@@ -2,8 +2,8 @@
 //!
 //! Provides comprehensive query result processing capabilities, extending the core layer of QueryResult and Row
 
-use crate::core::{CoreError, CoreResult, QueryResult as CoreQueryResult};
-use crate::core::{Edge, Path, Value, Vertex};
+use graphdb_core::{CoreError, CoreResult, QueryResult as CoreQueryResult};
+use graphdb_core::{Edge, Path, Value, Vertex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -252,7 +252,7 @@ impl Row {
     }
 
     /// Get List
-    pub fn get_list(&self, column: &str) -> Option<&crate::core::value::list::List> {
+    pub fn get_list(&self, column: &str) -> Option<&graphdb_core::value::list::List> {
         self.get(column).and_then(|v| match v {
             Value::List(list) => Some(list.as_ref()),
             _ => None,

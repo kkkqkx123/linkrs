@@ -16,13 +16,13 @@ pub(super) use graph::*;
 pub(super) use join::*;
 pub(super) use source::*;
 
-use crate::core::types::expr::Expression;
+use graphdb_core::types::expr::Expression;
 use crate::executor::build_error::PlanBuildError;
 
 /// Convert a [`ContextualExpression`] plan expression into a bare
 /// [`Expression`] for embedding into an operator spec.
 pub(super) fn contextual_to_expression(
-    expr: &crate::core::types::expr::ContextualExpression,
+    expr: &graphdb_core::types::expr::ContextualExpression,
 ) -> Result<Expression, PlanBuildError> {
     expr.get_expression().ok_or_else(|| {
         PlanBuildError::expression(

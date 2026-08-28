@@ -38,8 +38,8 @@ pub trait LogicalBinaryInputNode: LogicalNode {
 
 /// Trait for join nodes with hash/probe keys.
 pub trait LogicalJoinNode: LogicalBinaryInputNode {
-    fn hash_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression];
-    fn probe_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression];
+    fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression];
+    fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression];
 }
 
 /// Trait for nodes with multiple inputs.

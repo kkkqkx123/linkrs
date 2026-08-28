@@ -2,7 +2,7 @@
 //!
 //! Responsible for planning the execution of the UNWIND clause, which expands the list into multiple lines.
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -78,14 +78,14 @@ mod tests {
 
     #[test]
     fn test_extract_unwind_info() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::Expression;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::Expression;
         use crate::parser::ast::Span;
         use std::sync::Arc;
 
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::List(vec![]);
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 

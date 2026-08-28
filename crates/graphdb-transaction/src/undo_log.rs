@@ -8,18 +8,18 @@ pub mod file_backed;
 pub use file_backed::{FileBackedUndoLog, UndoLogConfig};
 
 use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
-use crate::core::types::{
+use graphdb_core::types::{
     EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey, VertexIdentifier,
 };
 
 /// Undo log error
-pub use crate::core::types::UndoLogError;
+pub use graphdb_core::types::UndoLogError;
 
 /// Undo log result type
-pub use crate::core::types::UndoLogResult;
+pub use graphdb_core::types::UndoLogResult;
 
 /// Target for undo operations (will be GraphStorageContext)
-pub use crate::core::types::UndoTarget;
+pub use graphdb_core::types::UndoTarget;
 
 /// Undo log for create vertex type operation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -97,7 +97,7 @@ pub struct RestoreEdgeUndo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub properties: Vec<(String, crate::core::Value)>,
+    pub properties: Vec<(String, graphdb_core::Value)>,
 }
 
 impl RestoreEdgeUndo {
@@ -153,7 +153,7 @@ pub struct UpdateVertexPropUndo {
     pub v_label: LabelId,
     pub vid: VertexId,
     pub col_id: ColumnId,
-    pub old_value: crate::core::Value,
+    pub old_value: graphdb_core::Value,
 }
 
 impl UpdateVertexPropUndo {
@@ -184,7 +184,7 @@ pub struct UpdateEdgePropUndo {
     pub edge_label: LabelId,
     pub rank: i64,
     pub col_id: ColumnId,
-    pub old_value: crate::core::Value,
+    pub old_value: graphdb_core::Value,
 }
 
 impl UpdateEdgePropUndo {
@@ -376,7 +376,7 @@ pub struct AddUpdateEdgePropParams {
     pub edge_label: LabelId,
     pub rank: i64,
     pub col_id: ColumnId,
-    pub old_value: crate::core::Value,
+    pub old_value: graphdb_core::Value,
 }
 
 impl UndoLogManager {
@@ -421,7 +421,7 @@ impl UndoLogManager {
         label: LabelId,
         vid: VertexId,
         col_id: ColumnId,
-        old_value: crate::core::Value,
+        old_value: graphdb_core::Value,
     ) -> UndoLogResult<()> {
         self.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
             v_label: label,
@@ -511,7 +511,7 @@ mod tests {
             &self,
             _vertex: VertexIdentifier,
             _col_id: ColumnId,
-            _value: crate::core::Value,
+            _value: graphdb_core::Value,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -521,7 +521,7 @@ mod tests {
             &self,
             _edge_id: EdgeIdentifier,
             _col_id: ColumnId,
-            _value: crate::core::Value,
+            _value: graphdb_core::Value,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -680,7 +680,7 @@ mod tests {
             v_label: 1,
             vid: VertexId::from_int64(100),
             col_id: ColumnId(0),
-            old_value: crate::core::Value::BigInt(42),
+            old_value: graphdb_core::Value::BigInt(42),
         };
 
         let target = MockUndoTarget;
@@ -697,7 +697,7 @@ mod tests {
             edge_label: 3,
             rank: 0,
             col_id: ColumnId(0),
-            old_value: crate::core::Value::string("test"),
+            old_value: graphdb_core::Value::string("test"),
         };
 
         let target = MockUndoTarget;

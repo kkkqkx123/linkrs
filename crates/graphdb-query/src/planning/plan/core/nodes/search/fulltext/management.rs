@@ -2,7 +2,7 @@
 //!
 //! This module defines plan nodes for full-text index management operations.
 
-use crate::core::types::FulltextEngineType;
+use graphdb_core::types::FulltextEngineType;
 use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions};
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;

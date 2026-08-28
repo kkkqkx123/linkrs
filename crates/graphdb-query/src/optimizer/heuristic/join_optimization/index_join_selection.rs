@@ -25,9 +25,9 @@
 //!   IndexJoin using property indexes
 //! ```
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::expr::visitor_collectors::VariableCollector;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};

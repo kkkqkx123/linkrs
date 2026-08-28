@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
@@ -804,13 +804,13 @@ mod tests {
         assert_eq!(empty_complexity, 0.0);
 
         // Test with simple expressions
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::Expression;
-        use crate::core::value::Value;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::Expression;
+        use graphdb_core::value::Value;
 
         let ctx = ExpressionAnalysisContext::new();
         let expr = Expression::Literal(Value::Int(42));
-        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+        let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
         let simple_expr = ContextualExpression::new(id, std::sync::Arc::new(ctx));
         let simple_complexity = selector.analyze_aggregation_complexity(&[simple_expr]);
         assert!(simple_complexity >= 0.0);
@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn logical_walk_emits_aggregate_strategy_note() {
-        use crate::core::types::operators::AggregateFunction;
+        use graphdb_core::types::operators::AggregateFunction;
         use crate::optimizer::cost::SelectivityEstimator;
         use crate::optimizer::stats::StatsView;
         use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::core::types::{Index, Timestamp};
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::wal::EntityRef;
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
 use crate::index::chunk::chunked_index::ChunkedIndex;
@@ -170,7 +170,7 @@ impl IndexCursor for EdgeIndexCursor {
             }
             if let Some(ref prange) = self.partition_id_range {
                 let src = match &entity_ref {
-                    crate::core::wal::EntityRef::Edge { src, .. } => src,
+                    graphdb_core::wal::EntityRef::Edge { src, .. } => src,
                     _ => continue,
                 };
                 let bytes = src.as_bytes();
@@ -265,17 +265,17 @@ fn parse_edge_entity_ref(key: &[u8]) -> Option<EntityRef> {
     })
 }
 
-fn value_to_vertex_id(v: &Value) -> Option<crate::core::types::storage_ids::VertexId> {
+fn value_to_vertex_id(v: &Value) -> Option<graphdb_core::types::storage_ids::VertexId> {
     match v {
-        Value::BigInt(id) => Some(crate::core::types::storage_ids::VertexId::from_int64(*id)),
-        Value::Int(id) => Some(crate::core::types::storage_ids::VertexId::from_int64(
+        Value::BigInt(id) => Some(graphdb_core::types::storage_ids::VertexId::from_int64(*id)),
+        Value::Int(id) => Some(graphdb_core::types::storage_ids::VertexId::from_int64(
             *id as i64,
         )),
         Value::String(s) => {
             if let Ok(id) = s.parse::<i64>() {
-                Some(crate::core::types::storage_ids::VertexId::from_int64(id))
+                Some(graphdb_core::types::storage_ids::VertexId::from_int64(id))
             } else {
-                Some(crate::core::types::storage_ids::VertexId::from_string(
+                Some(graphdb_core::types::storage_ids::VertexId::from_string(
                     s.clone(),
                 ))
             }
@@ -367,8 +367,8 @@ impl EdgePropertyIndex {
     ) -> StorageResult<()> {
         let key = Self::encode_edge_property_key(prop_value, src, dst, rank)?;
         let entity_ref = EntityRef::Edge {
-            src: crate::core::types::VertexId::from_int64(src as i64),
-            dst: crate::core::types::VertexId::from_int64(dst as i64),
+            src: graphdb_core::types::VertexId::from_int64(src as i64),
+            dst: graphdb_core::types::VertexId::from_int64(dst as i64),
             edge_type,
             ranking: rank,
         };
@@ -432,7 +432,7 @@ impl EdgePropertyIndex {
     }
 }
 
-fn u32_from_vertex_id(v: &crate::core::types::VertexId) -> Option<u32> {
+fn u32_from_vertex_id(v: &graphdb_core::types::VertexId) -> Option<u32> {
     let bytes = v.as_bytes();
     if bytes.len() == 8 {
         let val = i64::from_be_bytes(bytes.try_into().ok()?);

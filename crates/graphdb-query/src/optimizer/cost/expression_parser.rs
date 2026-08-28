@@ -6,8 +6,8 @@
 //! Analyze various expression patterns
 //! Expression constant folding optimization
 
-use crate::core::types::{BinaryOperator, Expression, UnaryOperator};
-use crate::core::value::Value;
+use graphdb_core::types::{BinaryOperator, Expression, UnaryOperator};
+use graphdb_core::value::Value;
 use crate::optimizer::cost::config::CostModelConfig;
 
 /// Expression parser

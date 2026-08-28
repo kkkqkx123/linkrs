@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 #[cfg(feature = "vector")]
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
@@ -13,7 +13,7 @@ use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
-use crate::sync::VectorSyncCoordinator;
+use graphdb_sync::VectorSyncCoordinator;
 
 #[cfg(feature = "vector")]
 fn make_manage_result(
@@ -24,7 +24,7 @@ fn make_manage_result(
 ) -> DataChunk {
     let name_val = name
         .map(Value::string)
-        .unwrap_or(Value::Null(crate::core::NullType::Null));
+        .unwrap_or(Value::Null(graphdb_core::NullType::Null));
     DataChunk::new_with_layout(
         vec![vec![Value::string(action), name_val, Value::string(status)]],
         output_layout,
@@ -480,7 +480,7 @@ impl VectorOperator {
                     if let Some(coordinator) = vector_coordinator {
                         // Fetch enough candidates so skipping `offset` rows
                         // still leaves up to `top_k` results.
-                        let mut options = crate::sync::vector_sync::SearchOptions::new(
+                        let mut options = graphdb_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
@@ -566,7 +566,7 @@ impl VectorOperator {
                                 "LOOKUP VECTOR cannot execute: index location (tag/field) is not resolved",
                             ));
                         }
-                        let options = crate::sync::vector_sync::SearchOptions::new(
+                        let options = graphdb_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),

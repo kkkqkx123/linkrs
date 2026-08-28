@@ -9,7 +9,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 use crate::compression::CompressionType;
 use crate::encoding::EncodingType;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
@@ -613,7 +613,7 @@ impl VertexTable {
                 let Some(column) = self.columns.get_column_mut(name) else {
                     return Err(StorageError::column_not_found(name.to_string()));
                 };
-                if column.data_type == crate::core::DataType::Bool {
+                if column.data_type == graphdb_core::DataType::Bool {
                     let col = RleBoolColumn::deserialize_meta(meta_cursor)?;
                     column.apply_rle_bool_from_meta(col)?;
                 } else {

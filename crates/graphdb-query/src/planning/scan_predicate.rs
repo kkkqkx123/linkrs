@@ -10,9 +10,9 @@
 //! The original filter expression is never modified: the pushed predicate is
 //! a pure pre-filter and the full condition still runs on top of the scan.
 
-use crate::core::types::expr::{ContextualExpression, Expression};
-use crate::core::types::operators::BinaryOperator;
-use crate::core::Value;
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Value;
 use crate::storage::ScanPredicate;
 
 /// Extract pushable conjuncts from a scan-level filter expression.
@@ -217,7 +217,7 @@ fn build_predicate(column: &str, op: BinaryOperator, literal: &Expression) -> Sc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::ExpressionMeta;
+    use graphdb_core::types::expr::ExpressionMeta;
 
     fn lit(value: Value) -> Expression {
         Expression::Literal(value)
@@ -239,7 +239,7 @@ mod tests {
     }
 
     fn contextual(expr: Expression) -> ContextualExpression {
-        let ctx = std::sync::Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let ctx = std::sync::Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
         let id = ctx.register_expression(ExpressionMeta::new(expr));
         ContextualExpression::new(id, ctx)
     }

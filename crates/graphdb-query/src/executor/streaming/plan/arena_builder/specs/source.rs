@@ -68,7 +68,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                         Some(
                             src_vids
                                 .split(',')
-                                .map(|s| crate::core::Value::string(s.trim()))
+                                .map(|s| graphdb_core::Value::string(s.trim()))
                                 .collect::<Vec<_>>(),
                         )
                     }
@@ -162,7 +162,7 @@ fn index_limit_to_predicate(
                 value: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                    .unwrap_or(graphdb_core::Value::Null(graphdb_core::value::NullType::Null)),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Range => {
@@ -180,7 +180,7 @@ fn index_limit_to_predicate(
                 prefix: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                    .unwrap_or(graphdb_core::Value::Null(graphdb_core::value::NullType::Null)),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Full => {
@@ -214,7 +214,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
             (rows, names)
         }
         PlanNodeEnum::InsertEdges(insert) => {
-            use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+            use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
             let mut rows = Vec::with_capacity(insert.edges().len());
             for (src, dst, rank, properties) in insert.edges() {
                 let mut row = vec![src.clone(), dst.clone()];
@@ -222,7 +222,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
                     Some(value) => value.clone(),
                     None => {
                         let id = src.context().register_expression(ExpressionMeta::new(
-                            Expression::literal(crate::core::Value::BigInt(0)),
+                            Expression::literal(graphdb_core::Value::BigInt(0)),
                         ));
                         ContextualExpression::new(id, src.context().clone())
                     }
@@ -292,12 +292,12 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
         PlanNodeEnum::CopyFrom(_) | PlanNodeEnum::CopyTo(_) => {
             // COPY is driven by file scan (FROM) or storage scan (TO), not
             // in-memory values: emit a single dummy row
-            use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+            use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
             let expr_context =
-                crate::core::types::expr::expression_context::ExpressionAnalysisContext::new();
+                graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new();
             let ctx = std::sync::Arc::new(expr_context);
             let id = ctx.register_expression(ExpressionMeta::new(Expression::Literal(
-                crate::core::Value::Null(crate::core::value::NullType::Null),
+                graphdb_core::Value::Null(graphdb_core::value::NullType::Null),
             )));
             let dummy = ContextualExpression::new(id, ctx);
             (vec![vec![dummy]], vec!["copy_dummy".to_string()])

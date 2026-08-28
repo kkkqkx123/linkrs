@@ -18,7 +18,7 @@
 //! - `CsrVariant::Labeled`: Label-aware mutable CSR
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 
 use super::{
     CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr,
@@ -290,7 +290,7 @@ impl CsrBase for CsrVariant {
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
-            return Err(crate::core::StorageError::deserialize_error(
+            return Err(graphdb_core::StorageError::deserialize_error(
                 "Cannot load CSR variant: empty data",
             ));
         }
@@ -298,7 +298,7 @@ impl CsrBase for CsrVariant {
         match data[0] {
             0 => {
                 if data.len() < 9 {
-                    return Err(crate::core::StorageError::deserialize_error(
+                    return Err(graphdb_core::StorageError::deserialize_error(
                         "Cannot load None CSR variant: data too short",
                     ));
                 }
@@ -332,7 +332,7 @@ impl CsrBase for CsrVariant {
                 *self = CsrVariant::Labeled(csr);
                 Ok(())
             }
-            _ => Err(crate::core::StorageError::deserialize_error(
+            _ => Err(graphdb_core::StorageError::deserialize_error(
                 "Invalid CSR variant tag in serialized data",
             )),
         }

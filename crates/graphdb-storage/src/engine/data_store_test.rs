@@ -2,7 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use crate::core::{StorageError, StorageResult};
+    use graphdb_core::{StorageError, StorageResult};
     use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::engine::data_store::{EdgeTableKey, GraphDataStore};
     use crate::vertex::{ShardedVertexTable, VertexSchema};

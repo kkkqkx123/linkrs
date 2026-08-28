@@ -37,7 +37,7 @@ pub use key_parser::KeyParser;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::index::key_codec::key_types::{
         ByteKey, KEY_TYPE_VERTEX_FORWARD, KEY_TYPE_VERTEX_REVERSE,
     };

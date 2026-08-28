@@ -146,10 +146,10 @@ impl crate::optimizer::heuristic::rule::PushDownRule for PushProjectDownGetEdges
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, YieldColumn};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use crate::optimizer::heuristic::context::RewriteContext;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetEdgesNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;

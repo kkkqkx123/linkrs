@@ -3,7 +3,7 @@
 //! Responsible for parsing various statements, including MATCH, GO, CREATE, DELETE, UPDATE, etc.
 //! This module serves as an entry point; it delegates the specific analysis logic to the various sub-modules.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
@@ -337,7 +337,7 @@ impl StmtParser {
 
     /// Analysis of the GROUP BY statement
     fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::core::types::expr::Expression;
+        use graphdb_core::types::expr::Expression;
         use crate::parser::ast::stmt::{GroupByStmt, GroupingType, YieldItem};
         use crate::parser::parsing::clause_parser::ClauseParser;
 
@@ -377,9 +377,9 @@ impl StmtParser {
             loop {
                 let ident = ctx.expect_identifier()?;
                 let expr = Expression::Variable(ident);
-                let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+                let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
                 let expr_id = ctx.expression_context().register_expression(expr_meta);
-                let contextual_expr = crate::core::types::expr::ContextualExpression::new(
+                let contextual_expr = graphdb_core::types::expr::ContextualExpression::new(
                     expr_id,
                     ctx.expression_context_clone(),
                 );
@@ -437,15 +437,15 @@ impl StmtParser {
     /// Parse grouping set items for ROLLUP, CUBE, GROUPING SETS
     fn parse_grouping_set_items(
         ctx: &mut ParseContext,
-    ) -> Result<Vec<crate::core::types::expr::ContextualExpression>, ParseError> {
-        use crate::core::types::expr::Expression;
+    ) -> Result<Vec<graphdb_core::types::expr::ContextualExpression>, ParseError> {
+        use graphdb_core::types::expr::Expression;
         let mut items = Vec::new();
         loop {
             let ident = ctx.expect_identifier()?;
             let expr = Expression::Variable(ident);
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
             let expr_id = ctx.expression_context().register_expression(expr_meta);
-            let contextual_expr = crate::core::types::expr::ContextualExpression::new(
+            let contextual_expr = graphdb_core::types::expr::ContextualExpression::new(
                 expr_id,
                 ctx.expression_context_clone(),
             );
@@ -994,7 +994,7 @@ mod tests {
             .iter()
             .map(|p| (p.name.clone(), p.data_type.clone()))
             .collect();
-        use crate::core::{ArrayTypeInfo, DataType, StructTypeInfo};
+        use graphdb_core::{ArrayTypeInfo, DataType, StructTypeInfo};
         use std::sync::Arc;
         assert_eq!(props[0].0, "id");
         assert_eq!(props[0].1, DataType::Int);
@@ -1515,7 +1515,7 @@ mod tests {
                 .get_expression()
                 .expect("expression should resolve");
             assert!(
-                matches!(expr, crate::core::types::expr::Expression::Binary { .. }),
+                matches!(expr, graphdb_core::types::expr::Expression::Binary { .. }),
                 "LET RHS should parse as a binary expression, got {:?}",
                 expr
             );

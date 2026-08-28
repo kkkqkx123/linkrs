@@ -1,10 +1,10 @@
-use crate::core::error::StorageError;
-use crate::core::metadata::IndexMetadataManager;
-use crate::core::types::{
+use graphdb_core::error::StorageError;
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::{
     EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::{
     LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
@@ -12,7 +12,7 @@ use crate::{
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
     StorageSyncContextOps, StorageWriter,
 };
-use crate::transaction::UndoTarget;
+use graphdb_transaction::UndoTarget;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ macro_rules! mock_stub {
 #[derive(Debug, Clone)]
 pub struct MockStorage {
     graph: GraphStorageContext,
-    schema_manager: Arc<crate::core::metadata::SchemaManager>,
+    schema_manager: Arc<graphdb_core::metadata::SchemaManager>,
     operation_context: Option<Arc<StorageOperationContext>>,
     fail_insert_edge: Arc<RwLock<bool>>,
     fail_delete_edge: Arc<RwLock<bool>>,
@@ -45,7 +45,7 @@ impl MockStorage {
     pub fn new() -> Result<Self, StorageError> {
         Ok(Self {
             graph: GraphStorageContext::new(),
-            schema_manager: Arc::new(crate::core::metadata::SchemaManager::new()),
+            schema_manager: Arc::new(graphdb_core::metadata::SchemaManager::new()),
             operation_context: None,
             fail_insert_edge: Arc::new(RwLock::new(false)),
             fail_delete_edge: Arc::new(RwLock::new(false)),
@@ -283,21 +283,21 @@ impl StorageAdmin for MockStorage {
 }
 
 impl StoragePersistenceOps for MockStorage {
-    fn flush(&self) -> crate::core::StorageResult<()> {
+    fn flush(&self) -> graphdb_core::StorageResult<()> {
         Ok(())
     }
 
     fn create_checkpoint(
         &self,
-    ) -> crate::core::StorageResult<Option<crate::CheckpointStats>> {
+    ) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
         Ok(None)
     }
 
-    fn verify_snapshot(&self, _snapshot_id: u64) -> crate::core::StorageResult<bool> {
+    fn verify_snapshot(&self, _snapshot_id: u64) -> graphdb_core::StorageResult<bool> {
         Ok(false)
     }
 
-    fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize> {
+    fn cleanup_snapshots(&self) -> graphdb_core::StorageResult<usize> {
         Ok(0)
     }
 
@@ -311,12 +311,12 @@ impl StoragePersistenceOps for MockStorage {
 
     fn compact(
         &self,
-        _config: &crate::core::types::CompactConfig,
-    ) -> crate::core::StorageResult<()> {
+        _config: &graphdb_core::types::CompactConfig,
+    ) -> graphdb_core::StorageResult<()> {
         Ok(())
     }
 
-    fn save_data_to_dir(&self, _dir: &std::path::Path) -> crate::core::StorageResult<()> {
+    fn save_data_to_dir(&self, _dir: &std::path::Path) -> graphdb_core::StorageResult<()> {
         Ok(())
     }
 
@@ -330,7 +330,7 @@ impl StoragePersistenceOps for MockStorage {
 }
 
 impl StorageSchemaContextOps for MockStorage {
-    fn get_schema_manager(&self) -> Option<Arc<crate::core::metadata::SchemaManager>> {
+    fn get_schema_manager(&self) -> Option<Arc<graphdb_core::metadata::SchemaManager>> {
         Some(self.schema_manager.clone())
     }
 
@@ -382,7 +382,7 @@ impl StorageOperationContextOps for MockStorage {
         self.operation_context.clone()
     }
 
-    fn finalize_operation(&self, _committed: bool) -> crate::core::StorageResult<()> {
+    fn finalize_operation(&self, _committed: bool) -> graphdb_core::StorageResult<()> {
         Ok(())
     }
 }
@@ -390,29 +390,29 @@ impl StorageOperationContextOps for MockStorage {
 impl crate::StorageCommitOps for MockStorage {
     fn commit_staged_writes(
         &self,
-        _transaction_id: crate::core::types::TransactionId,
-        _intents: &[crate::core::wal::OutboxIntent],
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
-        Ok(crate::core::types::CommitLsn::ZERO)
+        _transaction_id: graphdb_core::types::TransactionId,
+        _intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
+        Ok(graphdb_core::types::CommitLsn::ZERO)
     }
 
     fn abort_staged_writes(
         &self,
-        _transaction_id: crate::core::types::TransactionId,
-    ) -> crate::core::StorageResult<()> {
+        _transaction_id: graphdb_core::types::TransactionId,
+    ) -> graphdb_core::StorageResult<()> {
         Ok(())
     }
 
     fn recover_outbox_projection(
         &self,
-        _sync_manager: &crate::sync::SyncManager,
-    ) -> crate::core::StorageResult<usize> {
+        _sync_manager: &graphdb_sync::SyncManager,
+    ) -> graphdb_core::StorageResult<usize> {
         Ok(0)
     }
 }
 
 impl StorageSyncContextOps for MockStorage {
-    fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+    fn get_sync_manager(&self) -> Option<Arc<graphdb_sync::SyncManager>> {
         None
     }
 }
@@ -421,31 +421,31 @@ impl UndoTarget for MockStorage {
     fn delete_vertex_type(
         &self,
         label: LabelId,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.delete_vertex_type(label)
     }
 
     fn delete_edge_type(
         &self,
-        edge_key: crate::core::types::EdgeKey,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_key: graphdb_core::types::EdgeKey,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.delete_edge_type(edge_key)
     }
 
     fn delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .delete_vertex(vertex.label, &vertex.vid.to_string(), ts)
-            .map_err(|e| crate::transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
+            .map_err(|e| graphdb_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
     }
 
     fn delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         let edge_id = &edge_ctx.edge_id;
         let params = crate::engine::params::EdgeOperationParams {
             edge_label: edge_id.edge_label,
@@ -458,43 +458,43 @@ impl UndoTarget for MockStorage {
         self.graph
             .delete_edge(&params, edge_ctx.timestamp)
             .map(|_| ())
-            .map_err(|e| crate::transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
+            .map_err(|e| graphdb_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
     }
 
     fn undo_update_vertex_property(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .undo_update_vertex_property(vertex, col_id, value, ts)
     }
 
     fn undo_update_edge_property(
         &self,
-        edge_id: crate::core::types::EdgeIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_id: graphdb_core::types::EdgeIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .undo_update_edge_property(edge_id, col_id, value, ts)
     }
 
     fn revert_delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.revert_delete_vertex(vertex, ts)
     }
 
     fn revert_delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.revert_delete_edge(edge_ctx)
     }
 
@@ -502,7 +502,7 @@ impl UndoTarget for MockStorage {
         &self,
         label_name: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_delete_vertex_properties(label_name, prop_names)
     }
@@ -513,7 +513,7 @@ impl UndoTarget for MockStorage {
         dst_label: &str,
         edge_label: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
     }
@@ -521,7 +521,7 @@ impl UndoTarget for MockStorage {
     fn revert_delete_vertex_label(
         &self,
         label_name: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.revert_delete_vertex_label(label_name)
     }
 
@@ -530,7 +530,7 @@ impl UndoTarget for MockStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_delete_edge_label(src_label, dst_label, edge_label)
     }
@@ -540,7 +540,7 @@ impl UndoTarget for MockStorage {
         label_name: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_rename_vertex_properties(label_name, current_names, original_names)
     }
@@ -552,7 +552,7 @@ impl UndoTarget for MockStorage {
         edge_label: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.revert_rename_edge_properties(
             src_label,
             dst_label,
@@ -570,14 +570,14 @@ impl StorageRecoveryOps for MockStorage {
 
     fn recover_from_wal(
         &self,
-    ) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats> {
+    ) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats> {
         Ok(Default::default())
     }
 
     fn recover_from_wal_with_config(
         &self,
-        _config: crate::transaction::wal::recovery::RecoveryConfig,
-    ) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats> {
+        _config: graphdb_transaction::wal::recovery::RecoveryConfig,
+    ) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats> {
         Ok(Default::default())
     }
 }

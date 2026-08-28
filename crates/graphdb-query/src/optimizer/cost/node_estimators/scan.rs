@@ -134,7 +134,7 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::optimizer::stats::{EdgeTypeStatistics, TagStatistics};
     use crate::planning::plan::core::nodes::access::graph_scan_node::*;

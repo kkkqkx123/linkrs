@@ -13,10 +13,10 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rayon::prelude::*;
 
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
+use graphdb_core::Value;
 use crate::executor::streaming::operators::spec::CopyTarget;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::storage::{QueryStorage, StorageWriter};
@@ -541,7 +541,7 @@ impl CsvSource {
 /// schema on insert.
 fn parse_copy_value(s: &str) -> Value {
     if s.is_empty() {
-        return Value::Null(crate::core::value::NullType::Null);
+        return Value::Null(graphdb_core::value::NullType::Null);
     }
     if s.eq_ignore_ascii_case("true") {
         return Value::Bool(true);
@@ -550,7 +550,7 @@ fn parse_copy_value(s: &str) -> Value {
         return Value::Bool(false);
     }
     if s.eq_ignore_ascii_case("null") {
-        return Value::Null(crate::core::value::NullType::Null);
+        return Value::Null(graphdb_core::value::NullType::Null);
     }
     if let Ok(i) = s.parse::<i64>() {
         return Value::BigInt(i);
@@ -763,7 +763,7 @@ mod tests {
     fn parse_value_inference() {
         assert_eq!(
             parse_copy_value(""),
-            Value::Null(crate::core::value::NullType::Null)
+            Value::Null(graphdb_core::value::NullType::Null)
         );
         assert_eq!(parse_copy_value("true"), Value::Bool(true));
         assert_eq!(parse_copy_value("42"), Value::BigInt(42));

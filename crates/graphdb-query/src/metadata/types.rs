@@ -3,7 +3,7 @@
 //! This module defines the core metadata types used throughout the query planning
 //! and execution process.
 
-use crate::core::types::DataType;
+use graphdb_core::types::DataType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

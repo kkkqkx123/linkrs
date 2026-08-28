@@ -23,8 +23,8 @@
 //! read execution semantics from the `MultipleInputNode` declaration; the
 //! declaration is kept as-is so the optimizer rules keep working.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::define_plan_node;
 use crate::planning::plan::core::common::{EdgeProp, TagProp};
 use crate::planning::plan::core::node_id_generator::next_node_id;
@@ -53,8 +53,8 @@ define_plan_node! {
 
 impl GetVerticesNode {
     pub fn new(space_id: u64, space_name: &str, src_vids: &str) -> Self {
-        use crate::core::types::expr::ExpressionMeta;
-        use crate::core::Expression;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
         use std::sync::Arc;
         use ExpressionAnalysisContext;
 
@@ -139,8 +139,8 @@ impl GetVerticesNode {
     }
 
     pub fn set_src_vids(&mut self, src_vids: String) {
-        use crate::core::types::expr::ExpressionMeta;
-        use crate::core::Expression;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
         use std::sync::Arc;
         use ExpressionAnalysisContext;
 
@@ -195,8 +195,8 @@ define_plan_node! {
 
 impl GetEdgesNode {
     pub fn new(space_id: u64, src: &str, edge_type: &str, rank: &str, dst: &str) -> Self {
-        use crate::core::types::expr::ExpressionMeta;
-        use crate::core::Expression;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
         use std::sync::Arc;
         use ExpressionAnalysisContext;
 

@@ -3,14 +3,14 @@
 //! This module defines types specific to the query AST (Abstract Syntax Tree), including tags, property references, clause structures, etc.
 //! At the same time, the type of the core module is re-exported for easier use.
 
-pub use crate::core::types::operators::AggregateFunction as CoreAggregateFunction;
-pub use crate::core::types::{EdgeDirection, OrderDirection};
+pub use graphdb_core::types::operators::AggregateFunction as CoreAggregateFunction;
+pub use graphdb_core::types::{EdgeDirection, OrderDirection};
 
-pub use crate::core::types::Span;
+pub use graphdb_core::types::Span;
 
-pub type BinaryOp = crate::core::types::operators::BinaryOperator;
-pub type UnaryOp = crate::core::types::operators::UnaryOperator;
-pub type DataType = crate::core::types::DataType;
+pub type BinaryOp = graphdb_core::types::operators::BinaryOperator;
+pub type UnaryOp = graphdb_core::types::operators::UnaryOperator;
+pub type DataType = graphdb_core::types::DataType;
 pub type AggregateFunction = CoreAggregateFunction;
 
 #[derive(Debug, Clone, PartialEq)]

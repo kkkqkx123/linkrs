@@ -1,7 +1,7 @@
 //! Implementation of regular expression functions
 
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 
 /// Enumeration of regular expression functions

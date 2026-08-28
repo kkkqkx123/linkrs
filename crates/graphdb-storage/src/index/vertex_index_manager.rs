@@ -8,10 +8,10 @@
 //! Index keys now use the order-preserving `OrderedCodec`, eliminating the
 //! need for post-filtering predicate matches on range scans.
 
-use crate::core::types::{Index, Timestamp};
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::wal::EntityRef;
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::index::cursor::ChainForwardIterator;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
@@ -186,7 +186,7 @@ impl IndexCursor for VertexIndexCursor {
 
             if let Some(ref prange) = self.partition_id_range {
                 let vid = match &entity_ref {
-                    crate::core::wal::EntityRef::Vertex(vid) => vid,
+                    graphdb_core::wal::EntityRef::Vertex(vid) => vid,
                     _ => continue,
                 };
                 if let Some(vid_i64) = try_vertex_id_to_i64(vid) {
@@ -268,20 +268,20 @@ fn project_vertex_row(
 fn vertex_id_to_entity_ref(v: &Value) -> Option<EntityRef> {
     match v {
         Value::BigInt(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id),
+            graphdb_core::types::storage_ids::VertexId::from_int64(*id),
         )),
         Value::Int(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id as i64),
+            graphdb_core::types::storage_ids::VertexId::from_int64(*id as i64),
         )),
         Value::String(s) => {
             // Try to parse as i64 first, then treat as string ID
             if let Ok(id) = s.parse::<i64>() {
                 Some(EntityRef::Vertex(
-                    crate::core::types::storage_ids::VertexId::from_int64(id),
+                    graphdb_core::types::storage_ids::VertexId::from_int64(id),
                 ))
             } else {
                 Some(EntityRef::Vertex(
-                    crate::core::types::storage_ids::VertexId::from_string(s.clone()),
+                    graphdb_core::types::storage_ids::VertexId::from_string(s.clone()),
                 ))
             }
         }
@@ -290,7 +290,7 @@ fn vertex_id_to_entity_ref(v: &Value) -> Option<EntityRef> {
     }
 }
 
-fn try_vertex_id_to_i64(vid: &crate::core::types::storage_ids::VertexId) -> Option<i64> {
+fn try_vertex_id_to_i64(vid: &graphdb_core::types::storage_ids::VertexId) -> Option<i64> {
     let bytes = vid.as_bytes();
     if bytes.len() == 8 {
         let mut buf = [0u8; 8];

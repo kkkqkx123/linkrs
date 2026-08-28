@@ -3,7 +3,7 @@
 //! Provides statistics for tombstones, deletions, and merge operations
 //! to help track edge table behavior and performance.
 
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 
 /// Statistics about tombstones for observability and debugging.
 #[derive(Debug, Clone)]
@@ -171,8 +171,8 @@ pub struct MergeMetricsResult {
 mod tests {
     use super::super::super::{EdgeSchema, EdgeStrategy};
     use super::*;
-    use crate::core::types::DataType;
-    use crate::core::Value;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::types::StoragePropertyDef;
 

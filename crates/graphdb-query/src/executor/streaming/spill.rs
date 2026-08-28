@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -1076,7 +1076,7 @@ impl RowBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
 
     fn sample_rows(n: usize) -> Vec<Vec<Value>> {
         (0..n)

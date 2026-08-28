@@ -1,7 +1,7 @@
 //! The FETCH EDGES query planner
 //! Planning for the execution of the FETCH EDGES query
 
-use crate::core::types::expr::expression_utils::extract_string_from_expr;
+use graphdb_core::types::expr::expression_utils::extract_string_from_expr;
 use crate::parser::ast::{FetchTarget, Stmt};
 use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::execution_plan::SubPlan;
@@ -70,7 +70,7 @@ impl Planner for FetchEdgesPlanner {
         let root = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
             let mut columns = Vec::new();
             for item in &yield_clause.items {
-                columns.push(crate::core::YieldColumn {
+                columns.push(graphdb_core::YieldColumn {
                     expression: item.expression.clone(),
                     alias: item.alias.clone().unwrap_or_default(),
                     is_matched: false,

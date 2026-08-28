@@ -2,7 +2,7 @@
 //!
 //! Provides comparison logic for VALUES in streaming executor.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use std::cmp::Ordering;
 
 /// Compare two values for sorting
@@ -44,7 +44,7 @@ pub fn compare_values(a: &Value, b: &Value) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
 
     #[test]
     fn test_null_ordering() {

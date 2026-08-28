@@ -7,10 +7,10 @@ use dashmap::DashMap;
 use tracing::{debug, warn};
 
 use super::types::{ChangeContext, ChangeData, ChangeType};
-use crate::core::stats::StatsManager;
-use crate::search::engine::ConsistencyState;
-use crate::search::manager::FulltextIndexManager;
-use crate::search::SyncFailurePolicy;
+use graphdb_core::stats::StatsManager;
+use graphdb_search::engine::ConsistencyState;
+use graphdb_search::manager::FulltextIndexManager;
+use graphdb_search::SyncFailurePolicy;
 use crate::batch::{
     BatchConfig, BatchProcessor, FulltextBatchProcessor, TransactionBatchBuffer,
 };
@@ -24,7 +24,7 @@ type FulltextProcessor = FulltextBatchProcessor;
 pub struct SyncCoordinator {
     fulltext_manager: Arc<FulltextIndexManager>,
     fulltext_processors: DashMap<(u64, String, String), Arc<FulltextProcessor>>,
-    transaction_buffers: DashMap<crate::core::types::TransactionId, Arc<TransactionBatchBuffer>>,
+    transaction_buffers: DashMap<graphdb_core::types::TransactionId, Arc<TransactionBatchBuffer>>,
     config: BatchConfig,
     dead_letter_queue: Arc<DeadLetterQueue>,
     stats_manager: Option<Arc<StatsManager>>,
@@ -159,8 +159,8 @@ impl SyncCoordinator {
         &self,
         space_id: u64,
         tag_name: &str,
-        vertex_id: &crate::core::Value,
-        properties: &[(String, crate::core::Value)],
+        vertex_id: &graphdb_core::Value,
+        properties: &[(String, graphdb_core::Value)],
         change_type: ChangeType,
     ) -> Result<(), SyncCoordinatorError> {
         let vid_str = format!("{}", vertex_id);
@@ -171,7 +171,7 @@ impl SyncCoordinator {
                 .get_engine(space_id, tag_name, field_name)
                 .is_some()
             {
-                if let crate::core::Value::String(text) = value {
+                if let graphdb_core::Value::String(text) = value {
                     let ctx = ChangeContext::new_fulltext(
                         space_id,
                         tag_name,
@@ -191,7 +191,7 @@ impl SyncCoordinator {
     /// Buffered index operations
     pub fn buffer_operation(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
         ctx: ChangeContext,
     ) -> Result<(), SyncCoordinatorError> {
         self.buffer_operation_with_sequence(txn_id, 0, ctx)
@@ -199,7 +199,7 @@ impl SyncCoordinator {
 
     pub fn buffer_operation_with_sequence(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
         sequence: u64,
         ctx: ChangeContext,
     ) -> Result<(), SyncCoordinatorError> {
@@ -230,7 +230,7 @@ impl SyncCoordinator {
         Ok(())
     }
 
-    pub fn current_sequence(&self, txn_id: crate::core::types::TransactionId) -> u64 {
+    pub fn current_sequence(&self, txn_id: graphdb_core::types::TransactionId) -> u64 {
         self.transaction_buffers
             .get(&txn_id)
             .map(|buffer| buffer.pending_sequence(txn_id))
@@ -238,7 +238,7 @@ impl SyncCoordinator {
     }
 
     /// Get the count of buffered operations for a transaction
-    pub fn transaction_buffer_count(&self, txn_id: crate::core::types::TransactionId) -> usize {
+    pub fn transaction_buffer_count(&self, txn_id: graphdb_core::types::TransactionId) -> usize {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             buffer.pending_count(txn_id)
         } else {
@@ -249,7 +249,7 @@ impl SyncCoordinator {
     /// Prepare phase: validate all target engines are consistent
     pub async fn prepare_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> Result<(), SyncCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             let count = buffer.pending_count(txn_id);
@@ -291,7 +291,7 @@ impl SyncCoordinator {
     ///   4. On any failure, mark affected engines as Inconsistent
     pub async fn commit_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> Result<(), SyncCoordinatorError> {
         let result = if let Some((_, buffer)) = self.transaction_buffers.remove(&txn_id) {
             let grouped_ops = buffer
@@ -441,7 +441,7 @@ impl SyncCoordinator {
     /// Rollback transaction: discard buffered operations
     pub fn rollback_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> Result<(), SyncCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             buffer.rollback(txn_id)?;
@@ -452,7 +452,7 @@ impl SyncCoordinator {
 
     pub fn truncate_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
         sequence: u64,
     ) -> Result<(), SyncCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {

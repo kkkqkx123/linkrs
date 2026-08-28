@@ -11,8 +11,8 @@ use crate::session::GraphSessionManager;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use crate::transaction::TransactionManager;
-use graphdb_api::core::{QueryApi, SchemaApi, TransactionApi};
+use graphdb_transaction::TransactionManager;
+use graphdb_api::api_core::{QueryApi, SchemaApi, TransactionApi};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -113,7 +113,7 @@ impl<
     }
 
     /// Getting the Statistics Manager (via GraphService)
-    pub fn get_stats_manager(&self) -> &Arc<crate::core::StatsManager> {
+    pub fn get_stats_manager(&self) -> &Arc<graphdb_core::StatsManager> {
         self.graph_service.get_stats_manager()
     }
 

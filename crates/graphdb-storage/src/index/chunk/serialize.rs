@@ -1,5 +1,5 @@
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::{StorageError, StorageResult};
 use crate::cache::BufferPool;
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::chunk::data::{Chunk, ChunkId};
@@ -445,9 +445,9 @@ pub(crate) fn make_chunk_writer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::wal::EntityRef;
-    use crate::core::Value;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::wal::EntityRef;
+    use graphdb_core::Value;
     use std::collections::BTreeMap;
 
     #[test]

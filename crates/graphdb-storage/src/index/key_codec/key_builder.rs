@@ -3,8 +3,8 @@
 //! This module provides functions for building index keys using the
 //! order-preserving `OrderedCodec`.
 
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::{StorageError, Value};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::{StorageError, Value};
 
 use super::key_types::{
     ByteKey, KEY_TYPE_EDGE_FORWARD, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_FORWARD,
@@ -253,7 +253,7 @@ impl KeyBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     #[test]
     fn test_build_vertex_index_key() {

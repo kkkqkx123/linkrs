@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::search::SearchError;
+use graphdb_search::SearchError;
 #[cfg(feature = "fulltext-search")]
 use crate::coordinator::CoordinatorError;
 

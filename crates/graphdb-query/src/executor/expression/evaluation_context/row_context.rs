@@ -3,7 +3,7 @@
 //! Provide dedicated context implementations for the Join operation and the evaluation of row-level expressions.
 //! Support accessing row data by column name and column index.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use std::collections::HashMap;
 
 /// Context of the expression line

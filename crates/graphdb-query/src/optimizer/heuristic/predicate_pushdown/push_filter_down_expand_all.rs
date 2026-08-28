@@ -126,7 +126,7 @@ impl PushFilterDownExpandAllRule {
     /// expand's anchor input. Such filters are safe to evaluate on the anchor
     /// before expansion, avoiding full expansion of non-matching anchors.
     fn filter_references_only_input(
-        filter_condition: &crate::core::types::ContextualExpression,
+        filter_condition: &graphdb_core::types::ContextualExpression,
         expand_all: &ExpandAllNode,
     ) -> bool {
         let Some(expression) = filter_condition.get_expression() else {
@@ -144,7 +144,7 @@ impl PushFilterDownExpandAllRule {
     /// The filter can only be pushed down if all variables it references
     /// are available in the ExpandAll's output columns.
     fn can_push_filter_to_expand(
-        filter_condition: &crate::core::types::ContextualExpression,
+        filter_condition: &graphdb_core::types::ContextualExpression,
         expand_all: &ExpandAllNode,
     ) -> bool {
         // Get the expression from the contextual expression
@@ -204,7 +204,7 @@ impl PushDownRule for PushFilterDownExpandAllRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Expression;
+    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn test_can_push_down() {
         let rule = PushFilterDownExpandAllRule::new();
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use std::sync::Arc;
 
         let start = StartNode::new();
@@ -232,9 +232,9 @@ mod tests {
 
         let condition = Expression::Variable("test".to_string());
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
         let filter =
             crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
                 start_enum.clone(),
@@ -257,10 +257,10 @@ mod tests {
         PlanNodeEnum::ScanVertices(scan)
     }
 
-    fn anchor_filter_expr(var: &str, property: &str) -> crate::core::types::ContextualExpression {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::operators::BinaryOperator;
-        use crate::core::Value;
+    fn anchor_filter_expr(var: &str, property: &str) -> graphdb_core::types::ContextualExpression {
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::operators::BinaryOperator;
+        use graphdb_core::Value;
         use std::sync::Arc;
 
         let expr = Expression::Binary {
@@ -272,12 +272,12 @@ mod tests {
             right: Box::new(Expression::Literal(Value::Int(100))),
         };
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
-        crate::core::types::ContextualExpression::new(id, ctx)
+        let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
+        graphdb_core::types::ContextualExpression::new(id, ctx)
     }
 
     fn filter_above(
-        condition: crate::core::types::ContextualExpression,
+        condition: graphdb_core::types::ContextualExpression,
         input: PlanNodeEnum,
     ) -> PlanNodeEnum {
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -292,7 +292,7 @@ impl HashShuffleJoinOperator {
                 if self.join_kind == HashJoinKind::Left && bucket.right_rows.is_empty() {
                     let mut joined = left_row.clone();
                     joined.extend(vec![
-                        Value::Null(crate::core::value::NullType::Null);
+                        Value::Null(graphdb_core::value::NullType::Null);
                         right_width
                     ]);
                     chunk_rows.push(joined);
@@ -338,7 +338,7 @@ impl HashShuffleJoinOperator {
                 } else if self.join_kind == HashJoinKind::Left {
                     let mut joined = left_row.clone();
                     joined.extend(vec![
-                        Value::Null(crate::core::value::NullType::Null);
+                        Value::Null(graphdb_core::value::NullType::Null);
                         right_width
                     ]);
                     chunk_rows.push(joined);
@@ -353,7 +353,7 @@ impl HashShuffleJoinOperator {
             } else if self.join_kind == HashJoinKind::Left {
                 let mut joined = left_row.clone();
                 joined.extend(vec![
-                    Value::Null(crate::core::value::NullType::Null);
+                    Value::Null(graphdb_core::value::NullType::Null);
                     right_width
                 ]);
                 chunk_rows.push(joined);

@@ -3,8 +3,8 @@
 //! Replaces the hardcoded 100MB limit with a configurable budget
 //! passed through ExecutionContext.
 
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 static BUDGET_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

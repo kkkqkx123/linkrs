@@ -91,9 +91,9 @@ impl HttpError {
     }
 }
 
-impl From<graphdb_api::core::CoreError> for HttpError {
-    fn from(err: graphdb_api::core::CoreError) -> Self {
-        use graphdb_api::core::CoreError;
+impl From<graphdb_api::api_core::CoreError> for HttpError {
+    fn from(err: graphdb_api::api_core::CoreError) -> Self {
+        use graphdb_api::api_core::CoreError;
         match err {
             CoreError::NotFound(msg) => HttpError::NotFound(msg),
             CoreError::InvalidParameter(msg) => HttpError::BadRequest(msg),

@@ -16,8 +16,8 @@ use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
 use super::wal::Timestamp;
-use crate::core::types::CommitLsn;
-use crate::core::types::VertexId;
+use graphdb_core::types::CommitLsn;
+use graphdb_core::types::VertexId;
 
 /// Transaction Context
 ///
@@ -612,7 +612,7 @@ impl TransactionContext {
         self.read_set.lock().record_vertex(vid);
     }
 
-    pub fn record_edge_read(&self, edge: crate::core::types::EdgeIdentifier) {
+    pub fn record_edge_read(&self, edge: graphdb_core::types::EdgeIdentifier) {
         self.read_set.lock().record_edge(edge);
     }
 
@@ -740,7 +740,7 @@ impl TransactionContext {
     }
 
     /// Record an edge write for conflict certification.
-    pub fn record_edge_write(&self, edge: crate::core::types::EdgeIdentifier) {
+    pub fn record_edge_write(&self, edge: graphdb_core::types::EdgeIdentifier) {
         self.write_set.lock().record_edge(edge);
     }
 
@@ -1068,7 +1068,7 @@ impl TransactionMutationRecorder for TransactionContext {
         self.record_vertex_delete(vertex_id);
     }
 
-    fn record_edge_write(&self, edge: crate::core::types::EdgeIdentifier) {
+    fn record_edge_write(&self, edge: graphdb_core::types::EdgeIdentifier) {
         self.record_edge_write(edge);
     }
 
@@ -1092,7 +1092,7 @@ impl TransactionMutationRecorder for TransactionContext {
         self.record_vertex_read(vertex_id);
     }
 
-    fn record_edge_read(&self, edge: crate::core::types::EdgeIdentifier) {
+    fn record_edge_read(&self, edge: graphdb_core::types::EdgeIdentifier) {
         self.record_edge_read(edge);
     }
 

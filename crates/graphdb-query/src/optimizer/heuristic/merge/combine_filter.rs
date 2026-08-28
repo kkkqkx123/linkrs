@@ -1,7 +1,7 @@
 //! Rules that combine multiple filtering operations
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -48,7 +48,7 @@ impl CombineFilterRule {
     fn combine_conditions(&self, top: &Expression, child: &Expression) -> Expression {
         Expression::Binary {
             left: Box::new(child.clone()),
-            op: crate::core::types::operators::BinaryOperator::And,
+            op: graphdb_core::types::operators::BinaryOperator::And,
             right: Box::new(top.clone()),
         }
     }
@@ -111,7 +111,7 @@ impl RewriteRule for CombineFilterRule {
         let ctx = top_condition.context().clone();
 
         // Create metadata for the merged expression.
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(combined_condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(combined_condition);
         let id = ctx.register_expression(expr_meta);
         let combined_ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -151,8 +151,8 @@ impl MergeRule for CombineFilterRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 
@@ -177,10 +177,10 @@ mod tests {
         // Lower-level filter: col1 > 100
         let child_condition = Expression::Binary {
             left: Box::new(Expression::Variable("col1".to_string())),
-            op: crate::core::types::operators::BinaryOperator::GreaterThan,
-            right: Box::new(Expression::Literal(crate::core::Value::Int(100))),
+            op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(100))),
         };
-        let child_expr_meta = crate::core::types::expr::ExpressionMeta::new(child_condition);
+        let child_expr_meta = graphdb_core::types::expr::ExpressionMeta::new(child_condition);
         let child_id = expr_ctx.register_expression(child_expr_meta);
         let child_ctx_expr = ContextualExpression::new(child_id, expr_ctx.clone());
         let child_filter =
@@ -190,10 +190,10 @@ mod tests {
         // Upper-level filter: col2 > 200
         let top_condition = Expression::Binary {
             left: Box::new(Expression::Variable("col2".to_string())),
-            op: crate::core::types::operators::BinaryOperator::GreaterThan,
-            right: Box::new(Expression::Literal(crate::core::Value::Int(200))),
+            op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(200))),
         };
-        let top_expr_meta = crate::core::types::expr::ExpressionMeta::new(top_condition);
+        let top_expr_meta = graphdb_core::types::expr::ExpressionMeta::new(top_condition);
         let top_id = expr_ctx.register_expression(top_expr_meta);
         let top_ctx_expr = ContextualExpression::new(top_id, expr_ctx);
         let top_filter =

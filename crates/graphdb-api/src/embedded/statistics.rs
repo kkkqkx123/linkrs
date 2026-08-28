@@ -2,7 +2,7 @@
 //!
 //! Provides statistics such as the number of rows affected by query execution, last insertion ID, etc.
 
-pub use crate::core::SessionStatistics;
+pub use graphdb_core::SessionStatistics;
 
 /// Statistical information on query results
 ///
@@ -37,7 +37,7 @@ impl QueryStatistics {
     ///
     /// # Parameters
     /// - `metadata` - query result metadata
-    pub fn from_metadata(metadata: &crate::core::ExecutionMetadata) -> Self {
+    pub fn from_metadata(metadata: &graphdb_core::ExecutionMetadata) -> Self {
         Self {
             rows_affected: metadata.rows_returned,
             rows_returned: metadata.rows_returned,

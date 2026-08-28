@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::semantic::AliasType;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::semantic::AliasType;
 
-use crate::core::types::Span;
+use graphdb_core::types::Span;
 
 /// Verified statement wrapper.
 ///
@@ -46,7 +46,7 @@ impl ValidatedStatement {
 
     pub fn expr_context(
         &self,
-    ) -> &Arc<crate::core::types::expr::expression_context::ExpressionAnalysisContext> {
+    ) -> &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext> {
         &self.ast.expr_context
     }
 }
@@ -241,8 +241,8 @@ impl CypherClauseKind {
 
 // ── Clause contexts (used by planners) ───────────────────────────────────────
 
-use crate::core::types::OrderDirection;
-use crate::core::YieldColumn;
+use graphdb_core::types::OrderDirection;
+use graphdb_core::YieldColumn;
 
 #[derive(Debug, Clone)]
 pub struct WhereClauseContext {

@@ -35,7 +35,7 @@ use crate::storage::{
 ///
 /// Delegates to the core `DataType::from_str` parser (single source of
 /// truth).
-fn parse_data_type(type_str: &str) -> Option<crate::core::DataType> {
+fn parse_data_type(type_str: &str) -> Option<graphdb_core::DataType> {
     type_str.parse().ok()
 }
 
@@ -166,7 +166,7 @@ async fn get_space_details<
         let tag_indexes = storage
             .list_tag_indexes(&name)
             .map_err(|e| WebError::Storage(e.to_string()))?;
-        let edge_indexes: Vec<crate::core::types::Index> = Vec::new();
+        let edge_indexes: Vec<graphdb_core::types::Index> = Vec::new();
 
         Ok::<_, WebError>(SpaceDetail {
             id: space_info.space_id,
@@ -224,7 +224,7 @@ async fn get_space_statistics<
         let tag_indexes = storage
             .list_tag_indexes(&name)
             .map_err(|e| WebError::Storage(e.to_string()))?;
-        let edge_indexes: Vec<crate::core::types::Index> = Vec::new();
+        let edge_indexes: Vec<graphdb_core::types::Index> = Vec::new();
 
         Ok::<_, WebError>(SpaceStatistics {
             tag_count: tags.len() as i64,
@@ -316,7 +316,7 @@ async fn create_tag<
         .to_string();
 
     // Parse properties before spawn_blocking
-    let properties: Vec<graphdb_api::core::PropertyDef> = request
+    let properties: Vec<graphdb_api::api_core::PropertyDef> = request
         .get("properties")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -325,7 +325,7 @@ async fn create_tag<
                     let name = p.get("name")?.as_str()?;
                     let data_type_str = p.get("data_type")?.as_str()?;
                     let data_type = parse_data_type(data_type_str)?;
-                    Some(graphdb_api::core::PropertyDef {
+                    Some(graphdb_api::api_core::PropertyDef {
                         name: name.to_string(),
                         data_type,
                         nullable: p.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true),
@@ -447,7 +447,7 @@ async fn update_tag<
                 let data_type = parse_data_type(&p.data_type).ok_or_else(|| {
                     WebError::BadRequest(format!("Invalid data type: {}", p.data_type))
                 })?;
-                core_props.push(graphdb_api::core::PropertyDef {
+                core_props.push(graphdb_api::api_core::PropertyDef {
                     name: p.name,
                     data_type,
                     nullable: p.nullable,
@@ -590,7 +590,7 @@ async fn create_edge_type<
         .to_string();
 
     // Parse properties before spawn_blocking
-    let properties: Vec<graphdb_api::core::PropertyDef> = request
+    let properties: Vec<graphdb_api::api_core::PropertyDef> = request
         .get("properties")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -599,7 +599,7 @@ async fn create_edge_type<
                     let name = p.get("name")?.as_str()?;
                     let data_type_str = p.get("data_type")?.as_str()?;
                     let data_type = parse_data_type(data_type_str)?;
-                    Some(graphdb_api::core::PropertyDef {
+                    Some(graphdb_api::api_core::PropertyDef {
                         name: name.to_string(),
                         data_type,
                         nullable: p.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true),
@@ -720,7 +720,7 @@ async fn update_edge_type<
                 let data_type = parse_data_type(&p.data_type).ok_or_else(|| {
                     WebError::BadRequest(format!("Invalid data type: {}", p.data_type))
                 })?;
-                core_props.push(graphdb_api::core::PropertyDef {
+                core_props.push(graphdb_api::api_core::PropertyDef {
                     name: p.name,
                     data_type,
                     nullable: p.nullable,
@@ -866,11 +866,11 @@ async fn create_index<
             .map_err(|e| WebError::NotFound(format!("Space '{}' not found: {}", space_name, e)))?;
 
         let target = match request.entity_type.as_str() {
-            "TAG" => graphdb_api::core::IndexTarget::Tag {
+            "TAG" => graphdb_api::api_core::IndexTarget::Tag {
                 name: request.entity_name,
                 fields: request.fields,
             },
-            "EDGE" => graphdb_api::core::IndexTarget::Edge {
+            "EDGE" => graphdb_api::api_core::IndexTarget::Edge {
                 name: request.entity_name,
                 fields: request.fields,
             },

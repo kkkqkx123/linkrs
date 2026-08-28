@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use super::chunk::{ColumnInfo, DataChunk, Schema};
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::data_set::DataSet;
 use crate::executor::base::ExecutionResult;
 
@@ -56,7 +56,7 @@ enum StreamState {
     Streaming(ResultStream, Option<Vec<String>>),
     /// Pre-materialized result (EXPLAIN/PROFILE/SpaceSwitched).
     Materialized {
-        rows: Vec<Vec<crate::core::Value>>,
+        rows: Vec<Vec<graphdb_core::Value>>,
         col_names: Vec<String>,
         exhausted: bool,
     },
@@ -121,8 +121,8 @@ impl StreamingQueryResult {
             }
             ExecutionResult::SpaceSwitched(summary) => {
                 let row = vec![
-                    crate::core::Value::string(summary.name.clone()),
-                    crate::core::Value::BigInt(summary.id as i64),
+                    graphdb_core::Value::string(summary.name.clone()),
+                    graphdb_core::Value::BigInt(summary.id as i64),
                 ];
                 let col_names = vec!["space_name".to_string(), "space_id".to_string()];
                 let runtime = Arc::new(ExecutionRuntime::default_budget());
@@ -143,7 +143,7 @@ impl StreamingQueryResult {
                 let runtime = Arc::new(ExecutionRuntime::default_budget());
                 Self {
                     inner: Arc::new(Mutex::new(StreamState::Materialized {
-                        rows: vec![vec![crate::core::Value::string(msg)]],
+                        rows: vec![vec![graphdb_core::Value::string(msg)]],
                         col_names,
                         exhausted: false,
                     })),
@@ -369,7 +369,7 @@ impl StreamingQueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::engine::StreamingExecutionEngine;
     use crate::executor::streaming::executor::StreamingExecutor;

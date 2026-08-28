@@ -15,7 +15,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::core::types::expr::ContextualExpression;
+use graphdb_core::types::expr::ContextualExpression;
 use crate::planning::plan::core::nodes::{BinaryInputNode, PlanNodeEnum, SingleInputNode};
 
 /// Plan node fingerprint

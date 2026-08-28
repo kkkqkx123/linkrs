@@ -1,16 +1,16 @@
-use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::{
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::types::{
     DataType, EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
 };
-use crate::core::wal::traits::RecoveryApplier;
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::wal::traits::RecoveryApplier;
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::EdgeStrategy;
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::params::{CreateEdgeTypeParams, EdgeOperationParams};
 use crate::engine::transaction::{AddEdgeParams, TransactionOps};
 use crate::index::{EdgeIndexOps, VertexIndexOps};
 use crate::types::StoragePropertyDef;
-use crate::transaction::wal::{
+use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
@@ -674,7 +674,7 @@ impl RecoveryApplier for GraphStorageContext {
         redo: &CreateTagIndexRedo,
         _ts: Timestamp,
     ) -> StorageResult<()> {
-        let index = Index::new(crate::core::types::IndexConfig {
+        let index = Index::new(graphdb_core::types::IndexConfig {
             id: 0,
             name: redo.index_name.clone(),
             space_id: redo.space_id,
@@ -683,15 +683,15 @@ impl RecoveryApplier for GraphStorageContext {
                 .fields
                 .iter()
                 .map(|(name, _typ)| {
-                    crate::core::types::IndexField::new(
+                    graphdb_core::types::IndexField::new(
                         name.clone(),
-                        crate::core::Value::string(""),
+                        graphdb_core::Value::string(""),
                         true,
                     )
                 })
                 .collect(),
             properties: redo.properties.clone(),
-            index_type: crate::core::types::IndexType::TagIndex,
+            index_type: graphdb_core::types::IndexType::TagIndex,
             is_unique: redo.is_unique,
             covering: false,
             partial_condition: None,
@@ -727,7 +727,7 @@ impl RecoveryApplier for GraphStorageContext {
         redo: &CreateEdgeIndexRedo,
         _ts: Timestamp,
     ) -> StorageResult<()> {
-        let index = Index::new(crate::core::types::IndexConfig {
+        let index = Index::new(graphdb_core::types::IndexConfig {
             id: 0,
             name: redo.index_name.clone(),
             space_id: redo.space_id,
@@ -736,15 +736,15 @@ impl RecoveryApplier for GraphStorageContext {
                 .fields
                 .iter()
                 .map(|(name, _typ)| {
-                    crate::core::types::IndexField::new(
+                    graphdb_core::types::IndexField::new(
                         name.clone(),
-                        crate::core::Value::string(""),
+                        graphdb_core::Value::string(""),
                         true,
                     )
                 })
                 .collect(),
             properties: redo.properties.clone(),
-            index_type: crate::core::types::IndexType::EdgeIndex,
+            index_type: graphdb_core::types::IndexType::EdgeIndex,
             is_unique: redo.is_unique,
             covering: false,
             partial_condition: None,
@@ -1089,8 +1089,8 @@ fn parse_data_type(raw: &str) -> StorageResult<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::wal::traits::RecoveryApplier;
-    use crate::core::Value;
+    use graphdb_core::wal::traits::RecoveryApplier;
+    use graphdb_core::Value;
     use crate::engine::{EdgeOperationParams, InsertEdgeParams};
 
     #[test]

@@ -23,7 +23,7 @@ pub mod query_manager;
 // Re-export DataSet for convenience
 pub use data_set::DataSet;
 // Re-export error types from core module
-pub use crate::core::{DBResult, QueryError};
+pub use graphdb_core::{DBResult, QueryError};
 // Re-export execution result from executor module
 pub use executor::base::ExecutionResult;
 // Re-export QueryPipelineManager

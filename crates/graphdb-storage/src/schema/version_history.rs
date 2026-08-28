@@ -4,7 +4,7 @@
 //! for each label.
 
 use super::change::{ChangeLog, PropertyChange, SchemaObjectType};
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -121,13 +121,13 @@ impl SchemaVersionHistory {
     /// Serialize to JSON
     pub fn to_json(&self) -> StorageResult<String> {
         serde_json::to_string(self)
-            .map_err(|e| crate::core::StorageError::serialize_error(e.to_string()))
+            .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))
     }
 
     /// Deserialize from JSON
     pub fn from_json(json: &str) -> StorageResult<Self> {
         serde_json::from_str(json)
-            .map_err(|e| crate::core::StorageError::deserialize_error(e.to_string()))
+            .map_err(|e| graphdb_core::StorageError::deserialize_error(e.to_string()))
     }
 }
 

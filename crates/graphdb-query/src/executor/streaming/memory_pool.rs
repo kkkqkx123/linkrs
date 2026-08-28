@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 
 use super::chunk::DataChunk;
 

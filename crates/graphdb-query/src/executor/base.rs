@@ -20,4 +20,4 @@ pub use memory_budget::{
     MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, Spillable,
 };
 
-pub use crate::core::types::EdgeDirection;
+pub use graphdb_core::types::EdgeDirection;

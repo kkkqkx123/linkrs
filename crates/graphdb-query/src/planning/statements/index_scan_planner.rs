@@ -1,6 +1,6 @@
-use crate::core::types::expr::{ContextualExpression, Expression};
-use crate::core::types::operators::BinaryOperator;
-use crate::core::Value;
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Value;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::pattern::NodePattern;
 use crate::planning::plan::core::nodes::access::index_scan::{

@@ -1,7 +1,7 @@
 use crc32fast::Hasher;
 
-use crate::core::types::{CommitLsn, Timestamp, TransactionId};
-use crate::core::wal::{
+use graphdb_core::types::{CommitLsn, Timestamp, TransactionId};
+use graphdb_core::wal::{
     OutboxIntent, TransactionAbort, TransactionCommit, WalError, WalOpType, WalResult,
 };
 
@@ -132,7 +132,7 @@ pub fn collect_committed_transactions(
 #[cfg(test)]
 mod tests {
     use super::{batch_checksum, TransactionWalEntry};
-    use crate::core::wal::WalOpType;
+    use graphdb_core::wal::WalOpType;
 
     #[test]
     fn checksum_covers_operation_timestamp_and_payload() {

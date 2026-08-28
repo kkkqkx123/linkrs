@@ -1,5 +1,5 @@
-use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::vertex::VertexRecord;
 use std::sync::atomic::Ordering;
 
@@ -130,9 +130,9 @@ impl GraphStorageContext {
                 vid: cached
                     .external_id
                     .parse::<i64>()
-                    .map(crate::core::types::VertexId::from_int64)
+                    .map(graphdb_core::types::VertexId::from_int64)
                     .unwrap_or_else(|_| {
-                        crate::core::types::VertexId::from_string(&cached.external_id)
+                        graphdb_core::types::VertexId::from_string(&cached.external_id)
                     }),
                 properties: cached.properties,
             });
@@ -288,7 +288,7 @@ impl GraphStorageContext {
         {
             return Some(VertexRecord {
                 internal_id: cached.internal_id,
-                vid: crate::core::types::VertexId::from_int64(external_id),
+                vid: graphdb_core::types::VertexId::from_int64(external_id),
                 properties: cached.properties,
             });
         }
@@ -335,9 +335,9 @@ impl GraphStorageContext {
                 vid: cached
                     .external_id
                     .parse::<i64>()
-                    .map(crate::core::types::VertexId::from_int64)
+                    .map(graphdb_core::types::VertexId::from_int64)
                     .unwrap_or_else(|_| {
-                        crate::core::types::VertexId::from_string(&cached.external_id)
+                        graphdb_core::types::VertexId::from_string(&cached.external_id)
                     }),
                 properties: cached.properties,
             });

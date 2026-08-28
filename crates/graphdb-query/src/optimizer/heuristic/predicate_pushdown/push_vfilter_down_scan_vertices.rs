@@ -3,8 +3,8 @@
 //! This rule identifies the vFilter within the Traverse node.
 //! And rewrite it as a specific expression for the vertex attributes.
 
-use crate::core::types::expr::visitor_checkers::WildcardReplacer;
-use crate::core::Expression;
+use graphdb_core::types::expr::visitor_checkers::WildcardReplacer;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -91,9 +91,9 @@ impl RewriteRule for PushVFilterDownScanVerticesRule {
         let ctx = v_filter.context().clone();
 
         // Register the rewritten expression in the context.
-        let rewritten_meta = crate::core::types::ExpressionMeta::new(rewritten_expr);
+        let rewritten_meta = graphdb_core::types::ExpressionMeta::new(rewritten_expr);
         let rewritten_id = ctx.register_expression(rewritten_meta);
-        let rewritten_filter = crate::core::types::ContextualExpression::new(rewritten_id, ctx);
+        let rewritten_filter = graphdb_core::types::ContextualExpression::new(rewritten_id, ctx);
 
         // Create a new Traverse node.
         let mut new_traverse = traverse.clone();
@@ -139,7 +139,7 @@ fn rewrite_wildcard_to_alias(expr: &Expression, vertex_alias: &str) -> Expressio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use graphdb_core::types::operators::BinaryOperator;
 
     #[test]
     fn test_rule_name() {

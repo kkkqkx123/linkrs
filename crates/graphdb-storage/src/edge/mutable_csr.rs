@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 use crate::persistence::{read_u32_le, read_u64_le};
 
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_TIMESTAMP};
@@ -1360,7 +1360,7 @@ mod tests {
         let err = csr.delete_edge(0u32, EdgeId(100), 200).unwrap_err();
         assert_eq!(
             err.kind(),
-            crate::core::error::storage::StorageErrorKind::Conflict
+            graphdb_core::error::storage::StorageErrorKind::Conflict
         );
 
         // The edge is still logically deleted at the original timestamp.

@@ -9,7 +9,7 @@
 
 use std::error::Error;
 
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
+use graphdb_core::error::codes::{ErrorCode, PublicError, ToPublicError};
 
 /// Thread-safe boxed error type
 type BoxedError = Box<dyn Error + Send + Sync>;

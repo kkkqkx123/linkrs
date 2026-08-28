@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::info;
 
 use crate::config::Config;
-use crate::core::error::DBResult;
+use graphdb_core::error::DBResult;
 use crate::HttpServer;
 use crate::storage::UndoTarget;
 use crate::storage::{
@@ -107,7 +107,7 @@ pub async fn start_http_and_grpc_servers<
     // Setup gRPC address
     let grpc_addr = format!("{}:{}", config.host(), config.grpc_port())
         .parse::<std::net::SocketAddr>()
-        .map_err(|e| crate::core::error::DBError::internal(e.to_string()))?;
+        .map_err(|e| graphdb_core::error::DBError::internal(e.to_string()))?;
 
     // Setup HTTP address
     let http_addr = format!("{}:{}", config.host(), config.port());
@@ -125,15 +125,15 @@ pub async fn start_http_and_grpc_servers<
         serve(http_listener, http_app)
             .with_graceful_shutdown(async_shutdown_signal())
             .await?;
-        Ok::<(), crate::core::error::DBError>(())
+        Ok::<(), graphdb_core::error::DBError>(())
     };
 
     // Start gRPC server
     let grpc_future = async move {
         crate::grpc::run_server(grpc_state, grpc_config, grpc_addr)
             .await
-            .map_err(|e| crate::core::error::DBError::internal(e.to_string()))?;
-        Ok::<(), crate::core::error::DBError>(())
+            .map_err(|e| graphdb_core::error::DBError::internal(e.to_string()))?;
+        Ok::<(), graphdb_core::error::DBError>(())
     };
 
     // Run both servers concurrently

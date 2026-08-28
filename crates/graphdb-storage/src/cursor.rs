@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::types::{DataType, Timestamp};
-use crate::core::StorageError;
+use graphdb_core::types::{DataType, Timestamp};
+use graphdb_core::StorageError;
 
 // ---------------------------------------------------------------------------
 // Scan target (type-safe scan intent)
@@ -225,14 +225,14 @@ impl ScanOptions {
 /// Predicate understood by native index cursors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IndexPredicate {
-    Equal(crate::core::Value),
+    Equal(graphdb_core::Value),
     Range {
-        lower: Option<crate::core::Value>,
-        upper: Option<crate::core::Value>,
+        lower: Option<graphdb_core::Value>,
+        upper: Option<graphdb_core::Value>,
         include_lower: bool,
         include_upper: bool,
     },
-    Prefix(crate::core::Value),
+    Prefix(graphdb_core::Value),
     All,
 }
 
@@ -250,13 +250,13 @@ pub enum ScanPredicate {
     /// `column = value`
     ColumnEqual {
         column: String,
-        value: crate::core::Value,
+        value: graphdb_core::Value,
     },
     /// `column` bounded by constants (either bound may be absent).
     ColumnRange {
         column: String,
-        lower: Option<crate::core::Value>,
-        upper: Option<crate::core::Value>,
+        lower: Option<graphdb_core::Value>,
+        upper: Option<graphdb_core::Value>,
         include_lower: bool,
         include_upper: bool,
     },
@@ -267,7 +267,7 @@ impl ScanPredicate {
     ///
     /// Properties are a `(name, value)` slice in projection order.  A
     /// missing column (or any non-scalar comparison) never matches.
-    pub fn matches(&self, props: &[(String, crate::core::Value)]) -> bool {
+    pub fn matches(&self, props: &[(String, graphdb_core::Value)]) -> bool {
         let Some(value) = props
             .iter()
             .find(|(name, _)| name == self.column())
@@ -364,9 +364,9 @@ impl ScanPredicate {
 #[derive(Debug, Clone)]
 pub struct PredicateRange {
     pub column: String,
-    pub lower: Option<crate::core::Value>,
+    pub lower: Option<graphdb_core::Value>,
     pub include_lower: bool,
-    pub upper: Option<crate::core::Value>,
+    pub upper: Option<graphdb_core::Value>,
     pub include_upper: bool,
 }
 
@@ -374,9 +374,9 @@ impl PredicateRange {
     /// Tighten this range with another conjunctive bound set.
     fn intersect(
         &mut self,
-        lower: Option<crate::core::Value>,
+        lower: Option<graphdb_core::Value>,
         include_lower: bool,
-        upper: Option<crate::core::Value>,
+        upper: Option<graphdb_core::Value>,
         include_upper: bool,
     ) {
         if let (_, Some(new_lower)) = (&self.lower, &lower) {
@@ -412,7 +412,7 @@ impl PredicateRange {
     /// Whether a chunk holding values in `[min, max]` may contain rows
     /// matching this range. Conservative: returns `true` unless the chunk
     /// provably lies entirely outside.
-    pub fn overlaps(&self, min: &crate::core::Value, max: &crate::core::Value) -> bool {
+    pub fn overlaps(&self, min: &graphdb_core::Value, max: &graphdb_core::Value) -> bool {
         if let Some(ref lower) = self.lower {
             // Chunk max must reach the query lower bound.
             let ord = compare_scalar(max, lower);
@@ -453,7 +453,7 @@ impl ScanPredicate {
     }
 
     /// Evaluate the predicate against a single decoded value.
-    fn matches_scalar(&self, value: &crate::core::Value) -> bool {
+    fn matches_scalar(&self, value: &graphdb_core::Value) -> bool {
         match self {
             ScanPredicate::ColumnEqual {
                 value: expected, ..
@@ -498,29 +498,29 @@ impl ScanPredicate {
 /// Integer kinds are compared exactly as `i64`; any numeric pair involving a
 /// float is compared as `f64` (mirroring the query engine's typed batch
 /// evaluation); everything else falls back to `Value` ordering.
-fn compare_scalar(a: &crate::core::Value, b: &crate::core::Value) -> std::cmp::Ordering {
+fn compare_scalar(a: &graphdb_core::Value, b: &graphdb_core::Value) -> std::cmp::Ordering {
     match (as_i64(a), as_i64(b)) {
         (Some(x), Some(y)) => x.cmp(&y),
         _ => match (as_f64(a), as_f64(b)) {
             (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            _ => crate::core::Value::cmp(a, b),
+            _ => graphdb_core::Value::cmp(a, b),
         },
     }
 }
 
-fn as_i64(value: &crate::core::Value) -> Option<i64> {
+fn as_i64(value: &graphdb_core::Value) -> Option<i64> {
     match value {
-        crate::core::Value::SmallInt(v) => Some(*v as i64),
-        crate::core::Value::Int(v) => Some(*v as i64),
-        crate::core::Value::BigInt(v) => Some(*v),
+        graphdb_core::Value::SmallInt(v) => Some(*v as i64),
+        graphdb_core::Value::Int(v) => Some(*v as i64),
+        graphdb_core::Value::BigInt(v) => Some(*v),
         _ => None,
     }
 }
 
-fn as_f64(value: &crate::core::Value) -> Option<f64> {
+fn as_f64(value: &graphdb_core::Value) -> Option<f64> {
     match value {
-        crate::core::Value::Float(v) => Some(*v as f64),
-        crate::core::Value::Double(v) => Some(*v),
+        graphdb_core::Value::Float(v) => Some(*v as f64),
+        graphdb_core::Value::Double(v) => Some(*v),
         _ => None,
     }
 }
@@ -538,10 +538,10 @@ pub enum PartitionSelector {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IndexRow {
-    RowId(crate::core::wal::EntityRef),
+    RowId(graphdb_core::wal::EntityRef),
     Covering {
-        entity_ref: crate::core::wal::EntityRef,
-        columns: Vec<(String, crate::core::Value)>,
+        entity_ref: graphdb_core::wal::EntityRef,
+        columns: Vec<(String, graphdb_core::Value)>,
     },
 }
 
@@ -577,13 +577,13 @@ pub struct IndexScanPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlatVertexRecord {
     /// External vertex ID.
-    pub vid: crate::core::types::VertexId,
+    pub vid: graphdb_core::types::VertexId,
     /// Internal (storage) vertex ID.
     pub internal_id: i64,
     /// Tag (label) name of the scanned table.
     pub tag_name: String,
     /// Projected properties in storage order.
-    pub props: Vec<(String, crate::core::Value)>,
+    pub props: Vec<(String, graphdb_core::Value)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ pub enum ColumnValues {
     I64 { values: Vec<i64>, valid: Vec<u8> },
     F64 { values: Vec<f64>, valid: Vec<u8> },
     I32 { values: Vec<i32>, valid: Vec<u8> },
-    General(Vec<Option<crate::core::Value>>),
+    General(Vec<Option<graphdb_core::Value>>),
 }
 
 impl ColumnValues {
@@ -620,25 +620,25 @@ impl ColumnValues {
     }
 
     /// The decoded value at row `idx` (None for null / missing).
-    pub fn value_at(&self, idx: usize) -> Option<crate::core::Value> {
+    pub fn value_at(&self, idx: usize) -> Option<graphdb_core::Value> {
         match self {
             ColumnValues::I64 { values, valid } => {
                 if valid.get(idx).copied().unwrap_or(0) == 1 {
-                    values.get(idx).map(|&v| crate::core::Value::BigInt(v))
+                    values.get(idx).map(|&v| graphdb_core::Value::BigInt(v))
                 } else {
                     None
                 }
             }
             ColumnValues::F64 { values, valid } => {
                 if valid.get(idx).copied().unwrap_or(0) == 1 {
-                    values.get(idx).map(|&v| crate::core::Value::Double(v))
+                    values.get(idx).map(|&v| graphdb_core::Value::Double(v))
                 } else {
                     None
                 }
             }
             ColumnValues::I32 { values, valid } => {
                 if valid.get(idx).copied().unwrap_or(0) == 1 {
-                    values.get(idx).map(|&v| crate::core::Value::Int(v))
+                    values.get(idx).map(|&v| graphdb_core::Value::Int(v))
                 } else {
                     None
                 }
@@ -794,7 +794,7 @@ impl ColumnValues {
     }
 
     /// Convert to a `General` per-row `Option<Value>` column.
-    pub fn to_general(&self) -> Vec<Option<crate::core::Value>> {
+    pub fn to_general(&self) -> Vec<Option<graphdb_core::Value>> {
         (0..self.len()).map(|i| self.value_at(i)).collect()
     }
 
@@ -817,7 +817,7 @@ impl ColumnValues {
     /// matches the column's declared scalar kind (or is null).  Returns `None`
     /// when the declared type does not map to a typed kind or values disagree.
     pub fn from_general_with_type(
-        values: Vec<Option<crate::core::Value>>,
+        values: Vec<Option<graphdb_core::Value>>,
         data_type: &DataType,
     ) -> Option<ColumnValues> {
         match data_type {
@@ -826,7 +826,7 @@ impl ColumnValues {
                 let mut valid = vec![0u8; values.len()];
                 for (i, value) in values.into_iter().enumerate() {
                     match value {
-                        Some(crate::core::Value::BigInt(v)) => {
+                        Some(graphdb_core::Value::BigInt(v)) => {
                             vs.push(v);
                             valid[i] = 1;
                         }
@@ -841,7 +841,7 @@ impl ColumnValues {
                 let mut valid = vec![0u8; values.len()];
                 for (i, value) in values.into_iter().enumerate() {
                     match value {
-                        Some(crate::core::Value::Double(v)) => {
+                        Some(graphdb_core::Value::Double(v)) => {
                             vs.push(v);
                             valid[i] = 1;
                         }
@@ -856,7 +856,7 @@ impl ColumnValues {
                 let mut valid = vec![0u8; values.len()];
                 for (i, value) in values.into_iter().enumerate() {
                     match value {
-                        Some(crate::core::Value::Int(v)) => {
+                        Some(graphdb_core::Value::Int(v)) => {
                             vs.push(v);
                             valid[i] = 1;
                         }
@@ -892,7 +892,7 @@ impl ColumnValues {
 /// aligned with the real engine path means non-GraphStorage engines
 /// (`VecVertexCursor`, `VecEdgeCursor`) get the same typed-column coverage
 /// when they opt into the column-block scan path.
-fn column_data_type(values: &[Option<crate::core::Value>]) -> DataType {
+fn column_data_type(values: &[Option<graphdb_core::Value>]) -> DataType {
     for v in values.iter().flatten() {
         let ty = v.get_type();
         if !matches!(ty, DataType::Empty | DataType::Null) {
@@ -918,7 +918,7 @@ pub struct PropertyColumn {
 /// holds every column of the scanned table(s).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VertexColumnBatch {
-    pub vids: Vec<crate::core::types::VertexId>,
+    pub vids: Vec<graphdb_core::types::VertexId>,
     pub internal_ids: Vec<i64>,
     /// Tag (label) name per row (batches may span tables).
     pub tag_names: Vec<String>,
@@ -951,8 +951,8 @@ impl VertexColumnBatch {
 /// property in projection order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeColumnBatch {
-    pub srcs: Vec<crate::core::types::VertexId>,
-    pub dsts: Vec<crate::core::types::VertexId>,
+    pub srcs: Vec<graphdb_core::types::VertexId>,
+    pub dsts: Vec<graphdb_core::types::VertexId>,
     pub edge_types: Vec<String>,
     pub rankings: Vec<i64>,
     pub columns: Vec<PropertyColumn>,
@@ -987,7 +987,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
     /// Read the next batch of vertices (at most `batch_size` rows).
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
-    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Vertex>, StorageError>;
+    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<graphdb_core::Vertex>, StorageError>;
 
     /// Read the next batch as flat vertex records (at most `batch_size`
     /// rows), skipping `Vertex` construction and `HashMap` boxing.
@@ -1039,7 +1039,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
             tag_names: Vec::with_capacity(row_count),
             columns: Vec::with_capacity(prop_names.len()),
         };
-        let mut per_name: Vec<Vec<Option<crate::core::Value>>> = prop_names
+        let mut per_name: Vec<Vec<Option<graphdb_core::Value>>> = prop_names
             .iter()
             .map(|_| Vec::with_capacity(row_count))
             .collect();
@@ -1072,7 +1072,7 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
     /// Read the next batch of edges (at most `batch_size` rows).
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
-    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Edge>, StorageError>;
+    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<graphdb_core::Edge>, StorageError>;
 
     /// Read the next batch as column-major data (at most `batch_size` rows).
     ///
@@ -1099,7 +1099,7 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
             rankings: Vec::with_capacity(row_count),
             columns: Vec::with_capacity(prop_names.len()),
         };
-        let mut per_name: Vec<Vec<Option<crate::core::Value>>> = prop_names
+        let mut per_name: Vec<Vec<Option<graphdb_core::Value>>> = prop_names
             .iter()
             .map(|_| Vec::with_capacity(row_count))
             .collect();
@@ -1175,11 +1175,11 @@ pub trait IndexCursor: Send + std::fmt::Debug {
 /// to calling [`StorageReader::scan_vertices`] upfront.
 #[derive(Debug)]
 pub struct VecVertexCursor {
-    iter: std::vec::IntoIter<crate::core::Vertex>,
+    iter: std::vec::IntoIter<graphdb_core::Vertex>,
 }
 
 impl VecVertexCursor {
-    pub fn new(vertices: Vec<crate::core::Vertex>) -> Self {
+    pub fn new(vertices: Vec<graphdb_core::Vertex>) -> Self {
         Self {
             iter: vertices.into_iter(),
         }
@@ -1187,7 +1187,7 @@ impl VecVertexCursor {
 }
 
 impl VertexCursor for VecVertexCursor {
-    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Vertex>, StorageError> {
+    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<graphdb_core::Vertex>, StorageError> {
         Ok(self.iter.by_ref().take(batch_size).collect())
     }
 }
@@ -1195,11 +1195,11 @@ impl VertexCursor for VecVertexCursor {
 /// Edge cursor backed by a pre-materialized `Vec<Edge>`.
 #[derive(Debug)]
 pub struct VecEdgeCursor {
-    iter: std::vec::IntoIter<crate::core::Edge>,
+    iter: std::vec::IntoIter<graphdb_core::Edge>,
 }
 
 impl VecEdgeCursor {
-    pub fn new(edges: Vec<crate::core::Edge>) -> Self {
+    pub fn new(edges: Vec<graphdb_core::Edge>) -> Self {
         Self {
             iter: edges.into_iter(),
         }
@@ -1207,7 +1207,7 @@ impl VecEdgeCursor {
 }
 
 impl EdgeCursor for VecEdgeCursor {
-    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Edge>, StorageError> {
+    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<graphdb_core::Edge>, StorageError> {
         Ok(self.iter.by_ref().take(batch_size).collect())
     }
 }
@@ -1271,8 +1271,8 @@ pub fn open_index_cursor<S: crate::StorageReader + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::{Tag, Value, Vertex};
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::{Tag, Value, Vertex};
     use std::collections::HashMap;
 
     #[test]

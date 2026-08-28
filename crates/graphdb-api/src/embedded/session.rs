@@ -2,24 +2,24 @@
 //!
 //! Provide the concept of a "session" as the context in which queries are executed.
 
-use crate::core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
+use graphdb_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
-use crate::core::Value;
-use crate::core::{SessionStatistics, StatsManager};
-use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
-use crate::query::parser::ast::Stmt;
-use crate::query::parser::{Parser, ParserResult};
+use graphdb_core::Value;
+use graphdb_core::{SessionStatistics, StatsManager};
+use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
+use graphdb_query::parser::ast::Stmt;
+use graphdb_query::parser::{Parser, ParserResult};
 #[cfg(feature = "fulltext-search")]
-use crate::search::FulltextIndexManager;
+use graphdb_search::FulltextIndexManager;
 use crate::storage::StorageClient;
 #[cfg(feature = "vector")]
-use crate::sync::vector_sync::SearchOptions;
-use crate::sync::SyncManager;
-use crate::transaction::TransactionId;
-use crate::transaction::TransactionManager;
-use crate::transaction::TransactionOptions;
+use graphdb_sync::vector_sync::SearchOptions;
+use graphdb_sync::SyncManager;
+use graphdb_transaction::TransactionId;
+use graphdb_transaction::TransactionManager;
+use graphdb_transaction::TransactionOptions;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -167,7 +167,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// The core QueryApi converts SpaceSwitched to a QueryResult with
     /// "space_name", "space_id", "vid_type" columns. This method detects
     /// that pattern and updates the session's space state accordingly.
-    fn update_space_from_result(&self, result: &crate::core::QueryResult) {
+    fn update_space_from_result(&self, result: &crate::api_core::types::QueryResult) {
         let columns = result.columns();
         if !columns.iter().any(|c| c == "space_name") {
             return;
@@ -377,7 +377,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         &self,
         query: &str,
         stmt: &Stmt,
-        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
+        parsed_ast: Arc<graphdb_query::parser::ast::stmt::Ast>,
     ) -> CoreResult<QueryResult> {
         let txn_manager = self.txn_manager();
         let require_transaction = |what: &str| {
@@ -487,7 +487,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     fn execute_command_plan(
         &self,
         query: &str,
-        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
+        parsed_ast: Arc<graphdb_query::parser::ast::stmt::Ast>,
         transaction_id: Option<TransactionId>,
         active: bool,
     ) -> CoreResult<QueryResult> {
@@ -571,8 +571,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     fn execute_variable_assignment(
         &self,
         query: &str,
-        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
-        assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
+        parsed_ast: Arc<graphdb_query::parser::ast::stmt::Ast>,
+        assign: &graphdb_query::parser::ast::stmt::AssignVariableStmt,
         parameters: Option<HashMap<String, Value>>,
         session_variables: Option<HashMap<String, Value>>,
     ) -> CoreResult<QueryResult> {
@@ -652,9 +652,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
         self.set_variable(assign.name.clone(), value);
-        Ok(QueryResult::from_core(crate::core::QueryResult::new(
-            crate::query::executor::base::ExecutionResult::from_data_set(
-                crate::core::types::DataSet::from_rows(rows, columns),
+        Ok(QueryResult::from_core(crate::api_core::types::QueryResult::new(
+            graphdb_query::executor::base::ExecutionResult::from_data_set(
+                graphdb_core::types::DataSet::from_rows(rows, columns),
             ),
             result.metadata,
         )))
@@ -819,8 +819,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             .db
             .txn_manager
             .begin_transaction(options)
-            .map_err(|e| crate::core::CoreError::TransactionFailed(e.to_string()))?;
-        let txn_handle = crate::core::TransactionHandle(txn_id);
+            .map_err(|e| crate::api_core::error::CoreError::TransactionFailed(e.to_string()))?;
+        let txn_handle = crate::api_core::types::TransactionHandle(txn_id);
 
         Ok(Transaction::new(self, txn_handle))
     }
@@ -862,8 +862,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             .db
             .txn_manager
             .begin_transaction(options)
-            .map_err(|e| crate::core::CoreError::TransactionFailed(e.to_string()))?;
-        let txn_handle = crate::core::TransactionHandle(txn_id);
+            .map_err(|e| crate::api_core::error::CoreError::TransactionFailed(e.to_string()))?;
+        let txn_handle = crate::api_core::types::TransactionHandle(txn_id);
 
         Ok(Transaction::new(self, txn_handle))
     }
@@ -906,7 +906,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     pub fn create_space(
         &self,
         name: &str,
-        config: crate::core::SpaceConfig,
+        config: crate::api_core::types::SpaceConfig,
     ) -> CoreResult<()> {
         self.db.schema_api.create_space(name, config)
     }
@@ -1008,7 +1008,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// # Return
     /// - Returns the number of vertices inserted on success
     /// - Return error on failure
-    pub fn batch_insert_vertices(&self, vertices: Vec<crate::core::Vertex>) -> CoreResult<usize> {
+    pub fn batch_insert_vertices(&self, vertices: Vec<graphdb_core::Vertex>) -> CoreResult<usize> {
         let space_name = self
             .space_name()
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
@@ -1030,7 +1030,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// # Return
     /// - Returns the number of edges inserted on success
     /// - Return error on failure
-    pub fn batch_insert_edges(&self, edges: Vec<crate::core::Edge>) -> CoreResult<usize> {
+    pub fn batch_insert_edges(&self, edges: Vec<graphdb_core::Edge>) -> CoreResult<usize> {
         let space_name = self
             .space_name()
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
@@ -1054,7 +1054,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn commit_transaction(
         &self,
-        txn_handle: crate::core::TransactionHandle,
+        txn_handle: crate::api_core::types::TransactionHandle,
     ) -> CoreResult<()> {
         self.txn_manager()
             .commit_transaction(txn_handle.0)
@@ -1071,7 +1071,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn rollback_transaction(
         &self,
-        txn_handle: crate::core::TransactionHandle,
+        txn_handle: crate::api_core::types::TransactionHandle,
     ) -> CoreResult<()> {
         self.txn_manager()
             .abort_transaction(txn_handle.0)
@@ -1089,13 +1089,13 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn create_savepoint(
         &self,
-        txn_handle: &crate::core::TransactionHandle,
+        txn_handle: &crate::api_core::types::TransactionHandle,
         name: &str,
-    ) -> CoreResult<crate::core::SavepointId> {
+    ) -> CoreResult<crate::api_core::types::SavepointId> {
         self.txn_manager()
             .create_savepoint(txn_handle.0, Some(name.to_string()))
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
-            .map(crate::core::SavepointId)
+            .map(crate::api_core::types::SavepointId)
     }
 
     /// Release a savepoint (for C API use)
@@ -1109,8 +1109,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn release_savepoint(
         &self,
-        txn_handle: &crate::core::TransactionHandle,
-        savepoint: crate::core::SavepointId,
+        txn_handle: &crate::api_core::types::TransactionHandle,
+        savepoint: crate::api_core::types::SavepointId,
     ) -> CoreResult<()> {
         self.txn_manager()
             .release_savepoint(txn_handle.0, savepoint.0)
@@ -1128,8 +1128,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn rollback_to_savepoint(
         &self,
-        txn_handle: &crate::core::TransactionHandle,
-        savepoint: crate::core::SavepointId,
+        txn_handle: &crate::api_core::types::TransactionHandle,
+        savepoint: crate::api_core::types::SavepointId,
     ) -> CoreResult<()> {
         let txn_manager = self.txn_manager();
         let storage = self.storage_mut();
@@ -1156,7 +1156,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         field_name: &str,
         query_vector: Vec<f32>,
         limit: usize,
-    ) -> CoreResult<Vec<crate::core::VectorSearchResult>> {
+    ) -> CoreResult<Vec<graphdb_core::VectorSearchResult>> {
         let space_id = (*self.space_id.read())
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
 
@@ -1177,7 +1177,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         Ok(results
             .into_iter()
-            .map(|r| crate::core::VectorSearchResult {
+            .map(|r| graphdb_core::VectorSearchResult {
                 id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
@@ -1206,7 +1206,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         query_vector: Vec<f32>,
         limit: usize,
         threshold: f32,
-    ) -> CoreResult<Vec<crate::core::VectorSearchResult>> {
+    ) -> CoreResult<Vec<graphdb_core::VectorSearchResult>> {
         let space_id = (*self.space_id.read())
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
 
@@ -1228,7 +1228,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         Ok(results
             .into_iter()
-            .map(|r| crate::core::VectorSearchResult {
+            .map(|r| graphdb_core::VectorSearchResult {
                 id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),

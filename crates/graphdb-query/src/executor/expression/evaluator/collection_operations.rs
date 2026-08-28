@@ -2,15 +2,15 @@
 //!
 //! Provide functionality for evaluating collection types, including index access, range access, and property access.
 
-use crate::core::value::list::List;
-use crate::core::Value;
+use graphdb_core::value::list::List;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 use serde_json::Value as JsonValue;
 
 /// Convert a serde_json::Value to a native Value
 fn json_to_value_inline(json: &JsonValue) -> Value {
     match json {
-        JsonValue::Null => Value::Null(crate::core::value::NullType::Null),
+        JsonValue::Null => Value::Null(graphdb_core::value::NullType::Null),
         JsonValue::Bool(b) => Value::Bool(*b),
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -18,7 +18,7 @@ fn json_to_value_inline(json: &JsonValue) -> Value {
             } else if let Some(f) = n.as_f64() {
                 Value::Double(f)
             } else {
-                Value::Null(crate::core::value::NullType::Null)
+                Value::Null(graphdb_core::value::NullType::Null)
             }
         }
         JsonValue::String(s) => Value::string(s.clone()),
@@ -73,7 +73,7 @@ fn json_property_access(json: &JsonValue, property: &str) -> Result<Value, Expre
         JsonValue::Object(map) => Ok(map
             .get(property)
             .map(json_to_value_inline)
-            .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+            .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
         JsonValue::Array(arr) => {
             if let Ok(index) = property.parse::<isize>() {
                 let idx = if index < 0 {
@@ -90,7 +90,7 @@ fn json_property_access(json: &JsonValue, property: &str) -> Result<Value, Expre
                 ))
             }
         }
-        _ => Ok(Value::Null(crate::core::value::NullType::Null)),
+        _ => Ok(Value::Null(graphdb_core::value::NullType::Null)),
     }
 }
 
@@ -114,7 +114,7 @@ impl CollectionOperationEvaluator {
         index: &Value,
     ) -> Result<Value, ExpressionError> {
         if collection.is_null() || index.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match collection {
@@ -229,11 +229,11 @@ impl CollectionOperationEvaluator {
         end: Option<&Value>,
     ) -> Result<Value, ExpressionError> {
         if collection.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         if start.is_some_and(|v| v.is_null()) || end.is_some_and(|v| v.is_null()) {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match collection {
@@ -324,28 +324,28 @@ impl CollectionOperationEvaluator {
     /// Access to the evaluation attribute
     pub fn eval_property_access(object: &Value, property: &str) -> Result<Value, ExpressionError> {
         if object.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match object {
             Value::Vertex(vertex) => Ok(vertex
                 .property_value(property)
-                .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))),
             Value::Edge(edge) => Ok(edge
                 .properties()
                 .get(property)
                 .cloned()
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             Value::Map(map) => Ok(map
                 .get(&Value::string(property))
                 .cloned()
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             Value::Struct(s) => Ok(s
                 .fields
                 .iter()
                 .find(|(name, _)| name == property)
                 .map(|(_, value)| value.clone())
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             Value::List(list) => {
                 if let Ok(index) = property.parse::<isize>() {
                     let adjusted_index = if index < 0 {
@@ -396,7 +396,7 @@ impl CollectionOperationEvaluator {
     /// tag-qualified paths such as `$$.Person.name` resolve correctly.
     pub fn eval_struct_field_access(object: &Value, field: &str) -> Result<Value, ExpressionError> {
         if object.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
         match object {
             Value::Struct(s) => Ok(s
@@ -404,7 +404,7 @@ impl CollectionOperationEvaluator {
                 .iter()
                 .find(|(name, _)| name == field)
                 .map(|(_, value)| value.clone())
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             _ => Self::eval_property_access(object, field),
         }
     }

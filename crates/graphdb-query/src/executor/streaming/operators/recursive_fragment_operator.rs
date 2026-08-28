@@ -6,9 +6,9 @@ use super::algorithms::{
     bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs, AllPathsConfig,
     BidirBfsConfig,
 };
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{EdgeDirection, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
@@ -308,12 +308,12 @@ impl RecursiveFragmentOperator {
                             .get_variable(left_vertex_column)
                             .or_else(|| ctx.get_variable("vid"))
                             .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                         let right_val = ctx
                             .get_variable(right_vertex_column)
                             .or_else(|| ctx.get_variable("dst_vid"))
                             .or_else(|| row.get(1).cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                         let Ok(src_vid) = VertexId::try_from(&left_val) else {
                             continue;
                         };
@@ -401,7 +401,7 @@ impl RecursiveFragmentOperator {
                         let vid_val = ctx
                             .get_variable("vid")
                             .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                         let Ok(start_vid) = VertexId::try_from(&vid_val) else {
                             continue;
                         };
@@ -409,7 +409,7 @@ impl RecursiveFragmentOperator {
                             .get_variable("dst_vid")
                             .or_else(|| ctx.get_variable("target"))
                             .or_else(|| row.get(1).cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                         let Ok(end_vid) = VertexId::try_from(&end_val) else {
                             continue;
                         };

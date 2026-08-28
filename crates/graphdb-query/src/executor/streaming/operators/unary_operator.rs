@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::compiled::{
     compiled_eval_enabled, CompiledExpr,
 };
@@ -475,7 +475,7 @@ impl UnaryOperator {
                         let col = match chunk.evaluate_expression(expr, Some(&state.env)) {
                             Ok(col) => col,
                             Err(_) => {
-                                vec![Value::Null(crate::core::value::NullType::Null); chunk.len()]
+                                vec![Value::Null(graphdb_core::value::NullType::Null); chunk.len()]
                             }
                         };
                         new_cols.push(col);
@@ -630,13 +630,13 @@ impl UnaryOperator {
                         };
                         let entity = match ExpressionEvaluator::evaluate(entity_expr, &mut ctx) {
                             Ok(val) => val,
-                            Err(_) => Value::Null(crate::core::NullType::Null),
+                            Err(_) => Value::Null(graphdb_core::NullType::Null),
                         };
-                        let vid = match crate::core::types::storage_ids::VertexId::try_from(&entity)
+                        let vid = match graphdb_core::types::storage_ids::VertexId::try_from(&entity)
                         {
                             Ok(vid) => vid,
                             Err(_) => {
-                                new_row.push(Value::Null(crate::core::NullType::Null));
+                                new_row.push(Value::Null(graphdb_core::NullType::Null));
                                 result_rows.push(new_row);
                                 continue;
                             }
@@ -646,7 +646,7 @@ impl UnaryOperator {
                                 if flat {
                                     for prop in prop_names.iter() {
                                         new_row.push(vertex.property_value(prop).unwrap_or_else(
-                                            || Value::Null(crate::core::NullType::Null),
+                                            || Value::Null(graphdb_core::NullType::Null),
                                         ));
                                     }
                                 } else {
@@ -656,14 +656,14 @@ impl UnaryOperator {
                             Ok(None) => {
                                 if flat {
                                     for _ in prop_names.iter() {
-                                        new_row.push(Value::Null(crate::core::NullType::Null));
+                                        new_row.push(Value::Null(graphdb_core::NullType::Null));
                                     }
                                 } else {
-                                    new_row.push(Value::Null(crate::core::NullType::Null));
+                                    new_row.push(Value::Null(graphdb_core::NullType::Null));
                                 }
                             }
                             Err(_) => {
-                                new_row.push(Value::Null(crate::core::NullType::Null));
+                                new_row.push(Value::Null(graphdb_core::NullType::Null));
                             }
                         }
                         result_rows.push(new_row);
@@ -775,8 +775,8 @@ fn matches_value(val: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::{Tag, Vertex};
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::{Tag, Vertex};
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::operators::source_operator::SourceOperator;

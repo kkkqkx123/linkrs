@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::{Expression, ExpressionMeta};
-use crate::core::Value;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{Expression, ExpressionMeta};
+use graphdb_core::Value;
 use crate::optimizer::analysis::{
     ExpressionAnalysis, ExpressionAnalyzer, FingerprintCalculator, PlanFingerprint,
     ReferenceCountAnalysis, ReferenceCountAnalyzer,
@@ -16,11 +16,11 @@ use crate::planning::plan::core::nodes::{
 };
 
 /// Create an expression context for testing purposes.
-fn create_test_context(expr: Expression) -> crate::core::types::ContextualExpression {
+fn create_test_context(expr: Expression) -> graphdb_core::types::ContextualExpression {
     let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
     let expr_meta = ExpressionMeta::new(expr);
     let expr_id = expr_ctx.register_expression(expr_meta);
-    crate::core::types::ContextualExpression::new(expr_id, expr_ctx)
+    graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx)
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_expression_analyzer_integration() {
             object: Box::new(Expression::Variable("n".to_string())),
             property: "age".to_string(),
         }),
-        op: crate::core::types::BinaryOperator::GreaterThan,
+        op: graphdb_core::types::BinaryOperator::GreaterThan,
         right: Box::new(Expression::Literal(Value::Int(18))),
     };
 
@@ -158,7 +158,7 @@ fn test_expression_complexity_scoring() {
                 property: "value".to_string(),
             }],
         }),
-        op: crate::core::types::BinaryOperator::Add,
+        op: graphdb_core::types::BinaryOperator::Add,
         right: Box::new(Expression::Function {
             name: "coalesce".to_string(),
             args: vec![
@@ -183,7 +183,7 @@ fn test_expression_aggregate_detection() {
 
     // Expressions that contain aggregate functions
     let aggregate_expr = Expression::Aggregate {
-        func: crate::core::types::operators::AggregateFunction::Count,
+        func: graphdb_core::types::operators::AggregateFunction::Count,
         args: vec![Expression::Variable("n".to_string())],
         distinct: false,
         filter: None,
@@ -204,13 +204,13 @@ fn test_expression_depth_and_node_count() {
         left: Box::new(Expression::Binary {
             left: Box::new(Expression::Binary {
                 left: Box::new(Expression::Literal(Value::Int(1))),
-                op: crate::core::types::BinaryOperator::Add,
+                op: graphdb_core::types::BinaryOperator::Add,
                 right: Box::new(Expression::Literal(Value::Int(2))),
             }),
-            op: crate::core::types::BinaryOperator::Add,
+            op: graphdb_core::types::BinaryOperator::Add,
             right: Box::new(Expression::Literal(Value::Int(3))),
         }),
-        op: crate::core::types::BinaryOperator::Add,
+        op: graphdb_core::types::BinaryOperator::Add,
         right: Box::new(Expression::Literal(Value::Int(4))),
     };
 
@@ -260,7 +260,7 @@ fn test_expression_analyzer_with_case_expression() {
             (
                 Expression::Binary {
                     left: Box::new(Expression::Variable("x".to_string())),
-                    op: crate::core::types::BinaryOperator::GreaterThan,
+                    op: graphdb_core::types::BinaryOperator::GreaterThan,
                     right: Box::new(Expression::Literal(Value::Int(10))),
                 },
                 Expression::Literal(Value::string("large")),
@@ -268,7 +268,7 @@ fn test_expression_analyzer_with_case_expression() {
             (
                 Expression::Binary {
                     left: Box::new(Expression::Variable("x".to_string())),
-                    op: crate::core::types::BinaryOperator::GreaterThan,
+                    op: graphdb_core::types::BinaryOperator::GreaterThan,
                     right: Box::new(Expression::Literal(Value::Int(5))),
                 },
                 Expression::Literal(Value::string("medium")),
@@ -294,14 +294,14 @@ fn test_plan_fingerprint_with_filter() {
             object: Box::new(Expression::Variable("n".to_string())),
             property: "age".to_string(),
         }),
-        op: crate::core::types::BinaryOperator::GreaterThan,
+        op: graphdb_core::types::BinaryOperator::GreaterThan,
         right: Box::new(Expression::Literal(Value::Int(18))),
     };
 
     let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
     let expr_meta = ExpressionMeta::new(condition_expr);
     let expr_id = expr_ctx.register_expression(expr_meta);
-    let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+    let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
 
     let input_node = PlanNodeEnum::GetVertices(GetVerticesNode::new(1, "default", "Person"));
     let filter_node = PlanNodeEnum::Filter(
@@ -329,7 +329,7 @@ fn test_plan_fingerprint_with_project() {
     };
     let expr_meta1 = ExpressionMeta::new(expr1);
     let expr_id1 = expr_ctx.register_expression(expr_meta1);
-    let ctx_expr1 = crate::core::types::ContextualExpression::new(expr_id1, expr_ctx.clone());
+    let ctx_expr1 = graphdb_core::types::ContextualExpression::new(expr_id1, expr_ctx.clone());
 
     let expr2 = Expression::Property {
         object: Box::new(Expression::Variable("n".to_string())),
@@ -337,11 +337,11 @@ fn test_plan_fingerprint_with_project() {
     };
     let expr_meta2 = ExpressionMeta::new(expr2);
     let expr_id2 = expr_ctx.register_expression(expr_meta2);
-    let ctx_expr2 = crate::core::types::ContextualExpression::new(expr_id2, expr_ctx);
+    let ctx_expr2 = graphdb_core::types::ContextualExpression::new(expr_id2, expr_ctx);
 
     let columns = vec![
-        crate::core::YieldColumn::new(ctx_expr1, "n.name".to_string()),
-        crate::core::YieldColumn::new(ctx_expr2, "n.age".to_string()),
+        graphdb_core::YieldColumn::new(ctx_expr1, "n.name".to_string()),
+        graphdb_core::YieldColumn::new(ctx_expr2, "n.age".to_string()),
     ];
 
     let project_node = PlanNodeEnum::Project(
@@ -399,7 +399,7 @@ fn test_expression_analyzer_with_type_cast() {
     // Type conversion expressions
     let cast_expr = Expression::TypeCast {
         expression: Box::new(Expression::Literal(Value::string("123"))),
-        target_type: crate::core::types::DataType::Int,
+        target_type: graphdb_core::types::DataType::Int,
     };
 
     let ctx_expr = create_test_context(cast_expr);
@@ -432,7 +432,7 @@ fn test_expression_analyzer_with_unary_operator() {
 
     // A unary operation expression
     let unary_expr = Expression::Unary {
-        op: crate::core::types::UnaryOperator::Minus,
+        op: graphdb_core::types::UnaryOperator::Minus,
         operand: Box::new(Expression::Literal(Value::Int(5))),
     };
 

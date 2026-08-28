@@ -1,4 +1,4 @@
-use crate::core::types::{
+use graphdb_core::types::{
     ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, UndoLogError,
     UndoLogResult, UndoTarget, VertexIdentifier,
 };
@@ -8,7 +8,7 @@ use crate::engine::transaction::{
     EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps, UpdateEdgePropertyUndoParams,
 };
 
-fn checked_internal_vertex_id(vid: &crate::core::types::VertexId) -> UndoLogResult<u32> {
+fn checked_internal_vertex_id(vid: &graphdb_core::types::VertexId) -> UndoLogResult<u32> {
     let value = vid.as_int64().ok_or_else(|| {
         UndoLogError::UndoFailed(format!(
             "Cannot encode non-integer vertex ID in an edge undo record: {vid}"
@@ -75,7 +75,7 @@ impl UndoTarget for GraphStorageContext {
     fn restore_edge(
         &self,
         edge: EdgeIdentifier,
-        properties: Vec<(String, crate::core::Value)>,
+        properties: Vec<(String, graphdb_core::Value)>,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         self.insert_edge(crate::engine::params::InsertEdgeParams {
@@ -97,7 +97,7 @@ impl UndoTarget for GraphStorageContext {
         &self,
         vertex: VertexIdentifier,
         col_id: ColumnId,
-        value: crate::core::Value,
+        value: graphdb_core::Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         self.data_store()
@@ -119,7 +119,7 @@ impl UndoTarget for GraphStorageContext {
         &self,
         edge_id: EdgeIdentifier,
         col_id: ColumnId,
-        value: crate::core::Value,
+        value: graphdb_core::Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let params = UpdateEdgePropertyUndoParams {
@@ -137,7 +137,7 @@ impl UndoTarget for GraphStorageContext {
                     value,
                     ts,
                 )
-                .map_err(|e| crate::core::StorageError::db_error(e.to_string()))
+                .map_err(|e| graphdb_core::StorageError::db_error(e.to_string()))
             })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_id.edge_label);
@@ -173,7 +173,7 @@ impl UndoTarget for GraphStorageContext {
                     edge_ctx.ie_offset,
                     edge_ctx.timestamp,
                 )
-                .map_err(|e| crate::core::StorageError::db_error(e.to_string()))
+                .map_err(|e| graphdb_core::StorageError::db_error(e.to_string()))
             })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
@@ -358,7 +358,7 @@ impl UndoTarget for GraphStorageContext {
 #[cfg(test)]
 mod tests {
     use super::checked_internal_vertex_id;
-    use crate::core::types::VertexId;
+    use graphdb_core::types::VertexId;
 
     #[test]
     fn checked_internal_vertex_id_rejects_non_integer_ids() {

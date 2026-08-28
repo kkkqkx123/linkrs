@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use crate::core::types::LabelId;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::LabelId;
+use graphdb_core::{StorageError, StorageResult};
 use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
@@ -291,7 +291,7 @@ pub fn rename_edge_property(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::DataType;
+    use graphdb_core::DataType;
     use crate::edge::EdgeStrategy;
     use crate::types::StoragePropertyDef;
 

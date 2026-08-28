@@ -2,7 +2,7 @@
 //!
 //! Provide definitions for the planning nodes related to user management.
 
-use crate::core::types::PasswordInfo;
+use graphdb_core::types::PasswordInfo;
 use crate::define_plan_node;
 
 define_plan_node! {

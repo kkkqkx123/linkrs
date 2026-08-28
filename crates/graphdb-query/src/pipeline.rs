@@ -6,9 +6,9 @@ mod execution;
 mod frontend;
 mod prepared;
 
-use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::metadata::SchemaManager;
-use crate::core::StatsManager;
+use graphdb_core::metadata::index_manager::IndexMetadataManager;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::StatsManager;
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
@@ -16,11 +16,11 @@ use crate::executor::streaming::SessionTransactionController;
 use crate::optimizer::OptimizerEngine;
 use crate::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
 #[cfg(feature = "fulltext-search")]
-use crate::search::manager::FulltextIndexManager;
+use graphdb_search::manager::FulltextIndexManager;
 use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
-use crate::sync::vector_sync::VectorSyncCoordinator;
-use crate::sync::SyncManager;
+use graphdb_sync::vector_sync::VectorSyncCoordinator;
+use graphdb_sync::SyncManager;
 use parking_lot::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;

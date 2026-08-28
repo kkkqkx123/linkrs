@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 
@@ -71,7 +71,7 @@ pub(super) fn handle(
                 .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
-                row.push(Value::Null(crate::core::NullType::Null));
+                row.push(Value::Null(graphdb_core::NullType::Null));
                 row.push(Value::Vertex(Box::default()));
             }
             let out_col_names = schema
@@ -215,7 +215,7 @@ pub(super) fn handle_all(
                 .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
-                row.push(Value::Null(crate::core::NullType::Null));
+                row.push(Value::Null(graphdb_core::NullType::Null));
                 row.push(Value::Vertex(Box::default()));
             }
             if !rows.is_empty() {

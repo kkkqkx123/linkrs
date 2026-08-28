@@ -1,12 +1,12 @@
 use super::{set_typed_columns_enabled, DataChunk, RowPool, TypedColumn, TypedKind};
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::value::date_time::DateTimeValue;
-use crate::core::value::decimal128::Decimal128Value;
-use crate::core::value::DateValue;
-use crate::core::Value;
-use crate::core::Vertex;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::value::date_time::DateTimeValue;
+use graphdb_core::value::decimal128::Decimal128Value;
+use graphdb_core::value::DateValue;
+use graphdb_core::Value;
+use graphdb_core::Vertex;
 use crate::executor::streaming::slot::SlotLayout;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -212,7 +212,7 @@ fn typed_columns_probe_null_leading_and_fallback_on_mixed() {
     ]));
     let rows = vec![
         vec![
-            Value::Null(crate::core::value::NullType::Null),
+            Value::Null(graphdb_core::value::NullType::Null),
             Value::BigInt(1),
         ],
         vec![Value::BigInt(2), Value::Double(2.0)],
@@ -225,7 +225,7 @@ fn typed_columns_probe_null_leading_and_fallback_on_mixed() {
     );
     assert_eq!(
         chunk.typed_column(0).and_then(|c| c.value_at(0)),
-        Some(Value::Null(crate::core::value::NullType::Null)),
+        Some(Value::Null(graphdb_core::value::NullType::Null)),
         "NULL placeholder preserved by the bitmap"
     );
     assert!(matches!(
@@ -238,8 +238,8 @@ fn typed_columns_probe_null_leading_and_fallback_on_mixed() {
 fn typed_columns_all_null_column_falls_back() {
     let layout = Arc::new(SlotLayout::from_names(&["n".to_string()]));
     let rows = vec![
-        vec![Value::Null(crate::core::value::NullType::Null)],
-        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::Null(graphdb_core::value::NullType::Null)],
+        vec![Value::Null(graphdb_core::value::NullType::Null)],
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     chunk.build_typed_columns(true);
@@ -271,7 +271,7 @@ fn typed_columns_build_datetime_and_decimal_columns() {
             ]
         })
         .collect();
-    rows[2][0] = Value::Null(crate::core::value::NullType::Null);
+    rows[2][0] = Value::Null(graphdb_core::value::NullType::Null);
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     chunk.build_typed_columns(true);
     let dt = chunk.typed_column(0).expect("datetime column typed");
@@ -294,7 +294,7 @@ fn typed_columns_build_datetime_and_decimal_columns() {
     );
     assert_eq!(
         dt.value_at(2),
-        Some(Value::Null(crate::core::value::NullType::Null))
+        Some(Value::Null(graphdb_core::value::NullType::Null))
     );
     let dec = chunk.typed_column(1).expect("decimal column typed");
     assert!(
@@ -568,7 +568,7 @@ fn typed_eval_supports_arithmetic_and_cast() {
 
     let cast = Expression::TypeCast {
         expression: Box::new(Expression::variable("a")),
-        target_type: crate::core::DataType::Double,
+        target_type: graphdb_core::DataType::Double,
     };
     assert_eq!(
         chunk.evaluate_expression(&cast, None).expect("cast"),
@@ -918,9 +918,9 @@ fn nullable_column_builds_typed_with_bitmap() {
     let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
     let rows = vec![
         vec![Value::BigInt(10)],
-        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::Null(graphdb_core::value::NullType::Null)],
         vec![Value::BigInt(30)],
-        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::Null(graphdb_core::value::NullType::Null)],
         vec![Value::BigInt(50)],
     ];
     let mut chunk = DataChunk::new_with_layout(rows.clone(), layout);
@@ -937,7 +937,7 @@ fn nullable_column_builds_typed_with_bitmap() {
     );
     assert_eq!(
         col.value_at(1),
-        Some(Value::Null(crate::core::value::NullType::Null)),
+        Some(Value::Null(graphdb_core::value::NullType::Null)),
         "invalid rows materialize as NULL"
     );
     assert_eq!(
@@ -949,7 +949,7 @@ fn nullable_column_builds_typed_with_bitmap() {
 
 #[test]
 fn nullable_eval_matches_row_path() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
     let rows = vec![
         vec![Value::BigInt(10), Value::BigInt(2)],
@@ -1007,7 +1007,7 @@ fn nullable_eval_matches_row_path() {
 
 #[test]
 fn nullable_eval_literal_and_cast() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
     let rows = vec![
         vec![Value::BigInt(1)],
@@ -1044,7 +1044,7 @@ fn nullable_eval_literal_and_cast() {
     // Cast preserves NULL (NULL -> NULL in the value path).
     let cast = Expression::TypeCast {
         expression: Box::new(Expression::variable("a")),
-        target_type: crate::core::DataType::Double,
+        target_type: graphdb_core::DataType::Double,
     };
     assert_eq!(
         chunk.evaluate_expression(&cast, None).expect("cast"),
@@ -1058,7 +1058,7 @@ fn nullable_eval_literal_and_cast() {
 
 #[test]
 fn nullable_column_served_by_typed_batch_path() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     let stats = Arc::new(crate::executor::streaming::runtime::ColumnarStats::new());
     let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
     let rows: Vec<Vec<Value>> = (0..100)
@@ -1095,7 +1095,7 @@ fn nullable_column_served_by_typed_batch_path() {
 
 #[test]
 fn nullable_bool_and_or_errors_like_row_path() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     let layout = Arc::new(SlotLayout::from_names(&["x".to_string(), "y".to_string()]));
     let rows = vec![
         vec![Value::Bool(true), Value::Bool(false)],
@@ -1128,7 +1128,7 @@ fn nullable_bool_and_or_errors_like_row_path() {
 
 #[test]
 fn columnar_batch_keeps_nullable_typed_columns() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     use crate::executor::streaming::chunk::columnar_batch::ColumnarBatch;
     use crate::executor::streaming::chunk::schema::{ColumnInfo, Schema};
 
@@ -1196,7 +1196,7 @@ fn columnar_and_row_paths_agree_fuzz() {
         let rows: Vec<Vec<Value>> = (0..n)
             .map(|_| {
                 vec![
-                    Value::Vertex(Box::new(crate::core::Vertex::with_vid(
+                    Value::Vertex(Box::new(graphdb_core::Vertex::with_vid(
                         VertexId::from_int64(rand() as i64),
                     ))),
                     Value::BigInt((rand() % 100) as i64),

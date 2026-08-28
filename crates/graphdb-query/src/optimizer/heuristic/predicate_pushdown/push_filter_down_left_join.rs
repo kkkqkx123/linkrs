@@ -3,8 +3,8 @@
 //! This rule identifies the Filter -> LeftJoin mode.
 //! And push the filtering conditions to both sides of the connection.
 
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::{check_col_name, split_filter};
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -123,7 +123,7 @@ impl RewriteRule for PushFilterDownLeftJoinRule {
                 Some(meta) => meta.inner().clone(),
                 None => return Ok(None),
             };
-            let left_expr_meta = crate::core::types::expr::ExpressionMeta::new(left_expr);
+            let left_expr_meta = graphdb_core::types::expr::ExpressionMeta::new(left_expr);
             let left_id = ctx.register_expression(left_expr_meta);
             let left_ctx_expr = ContextualExpression::new(left_id, ctx.clone());
             let left_filter_node = FilterNode::new(new_left, left_ctx_expr).map_err(|e| {
@@ -142,7 +142,7 @@ impl RewriteRule for PushFilterDownLeftJoinRule {
                 Some(meta) => meta.inner().clone(),
                 None => return Ok(None),
             };
-            let right_expr_meta = crate::core::types::expr::ExpressionMeta::new(right_expr);
+            let right_expr_meta = graphdb_core::types::expr::ExpressionMeta::new(right_expr);
             let right_id = ctx.register_expression(right_expr_meta);
             let right_ctx_expr = ContextualExpression::new(right_id, ctx.clone());
             let right_filter_node = FilterNode::new(new_right, right_ctx_expr).map_err(|e| {
@@ -177,7 +177,7 @@ impl RewriteRule for PushFilterDownLeftJoinRule {
                 Some(meta) => meta.inner().clone(),
                 None => return Ok(None),
             };
-            let remained_meta = crate::core::types::ExpressionMeta::new(remained_expr);
+            let remained_meta = graphdb_core::types::ExpressionMeta::new(remained_expr);
             let remained_id = ctx.register_expression(remained_meta);
             let remained_ctx_expr = ContextualExpression::new(remained_id, ctx);
             new_filter.set_condition(remained_ctx_expr);
@@ -213,7 +213,7 @@ impl PushDownRule for PushFilterDownLeftJoinRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::join::join_node::LeftJoinNode;
     use std::sync::Arc;
@@ -240,7 +240,7 @@ mod tests {
 
         let condition = Expression::Variable("test".to_string());
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
         let filter =

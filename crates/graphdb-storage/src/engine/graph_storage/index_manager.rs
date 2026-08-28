@@ -1,9 +1,9 @@
-use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::types::{
+use graphdb_core::metadata::index_manager::IndexMetadataManager;
+use graphdb_core::types::{
     CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp,
 };
-use crate::core::wal::EntityRef;
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::chunk::serialize::write_chunked_index_checkpoint;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
@@ -40,7 +40,7 @@ fn write_generation_checkpoint(
     Ok(())
 }
 
-use crate::transaction::wal::{
+use graphdb_transaction::wal::{
     collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
     LocalWalParser, WalParser,
 };
@@ -121,7 +121,7 @@ pub(crate) fn wal_intents_for_index(
     index: &Index,
     start_lsn: CommitLsn,
     barrier_lsn: CommitLsn,
-) -> StorageResult<Vec<crate::core::wal::OutboxIntent>> {
+) -> StorageResult<Vec<graphdb_core::wal::OutboxIntent>> {
     let transactions = committed_wal_transactions(ctx)?;
     let mut index_ids = vec![index.id];
     for logical_name in [&index.name, &index.schema_name] {
@@ -307,7 +307,7 @@ pub(crate) fn list_tag_indexes(
     ctx.index_metadata_manager().list_tag_indexes(space_id)
 }
 
-fn edge_entity_ref(edge: &crate::core::Edge) -> EntityRef {
+fn edge_entity_ref(edge: &graphdb_core::Edge) -> EntityRef {
     EntityRef::Edge {
         src: edge.src,
         dst: edge.dst,
@@ -338,7 +338,7 @@ fn replay_wal_partition<F, R>(
     (mut active_forward, mut active_reverse): IndexDataMaps,
     (rebuilt_forward, rebuilt_reverse): IndexDataMaps,
     snapshot_timestamp: Timestamp,
-    intents: &[crate::core::wal::OutboxIntent],
+    intents: &[graphdb_core::wal::OutboxIntent],
     matches_forward: F,
     matches_reverse: R,
 ) -> IndexDataMaps
@@ -389,7 +389,7 @@ where
 fn build_vertex_index_data(
     space_id: u64,
     index: &Index,
-    vertices: &[crate::core::Vertex],
+    vertices: &[graphdb_core::Vertex],
     snapshot_timestamp: Timestamp,
 ) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
@@ -493,7 +493,7 @@ pub(crate) fn rebuild_tag_index(
     ctx: &GraphStorageContext,
     space: &str,
     index_name: &str,
-    vertices: &[crate::core::Vertex],
+    vertices: &[graphdb_core::Vertex],
     snapshot_timestamp: SnapshotTimestamp,
     start_lsn: CommitLsn,
 ) -> StorageResult<bool> {
@@ -724,7 +724,7 @@ pub(crate) fn drop_edge_index(
 fn build_edge_index_data(
     space_id: u64,
     index: &Index,
-    edges: &[crate::core::Edge],
+    edges: &[graphdb_core::Edge],
     snapshot_timestamp: Timestamp,
 ) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
@@ -783,7 +783,7 @@ pub(crate) fn rebuild_edge_index(
     ctx: &GraphStorageContext,
     space: &str,
     index_name: &str,
-    edges: &[crate::core::Edge],
+    edges: &[graphdb_core::Edge],
     snapshot_timestamp: SnapshotTimestamp,
     start_lsn: CommitLsn,
 ) -> StorageResult<bool> {
@@ -956,12 +956,12 @@ pub(crate) fn list_edge_indexes(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{
+    use graphdb_core::types::{
         CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
         OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
     };
-    use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
-    use crate::core::Value;
+    use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
+    use graphdb_core::Value;
     use crate::engine::graph_storage::context::GraphStorageContext;
     use crate::index::manifest::{GenerationBuildState, GenerationState};
     use crate::index::types::IndexRecord;
@@ -991,11 +991,11 @@ mod tests {
 
     fn test_intent(transaction_id: TransactionId, index_id: u64, vertex_id: i64) -> OutboxIntent {
         OutboxIntent {
-            wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+            wire_version: graphdb_core::wal::WAL_SYNC_WIRE_VERSION,
             transaction_id,
             intent_sequence: 0,
             mutation: IndexMutation {
-                wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+                wire_version: graphdb_core::wal::WAL_SYNC_WIRE_VERSION,
                 target: TargetId::new("native-index").expect("target should be valid"),
                 index_id,
                 index_generation: IndexGeneration::new(1),
@@ -1100,13 +1100,13 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
             .expect("persistent storage should be created");
-        let mut space = crate::core::types::SpaceInfo::new("test_space".to_string())
-            .with_vid_type(crate::core::DataType::BigInt);
+        let mut space = graphdb_core::types::SpaceInfo::new("test_space".to_string())
+            .with_vid_type(graphdb_core::DataType::BigInt);
         storage
             .create_space(&mut space)
             .expect("space should be created");
-        let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            crate::core::types::PropertyDef::new("name".to_string(), crate::core::DataType::String),
+        let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
         ]);
         storage
             .create_tag("test_space", &tag)
@@ -1140,9 +1140,9 @@ mod tests {
             storage
                 .insert_vertex(
                     "test_space",
-                    crate::core::Vertex::new(
+                    graphdb_core::Vertex::new(
                         VertexId::from_int64(vertex_id),
-                        vec![crate::core::vertex_edge_path::Tag::new(
+                        vec![graphdb_core::vertex_edge_path::Tag::new(
                             "Person".to_string(),
                             properties,
                         )],
@@ -1170,9 +1170,9 @@ mod tests {
                 writer_storage
                     .insert_vertex(
                         "test_space",
-                        crate::core::Vertex::new(
+                        graphdb_core::Vertex::new(
                             VertexId::from_int64(vertex_id),
-                            vec![crate::core::vertex_edge_path::Tag::new(
+                            vec![graphdb_core::vertex_edge_path::Tag::new(
                                 "Person".to_string(),
                                 properties,
                             )],
@@ -1220,15 +1220,15 @@ mod tests {
         {
             let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
                 .expect("persistent storage should be created");
-            let mut space = crate::core::types::SpaceInfo::new("test_space".to_string())
-                .with_vid_type(crate::core::DataType::BigInt);
+            let mut space = graphdb_core::types::SpaceInfo::new("test_space".to_string())
+                .with_vid_type(graphdb_core::DataType::BigInt);
             storage
                 .create_space(&mut space)
                 .expect("space should be created");
-            let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-                crate::core::types::PropertyDef::new(
+            let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+                graphdb_core::types::PropertyDef::new(
                     "name".to_string(),
-                    crate::core::DataType::String,
+                    graphdb_core::DataType::String,
                 ),
             ]);
             storage
@@ -1237,9 +1237,9 @@ mod tests {
             storage
                 .create_tag_index("test_space", &index)
                 .expect("index should be created");
-            let vertex = crate::core::Vertex::new(
+            let vertex = graphdb_core::Vertex::new(
                 VertexId::from_int64(1),
-                vec![crate::core::vertex_edge_path::Tag::new(
+                vec![graphdb_core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
@@ -1543,7 +1543,7 @@ mod tests {
 
         let vertices = vec![];
         let (forward, reverse) =
-            super::build_vertex_index_data(0, &index, &vertices, crate::core::types::MAX_TIMESTAMP)
+            super::build_vertex_index_data(0, &index, &vertices, graphdb_core::types::MAX_TIMESTAMP)
                 .expect("build should succeed with empty input");
         assert!(forward.is_empty(), "forward map should be empty");
         assert!(reverse.is_empty(), "reverse map should be empty");
@@ -1551,7 +1551,7 @@ mod tests {
 
     #[test]
     fn test_flush_index_data_writes_valid_files() {
-        use crate::core::types::MAX_TIMESTAMP;
+        use graphdb_core::types::MAX_TIMESTAMP;
         use crate::index::types::IndexRecord;
         use std::collections::BTreeMap;
         use std::fs;

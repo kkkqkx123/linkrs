@@ -5,7 +5,7 @@
 //! - Vector property functions (dimension, l2_norm, nnz, normalize)
 //! - Vector access functions (element access, slicing)
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 

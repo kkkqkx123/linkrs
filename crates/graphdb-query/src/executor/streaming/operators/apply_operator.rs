@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::{NullType, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::{NullType, Value};
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -24,8 +24,8 @@ pub enum ApplyOperatorKind {
         memory_tracker: MemoryTracker,
     },
     PatternApply {
-        hash_keys: Vec<crate::core::types::expr::Expression>,
-        probe_keys: Vec<crate::core::types::expr::Expression>,
+        hash_keys: Vec<graphdb_core::types::expr::Expression>,
+        probe_keys: Vec<graphdb_core::types::expr::Expression>,
         anti: bool,
         right_rows: Option<Vec<Vec<Value>>>,
         right_layout: Option<Arc<SlotLayout>>,
@@ -421,14 +421,14 @@ impl ApplyOperator {
                                 collect_slot
                                     .and_then(|slot| row.get(slot).cloned())
                                     .unwrap_or_else(|| {
-                                        Value::List(Box::new(crate::core::value::List {
+                                        Value::List(Box::new(graphdb_core::value::List {
                                             values: row.clone(),
                                         }))
                                     })
                             })
                             .collect();
                         let mut row = left_row;
-                        row.push(Value::List(Box::new(crate::core::value::List { values })));
+                        row.push(Value::List(Box::new(graphdb_core::value::List { values })));
                         output.push(row);
                     }
                     if !output.is_empty() {
@@ -604,7 +604,7 @@ fn keys_match(left: &[Value], right: &[Value]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::ContextualExpression;
+    use graphdb_core::types::ContextualExpression;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::operators::source_operator::{
         SourceOperator, SourceOperatorKind,
@@ -734,7 +734,7 @@ mod tests {
     /// When `condition` is `None` the filter is omitted, so the subtree is
     /// non-empty for every correlation frame.
     fn build_sub_plan(condition: Option<ContextualExpression>) -> Arc<PhysicalPlan> {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use crate::executor::base::ExecutionContext;
         use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
         use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -872,15 +872,15 @@ mod tests {
     fn correlated_apply_binds_the_frame_per_row() {
         // Filter that only passes the frame whose `id` equals 2. The left
         // input carries two rows, so the per-row frame must differ.
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::operators::BinaryOperator;
-        use crate::core::types::{ContextualExpression, ExpressionMeta};
-        use crate::core::Expression;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::operators::BinaryOperator;
+        use graphdb_core::types::{ContextualExpression, ExpressionMeta};
+        use graphdb_core::Expression;
 
         let condition_expr = Expression::binary(
             Expression::variable("id"),
             BinaryOperator::Equal,
-            Expression::literal(crate::core::Value::Int(2)),
+            Expression::literal(graphdb_core::Value::Int(2)),
         );
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_id = expr_ctx.register_expression(ExpressionMeta::new(condition_expr));

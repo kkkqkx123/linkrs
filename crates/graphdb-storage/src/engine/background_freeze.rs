@@ -258,7 +258,7 @@ impl Default for BackgroundFreezeManager {
 mod tests {
     use super::super::config::FreezeStrategyType;
     use super::*;
-    use crate::core::types::Timestamp;
+    use graphdb_core::types::Timestamp;
 
     #[test]
     fn test_freeze_decision_below_both_thresholds() {

@@ -13,7 +13,7 @@
 //!   [`BackgroundTaskHandle::stop`] is called, with a handle that supports
 //!   blocking [`BackgroundTaskHandle::join`] for graceful shutdown.
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 use parking_lot::{Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

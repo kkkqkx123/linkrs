@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::core::types::{IndexType, Timestamp, MAX_TIMESTAMP};
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{IndexType, Timestamp, MAX_TIMESTAMP};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::index::helpers::{
     edge_entity_ref, effective_index_values, merged_included_columns,
 };

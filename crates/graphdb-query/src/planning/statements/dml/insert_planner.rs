@@ -2,7 +2,7 @@
 //!
 //! Query planning for INSERT VERTEX and INSERT EDGE statements
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::{InsertStmt, InsertTarget, Stmt, VertexRow};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -18,9 +18,9 @@ use crate::QueryContext;
 use std::sync::Arc;
 
 #[cfg(test)]
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 #[cfg(test)]
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 #[cfg(test)]
 use crate::parser::ast::utils::ExprFactory;
 
@@ -114,7 +114,7 @@ impl InsertPlanner {
         expr_context: &Arc<ExpressionAnalysisContext>,
     ) -> Vec<YieldColumn> {
         let expr = ExprFactory::constant(
-            crate::core::Value::BigInt(count as i64),
+            graphdb_core::Value::BigInt(count as i64),
             expr_context.clone(),
         );
         vec![YieldColumn::new(expr, "inserted_count".to_string())]
@@ -256,9 +256,9 @@ impl Default for InsertPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::contextual::ContextualExpression;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Value;
+    use graphdb_core::types::expr::contextual::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Value;
     use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::utils::ExprFactory;
     use crate::parser::ast::{Ast, Span, Stmt};
@@ -268,7 +268,7 @@ mod tests {
     use std::sync::Arc;
 
     fn create_test_span() -> Span {
-        use crate::core::types::span::Position;
+        use graphdb_core::types::span::Position;
         Span::new(Position::new(1, 1), Position::new(1, 1))
     }
 

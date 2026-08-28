@@ -19,7 +19,7 @@ use super::super::{
     ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema,
     VertexTimestamp,
 };
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::encoding::EncodingSelector;
 use crate::mvcc::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
@@ -571,7 +571,7 @@ impl VertexTable {
     }
 
     /// Declared data type of the column `name`, if it exists in the schema.
-    pub fn data_type_of(&self, name: &str) -> Option<crate::core::types::DataType> {
+    pub fn data_type_of(&self, name: &str) -> Option<graphdb_core::types::DataType> {
         self.columns.data_type_of(name)
     }
 

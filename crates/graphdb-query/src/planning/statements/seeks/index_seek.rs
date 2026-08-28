@@ -4,7 +4,7 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{NodePattern, SeekResult, SeekStrategyContext, SeekStrategyType};
-use crate::core::{StorageError, Value, Vertex};
+use graphdb_core::{StorageError, Value, Vertex};
 use crate::storage::StorageReader;
 
 #[derive(Debug, Clone)]

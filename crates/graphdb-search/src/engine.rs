@@ -5,4 +5,4 @@ pub enum ConsistencyState {
     Rebuilding,
 }
 
-pub use crate::config::common::fulltext::FulltextEngineType as EngineType;
+pub use graphdb_config::fulltext::FulltextEngineType as EngineType;

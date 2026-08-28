@@ -19,7 +19,7 @@ pub mod vector_error;
 #[cfg(feature = "vector")]
 pub mod vector_sync;
 
-pub use crate::search::SyncConfig;
+pub use graphdb_search::SyncConfig;
 #[cfg(feature = "fulltext-search")]
 pub use batch::FulltextBatchProcessor;
 pub use batch::{BatchConfig, BatchError, BatchProcessor, TransactionBatchBuffer};
@@ -72,5 +72,3 @@ pub use vector_search::HealthStatus;
 #[cfg(feature = "vector-qdrant")]
 pub use vector_client::{VectorClientConfig, VectorManager};
 
-pub use graphdb_core::core;
-pub use graphdb_search::search;

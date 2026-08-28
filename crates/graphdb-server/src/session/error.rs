@@ -9,7 +9,7 @@
 
 use std::error::Error;
 
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
+use graphdb_core::error::codes::{ErrorCode, PublicError, ToPublicError};
 
 /// Thread-safe boxed error type
 type BoxedError = Box<dyn Error + Send + Sync>;
@@ -170,10 +170,10 @@ impl ToPublicError for SessionError {
     }
 }
 
-impl From<SessionError> for crate::core::error::DBError {
+impl From<SessionError> for graphdb_core::error::DBError {
     fn from(e: SessionError) -> Self {
         let msg = e.to_string();
-        crate::core::error::DBError::session(msg).with_source(Box::new(e))
+        graphdb_core::error::DBError::session(msg).with_source(Box::new(e))
     }
 }
 

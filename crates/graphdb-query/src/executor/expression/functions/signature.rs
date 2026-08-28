@@ -2,7 +2,7 @@
 //!
 //! Define an enumeration of value types used in function signatures, for type checking and function overloading resolution.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use std::fmt;
 
 /// Value type enumeration (used in function signatures)

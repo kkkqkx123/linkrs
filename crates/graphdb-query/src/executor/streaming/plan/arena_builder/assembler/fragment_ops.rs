@@ -25,7 +25,7 @@ pub(crate) struct FragmentCtx<'a> {
 pub(crate) struct HashExchangeParams {
     pub(crate) partition_fids: Vec<FragmentId>,
     pub(crate) partition_count: usize,
-    pub(crate) hash_expressions: Vec<crate::core::types::expr::Expression>,
+    pub(crate) hash_expressions: Vec<graphdb_core::types::expr::Expression>,
     pub(crate) input_layout: Option<SlotLayout>,
     pub(crate) output_layout: Option<SlotLayout>,
 }

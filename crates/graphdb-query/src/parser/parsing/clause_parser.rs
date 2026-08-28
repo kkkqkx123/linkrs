@@ -2,9 +2,9 @@
 //!
 //! Responsible for parsing various shared clauses, including RETURN, YIELD, SET, OVER, WHERE, etc.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression as CoreExpression;
-use crate::core::types::graph_schema::EdgeDirection;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::graph_schema::EdgeDirection;
 use crate::parser::ast::stmt::*;
 use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
@@ -34,7 +34,7 @@ impl ClauseParser {
         // Check whether it is *
         if ctx.match_token(TokenKind::Star) {
             let expr = CoreExpression::variable("*");
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
             let id = ctx.expression_context().register_expression(expr_meta);
             let ctx_expr = ContextualExpression::new(id, ctx.expression_context_clone());
             items.push(ReturnItem::Expression {

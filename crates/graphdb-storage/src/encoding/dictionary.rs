@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use crate::core::{StorageError, StorageResult, Value};
-use crate::utils::NullBitmap;
+use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::NullBitmap;
 
 #[derive(Debug, Clone)]
 pub struct StringDictionary {
@@ -198,7 +198,7 @@ impl DictionaryColumn {
             }
             Some(v) => {
                 return Err(StorageError::type_mismatch(
-                    crate::core::DataType::String,
+                    graphdb_core::DataType::String,
                     v.data_type(),
                 ));
             }

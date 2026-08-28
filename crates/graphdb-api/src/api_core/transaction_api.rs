@@ -2,8 +2,8 @@
 //!
 //! Provides transport layer-independent transaction management capabilities
 
-use crate::core::{CoreError, CoreResult, SavepointId, TransactionHandle};
-use crate::transaction::{TransactionManager, TransactionOptions};
+use crate::api_core::{CoreError, CoreResult, SavepointId, TransactionHandle};
+use graphdb_transaction::{TransactionManager, TransactionOptions};
 use std::sync::Arc;
 
 /// Common Transaction API - Core Layer
@@ -142,7 +142,7 @@ impl TransactionApi {
     pub fn get_savepoints(
         &self,
         handle: TransactionHandle,
-    ) -> CoreResult<Vec<crate::transaction::SavepointInfo>> {
+    ) -> CoreResult<Vec<graphdb_transaction::SavepointInfo>> {
         let context = self
             .txn_manager
             .get_context(handle.0)

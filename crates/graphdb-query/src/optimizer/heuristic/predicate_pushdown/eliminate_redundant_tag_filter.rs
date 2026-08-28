@@ -29,11 +29,11 @@
 //!     ScanVertices(Node)
 //! ```
 
-use crate::core::types::expr::ContextualExpression;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::Expression;
-use crate::core::Value;
+use graphdb_core::types::expr::ContextualExpression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::Expression;
+use graphdb_core::Value;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -191,8 +191,8 @@ fn collect_conjuncts<'a>(expr: &'a Expression, out: &mut Vec<&'a Expression>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::ScanVerticesNode;
     use std::sync::Arc;

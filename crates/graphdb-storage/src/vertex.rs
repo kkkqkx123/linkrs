@@ -23,10 +23,10 @@ pub use id_indexer::{IdIndexer, IdKey};
 pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
 
-use crate::core::vertex_edge_path::Tag;
-use crate::core::Value;
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::Value;
 
-pub use crate::core::types::{LabelId, Timestamp, VertexId, INVALID_TIMESTAMP, MAX_TIMESTAMP};
+pub use graphdb_core::types::{LabelId, Timestamp, VertexId, INVALID_TIMESTAMP, MAX_TIMESTAMP};
 
 #[derive(Debug, Clone)]
 pub struct VertexRecord {
@@ -35,12 +35,12 @@ pub struct VertexRecord {
     pub properties: Vec<(String, Value)>,
 }
 
-impl From<&VertexRecord> for crate::core::Vertex {
+impl From<&VertexRecord> for graphdb_core::Vertex {
     fn from(record: &VertexRecord) -> Self {
         let properties: std::collections::HashMap<String, Value> =
             record.properties.iter().cloned().collect();
 
-        crate::core::Vertex {
+        graphdb_core::Vertex {
             vid: record.vid,
             id: record.internal_id as i64,
             tags: vec![Tag {
@@ -53,11 +53,11 @@ impl From<&VertexRecord> for crate::core::Vertex {
 }
 
 impl VertexRecord {
-    pub fn into_vertex_with_tag(self, tag_name: &str) -> crate::core::Vertex {
+    pub fn into_vertex_with_tag(self, tag_name: &str) -> graphdb_core::Vertex {
         let properties: std::collections::HashMap<String, Value> =
             self.properties.into_iter().collect();
 
-        crate::core::Vertex {
+        graphdb_core::Vertex {
             vid: self.vid,
             id: self.internal_id as i64,
             tags: vec![Tag {
@@ -162,8 +162,8 @@ impl VertexSchema {
     /// - Comparable (support <, >, ==)
     /// - Hashable
     /// - Not composite types
-    fn validate_key_type(data_type: &crate::core::DataType, prop_name: &str) -> Result<(), String> {
-        use crate::core::DataType;
+    fn validate_key_type(data_type: &graphdb_core::DataType, prop_name: &str) -> Result<(), String> {
+        use graphdb_core::DataType;
 
         // Composite and structural types cannot be used as keys. The vertex id
         // itself is the actual storage key, so extended scalar types (Geography,
@@ -200,10 +200,10 @@ impl VertexSchema {
     /// Validate that a property data type is allowed
     /// Rejects Empty and Null types which don't make sense as properties
     fn validate_property_type(
-        data_type: &crate::core::DataType,
+        data_type: &graphdb_core::DataType,
         prop_name: &str,
     ) -> Result<(), String> {
-        use crate::core::DataType;
+        use graphdb_core::DataType;
 
         match data_type {
             DataType::Empty => Err(format!(

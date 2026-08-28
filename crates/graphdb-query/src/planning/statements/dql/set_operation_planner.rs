@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::parser::ast::{SetOperationStmt, SetOperationType, Stmt};
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};

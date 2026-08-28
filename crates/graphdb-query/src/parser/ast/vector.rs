@@ -3,8 +3,8 @@
 //! This module defines the Abstract Syntax Tree (AST) nodes for vector search queries,
 //! including CREATE VECTOR INDEX, SEARCH VECTOR, and related statements.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::span::Span;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::span::Span;
 use serde::{Deserialize, Serialize};
 
 use super::stmt::OrderByClause;

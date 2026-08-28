@@ -3,7 +3,7 @@
 //! Responsible for converting the YIELD clause into an execution plan node.
 //! Support for the YIELD ... WHERE ... syntax
 
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 type YieldInfoResult = Result<
     (
         Vec<YieldColumn>,
-        Option<crate::core::types::ContextualExpression>,
+        Option<graphdb_core::types::ContextualExpression>,
         Option<usize>,
         Option<usize>,
         Option<usize>,
@@ -44,7 +44,7 @@ impl YieldClausePlanner {
     pub fn plan_yield_clause(
         &self,
         yield_columns: &[YieldColumn],
-        filter_condition: Option<crate::core::types::ContextualExpression>,
+        filter_condition: Option<graphdb_core::types::ContextualExpression>,
         skip: Option<usize>,
         limit: Option<usize>,
         sample: Option<usize>,
@@ -114,7 +114,7 @@ impl YieldClausePlanner {
     fn create_filter_node(
         &self,
         input_plan: &SubPlan,
-        condition: crate::core::types::ContextualExpression,
+        condition: graphdb_core::types::ContextualExpression,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let input_node = input_plan.root().as_ref().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
@@ -257,8 +257,8 @@ impl YieldClausePlanner {
     /// Generate default aliases
     ///
     /// When the user does not specify an alias, a default alias is generated based on the expression.
-    fn generate_default_alias(expression: &crate::core::Expression) -> String {
-        use crate::core::Expression;
+    fn generate_default_alias(expression: &graphdb_core::Expression) -> String {
+        use graphdb_core::Expression;
 
         match expression {
             Expression::Variable(name) => name.clone(),
@@ -286,9 +286,9 @@ impl Default for YieldClausePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use crate::parser::ast::Span;
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
@@ -304,7 +304,7 @@ mod tests {
     fn test_extract_yield_info_from_yield_stmt() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -334,7 +334,7 @@ mod tests {
     fn test_extract_yield_info_from_go_stmt() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -379,7 +379,7 @@ mod tests {
     fn test_convert_yield_items() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -419,7 +419,7 @@ mod tests {
     fn test_transform_clause() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -474,9 +474,9 @@ mod tests {
     fn test_transform_clause_empty_input_plan() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let yield_stmt = Stmt::Yield(crate::parser::ast::stmt::YieldStmt {
             span: Span::default(),

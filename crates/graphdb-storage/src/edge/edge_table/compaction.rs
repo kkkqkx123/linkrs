@@ -7,7 +7,7 @@
 use super::core::TimeTravelEdgeStore;
 use super::segment::DeletionInfo;
 use super::stats::DeletionStats;
-use crate::core::types::{CompactConfig, Timestamp};
+use graphdb_core::types::{CompactConfig, Timestamp};
 
 use crate::edge::CsrBase;
 

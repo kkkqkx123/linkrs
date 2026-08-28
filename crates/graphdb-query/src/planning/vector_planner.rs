@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::metadata::MetadataContext;
 use crate::parser::ast::vector::{
     CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
@@ -585,12 +585,12 @@ impl VectorSearchPlanner {
     }
 
     /// Convert core::Value to String for filter conditions
-    fn value_to_string(&self, value: &crate::core::Value) -> Option<String> {
+    fn value_to_string(&self, value: &graphdb_core::Value) -> Option<String> {
         match value {
-            crate::core::Value::String(s) => Some(s.to_string()),
-            crate::core::Value::Int(i) => Some(i.to_string()),
-            crate::core::Value::Float(f) => Some(f.to_string()),
-            crate::core::Value::Bool(b) => Some(b.to_string()),
+            graphdb_core::Value::String(s) => Some(s.to_string()),
+            graphdb_core::Value::Int(i) => Some(i.to_string()),
+            graphdb_core::Value::Float(f) => Some(f.to_string()),
+            graphdb_core::Value::Bool(b) => Some(b.to_string()),
             _ => None,
         }
     }
@@ -805,9 +805,9 @@ impl VectorSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::{create_contextual_expression, Expression};
-    use crate::core::types::span::Span;
-    use crate::core::value::Value;
+    use graphdb_core::types::expr::{create_contextual_expression, Expression};
+    use graphdb_core::types::span::Span;
+    use graphdb_core::value::Value;
     use crate::parser::ast::vector::{
         VectorIndexConfig, VectorYieldClause, VectorYieldItem,
     };
@@ -884,19 +884,19 @@ mod tests {
         let planner = VectorSearchPlanner::new();
 
         assert_eq!(
-            planner.value_to_string(&crate::core::Value::string("test")),
+            planner.value_to_string(&graphdb_core::Value::string("test")),
             Some("test".to_string())
         );
         assert_eq!(
-            planner.value_to_string(&crate::core::Value::Int(42)),
+            planner.value_to_string(&graphdb_core::Value::Int(42)),
             Some("42".to_string())
         );
         assert_eq!(
-            planner.value_to_string(&crate::core::Value::Float(std::f32::consts::PI)),
+            planner.value_to_string(&graphdb_core::Value::Float(std::f32::consts::PI)),
             Some(format!("{}", std::f32::consts::PI))
         );
         assert_eq!(
-            planner.value_to_string(&crate::core::Value::Bool(true)),
+            planner.value_to_string(&graphdb_core::Value::Bool(true)),
             Some("true".to_string())
         );
     }

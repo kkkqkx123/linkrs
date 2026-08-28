@@ -191,7 +191,7 @@ async fn get_neighbors<
                 .iter()
                 .flat_map(|row| row.iter())
                 .filter_map(|v| match v {
-                    crate::core::Value::Vertex(vertex) => {
+                    graphdb_core::Value::Vertex(vertex) => {
                         Some(serde_json::json!({"vertex": vertex}))
                     }
                     _ => None,

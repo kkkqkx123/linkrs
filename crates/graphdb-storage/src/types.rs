@@ -1,8 +1,8 @@
 //! Types of data operations at the storage level
 
-use crate::core::types::PropertyDef as CorePropertyDef;
-use crate::core::DataType;
-use crate::core::Value;
+use graphdb_core::types::PropertyDef as CorePropertyDef;
+use graphdb_core::DataType;
+use graphdb_core::Value;
 
 /// Property ID - a compact identifier for properties within a schema.
 /// Replaces string-based property lookups with numeric indices.

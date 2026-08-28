@@ -1627,7 +1627,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::SqliteOutbox;
-    use crate::core::types::CommitLsn;
+    use graphdb_core::types::CommitLsn;
 
     fn intent(sequence: u32, entity: i64, target: &TargetId) -> OutboxIntent {
         OutboxIntent {

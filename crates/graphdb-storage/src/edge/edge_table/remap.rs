@@ -18,8 +18,8 @@
 
 use super::core::TimeTravelEdgeStore;
 use super::segment::CsrSegment;
-use crate::core::types::{Timestamp, VertexId};
-use crate::core::StorageResult;
+use graphdb_core::types::{Timestamp, VertexId};
+use graphdb_core::StorageResult;
 use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::{Csr, CsrBase, CsrVariant, EdgeStrategy, Nbr};
 use std::collections::HashMap;
@@ -278,7 +278,7 @@ mod tests {
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::edge_table::remap::remap_immutable_csr;
 use crate::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
@@ -61,7 +61,7 @@ impl ColdPropertyIndex {
         if prop_names.is_empty() {
             return index;
         }
-        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         let cap = exported.out_csr.vertex_capacity();
         for src in 0..cap {
             let src_u32 = src as u32;
@@ -1117,8 +1117,8 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::EdgeId;
-    use crate::core::Value;
+    use graphdb_core::types::EdgeId;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
@@ -1131,7 +1131,7 @@ mod tests {
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -1479,10 +1479,10 @@ mod tests {
         assert!(!index.is_empty());
         assert_eq!(index.indexed_property_names(), vec!["weight".to_string()]);
 
-        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         // Equality lookup: weight = 2.5
         let key = codec.encode(&Value::Double(2.5)).unwrap();
-        let upper = crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key);
+        let upper = graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key);
         let hits = index.lookup("weight", &key, &upper);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].src_internal, 0);
@@ -1514,12 +1514,12 @@ mod tests {
         let loaded = ColdSnapshot::open(&path).unwrap();
         assert!(loaded.has_property_index());
         let index = loaded.property_index().unwrap();
-        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         let key = codec.encode(&Value::Double(9.0)).unwrap();
         let hits = index.lookup(
             "weight",
             &key,
-            &crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
+            &graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].src_internal, 0);
@@ -1548,12 +1548,12 @@ mod tests {
 
         let reloaded = ColdSnapshot::open(&path).unwrap();
         let index = reloaded.property_index().unwrap();
-        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         let key = codec.encode(&Value::Double(1.0)).unwrap();
         let hits = index.lookup(
             "weight",
             &key,
-            &crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
+            &graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].src_internal, 0);
@@ -1565,9 +1565,9 @@ mod tests {
         use crate::edge::PropertyTable;
 
         let mut pt = PropertyTable::new();
-        pt.add_property("name".to_string(), crate::core::DataType::String, false)
+        pt.add_property("name".to_string(), graphdb_core::DataType::String, false)
             .unwrap();
-        pt.add_property("age".to_string(), crate::core::DataType::Int, false)
+        pt.add_property("age".to_string(), graphdb_core::DataType::Int, false)
             .unwrap();
 
         let offset = pt
@@ -1674,7 +1674,7 @@ mod tests {
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
                 "name".to_string(),
-                crate::core::types::DataType::String,
+                graphdb_core::types::DataType::String,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

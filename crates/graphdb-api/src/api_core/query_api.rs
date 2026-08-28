@@ -2,21 +2,21 @@
 //!
 //! Provides transport layer independent query execution
 
-use crate::core::error::{CoreError, CoreResult};
-use crate::core::types::{ExecutionMetadata, QueryRequest, QueryResult};
-use crate::core::metadata::SchemaManager;
-use crate::core::StatsManager;
-use crate::query::executor::streaming::pool::SharedScheduler;
-use crate::query::executor::streaming::query_registry::QueryRegistry;
-use crate::query::executor::streaming::StreamingQueryResult;
-use crate::query::{OptimizerEngine, QueryPipelineManager};
+use crate::api_core::error::{CoreError, CoreResult};
+use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::StatsManager;
+use graphdb_query::executor::streaming::pool::SharedScheduler;
+use graphdb_query::executor::streaming::query_registry::QueryRegistry;
+use graphdb_query::executor::streaming::StreamingQueryResult;
+use graphdb_query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
 };
 #[cfg(feature = "vector")]
-use crate::sync::backend::VectorBackend;
-use crate::sync::SyncManager;
-use crate::transaction::TransactionExecution;
+use graphdb_sync::backend::VectorBackend;
+use graphdb_sync::SyncManager;
+use graphdb_transaction::TransactionExecution;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -169,7 +169,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
         let handle = tokio::runtime::Handle::current();
         let vector_coordinator = Arc::new(
-            crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+            graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
         );
 
         // Create pipeline manager with vector coordinator and optional schema manager
@@ -264,7 +264,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let operation_finalizer = operation_storage.clone();
 
         // Constructing a QueryRequestContext
-        let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        let mut request_context = graphdb_query::QueryRequestContext::new(query.to_string());
         request_context.query_id = ctx.query_id;
         request_context.transaction_id = ctx.transaction_id.or_else(|| {
             operation_context
@@ -287,7 +287,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // Build space info from request context if space_id is provided
         let space_info = ctx.space_id.map(|id| {
             let space_name = ctx.space_name.clone().unwrap_or_default();
-            let mut space_info = crate::core::types::SpaceInfo::new(space_name);
+            let mut space_info = graphdb_core::types::SpaceInfo::new(space_name);
             space_info.space_id = id;
             space_info
         });
@@ -398,7 +398,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         operation_storage: Option<S>,
     ) -> CoreResult<StreamingQueryResult> {
         let operation_owned = operation_storage.is_some() && ctx.auto_commit;
-        let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        let mut request_context = graphdb_query::QueryRequestContext::new(query.to_string());
         request_context.query_id = ctx.query_id;
         request_context.transaction_id = ctx.transaction_id.or_else(|| {
             operation_context
@@ -420,7 +420,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
 
         let space_info = ctx.space_id.map(|id| {
             let space_name = ctx.space_name.clone().unwrap_or_default();
-            let mut space_info = crate::core::types::SpaceInfo::new(space_name);
+            let mut space_info = graphdb_core::types::SpaceInfo::new(space_name);
             space_info.space_id = id;
             space_info
         });
@@ -457,7 +457,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     pub fn execute_with_params(
         &mut self,
         query: &str,
-        params: std::collections::HashMap<String, crate::core::Value>,
+        params: std::collections::HashMap<String, graphdb_core::Value>,
         ctx: QueryRequest,
     ) -> CoreResult<QueryResult> {
         // Create new QueryRequest with parameters
@@ -483,14 +483,14 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// the API core layer adds only timing / count metadata. `ExecutionResult::Error`
     /// is surfaced as an internal error, all other variants pass through.
     fn attach_metadata(
-        execution: crate::query::executor::base::ExecutionResult,
+        execution: graphdb_query::executor::base::ExecutionResult,
     ) -> CoreResult<QueryResult> {
         let rows_returned = match &execution {
-            crate::query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
+            graphdb_query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
             _ => 0,
         };
         match execution {
-            crate::query::executor::base::ExecutionResult::Error(msg) => {
+            graphdb_query::executor::base::ExecutionResult::Error(msg) => {
                 Err(CoreError::Internal(msg))
             }
             other => Ok(QueryResult::new(

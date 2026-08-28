@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::optimizer::analysis::{
     BatchPlanAnalysis, ExpressionAnalysis, ReferenceCountAnalysis,
 };

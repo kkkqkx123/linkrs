@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 use crate::engine::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};

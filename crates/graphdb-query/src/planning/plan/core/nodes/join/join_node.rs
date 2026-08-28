@@ -2,7 +2,7 @@
 //!
 //! It includes various types of join nodes, such as inner joins, left joins, etc.
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::define_binary_input_node;
 use crate::define_join_node;
 

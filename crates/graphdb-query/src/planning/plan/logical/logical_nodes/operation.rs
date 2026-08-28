@@ -1,9 +1,9 @@
 //! Logical operation nodes: Project, Filter, Sort, Limit, TopN, Sample, Dedup, Aggregate, Window.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::Expression;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Expression;
+use graphdb_core::YieldColumn;
 use crate::define_logical_plan_node_with_deps;
 use crate::planning::plan::core::nodes::graph_operations::window_node::WindowFunctionSpec;
 use crate::planning::plan::core::nodes::operation::sort_node::SortItem;

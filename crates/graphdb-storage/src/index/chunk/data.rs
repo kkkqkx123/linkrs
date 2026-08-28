@@ -1,4 +1,4 @@
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::types::IndexRecord;
 
@@ -122,7 +122,7 @@ fn estimate_entries_size(entries: &[(SecondaryIndexKey, IndexRecord)]) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::Timestamp;
+    use graphdb_core::types::Timestamp;
 
     fn make_entry(key_suffix: u8) -> (SecondaryIndexKey, IndexRecord) {
         (vec![key_suffix], IndexRecord::new(key_suffix as Timestamp))

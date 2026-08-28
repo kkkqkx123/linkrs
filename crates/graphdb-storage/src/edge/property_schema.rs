@@ -3,8 +3,8 @@
 //! Contains schema definitions and compaction statistics for property storage.
 //! These types are separated from the table implementation for better modularity.
 
-use crate::core::types::Timestamp;
-use crate::core::DataType;
+use graphdb_core::types::Timestamp;
+use graphdb_core::DataType;
 use crate::encoding::EncodingType;
 
 /// Sentinel value meaning "no properties"

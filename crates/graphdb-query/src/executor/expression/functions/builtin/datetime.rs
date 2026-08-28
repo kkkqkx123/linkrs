@@ -1,7 +1,7 @@
 //! Implementation of date and time functions
 
-use crate::core::value::{DateTimeValue, DateValue, NullType, TimeValue};
-use crate::core::Value;
+use graphdb_core::value::{DateTimeValue, DateValue, NullType, TimeValue};
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 use chrono::{Datelike, Timelike};
 
@@ -794,7 +794,7 @@ fn execute_generate_series(args: &[Value]) -> Result<Value, ExpressionError> {
         }
     }
 
-    use crate::core::value::list::List;
+    use graphdb_core::value::list::List;
     Ok(Value::list(List { values: result }))
 }
 

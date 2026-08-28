@@ -11,7 +11,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
@@ -126,7 +126,7 @@ pub struct SearchOptions {
     /// When `ReadYourWrites`, the minimum LSN to wait for. `None` means wait
     /// for the current outbox `materialized_lsn` (i.e. all committed writes so
     /// far).
-    pub minimum_lsn: Option<crate::core::types::CommitLsn>,
+    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
 impl SearchOptions {
@@ -165,7 +165,7 @@ impl SearchOptions {
         self
     }
 
-    pub fn with_minimum_lsn(mut self, lsn: crate::core::types::CommitLsn) -> Self {
+    pub fn with_minimum_lsn(mut self, lsn: graphdb_core::types::CommitLsn) -> Self {
         self.minimum_lsn = Some(lsn);
         self
     }
@@ -699,7 +699,7 @@ impl VectorSyncCoordinator {
                     }
                 };
                 if minimum_lsn.get() != 0 {
-                    let target = crate::core::types::TargetId::new("vector".to_string())
+                    let target = graphdb_core::types::TargetId::new("vector".to_string())
                         .map_err(|e| {
                             VectorCoordinatorError::Vector(
                                 crate::vector_error::VectorError::Internal(e),

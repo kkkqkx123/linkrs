@@ -12,7 +12,7 @@
 
 use std::io::Read;
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 
 pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
 pub const MAX_PAGE_SIZE: usize = 64 * 1024 * 1024;
@@ -523,7 +523,7 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(
             err.kind(),
-            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
+            graphdb_core::error::storage::StorageErrorKind::UnsupportedVersion
         );
     }
 

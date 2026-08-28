@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use crate::core::value::decimal128::Decimal128Value;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::decimal128::Decimal128Value;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 use super::typed::{TypedBatch, TypedColumn, TypedKind};
 
@@ -302,8 +302,8 @@ pub fn typed_literal_batch(value: &Value, n: usize) -> Option<TypedBatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::value::date_time::{DateTimeValue, DateValue};
-    use crate::core::value::list::List;
+    use graphdb_core::value::date_time::{DateTimeValue, DateValue};
+    use graphdb_core::value::list::List;
 
     #[test]
     fn test_value_to_kind_mapping() {

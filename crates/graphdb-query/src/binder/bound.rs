@@ -5,11 +5,11 @@
 //! Every name reference has been resolved against the catalog so that
 //! downstream phases never need to re-parse or re-resolve the AST.
 
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::types::semantic::{ColumnDef, ValueType};
-use crate::core::types::{EdgeDirection, OrderDirection, Span};
-use crate::core::DataType;
-use crate::core::Value;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::types::semantic::{ColumnDef, ValueType};
+use graphdb_core::types::{EdgeDirection, OrderDirection, Span};
+use graphdb_core::DataType;
+use graphdb_core::Value;
 use crate::parser::ast::{LimitClause, SampleClause, SkipClause, Steps};
 
 use super::query_graph::QueryGraph;

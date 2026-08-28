@@ -383,7 +383,7 @@ impl PartitioningPlanner {
             .first()
             .and_then(|k| k.expression())
             .and_then(|meta| match meta.inner() {
-                crate::core::types::expr::Expression::Variable(name) => Some(name.clone()),
+                graphdb_core::types::expr::Expression::Variable(name) => Some(name.clone()),
                 _ => None,
             })
             .unwrap_or_else(|| DEFAULT_KEY.to_string());
@@ -392,14 +392,14 @@ impl PartitioningPlanner {
 
     /// Whether every key expression references the vertex-id partition key.
     fn keys_reference_vid(
-        keys: &[crate::core::types::expr::contextual::ContextualExpression],
+        keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
     ) -> bool {
         !keys.is_empty()
             && keys.iter().all(|key| {
                 key.expression().is_some_and(|meta| {
                     matches!(
                         meta.inner(),
-                        crate::core::types::expr::Expression::Variable(name)
+                        graphdb_core::types::expr::Expression::Variable(name)
                             if name == "vid" || name.ends_with(".vid")
                     )
                 })
@@ -554,8 +554,8 @@ impl PartitioningPlanner {
     /// Whether a join's hash/probe keys are each a single simple variable
     /// reference (the only key shape the partitioned join path supports).
     fn equality_join_keys_are_simple(
-        hash_keys: &[crate::core::types::expr::contextual::ContextualExpression],
-        probe_keys: &[crate::core::types::expr::contextual::ContextualExpression],
+        hash_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
+        probe_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
     ) -> bool {
         hash_keys.len() == 1
             && probe_keys.len() == 1
@@ -563,13 +563,13 @@ impl PartitioningPlanner {
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                    matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_))
                 })
             && probe_keys
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                    matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_))
                 })
     }
 
@@ -1135,8 +1135,8 @@ mod tests {
 
     #[test]
     fn equality_join_with_variable_key_selects_partition_layout() {
-        use crate::core::types::expr::contextual::ContextualExpression;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        use graphdb_core::types::expr::ExpressionMeta;
         use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
@@ -1146,12 +1146,12 @@ mod tests {
         right_scan.set_tag("person");
 
         // Create join keys using proper ExpressionAnalysisContext
-        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
-        let left_key_expr = crate::core::types::Expression::variable("a.vid");
+        let expr_ctx = Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
+        let left_key_expr = graphdb_core::types::Expression::variable("a.vid");
         let left_key_id = expr_ctx.register_expression(ExpressionMeta::new(left_key_expr));
         let hash_key = ContextualExpression::new(left_key_id, expr_ctx.clone());
 
-        let right_key_expr = crate::core::types::Expression::variable("b.vid");
+        let right_key_expr = graphdb_core::types::Expression::variable("b.vid");
         let right_key_id = expr_ctx.register_expression(ExpressionMeta::new(right_key_expr));
         let probe_key = ContextualExpression::new(right_key_id, expr_ctx.clone());
 
@@ -1175,8 +1175,8 @@ mod tests {
 
     #[test]
     fn hash_inner_join_with_variable_key_selects_partition_layout() {
-        use crate::core::types::expr::contextual::ContextualExpression;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        use graphdb_core::types::expr::ExpressionMeta;
         use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         // Real keyed-join queries lower to a InnerJoin node; the partition
@@ -1187,12 +1187,12 @@ mod tests {
         let mut right_scan = ScanVerticesNode::new(2, "space");
         right_scan.set_tag("person");
 
-        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
-        let left_key_expr = crate::core::types::Expression::variable("a.vid");
+        let expr_ctx = Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
+        let left_key_expr = graphdb_core::types::Expression::variable("a.vid");
         let left_key_id = expr_ctx.register_expression(ExpressionMeta::new(left_key_expr));
         let hash_key = ContextualExpression::new(left_key_id, expr_ctx.clone());
 
-        let right_key_expr = crate::core::types::Expression::variable("b.vid");
+        let right_key_expr = graphdb_core::types::Expression::variable("b.vid");
         let right_key_id = expr_ctx.register_expression(ExpressionMeta::new(right_key_expr));
         let probe_key = ContextualExpression::new(right_key_id, expr_ctx.clone());
 
@@ -1216,8 +1216,8 @@ mod tests {
 
     #[test]
     fn hash_inner_join_with_composite_key_is_rejected() {
-        use crate::core::types::expr::contextual::ContextualExpression;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        use graphdb_core::types::expr::ExpressionMeta;
         use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
@@ -1226,9 +1226,9 @@ mod tests {
         let mut right_scan = ScanVerticesNode::new(2, "space");
         right_scan.set_tag("person");
 
-        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let expr_ctx = Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
         let make_key = |name: &str| {
-            let expr = crate::core::types::Expression::variable(name);
+            let expr = graphdb_core::types::Expression::variable(name);
             let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
             ContextualExpression::new(id, expr_ctx.clone())
         };
@@ -1250,8 +1250,8 @@ mod tests {
 
     #[test]
     fn non_vid_join_key_selects_hash_partition_layout() {
-        use crate::core::types::expr::contextual::ContextualExpression;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        use graphdb_core::types::expr::ExpressionMeta;
         use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         // Q4: a join on a property variable cannot map onto the vertex-id
@@ -1262,9 +1262,9 @@ mod tests {
         let mut right_scan = ScanVerticesNode::new(2, "space");
         right_scan.set_tag("person");
 
-        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let expr_ctx = Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
         let make_key = |name: &str| {
-            let expr = crate::core::types::Expression::variable(name);
+            let expr = graphdb_core::types::Expression::variable(name);
             let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
             ContextualExpression::new(id, expr_ctx.clone())
         };
@@ -1323,7 +1323,7 @@ mod tests {
 
     #[test]
     fn edge_scan_with_traversal_above_rejected() {
-        use crate::core::EdgeDirection;
+        use graphdb_core::EdgeDirection;
         use crate::optimizer::stats::EdgeTypeStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
         use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;

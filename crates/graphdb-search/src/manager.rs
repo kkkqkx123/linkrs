@@ -3,8 +3,8 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::metadata::SchemaManager;
-use crate::core::stats::StatsManager;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::stats::StatsManager;
 use crate::config::FulltextConfig;
 use crate::engine::{ConsistencyState, EngineType};
 use crate::error::SearchError;
@@ -264,7 +264,7 @@ impl FulltextIndexManager {
                     return Ok(fulltext_path);
                 }
 
-                use crate::core::types::space::IsolationLevel;
+                use graphdb_core::types::space::IsolationLevel;
                 match space_info.isolation_level {
                     IsolationLevel::Device => {
                         if let Some(ref custom_path) = space_info.storage_path {
@@ -621,7 +621,7 @@ impl FulltextIndexManager {
                         tokio::fs::remove_dir_all(&fulltext_path).await.ok();
                     }
                 } else if space_info.isolation_level
-                    == crate::core::types::space::IsolationLevel::Directory
+                    == graphdb_core::types::space::IsolationLevel::Directory
                 {
                     let space_path = self.base_path.join(format!("space_{}", space_id));
                     if space_path.exists() {

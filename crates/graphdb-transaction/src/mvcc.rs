@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Condvar, Mutex};
 
 use super::snapshot_tracker::SnapshotTracker;
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 
 /// Released timestamp sentinel value (0 means timestamp has been released)
 /// Note: distinct from Timestamp::MAX which may be used as a sentinel elsewhere

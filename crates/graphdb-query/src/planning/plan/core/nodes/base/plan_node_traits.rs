@@ -149,19 +149,19 @@ impl<T: BinaryInputNode + ?Sized> BinaryInputNode for &T {
 /// The interfaces for connecting the nodes have been unified, which facilitates consistent processing within the executor factory.
 pub trait JoinNode: BinaryInputNode {
     /// Obtaining the hash key (used to construct a hash table)
-    fn hash_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression];
+    fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression];
 
     /// Obtain the detection key (used for probing the hash table)
-    fn probe_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression];
+    fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression];
 }
 
 /// Implement the JoinNode trait for reference types
 impl<T: JoinNode + ?Sized> JoinNode for &T {
-    fn hash_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression] {
+    fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
         (**self).hash_keys()
     }
 
-    fn probe_keys(&self) -> &[crate::core::types::expr::contextual::ContextualExpression] {
+    fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
         (**self).probe_keys()
     }
 }

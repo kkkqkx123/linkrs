@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::edge::EdgeTypeInfo;
-use crate::core::types::index::{Index, IndexConfig, IndexType};
-use crate::core::types::space::SpaceInfo;
-use crate::core::types::tag::TagInfo;
-use crate::core::{NullType, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::edge::EdgeTypeInfo;
+use graphdb_core::types::index::{Index, IndexConfig, IndexType};
+use graphdb_core::types::space::SpaceInfo;
+use graphdb_core::types::tag::TagInfo;
+use graphdb_core::{NullType, Value};
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::operators::spec::{
     EdgeManageCommand, IndexManageCommand, SpaceManageCommand, TagManageCommand,
@@ -245,7 +245,7 @@ pub(super) fn execute_tag_manage(
                 Err(e)
                     if *if_not_exists
                         && e.kind()
-                            == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
+                            == graphdb_core::error::storage::StorageErrorKind::LabelAlreadyExists =>
                 {
                     Ok(())
                 }
@@ -261,9 +261,9 @@ pub(super) fn execute_tag_manage(
                 Err(e)
                     if *if_exists
                         && (e.kind()
-                            == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            == graphdb_core::error::storage::StorageErrorKind::LabelNotFound
                             || e.kind()
-                                == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                                == graphdb_core::error::storage::StorageErrorKind::NotFound) =>
                 {
                     Ok(())
                 }
@@ -465,7 +465,7 @@ pub(super) fn execute_edge_manage(
                 Err(e)
                     if *if_not_exists
                         && e.kind()
-                            == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
+                            == graphdb_core::error::storage::StorageErrorKind::LabelAlreadyExists =>
                 {
                     Ok(())
                 }
@@ -481,9 +481,9 @@ pub(super) fn execute_edge_manage(
                 Err(e)
                     if *if_exists
                         && (e.kind()
-                            == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            == graphdb_core::error::storage::StorageErrorKind::LabelNotFound
                             || e.kind()
-                                == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                                == graphdb_core::error::storage::StorageErrorKind::NotFound) =>
                 {
                     Ok(())
                 }
@@ -655,12 +655,12 @@ pub(super) fn execute_index_manage(
         IndexManageCommand::CreateTagIndex { .. } => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
             let schema = target_name.as_deref().unwrap_or(space_name);
-            let fields: Vec<crate::core::types::IndexField> = index_properties
+            let fields: Vec<graphdb_core::types::IndexField> = index_properties
                 .iter()
                 .map(|p| {
-                    crate::core::types::IndexField::new(
+                    graphdb_core::types::IndexField::new(
                         p.clone(),
-                        crate::core::Value::Null(crate::core::value::NullType::Null),
+                        graphdb_core::Value::Null(graphdb_core::value::NullType::Null),
                         true,
                     )
                 })
@@ -684,12 +684,12 @@ pub(super) fn execute_index_manage(
         IndexManageCommand::CreateEdgeIndex { .. } => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
             let schema = target_name.as_deref().unwrap_or(space_name);
-            let fields: Vec<crate::core::types::IndexField> = index_properties
+            let fields: Vec<graphdb_core::types::IndexField> = index_properties
                 .iter()
                 .map(|p| {
-                    crate::core::types::IndexField::new(
+                    graphdb_core::types::IndexField::new(
                         p.clone(),
-                        crate::core::Value::Null(crate::core::value::NullType::Null),
+                        graphdb_core::Value::Null(graphdb_core::value::NullType::Null),
                         true,
                     )
                 })
@@ -957,16 +957,16 @@ pub(super) fn execute_delete_index(
     })
 }
 
-fn parse_vid_type_str(s: &str) -> Result<crate::core::types::DataType, String> {
+fn parse_vid_type_str(s: &str) -> Result<graphdb_core::types::DataType, String> {
     let upper = s.trim().to_uppercase();
     if upper == "INT64" {
-        Ok(crate::core::types::DataType::BigInt)
+        Ok(graphdb_core::types::DataType::BigInt)
     } else if upper == "INT32" {
-        Ok(crate::core::types::DataType::Int)
+        Ok(graphdb_core::types::DataType::Int)
     } else if upper == "INT16" || upper == "INT8" {
-        Ok(crate::core::types::DataType::SmallInt)
+        Ok(graphdb_core::types::DataType::SmallInt)
     } else if upper == "STRING" {
-        Ok(crate::core::types::DataType::String)
+        Ok(graphdb_core::types::DataType::String)
     } else if upper == "VID" {
         Err("VID is not a valid vertex ID type; use INT64, INT32, INT16, STRING or FIXED_STRING instead".to_string())
     } else if upper.starts_with("FIXED_STRING(") || upper.starts_with("FIXEDSTRING(") {
@@ -975,11 +975,11 @@ fn parse_vid_type_str(s: &str) -> Result<crate::core::types::DataType, String> {
             .trim_start_matches("FIXEDSTRING(")
             .trim_end_matches(')');
         if let Ok(n) = inner.parse::<usize>() {
-            Ok(crate::core::types::DataType::FixedString(n))
+            Ok(graphdb_core::types::DataType::FixedString(n))
         } else {
-            Ok(crate::core::types::DataType::FixedString(32))
+            Ok(graphdb_core::types::DataType::FixedString(32))
         }
     } else {
-        Ok(crate::core::types::DataType::String)
+        Ok(graphdb_core::types::DataType::String)
     }
 }

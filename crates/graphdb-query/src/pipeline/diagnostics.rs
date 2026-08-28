@@ -1,7 +1,7 @@
 use super::QueryPipelineManager;
-use crate::core::error::{DBError, DBResult, QueryError};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::Value;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::Value;
 use crate::executor::base::ExecutionResult;
 use crate::executor::explain::physical_plan_explain::physical_plan_to_plan_description;
 use crate::executor::streaming::instance::{
@@ -64,8 +64,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         };
 
-        let data_set = crate::core::DataSet::from_rows(
-            vec![vec![crate::core::Value::string(output)]],
+        let data_set = graphdb_core::DataSet::from_rows(
+            vec![vec![graphdb_core::Value::string(output)]],
             vec!["plan".to_string()],
         );
         Ok(ExecutionResult::DataSet { data: data_set })
@@ -124,8 +124,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         };
 
-        let data_set = crate::core::DataSet::from_rows(
-            vec![vec![crate::core::Value::string(output)]],
+        let data_set = graphdb_core::DataSet::from_rows(
+            vec![vec![graphdb_core::Value::string(output)]],
             vec!["plan".to_string()],
         );
         Ok(ExecutionResult::DataSet { data: data_set })
@@ -257,7 +257,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         operator_info.push(Value::string(&parallel_info));
 
         let total_rows = plan_desc.plan_node_descs.len() + 1;
-        let result_dataset = crate::core::DataSet {
+        let result_dataset = graphdb_core::DataSet {
             col_names: vec![
                 "id".to_string(),
                 "name".to_string(),
@@ -267,7 +267,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ],
             rows: (0..total_rows)
                 .map(|i| {
-                    use crate::core::value::NullType;
+                    use graphdb_core::value::NullType;
                     vec![
                         ids.get(i)
                             .cloned()

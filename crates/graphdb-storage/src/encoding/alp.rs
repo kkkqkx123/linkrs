@@ -16,8 +16,8 @@
 use std::io::{Read, Write};
 
 use super::bitpacking::BitPackedColumn;
-use crate::core::{DataType, StorageError, StorageResult, Value};
-use crate::utils::NullBitmap;
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::NullBitmap;
 
 const ALP_EPSILON: f64 = f64::EPSILON;
 

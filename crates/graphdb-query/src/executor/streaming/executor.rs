@@ -6,8 +6,8 @@ use std::time::Instant;
 use super::chunk::DataChunk;
 use super::runtime::{ExecutionRuntime, OperatorProfile, OperatorProfileKey};
 use super::slot::SlotLayout;
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::base::{MemoryTracker, Spillable};
 
 pub use super::context::ValueRowContext;
@@ -1053,7 +1053,7 @@ mod tests {
         BlockingOperator, ExecutionRuntime, OperatorBase, OperatorProfileKey, SetOperator,
         SortDirection, SourceOperator, StreamingExecutor, UnaryOperator,
     };
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::streaming::helpers::compare_values;
     use crate::executor::streaming::operators::set_operator::SetOperatorKind;
     use crate::executor::streaming::operators::source_operator::SourceOperatorKind;
@@ -1306,7 +1306,7 @@ mod tests {
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::Sort {
-                    sort_expressions: vec![crate::core::types::expr::Expression::variable(
+                    sort_expressions: vec![graphdb_core::types::expr::Expression::variable(
                         "val".to_string(),
                     )],
                     sort_directions: vec![SortDirection::Ascending],
@@ -1386,7 +1386,7 @@ mod tests {
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::Sort {
-                    sort_expressions: vec![crate::core::types::expr::Expression::variable(
+                    sort_expressions: vec![graphdb_core::types::expr::Expression::variable(
                         col_names[0].clone(),
                     )],
                     sort_directions: vec![SortDirection::Ascending],
@@ -1457,8 +1457,8 @@ mod tests {
         col_names: Vec<String>,
         spill_budget_bytes: Option<usize>,
     ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
-        use crate::core::types::expr::Expression;
-        use crate::core::types::operators::AggregateFunction;
+        use graphdb_core::types::expr::Expression;
+        use graphdb_core::types::operators::AggregateFunction;
         use crate::executor::base::MemoryBudget;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::slot::SlotLayout;
@@ -1623,7 +1623,7 @@ mod tests {
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::GroupBy {
-                    group_by_expressions: vec![crate::core::types::expr::Expression::variable(
+                    group_by_expressions: vec![graphdb_core::types::expr::Expression::variable(
                         col_names[0].clone(),
                     )],
                 },
@@ -1697,7 +1697,7 @@ mod tests {
         col_names: Vec<String>,
         spill_budget_bytes: Option<usize>,
     ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
-        use crate::core::types::expr::Expression;
+        use graphdb_core::types::expr::Expression;
         use crate::executor::base::MemoryBudget;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::plan::types::PhysicalOperatorId;
@@ -1820,8 +1820,8 @@ mod tests {
 
     #[test]
     fn stateless_filter_reset_repulls_identical_output() {
-        use crate::core::types::expr::Expression;
-        use crate::core::types::operators::BinaryOperator;
+        use graphdb_core::types::expr::Expression;
+        use graphdb_core::types::operators::BinaryOperator;
 
         let scan = Box::new(scan_executor(
             (1..=6).map(|v| vec![Value::BigInt(v)]).collect(),
@@ -1917,7 +1917,7 @@ mod tests {
 
     #[test]
     fn blocking_sort_reset_falls_back_to_close_open_and_marks_flag() {
-        use crate::core::types::expr::Expression;
+        use graphdb_core::types::expr::Expression;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::slot::SlotLayout;
 

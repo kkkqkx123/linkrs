@@ -9,7 +9,7 @@ use super::super::state::{
 };
 use crate::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::executor::streaming::slot::SlotLayout;
-use crate::utils::Arena;
+use graphdb_core::Arena;
 /// Explicit operator lifecycle state machine.
 ///
 /// # Transitions
@@ -240,7 +240,7 @@ impl OperatorBase {
         OperatorProfileKey::new(self.physical_operator_id, self.partition_id)
     }
 
-    pub fn ensure_not_cancelled(&self) -> Result<(), crate::core::error::QueryError> {
+    pub fn ensure_not_cancelled(&self) -> Result<(), graphdb_core::error::QueryError> {
         if let Some(rt) = &self.runtime {
             rt.ensure_not_cancelled()
         } else {

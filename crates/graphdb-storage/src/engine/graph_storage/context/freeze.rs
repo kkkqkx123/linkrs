@@ -1,5 +1,5 @@
-use crate::core::types::{AutoCompactConfig, CompactConfig, Timestamp};
-use crate::core::StorageResult;
+use graphdb_core::types::{AutoCompactConfig, CompactConfig, Timestamp};
+use graphdb_core::StorageResult;
 use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::background_freeze::{FreezeGuard, FreezeStats};
 use parking_lot::Mutex;

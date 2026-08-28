@@ -3,7 +3,7 @@
 //! Handles schema operations like adding, removing, and renaming properties.
 //! Schema modifications invalidate the property index cache, which is rebuilt on-demand.
 
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 use crate::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
 use crate::types::StoragePropertyDef;
 
@@ -21,7 +21,7 @@ impl VertexTable {
         let mut history_guard = self
             .version_history
             .lock()
-            .map_err(|_| crate::core::StorageError::db_error("Failed to lock version_history"))?;
+            .map_err(|_| graphdb_core::StorageError::db_error("Failed to lock version_history"))?;
 
         let next_version = history_guard.latest_version() + 1;
         self.schema.schema_version = next_version;
@@ -50,11 +50,11 @@ impl VertexTable {
 
     pub fn add_property(&mut self, prop: StoragePropertyDef) -> StorageResult<()> {
         if !self.is_open {
-            return Err(crate::core::StorageError::storage_not_open());
+            return Err(graphdb_core::StorageError::storage_not_open());
         }
 
         if self.columns.get_column(&prop.name).is_some() {
-            return Err(crate::core::StorageError::column_already_exists(
+            return Err(graphdb_core::StorageError::column_already_exists(
                 prop.name.clone(),
             ));
         }
@@ -82,7 +82,7 @@ impl VertexTable {
 
     pub fn remove_property(&mut self, prop_name: &str) -> StorageResult<()> {
         if !self.is_open {
-            return Err(crate::core::StorageError::storage_not_open());
+            return Err(graphdb_core::StorageError::storage_not_open());
         }
 
         let index = self
@@ -90,11 +90,11 @@ impl VertexTable {
             .properties
             .iter()
             .position(|prop| prop.name == prop_name)
-            .ok_or_else(|| crate::core::StorageError::column_not_found(prop_name.to_string()))?;
+            .ok_or_else(|| graphdb_core::StorageError::column_not_found(prop_name.to_string()))?;
 
         // GUARD: Prevent removal of primary key property
         if index == self.schema.primary_key_index {
-            return Err(crate::core::StorageError::not_supported(
+            return Err(graphdb_core::StorageError::not_supported(
                 "Removing the primary key property is not supported".to_string(),
             ));
         }
@@ -129,7 +129,7 @@ impl VertexTable {
 
     pub fn rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
         if !self.is_open {
-            return Err(crate::core::StorageError::storage_not_open());
+            return Err(graphdb_core::StorageError::storage_not_open());
         }
 
         if self
@@ -138,7 +138,7 @@ impl VertexTable {
             .iter()
             .any(|prop| prop.name == new_name)
         {
-            return Err(crate::core::StorageError::column_already_exists(
+            return Err(graphdb_core::StorageError::column_already_exists(
                 new_name.to_string(),
             ));
         }
@@ -148,7 +148,7 @@ impl VertexTable {
             .properties
             .iter()
             .position(|prop| prop.name == old_name)
-            .ok_or_else(|| crate::core::StorageError::column_not_found(old_name.to_string()))?;
+            .ok_or_else(|| graphdb_core::StorageError::column_not_found(old_name.to_string()))?;
 
         // Rename in columns first (potentially failing operation)
         self.columns.rename_column(old_name, new_name.to_string())?;

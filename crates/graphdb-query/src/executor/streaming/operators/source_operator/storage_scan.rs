@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -347,7 +347,7 @@ fn build_column_chunk(
                     column
                         .values
                         .value_at(row)
-                        .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                        .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
                 })
                 .collect(),
         );
@@ -365,9 +365,9 @@ fn build_column_chunk(
         let tags = if tag_name.is_empty() {
             Vec::new()
         } else {
-            vec![crate::core::Tag::new(tag_name.clone(), properties.clone())]
+            vec![graphdb_core::Tag::new(tag_name.clone(), properties.clone())]
         };
-        let vertex = crate::core::Vertex {
+        let vertex = graphdb_core::Vertex {
             vid: batch.vids[row],
             id: batch.internal_ids[row],
             tags,
@@ -382,7 +382,7 @@ fn build_column_chunk(
             .map(|prop| {
                 vertex
                     .property_value(prop)
-                    .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                    .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
             })
             .collect();
         row_vec.push(Value::Vertex(Box::new(vertex)));
@@ -404,7 +404,7 @@ fn build_column_chunk(
                 )),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
-                        .map(|_| Value::Null(crate::core::value::NullType::Null))
+                        .map(|_| Value::Null(graphdb_core::value::NullType::Null))
                         .collect(),
                 )),
             }
@@ -526,7 +526,7 @@ fn build_edge_column_chunk(
                     column
                         .values
                         .value_at(row)
-                        .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                        .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
                 })
                 .collect(),
         );
@@ -549,7 +549,7 @@ fn build_edge_column_chunk(
                 properties.insert(column.name.clone(), value.clone());
             }
         }
-        let edge = crate::core::Edge {
+        let edge = graphdb_core::Edge {
             src: *src,
             dst: *dst,
             edge_type: edge_type.clone(),
@@ -561,7 +561,7 @@ fn build_edge_column_chunk(
             .map(|prop| {
                 edge.get_property(prop)
                     .cloned()
-                    .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                    .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
             })
             .collect();
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
@@ -584,7 +584,7 @@ fn build_edge_column_chunk(
                 )),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
-                        .map(|_| Value::Null(crate::core::value::NullType::Null))
+                        .map(|_| Value::Null(graphdb_core::value::NullType::Null))
                         .collect(),
                 )),
             }

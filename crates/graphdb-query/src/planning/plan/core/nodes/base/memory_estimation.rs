@@ -3,7 +3,7 @@
 //! This trait provides a common interface for estimating memory usage
 //! of different plan node types.
 
-pub use crate::core::types::memory_estimation::{
+pub use graphdb_core::types::memory_estimation::{
     estimate_option_string_memory, estimate_string_memory, estimate_vec_memory,
     estimate_vec_string_memory, MemoryEstimatable,
 };
@@ -13,12 +13,12 @@ pub use crate::core::types::memory_estimation::{
 #[macro_export]
 macro_rules! impl_default_estimate_memory {
     ($node_type:ty) => {
-        impl $crate::core::types::memory_estimation::MemoryEstimatable for $node_type {
+        impl graphdb_core::types::memory_estimation::MemoryEstimatable for $node_type {
             fn estimate_memory(&self) -> usize {
                 let base = std::mem::size_of::<$node_type>();
 
                 let col_names_size =
-                    $crate::core::types::memory_estimation::estimate_vec_string_memory(
+                    graphdb_core::types::memory_estimation::estimate_vec_string_memory(
                         &self.col_names(),
                     );
 

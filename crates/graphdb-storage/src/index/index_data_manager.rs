@@ -1,10 +1,10 @@
-use crate::core::stats::StatsManager;
-use crate::core::types::{
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{
     CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
 };
-use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::wal::{EntityRef, OutboxIntent};
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::wal::{EntityRef, OutboxIntent};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::index::helpers::{
     edge_entity_ref, flush_split_generation, merge_split_wal_changes, vertex_entity_ref,
 };
@@ -1180,7 +1180,7 @@ impl IndexDataManagerImpl {
         let mut versioned = Vec::new();
         write_versioned_payload(
             &mut versioned,
-            crate::core::types::StorageVersion::CURRENT as u32,
+            graphdb_core::types::StorageVersion::CURRENT as u32,
             &serialized,
         );
         crate::persistence::write_file_atomic(&path, &versioned)

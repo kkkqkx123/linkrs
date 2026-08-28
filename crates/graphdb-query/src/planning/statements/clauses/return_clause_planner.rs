@@ -2,12 +2,12 @@
 //!
 //! Responsible for planning the execution of the RETURN statement and implementing the projection of the results.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression::ExpressionMeta;
-use crate::core::types::expr::expression_utils::generate_default_alias_from_contextual;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::Expression;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression::ExpressionMeta;
+use graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Expression;
+use graphdb_core::YieldColumn;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
@@ -77,7 +77,7 @@ fn extract_distinct_flag(stmt: &Stmt) -> bool {
     false
 }
 
-fn extract_having_clause(stmt: &Stmt) -> Option<crate::core::types::ContextualExpression> {
+fn extract_having_clause(stmt: &Stmt) -> Option<graphdb_core::types::ContextualExpression> {
     if let Stmt::Match(match_stmt) = stmt {
         if let Some(return_clause) = &match_stmt.return_clause {
             return return_clause.having_clause.clone();
@@ -562,8 +562,8 @@ impl ClausePlanner for ReturnClausePlanner {
     }
 }
 
-fn expression_contains_aggregate(expr: &crate::core::Expression) -> bool {
-    use crate::core::Expression;
+fn expression_contains_aggregate(expr: &graphdb_core::Expression) -> bool {
+    use graphdb_core::Expression;
     match expr {
         Expression::Aggregate { .. } => true,
         Expression::Binary { left, right, .. } => {
@@ -575,8 +575,8 @@ fn expression_contains_aggregate(expr: &crate::core::Expression) -> bool {
     }
 }
 
-fn expression_contains_window_function(expr: &crate::core::Expression) -> bool {
-    use crate::core::Expression;
+fn expression_contains_window_function(expr: &graphdb_core::Expression) -> bool {
+    use graphdb_core::Expression;
     match expr {
         Expression::WindowFunction { .. } => true,
         Expression::Binary { left, right, .. } => {
@@ -667,9 +667,9 @@ fn extract_aggregate_info(
 }
 
 fn extract_aggregate_function(
-    expr: &crate::core::Expression,
+    expr: &graphdb_core::Expression,
 ) -> Option<(AggregateFunction, bool, Option<Expression>, Vec<Expression>)> {
-    use crate::core::Expression;
+    use graphdb_core::Expression;
     match expr {
         Expression::Aggregate {
             func,
@@ -696,9 +696,9 @@ fn extract_aggregate_function(
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::contextual::ContextualExpression;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::contextual::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Expression;
     use crate::parser::ast::Span;
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
@@ -747,9 +747,9 @@ mod tests {
     fn test_extract_return_columns() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),
@@ -811,7 +811,7 @@ mod tests {
     fn test_generate_default_alias() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
         let alias = generate_default_alias_from_contextual(&contextual);
@@ -821,7 +821,7 @@ mod tests {
             object: Box::new(Expression::Variable("n".to_string())),
             property: "name".to_string(),
         };
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
         let alias = generate_default_alias_from_contextual(&contextual);
@@ -831,7 +831,7 @@ mod tests {
             name: "count".to_string(),
             args: vec![],
         };
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
         let alias = generate_default_alias_from_contextual(&contextual);
@@ -842,9 +842,9 @@ mod tests {
     fn test_transform_clause() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),
@@ -907,9 +907,9 @@ mod tests {
     fn test_transform_clause_with_distinct() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),
@@ -971,9 +971,9 @@ mod tests {
     fn test_transform_clause_empty_input_plan() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("n".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),

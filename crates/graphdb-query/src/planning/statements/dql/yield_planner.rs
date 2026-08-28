@@ -2,7 +2,7 @@
 //!
 //! Query planning for processing the YIELD statement
 
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{OrderDirection, Stmt, YieldItem, YieldStmt};
 use crate::planning::plan::core::nodes::{
     DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode,
@@ -122,10 +122,10 @@ impl Planner for YieldPlanner {
                 .map(|item| {
                     let direction = match item.direction {
                         OrderDirection::Asc => {
-                            crate::core::types::graph_schema::OrderDirection::Asc
+                            graphdb_core::types::graph_schema::OrderDirection::Asc
                         }
                         OrderDirection::Desc => {
-                            crate::core::types::graph_schema::OrderDirection::Desc
+                            graphdb_core::types::graph_schema::OrderDirection::Desc
                         }
                     };
                     let expression = item
@@ -133,7 +133,7 @@ impl Planner for YieldPlanner {
                         .expression()
                         .map(|e| e.inner().clone())
                         .unwrap_or_else(|| {
-                            crate::core::Expression::Variable(
+                            graphdb_core::Expression::Variable(
                                 item.expression.to_expression_string(),
                             )
                         });

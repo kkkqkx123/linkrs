@@ -115,7 +115,7 @@ pub async fn validate<
 /// The core result carries the engine `ExecutionResult` unchanged; each
 /// variant is rendered here into the JSON wire shape (rows stay in column
 /// order, no intermediate map conversion).
-fn query_result_to_response(result: graphdb_api::core::QueryResult) -> QueryResponse {
+fn query_result_to_response(result: graphdb_api::api_core::QueryResult) -> QueryResponse {
     // `metadata.space_id` surfaces the switched-to space. The engine executes
     // USE as a DataSet with a `space_id` column (the `SpaceSwitched` variant
     // is never produced); `QueryResult::space_summary` recognizes both.
@@ -181,7 +181,7 @@ fn query_result_to_response(result: graphdb_api::core::QueryResult) -> QueryResp
 /// Empty maps are passed through as `None` so the core sees no bindings.
 fn json_params_to_core(
     params: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<std::collections::HashMap<String, crate::core::Value>> {
+) -> Option<std::collections::HashMap<String, graphdb_core::Value>> {
     if params.is_empty() {
         return None;
     }

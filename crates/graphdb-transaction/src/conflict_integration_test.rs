@@ -2,7 +2,7 @@
 //!
 //! Tests the interaction between write set tracking, conflict detection, and MVCC
 
-use crate::core::types::VertexId;
+use graphdb_core::types::VertexId;
 use crate::manager::TransactionManager;
 use crate::types::{TransactionManagerConfig, TransactionOptions};
 use crate::WriteSetAnalyzer;
@@ -126,7 +126,7 @@ fn test_conflict_intensity_varying_overlaps() {
 /// Test 3.1.4: ConflictReport detailed analysis
 #[test]
 fn test_conflict_report_classification() {
-    use crate::core::types::EdgeIdentifier;
+    use graphdb_core::types::EdgeIdentifier;
     use crate::types::WriteSet;
 
     let vid1 = VertexId::from_int64(1);

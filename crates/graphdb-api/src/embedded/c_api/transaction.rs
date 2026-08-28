@@ -2,7 +2,7 @@
 //!
 //! Provides transaction management functionality, including transaction start, commit, rollback, and savepoints
 
-use crate::core::TransactionHandle;
+use crate::api_core::types::TransactionHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, graphdb_error_code_t, set_last_error_message,
 };
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         None => return graphdb_error_code_t::GRAPHDB_INTERNAL as c_int,
     };
 
-    let ctx = crate::core::QueryRequest {
+    let ctx = graphdb_core::QueryRequest {
         space_id: session.inner.space_id(),
         space_name: session.inner.space_name().map(|s| s.to_string()),
         auto_commit: false,
@@ -459,13 +459,13 @@ pub unsafe extern "C" fn graphdb_txn_release_savepoint(
         None => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
     };
 
-    let savepoint = crate::core::SavepointId(savepoint_id as u64);
+    let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
 
     // Use embedded session API instead of direct TransactionManager access
     match session.inner.release_savepoint(txn_handle, savepoint) {
         Ok(_) => graphdb_error_code_t::GRAPHDB_OK as c_int,
         Err(e) => {
-            let core_error = crate::core::CoreError::TransactionFailed(format!("{}", e));
+            let core_error = crate::api_core::error::CoreError::TransactionFailed(format!("{}", e));
             let (error_code, _) = error_code_from_core_error(&core_error);
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);
@@ -513,13 +513,13 @@ pub unsafe extern "C" fn graphdb_txn_rollback_to_savepoint(
         None => return graphdb_error_code_t::GRAPHDB_INTERNAL as c_int,
     };
 
-    let savepoint = crate::core::SavepointId(savepoint_id as u64);
+    let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
 
     // Use embedded session API instead of direct TransactionManager access
     match session.inner.rollback_to_savepoint(txn_handle, savepoint) {
         Ok(_) => graphdb_error_code_t::GRAPHDB_OK as c_int,
         Err(e) => {
-            let core_error = crate::core::CoreError::TransactionFailed(format!("{}", e));
+            let core_error = crate::api_core::error::CoreError::TransactionFailed(format!("{}", e));
             let (error_code, _) = error_code_from_core_error(&core_error);
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);

@@ -17,8 +17,8 @@ use super::operators::blocking::BlockingOperatorKind;
 use super::operators::gather_operator::GatherOperator;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::plan::types::SyntheticNodeIdAllocator;
 use crate::executor::streaming::pool::MorselWorkerPool;
@@ -711,7 +711,7 @@ mod tests {
     use super::super::operators::unary_operator::UnaryOperatorKind;
     use super::super::slot::SlotLayout;
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     fn operator_base(plan_node_id: i64, col_names: &[String]) -> OperatorBase {
         OperatorBase::new(plan_node_id)
@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
-        use crate::core::types::expr::Expression;
+        use graphdb_core::types::expr::Expression;
 
         let left = StreamingExecutor::Source(
             operator_base(1, &["id".to_string()]).with_chunk_size(1),
@@ -1267,7 +1267,7 @@ mod tests {
             ),
         ];
         let gather = GatherOperator::merge_sort(
-            vec![crate::core::types::expr::Expression::Variable(
+            vec![graphdb_core::types::expr::Expression::Variable(
                 "id".to_string(),
             )],
             vec![SortDirection::Ascending],
@@ -1308,7 +1308,7 @@ mod tests {
                         vec!["id".to_string()],
                     ),
                 ],
-                vec![crate::core::types::expr::Expression::Variable(
+                vec![graphdb_core::types::expr::Expression::Variable(
                     "id".to_string(),
                 )],
                 vec![SortDirection::Ascending],
@@ -1338,12 +1338,12 @@ mod tests {
                     group_by_expressions: Vec::new(),
                     aggregate_functions: vec![
                         (
-                            crate::core::types::operators::AggregateFunction::Count,
-                            vec![crate::core::types::expr::Expression::Literal(Value::Int(1))],
+                            graphdb_core::types::operators::AggregateFunction::Count,
+                            vec![graphdb_core::types::expr::Expression::Literal(Value::Int(1))],
                         ),
                         (
-                            crate::core::types::operators::AggregateFunction::Sum,
-                            vec![crate::core::types::expr::Expression::Variable(
+                            graphdb_core::types::operators::AggregateFunction::Sum,
+                            vec![graphdb_core::types::expr::Expression::Variable(
                                 "amount".to_string(),
                             )],
                         ),
@@ -1490,10 +1490,10 @@ mod tests {
             JoinOperator::new(
                 JoinOperatorKind::HashJoin {
                     join_condition: None,
-                    hash_keys: vec![crate::core::types::expr::Expression::Variable(
+                    hash_keys: vec![graphdb_core::types::expr::Expression::Variable(
                         "id".to_string(),
                     )],
-                    probe_keys: vec![crate::core::types::expr::Expression::Variable(
+                    probe_keys: vec![graphdb_core::types::expr::Expression::Variable(
                         "id".to_string(),
                     )],
                     build_side: crate::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),

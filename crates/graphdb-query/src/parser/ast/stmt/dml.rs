@@ -1,5 +1,5 @@
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::Span;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::Span;
 use crate::parser::ast::pattern::Pattern;
 
 use super::YieldClause;

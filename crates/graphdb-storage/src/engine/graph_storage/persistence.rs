@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::types::{CompactConfig, CompactTarget, Timestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{CompactConfig, CompactTarget, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::engine::paths::StoragePaths;
 use crate::engine::persistence_coordinator::{
     CheckpointData, CheckpointInfo, CheckpointStats,
 };
-use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
-use crate::transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
+use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
+use graphdb_transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
 use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
 
 use super::context::GraphStorageContext;
@@ -390,7 +390,7 @@ pub(crate) fn compact_transactional(
                 .read();
 
             wal_guard
-                .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
+                .append_entry(graphdb_core::wal::types::WalOpType::Compact, timestamp, &[])
                 .map_err(|e| {
                     StorageError::wal_error(format!("Failed to append compact WAL: {}", e))
                 })?;
@@ -721,12 +721,12 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
-    use crate::core::{DataType, Value};
+    use graphdb_core::types::VertexId;
+    use graphdb_core::{DataType, Value};
     use crate::engine::PersistenceConfig;
     use crate::types::StoragePropertyDef;
-    use crate::transaction::wal::writer::WalWriter;
-    use crate::transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
+    use graphdb_transaction::wal::writer::WalWriter;
+    use graphdb_transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
     use graphdb_core::types::CommitLsn;
     use graphdb_sync::checkpoint_manifest::CheckpointManifest;
     use postcard::to_allocvec;

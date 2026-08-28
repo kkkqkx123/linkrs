@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::types::{DataType, Position, Span};
-use crate::core::{StructValue, Value};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::types::{DataType, Position, Span};
+use graphdb_core::{StructValue, Value};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
@@ -552,7 +552,7 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             ctx.next_token();
             let span = ctx.merge_span(start_pos, ctx.current_position());
             Ok(ParseResult {
-                expr: Expression::literal(Value::Null(crate::core::NullType::Null)),
+                expr: Expression::literal(Value::Null(graphdb_core::NullType::Null)),
                 span,
             })
         }
@@ -660,7 +660,7 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 values.push(value);
             }
             Ok(ParseResult {
-                expr: Expression::literal(Value::Array(Box::new(crate::core::ArrayValue::new(
+                expr: Expression::literal(Value::Array(Box::new(graphdb_core::ArrayValue::new(
                     values,
                 )))),
                 span,
@@ -784,8 +784,8 @@ fn parse_function_call(
         if name_upper == "COUNT" {
             return Ok(ParseResult {
                 expr: Expression::Aggregate {
-                    func: crate::core::types::operators::AggregateFunction::Count,
-                    args: vec![Expression::Literal(crate::core::Value::string("*"))],
+                    func: graphdb_core::types::operators::AggregateFunction::Count,
+                    args: vec![Expression::Literal(graphdb_core::Value::string("*"))],
                     distinct: false,
                     filter: None,
                 },
@@ -840,37 +840,37 @@ fn parse_function_call(
         let distinct = ctx.match_token(TokenKind::Distinct);
         let mut agg_args: Vec<Expression> = args.iter().map(|a| a.expr.clone()).collect();
         if agg_args.is_empty() {
-            agg_args.push(Expression::Literal(crate::core::Value::Null(
-                crate::core::NullType::Null,
+            agg_args.push(Expression::Literal(graphdb_core::Value::Null(
+                graphdb_core::NullType::Null,
             )));
         }
 
         // Parameterized aggregates carry their extra parameters (e.g. the
         // percentile fraction of PERCENTILE_CONT) in `args` after the field.
         let func = match name_upper.as_str() {
-            "COUNT" => crate::core::types::operators::AggregateFunction::Count,
-            "SUM" => crate::core::types::operators::AggregateFunction::Sum,
-            "AVG" => crate::core::types::operators::AggregateFunction::Avg,
-            "MIN" => crate::core::types::operators::AggregateFunction::Min,
-            "MAX" => crate::core::types::operators::AggregateFunction::Max,
-            "COLLECT" => crate::core::types::operators::AggregateFunction::Collect,
-            "COLLECT_SET" => crate::core::types::operators::AggregateFunction::CollectSet,
-            "STD" => crate::core::types::operators::AggregateFunction::Std,
-            "STDDEV_POP" => crate::core::types::operators::AggregateFunction::StddevPop,
-            "STDDEV_SAMP" => crate::core::types::operators::AggregateFunction::StddevSamp,
-            "PRODUCT" => crate::core::types::operators::AggregateFunction::Product,
+            "COUNT" => graphdb_core::types::operators::AggregateFunction::Count,
+            "SUM" => graphdb_core::types::operators::AggregateFunction::Sum,
+            "AVG" => graphdb_core::types::operators::AggregateFunction::Avg,
+            "MIN" => graphdb_core::types::operators::AggregateFunction::Min,
+            "MAX" => graphdb_core::types::operators::AggregateFunction::Max,
+            "COLLECT" => graphdb_core::types::operators::AggregateFunction::Collect,
+            "COLLECT_SET" => graphdb_core::types::operators::AggregateFunction::CollectSet,
+            "STD" => graphdb_core::types::operators::AggregateFunction::Std,
+            "STDDEV_POP" => graphdb_core::types::operators::AggregateFunction::StddevPop,
+            "STDDEV_SAMP" => graphdb_core::types::operators::AggregateFunction::StddevSamp,
+            "PRODUCT" => graphdb_core::types::operators::AggregateFunction::Product,
             "PERCENTILE_CONT" | "PERCENTILE" => {
                 if args.len() < 2 {
-                    agg_args.push(Expression::Literal(crate::core::Value::Double(50.0)));
+                    agg_args.push(Expression::Literal(graphdb_core::Value::Double(50.0)));
                 }
-                crate::core::types::operators::AggregateFunction::PercentileCont
+                graphdb_core::types::operators::AggregateFunction::PercentileCont
             }
-            "VARIANCE" => crate::core::types::operators::AggregateFunction::Variance,
-            "MEDIAN" => crate::core::types::operators::AggregateFunction::Median,
-            "MODE" => crate::core::types::operators::AggregateFunction::Mode,
-            "BOOL_AND" => crate::core::types::operators::AggregateFunction::BoolAnd,
-            "BOOL_OR" => crate::core::types::operators::AggregateFunction::BoolOr,
-            _ => crate::core::types::operators::AggregateFunction::Count,
+            "VARIANCE" => graphdb_core::types::operators::AggregateFunction::Variance,
+            "MEDIAN" => graphdb_core::types::operators::AggregateFunction::Median,
+            "MODE" => graphdb_core::types::operators::AggregateFunction::Mode,
+            "BOOL_AND" => graphdb_core::types::operators::AggregateFunction::BoolAnd,
+            "BOOL_OR" => graphdb_core::types::operators::AggregateFunction::BoolOr,
+            _ => graphdb_core::types::operators::AggregateFunction::Count,
         };
 
         let filter = if ctx.match_token(TokenKind::Filter) {

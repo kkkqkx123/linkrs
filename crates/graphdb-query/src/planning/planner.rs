@@ -680,8 +680,8 @@ pub enum PlannerError {
 }
 
 // Implement the From conversion for the DBError class.
-impl From<crate::core::error::DBError> for PlannerError {
-    fn from(err: crate::core::error::DBError) -> Self {
+impl From<graphdb_core::error::DBError> for PlannerError {
+    fn from(err: graphdb_core::error::DBError) -> Self {
         PlannerError::PlanGenerationFailed(err.to_string())
     }
 }
@@ -694,7 +694,7 @@ mod tests {
     fn test_planner_enum_from_stmt() {
         // Testing the creation of a planner from a Stmt
         let match_stmt = Stmt::Match(crate::parser::ast::MatchStmt {
-            span: crate::core::types::Span::default(),
+            span: graphdb_core::types::Span::default(),
             patterns: vec![],
             where_clause: None,
             return_clause: None,
@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn test_planner_enum_matches() {
         let match_stmt = Stmt::Match(crate::parser::ast::MatchStmt {
-            span: crate::core::types::Span::default(),
+            span: graphdb_core::types::Span::default(),
             patterns: vec![],
             where_clause: None,
             return_clause: None,

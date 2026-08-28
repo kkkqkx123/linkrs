@@ -1,6 +1,6 @@
 //! Logical access nodes: Start, GetVertices, GetEdges, GetNeighbors, ScanVertices, ScanEdges.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_plan_node;
 use crate::planning::plan::core::common::{EdgeProp, TagProp};
 

@@ -1,6 +1,6 @@
 //! WAL compression strategy
 
-use crate::core::wal::types::{WalCompression, WalConfig, WalError, WalResult};
+use graphdb_core::wal::types::{WalCompression, WalConfig, WalError, WalResult};
 
 /// Compression strategy trait
 pub(crate) trait Compressor: Send + Sync {

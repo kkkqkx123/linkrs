@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::core::types::LabelId;
-use crate::core::StorageResult;
+use graphdb_core::types::LabelId;
+use graphdb_core::StorageResult;
 use crate::engine::config::ColdTierConfig;
 
 use super::GraphStorageContext;
@@ -97,7 +97,7 @@ impl GraphStorageContext {
                     .values()
                     .find(|arc| arc.read().label() == label)
                     .ok_or_else(|| {
-                        crate::core::StorageError::label_not_found(format!(
+                        graphdb_core::StorageError::label_not_found(format!(
                             "edge label {} disappeared before freeze",
                             label
                         ))

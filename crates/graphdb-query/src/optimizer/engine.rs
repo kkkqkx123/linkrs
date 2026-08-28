@@ -37,7 +37,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
 use crate::optimizer::cost_based::{
     AggregateContext, AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
@@ -440,7 +440,7 @@ impl OptimizerEngine {
     /// Set the stats manager on the CTE cache manager
     pub fn set_cte_cache_stats_manager(
         &self,
-        stats_manager: Arc<crate::core::stats::StatsManager>,
+        stats_manager: Arc<graphdb_core::stats::StatsManager>,
     ) {
         self.cte_cache_manager.set_stats_manager(stats_manager);
     }
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn test_feedback_loop_corrects_selectivity() {
-        use crate::core::types::Expression;
+        use graphdb_core::types::Expression;
         use crate::optimizer::cost::selectivity::condition_key;
         use crate::optimizer::stats::feedback::query::{
             OperatorFeedback, QueryExecutionFeedback,
@@ -1103,8 +1103,8 @@ mod tests {
                 object: Box::new(Expression::Variable("v".to_string())),
                 property: "age".to_string(),
             }),
-            op: crate::core::types::BinaryOperator::GreaterThan,
-            right: Box::new(Expression::Literal(crate::core::Value::Int(30))),
+            op: graphdb_core::types::BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(30))),
         };
         let original =
             engine
@@ -1261,10 +1261,10 @@ mod tests {
 
     #[test]
     fn cost_based_phases_rewrite_and_emit_notes() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-        use crate::core::types::{Index, IndexStatus, IndexType};
-        use crate::core::Value;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::{Index, IndexStatus, IndexType};
+        use graphdb_core::Value;
         use crate::optimizer::stats::TagStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -1311,7 +1311,7 @@ mod tests {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "name".to_string(),
             }),
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             right: Box::new(Expression::Literal(Value::String("alice".into()))),
         };
         let id = context.register_expression(ExpressionMeta::new(predicate));
@@ -1369,11 +1369,11 @@ mod tests {
 
     #[test]
     fn precompute_notes_emitted_for_reused_expressions() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-        use crate::core::types::operators::BinaryOperator;
-        use crate::core::Value;
-        use crate::core::YieldColumn;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::operators::BinaryOperator;
+        use graphdb_core::Value;
+        use graphdb_core::YieldColumn;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
         use std::sync::Arc;
@@ -1430,10 +1430,10 @@ mod tests {
 
     #[test]
     fn cost_based_consumes_logical_plan_when_attached() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-        use crate::core::types::{Index, IndexStatus, IndexType};
-        use crate::core::Value;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::{Index, IndexStatus, IndexType};
+        use graphdb_core::Value;
         use crate::optimizer::stats::TagStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -1481,7 +1481,7 @@ mod tests {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "name".to_string(),
             }),
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             right: Box::new(Expression::Literal(Value::String("alice".into()))),
         };
         let id = context.register_expression(ExpressionMeta::new(predicate));

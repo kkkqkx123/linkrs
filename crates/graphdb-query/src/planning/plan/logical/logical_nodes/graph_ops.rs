@@ -1,6 +1,6 @@
 //! Logical graph operation nodes: DataCollect, Remove, PatternApply, RollUpApply, Union, Minus, Intersect, Unwind, Materialize, Assign, Apply, Dedup.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_join_node;
 use crate::define_logical_plan_node_with_deps;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind;
@@ -103,7 +103,7 @@ pub struct LogicalApplyNode {
     apply_kind: ApplyKind,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalApplyNode {

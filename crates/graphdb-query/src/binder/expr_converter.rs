@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::types::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::types::Expression;
 
 use super::bound::{BoundAggregateCall, BoundExpression};
 

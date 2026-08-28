@@ -12,14 +12,14 @@ use super::query_registry::{CancelToken, QueryId, QueryRegistry};
 use super::spill::SpillManager;
 use super::state::StateArenaSet;
 use super::transaction_scope::{CancelReason, SessionTransactionController, TransactionScope};
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::base::MemoryBudget;
 use crate::executor::streaming::pool::TaskScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::query_manager::QueryManager;
 use crate::storage::QueryStorage;
-use crate::utils::Arena;
+use graphdb_core::Arena;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]
@@ -694,9 +694,9 @@ pub struct ExecutionRuntime {
     /// truly immutable and cacheable without sharing storage handles.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     #[cfg(feature = "fulltext-search")]
-    pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+    pub fulltext_manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
     #[cfg(feature = "vector")]
-    pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+    pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
     /// Per-partition operator state arenas.
     ///
     /// Indexed by `partition_id` so parallel workers do not contend on a
@@ -744,10 +744,10 @@ impl ExecutionRuntime {
         memory_budget: MemoryBudget,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<
-            Arc<crate::search::manager::FulltextIndexManager>,
+            Arc<graphdb_search::manager::FulltextIndexManager>,
         >,
         #[cfg(feature = "vector")] vector_coordinator: Option<
-            Arc<crate::sync::VectorSyncCoordinator>,
+            Arc<graphdb_sync::VectorSyncCoordinator>,
         >,
     ) -> Self {
         Self {
@@ -811,7 +811,7 @@ impl ExecutionRuntime {
     #[cfg(feature = "fulltext-search")]
     pub fn set_fulltext_manager(
         &mut self,
-        manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+        manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
     ) {
         self.fulltext_manager = manager;
     }
@@ -819,7 +819,7 @@ impl ExecutionRuntime {
     #[cfg(feature = "vector")]
     pub fn set_vector_coordinator(
         &mut self,
-        coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+        coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
     ) {
         self.vector_coordinator = coordinator;
     }

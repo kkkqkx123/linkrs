@@ -1,4 +1,4 @@
-use crate::core::SessionStatistics;
+use graphdb_core::SessionStatistics;
 
 #[derive(Debug)]
 pub struct StatisticsContext {

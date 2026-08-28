@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::{AutoCompactConfig, Timestamp};
-use crate::core::StorageError;
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::types::{AutoCompactConfig, Timestamp};
+use graphdb_core::StorageError;
 use crate::compression::CompressionType;
 
 /// Default number of vertex table shards (hash partitions). Higher shard

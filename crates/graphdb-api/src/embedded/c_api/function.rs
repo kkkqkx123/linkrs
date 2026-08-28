@@ -7,7 +7,7 @@ use crate::embedded::c_api::session::GraphDbSessionHandle;
 use crate::embedded::c_api::types::{
     graphdb_session_t, graphdb_value_t, graphdb_value_type_t,
 };
-use crate::query::executor::expression::functions::{
+use graphdb_query::executor::expression::functions::{
     AggregateFinalCallback, AggregateStepCallback, CFunctionContext, CustomFunction,
     ScalarFunctionCallback,
 };
@@ -234,7 +234,7 @@ pub unsafe extern "C" fn graphdb_context_set_result(
     unsafe {
         let ctx = &mut (*context).inner;
         if value.is_null() {
-            ctx.set_result(crate::core::Value::Null(crate::core::NullType::Null));
+            ctx.set_result(graphdb_core::Value::Null(graphdb_core::NullType::Null));
         } else {
             let val = crate::embedded::c_api::value::graphdb_value_to_core(value);
             ctx.set_result(val);
@@ -266,7 +266,7 @@ pub unsafe extern "C" fn graphdb_context_result_type(
     unsafe {
         let ctx = &(*context).inner;
         match &ctx.result {
-            Some(val) => crate::core::utils::value_conversion::core_value_to_graphdb_type(val),
+            Some(val) => graphdb_core::value_conversion::core_value_to_graphdb_type(val),
             None => graphdb_value_type_t::GRAPHDB_NULL,
         }
     }

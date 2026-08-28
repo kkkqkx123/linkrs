@@ -36,8 +36,8 @@
 //! // let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view, &selectivity);
 //! ```
 
-use crate::core::types::operators::BinaryOperator;
-use crate::core::Expression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Expression;
 use crate::optimizer::analysis::BatchPlanAnalysis;
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_corrected;
@@ -504,9 +504,9 @@ impl SubqueryUnnestingOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
     use crate::optimizer::analysis::BatchPlanAnalyzer;
     use crate::optimizer::stats::StatisticsManager;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_simple_expression_check() {
-        let literal = Expression::Literal(crate::core::Value::Int(42));
+        let literal = Expression::Literal(graphdb_core::Value::Int(42));
         assert!(SubqueryUnnestingOptimizer::is_simple_expression(&literal));
 
         let variable = Expression::Variable("n".to_string());
@@ -554,9 +554,9 @@ mod tests {
         assert!(SubqueryUnnestingOptimizer::is_simple_expression(&property));
 
         let binary = Expression::Binary {
-            left: Box::new(Expression::Literal(crate::core::Value::Int(1))),
-            op: crate::core::types::operators::BinaryOperator::Add,
-            right: Box::new(Expression::Literal(crate::core::Value::Int(2))),
+            left: Box::new(Expression::Literal(graphdb_core::Value::Int(1))),
+            op: graphdb_core::types::operators::BinaryOperator::Add,
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(2))),
         };
         assert!(!SubqueryUnnestingOptimizer::is_simple_expression(&binary));
     }
@@ -593,8 +593,8 @@ mod tests {
 
     #[test]
     fn test_shape_accepts_disjunctive_equality_filter() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::ContextualExpression;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::ContextualExpression;
         let condition = {
             let ctx = Arc::new(ExpressionAnalysisContext::new());
             let prop = |name: &str| Expression::Property {
@@ -605,16 +605,16 @@ mod tests {
                 left: Box::new(Expression::Binary {
                     left: Box::new(prop("city")),
                     op: BinaryOperator::Equal,
-                    right: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+                    right: Box::new(Expression::Literal(graphdb_core::Value::Int(1))),
                 }),
                 op: BinaryOperator::Or,
                 right: Box::new(Expression::Binary {
                     left: Box::new(prop("age")),
                     op: BinaryOperator::Equal,
-                    right: Box::new(Expression::Literal(crate::core::Value::Int(2))),
+                    right: Box::new(Expression::Literal(graphdb_core::Value::Int(2))),
                 }),
             };
-            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
             ContextualExpression::new(id, ctx)
         };
         // OR of equalities is accepted by the relaxed gate.
@@ -634,9 +634,9 @@ mod tests {
                     property: "age".to_string(),
                 }),
                 op: BinaryOperator::GreaterThan,
-                right: Box::new(Expression::Literal(crate::core::Value::Int(30))),
+                right: Box::new(Expression::Literal(graphdb_core::Value::Int(30))),
             };
-            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
             ContextualExpression::new(id, ctx)
         };
         let range_filter = PlanNodeEnum::Filter(
@@ -649,8 +649,8 @@ mod tests {
 
     #[test]
     fn test_shape_accepts_two_table_inner_join() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::ContextualExpression;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::ContextualExpression;
         use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         let key = || {
             let ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -665,7 +665,7 @@ mod tests {
                     property: "id".to_string(),
                 }),
             };
-            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
             ContextualExpression::new(id, ctx)
         };
         let join = PlanNodeEnum::InnerJoin(
@@ -719,7 +719,7 @@ mod tests {
                     property: "age".to_string(),
                 }),
                 op: BinaryOperator::Equal,
-                right: Box::new(Expression::Literal(crate::core::Value::Int(18))),
+                right: Box::new(Expression::Literal(graphdb_core::Value::Int(18))),
             };
             let id = ctx.register_expression(ExpressionMeta::new(expr));
             ContextualExpression::new(id, ctx)

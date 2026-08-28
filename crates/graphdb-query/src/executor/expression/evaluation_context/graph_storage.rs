@@ -1,5 +1,5 @@
-use crate::core::types::VertexId;
-use crate::core::{Edge, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, Vertex};
 use crate::storage::StorageReader;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ impl GraphStorageRef {
     }
 
     pub fn get_neighbors(&self, node_id: &VertexId) -> Result<Vec<(VertexId, Edge)>, String> {
-        use crate::core::types::EdgeDirection;
+        use graphdb_core::types::EdgeDirection;
         let reader = self.storage.read();
         let edges = reader
             .get_node_edges(&self.space, node_id, EdgeDirection::Both)

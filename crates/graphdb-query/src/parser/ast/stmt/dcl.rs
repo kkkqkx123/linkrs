@@ -1,4 +1,4 @@
-use crate::core::types::Span;
+use graphdb_core::types::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateUserStmt {

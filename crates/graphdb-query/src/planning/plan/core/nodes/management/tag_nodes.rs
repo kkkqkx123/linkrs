@@ -2,7 +2,7 @@
 //!
 //! Provide definitions for the planning nodes related to label management.
 
-use crate::core::types::PropertyDef;
+use graphdb_core::types::PropertyDef;
 use crate::define_plan_node;
 use crate::parser::ast::stmt::PropertyChange;
 

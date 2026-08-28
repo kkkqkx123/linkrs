@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::core::types::operators::BinaryOperator;
-use crate::core::DataType;
-use crate::core::Value;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::DataType;
+use graphdb_core::Value;
 
 /// A stable slot index for a query parameter within a physical plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -84,7 +84,7 @@ pub struct SlotRef(pub usize);
 /// A bound expression that has been resolved against the plan's slot layout
 /// and parameter schema.
 ///
-/// Unlike the logical [`Expression`](crate::core::types::expr::Expression),
+/// Unlike the logical [`Expression`](graphdb_core::types::expr::Expression),
 /// `BoundExpression` references slots and parameter slots directly, avoiding
 /// string-based resolution during execution.
 #[derive(Debug, Clone)]

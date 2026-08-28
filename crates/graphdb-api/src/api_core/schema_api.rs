@@ -2,8 +2,8 @@
 //!
 //! Provides transport layer-independent Schema management capabilities
 
-use crate::core::{CoreError, CoreResult, IndexTarget, PropertyDef, SpaceConfig};
-use crate::core::types::{
+use crate::api_core::{CoreError, CoreResult, IndexTarget, PropertyDef, SpaceConfig};
+use graphdb_core::types::{
     EdgeTypeInfo, Index, IndexField, IndexStatus, IndexType, SpaceInfo, TagInfo,
 };
 use crate::storage::StorageClient;
@@ -82,7 +82,7 @@ impl<S: StorageClient> SchemaApi<S> {
     ///
     /// # Returns
     /// List of space information
-    pub fn list_spaces(&self) -> CoreResult<Vec<crate::core::types::SpaceInfo>> {
+    pub fn list_spaces(&self) -> CoreResult<Vec<graphdb_core::types::SpaceInfo>> {
         let storage = self.storage.write();
         let spaces = storage
             .list_spaces()
@@ -108,7 +108,7 @@ impl<S: StorageClient> SchemaApi<S> {
         let space_name = self.get_space_name_by_id(space_id)?;
 
         // Conversion Attribute Definition
-        let core_properties: Vec<crate::core::types::PropertyDef> =
+        let core_properties: Vec<graphdb_core::types::PropertyDef> =
             properties.into_iter().map(|p| p.into()).collect();
 
         let tag_info = TagInfo::new(name.to_string()).with_properties(core_properties);
@@ -168,7 +168,7 @@ impl<S: StorageClient> SchemaApi<S> {
         let space_name = self.get_space_name_by_id(space_id)?;
 
         // Convert PropertyDef to core PropertyDef
-        let core_additions: Vec<crate::core::types::PropertyDef> =
+        let core_additions: Vec<graphdb_core::types::PropertyDef> =
             additions.into_iter().map(|p| p.into()).collect();
 
         let mut storage = self.storage.write();
@@ -206,7 +206,7 @@ impl<S: StorageClient> SchemaApi<S> {
         let space_name = self.get_space_name_by_id(space_id)?;
 
         // Conversion Attribute Definition
-        let core_properties: Vec<crate::core::types::PropertyDef> =
+        let core_properties: Vec<graphdb_core::types::PropertyDef> =
             properties.into_iter().map(|p| p.into()).collect();
 
         let edge_type_info = EdgeTypeInfo::new(name.to_string()).with_properties(core_properties);
@@ -270,7 +270,7 @@ impl<S: StorageClient> SchemaApi<S> {
         let space_name = self.get_space_name_by_id(space_id)?;
 
         // Convert PropertyDef to core PropertyDef
-        let core_additions: Vec<crate::core::types::PropertyDef> =
+        let core_additions: Vec<graphdb_core::types::PropertyDef> =
             additions.into_iter().map(|p| p.into()).collect();
 
         let mut storage = self.storage.write();
@@ -479,7 +479,7 @@ impl<S: StorageClient> SchemaApi<S> {
         let tag_indexes = storage
             .list_tag_indexes(space_name)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
-        let edge_indexes: Vec<crate::core::types::Index> = Vec::new();
+        let edge_indexes: Vec<graphdb_core::types::Index> = Vec::new();
 
         // Construct a descriptive string
         let mut description = format!("Graph space: {} (ID: {})", space_name, space_id);
@@ -561,7 +561,7 @@ impl<S: StorageClient> SchemaApi<S> {
     fn build_index_fields(
         &self,
         field_names: &[String],
-        properties: &[crate::core::types::PropertyDef],
+        properties: &[graphdb_core::types::PropertyDef],
     ) -> CoreResult<Vec<IndexField>> {
         let mut fields = Vec::new();
 
@@ -587,11 +587,11 @@ impl<S: StorageClient> SchemaApi<S> {
     }
 
     /// Convert the DataType to a Value (for use with index field types).
-    fn datatype_to_value(data_type: &crate::core::DataType) -> crate::core::Value {
-        use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
-        use crate::core::value::NullType;
-        use crate::core::DataType;
-        use crate::core::Value;
+    fn datatype_to_value(data_type: &graphdb_core::DataType) -> graphdb_core::Value {
+        use graphdb_core::value::date_time::{DateTimeValue, DateValue, TimeValue};
+        use graphdb_core::value::NullType;
+        use graphdb_core::DataType;
+        use graphdb_core::Value;
 
         match data_type {
             DataType::SmallInt => Value::SmallInt(0),
@@ -635,7 +635,7 @@ impl<S: StorageClient> Clone for SchemaApi<S> {
 }
 
 // Type conversion implementation
-impl From<PropertyDef> for crate::core::types::PropertyDef {
+impl From<PropertyDef> for graphdb_core::types::PropertyDef {
     fn from(prop: PropertyDef) -> Self {
         Self {
             name: prop.name,
@@ -678,15 +678,15 @@ mod tests {
     fn test_property_def_conversion() {
         let api_prop = PropertyDef {
             name: "test".to_string(),
-            data_type: crate::core::DataType::String,
+            data_type: graphdb_core::DataType::String,
             nullable: true,
             default_value: None,
             comment: Some("test comment".to_string()),
         };
 
-        let core_prop: crate::core::types::PropertyDef = api_prop.into();
+        let core_prop: graphdb_core::types::PropertyDef = api_prop.into();
         assert_eq!(core_prop.name, "test");
-        assert_eq!(core_prop.data_type, crate::core::DataType::String);
+        assert_eq!(core_prop.data_type, graphdb_core::DataType::String);
         assert!(core_prop.nullable);
         assert_eq!(core_prop.comment, Some("test comment".to_string()));
     }

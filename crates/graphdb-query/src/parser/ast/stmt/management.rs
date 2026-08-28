@@ -1,6 +1,6 @@
-use crate::core::types::expr::analysis_utils::collect_variables_from_contextual;
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::Span;
+use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::Span;
 
 use super::PatternUtils;
 

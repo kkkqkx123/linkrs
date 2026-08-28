@@ -11,7 +11,7 @@
 
 use super::super::bloom_filter::EdgeDeletionBloomFilter;
 use super::stats::TombstoneStats;
-use crate::core::types::{EdgeId, Timestamp};
+use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
@@ -380,8 +380,8 @@ impl MVCCManager {
 mod tests {
     use super::super::super::*;
     use super::*;
-    use crate::core::types::EdgeId;
-    use crate::core::Value;
+    use graphdb_core::types::EdgeId;
+    use graphdb_core::Value;
     use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
 
@@ -393,7 +393,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_metrics_tombstone_count() {
-        use crate::core::stats::{MetricType, StatsManager};
+        use graphdb_core::stats::{MetricType, StatsManager};
         use std::sync::Arc;
 
         let mut table = create_edge_table_with_props();

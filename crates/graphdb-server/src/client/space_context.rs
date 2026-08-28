@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use crate::core::types::SpaceSummary;
+use graphdb_core::types::SpaceSummary;
 
 #[derive(Debug)]
 pub struct SpaceContext {
@@ -37,7 +37,7 @@ impl SpaceContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::DataType;
+    use graphdb_core::types::DataType;
 
     #[test]
     fn test_space_context() {

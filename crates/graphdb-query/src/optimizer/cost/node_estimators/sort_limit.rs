@@ -139,7 +139,7 @@ impl<'a> NodeEstimator for SortLimitEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::AggregateFunction;
+    use graphdb_core::types::operators::AggregateFunction;
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;

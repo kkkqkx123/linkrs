@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
-use crate::core::vertex_edge_path::Tag;
-use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::cold::{ColdIndexEntry, ColdSnapshot};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::{EdgeRecord, EdgeStore, Nbr};
@@ -77,7 +77,7 @@ fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
     }
 }
 
-fn record_edge_read(ctx: &GraphStorageContext, edge: crate::core::types::EdgeIdentifier) {
+fn record_edge_read(ctx: &GraphStorageContext, edge: graphdb_core::types::EdgeIdentifier) {
     if let Some(recorder) = ctx.mutation_recorder() {
         recorder.record_edge_read(edge);
     }
@@ -341,7 +341,7 @@ fn get_edge_impl(
     };
     record_edge_read(
         ctx,
-        crate::core::types::EdgeIdentifier::new(
+        graphdb_core::types::EdgeIdentifier::new(
             src_label_id,
             *src,
             dst_label_id,
@@ -1355,7 +1355,7 @@ pub(crate) fn scan_edges_by_type(
                     for record in batch {
                         record_edge_read(
                             ctx,
-                            crate::core::types::EdgeIdentifier::new(
+                            graphdb_core::types::EdgeIdentifier::new(
                                 src_label_id,
                                 record.src_vid,
                                 dst_label_id,
@@ -1515,7 +1515,7 @@ pub(crate) fn lookup_edges_by_property_range(
 ) -> StorageResult<Vec<Edge>> {
     record_schema_read(ctx, space);
     let (src_label, dst_label, edge_label) = resolve_edge_table_labels(ctx, space, edge_type)?;
-    let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+    let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
     // Degenerate range [v, v) with an exclusive upper bound is interpreted as
     // a prefix/equality bound: everything from v up to the next value boundary.
     let prefix_bounds = include_lower && !include_upper && lower.is_some() && upper == lower;
@@ -1525,7 +1525,7 @@ pub(crate) fn lookup_edges_by_property_range(
             if include_lower {
                 encoded
             } else {
-                crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
             }
         }
         None => Vec::new(),
@@ -1534,7 +1534,7 @@ pub(crate) fn lookup_edges_by_property_range(
         Some(value) => {
             let encoded = codec.encode(value)?;
             if prefix_bounds || include_upper {
-                crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
             } else {
                 encoded
             }

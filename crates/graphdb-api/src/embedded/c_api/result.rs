@@ -151,7 +151,7 @@ pub unsafe extern "C" fn graphdb_get_int(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
-            Some(crate::core::Value::Int(i)) => {
+            Some(graphdb_core::Value::Int(i)) => {
                 *value = *i as i64;
                 graphdb_error_code_t::GRAPHDB_OK as c_int
             }
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn graphdb_get_string(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
-            Some(crate::core::Value::String(s)) => {
+            Some(graphdb_core::Value::String(s)) => {
                 if !len.is_null() {
                     *len = s.len() as c_int;
                 }
@@ -280,7 +280,7 @@ pub unsafe extern "C" fn graphdb_get_blob(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
-            Some(crate::core::Value::Blob(blob)) => {
+            Some(graphdb_core::Value::Blob(blob)) => {
                 if !len.is_null() {
                     *len = blob.len() as c_int;
                 }
@@ -347,7 +347,7 @@ pub unsafe extern "C" fn graphdb_get_int_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(crate::core::Value::Int(i)) => {
+            Some(graphdb_core::Value::Int(i)) => {
                 *value = *i as i64;
                 graphdb_error_code_t::GRAPHDB_OK as c_int
             }
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn graphdb_get_string_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(crate::core::Value::String(s)) => {
+            Some(graphdb_core::Value::String(s)) => {
                 if !len.is_null() {
                     *len = s.len() as c_int;
                 }
@@ -477,7 +477,7 @@ pub unsafe extern "C" fn graphdb_get_bool_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(crate::core::Value::Bool(b)) => {
+            Some(graphdb_core::Value::Bool(b)) => {
                 *value = *b;
                 graphdb_error_code_t::GRAPHDB_OK as c_int
             }
@@ -526,7 +526,7 @@ pub unsafe extern "C" fn graphdb_get_float_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(crate::core::Value::Float(f)) => {
+            Some(graphdb_core::Value::Float(f)) => {
                 *value = *f as f64;
                 graphdb_error_code_t::GRAPHDB_OK as c_int
             }
@@ -586,7 +586,7 @@ pub unsafe extern "C" fn graphdb_get_blob_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(crate::core::Value::Blob(blob)) => {
+            Some(graphdb_core::Value::Blob(blob)) => {
                 if !len.is_null() {
                     *len = blob.len() as c_int;
                 }
@@ -650,17 +650,17 @@ pub unsafe extern "C" fn graphdb_column_type(
 
             match row.get(col_name) {
                 Some(value) => match value {
-                    crate::core::Value::Null(_) => graphdb_value_type_t::GRAPHDB_NULL,
-                    crate::core::Value::Bool(_) => graphdb_value_type_t::GRAPHDB_BOOL,
-                    crate::core::Value::Int(_) => graphdb_value_type_t::GRAPHDB_INT,
-                    crate::core::Value::Float(_) => graphdb_value_type_t::GRAPHDB_FLOAT,
-                    crate::core::Value::String(_) => graphdb_value_type_t::GRAPHDB_STRING,
-                    crate::core::Value::Blob(_) => graphdb_value_type_t::GRAPHDB_BLOB,
-                    crate::core::Value::List(_) => graphdb_value_type_t::GRAPHDB_LIST,
-                    crate::core::Value::Map(_) => graphdb_value_type_t::GRAPHDB_MAP,
-                    crate::core::Value::Vertex(_) => graphdb_value_type_t::GRAPHDB_VERTEX,
-                    crate::core::Value::Edge(_) => graphdb_value_type_t::GRAPHDB_EDGE,
-                    crate::core::Value::Path(_) => graphdb_value_type_t::GRAPHDB_PATH,
+                    graphdb_core::Value::Null(_) => graphdb_value_type_t::GRAPHDB_NULL,
+                    graphdb_core::Value::Bool(_) => graphdb_value_type_t::GRAPHDB_BOOL,
+                    graphdb_core::Value::Int(_) => graphdb_value_type_t::GRAPHDB_INT,
+                    graphdb_core::Value::Float(_) => graphdb_value_type_t::GRAPHDB_FLOAT,
+                    graphdb_core::Value::String(_) => graphdb_value_type_t::GRAPHDB_STRING,
+                    graphdb_core::Value::Blob(_) => graphdb_value_type_t::GRAPHDB_BLOB,
+                    graphdb_core::Value::List(_) => graphdb_value_type_t::GRAPHDB_LIST,
+                    graphdb_core::Value::Map(_) => graphdb_value_type_t::GRAPHDB_MAP,
+                    graphdb_core::Value::Vertex(_) => graphdb_value_type_t::GRAPHDB_VERTEX,
+                    graphdb_core::Value::Edge(_) => graphdb_value_type_t::GRAPHDB_EDGE,
+                    graphdb_core::Value::Path(_) => graphdb_value_type_t::GRAPHDB_PATH,
                     _ => graphdb_value_type_t::GRAPHDB_NULL,
                 },
                 None => graphdb_value_type_t::GRAPHDB_NULL,

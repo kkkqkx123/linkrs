@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 
 pub struct BoundedReader<'a> {
     inner: &'a mut dyn Read,

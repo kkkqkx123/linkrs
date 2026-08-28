@@ -30,12 +30,12 @@
 //! The projection columns can be separated into left and right sides.
 //! The JOIN keys are retained in the projection.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::expr::visitor_collectors::VariableCollector;
-use crate::core::types::YieldColumn;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
+use graphdb_core::types::YieldColumn;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
@@ -87,7 +87,7 @@ impl PushProjectDownJoinRule {
             .into_iter()
             .map(|col| {
                 let expr = Expression::variable(&col);
-                let meta = crate::core::types::expr::ExpressionMeta::new(expr);
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
                 let id = ctx.register_expression(meta);
                 let ctx_expr = ContextualExpression::new(id, ctx.clone());
                 YieldColumn {

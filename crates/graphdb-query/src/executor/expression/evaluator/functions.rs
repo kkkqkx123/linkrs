@@ -2,10 +2,10 @@
 //!
 //! Provide the functionality to evaluate aggregate functions.
 
-use crate::core::types::operators::AggregateFunction;
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 
 /// Function evaluator
@@ -103,7 +103,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut numeric_values = Vec::new();
@@ -119,7 +119,7 @@ impl FunctionEvaluator {
                 }
 
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 numeric_values
@@ -150,7 +150,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut numeric_values = Vec::new();
@@ -166,7 +166,7 @@ impl FunctionEvaluator {
                 }
 
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let n = numeric_values.len() as f64;
@@ -191,7 +191,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut result = i64::MAX;
@@ -221,7 +221,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut result = 0i64;
@@ -251,7 +251,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut numeric_values = Vec::new();
@@ -267,7 +267,7 @@ impl FunctionEvaluator {
                 }
 
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let n = numeric_values.len() as f64;
@@ -291,7 +291,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut numeric_values = Vec::new();
@@ -307,7 +307,7 @@ impl FunctionEvaluator {
                 }
 
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 numeric_values
@@ -333,7 +333,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
 
                 let mut frequency_map = std::collections::HashMap::new();
@@ -361,7 +361,7 @@ impl FunctionEvaluator {
                             Ok(Value::string(mode_str))
                         }
                     }
-                    None => Ok(Value::Null(crate::core::NullType::NaN)),
+                    None => Ok(Value::Null(graphdb_core::NullType::NaN)),
                 }
             }
             AggregateFunction::BoolAnd => {
@@ -550,7 +550,7 @@ impl FunctionEvaluator {
                     _ => return Err(ExpressionError::type_error("First argument must be a list")),
                 };
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let mut numeric_values = Vec::new();
                 for value in values.iter() {
@@ -564,7 +564,7 @@ impl FunctionEvaluator {
                     }
                 }
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 numeric_values
                     .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -590,7 +590,7 @@ impl FunctionEvaluator {
                     _ => return Err(ExpressionError::type_error("First argument must be a list")),
                 };
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let mut numeric_values = Vec::new();
                 for value in values.iter() {
@@ -604,7 +604,7 @@ impl FunctionEvaluator {
                     }
                 }
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let n = numeric_values.len() as f64;
                 let mean: f64 = numeric_values.iter().sum::<f64>() / n;
@@ -624,7 +624,7 @@ impl FunctionEvaluator {
                     _ => return Err(ExpressionError::type_error("First argument must be a list")),
                 };
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let mut numeric_values = Vec::new();
                 for value in values.iter() {
@@ -638,11 +638,11 @@ impl FunctionEvaluator {
                     }
                 }
                 if numeric_values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let n = numeric_values.len() as f64;
                 if n < 2.0 {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let mean: f64 = numeric_values.iter().sum::<f64>() / n;
                 let variance: f64 = numeric_values
@@ -661,7 +661,7 @@ impl FunctionEvaluator {
                     _ => return Err(ExpressionError::type_error("First argument must be a list")),
                 };
                 if values.is_empty() {
-                    return Ok(Value::Null(crate::core::NullType::NaN));
+                    return Ok(Value::Null(graphdb_core::NullType::NaN));
                 }
                 let mut product = Value::Int(1);
                 for value in values.iter() {

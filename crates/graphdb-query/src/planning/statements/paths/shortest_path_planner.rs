@@ -2,9 +2,9 @@
 //!
 //! Responsible for planning shortest path queries, supporting algorithms such as BFS (Breadth-First Search).
 
-use crate::core::types::graph_schema::EdgeDirection;
-use crate::core::types::VertexId;
-use crate::core::{Edge, StorageError, Value, Vertex};
+use graphdb_core::types::graph_schema::EdgeDirection;
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, StorageError, Value, Vertex};
 use crate::planning::statements::seeks::seek_strategy_base::{
     NodePattern, SeekStrategyContext, SeekStrategySelector, SeekStrategyType,
 };

@@ -14,8 +14,8 @@ use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::types::LabelId;
-use crate::core::{StorageResult, Value};
+use graphdb_core::types::LabelId;
+use graphdb_core::{StorageResult, Value};
 
 use super::context::GraphStorageContext;
 

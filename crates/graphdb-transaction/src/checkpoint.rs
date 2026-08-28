@@ -14,7 +14,7 @@ use parking_lot::{Condvar, Mutex};
 use super::error::TransactionError;
 use super::manager::TransactionManager;
 use super::types::TransactionId;
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 
 /// Checkpoint coordination gate.
 ///
@@ -312,7 +312,7 @@ mod tests {
 
         // Coordinated checkpoint should wait for the write to complete.
         let result = manager.coordinated_checkpoint(Duration::from_secs(5), |_ts| {
-            Ok(crate::core::wal::types::Lsn::new(100))
+            Ok(graphdb_core::wal::types::Lsn::new(100))
         });
         assert!(result.is_ok());
 

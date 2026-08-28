@@ -13,7 +13,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
     StorageSyncContextOps,
 };
-use crate::transaction::{
+use graphdb_transaction::{
     DurabilityLevel, IsolationLevel, TransactionError, TransactionErrorKind, TransactionId,
     TransactionOptions,
 };
@@ -990,27 +990,27 @@ fn transaction_status(error: TransactionError) -> Status {
 }
 
 /// Convert a core [`Value`] to a protobuf [`super::proto::Value`].
-fn value_to_proto_value(value: crate::core::Value) -> super::proto::Value {
+fn value_to_proto_value(value: graphdb_core::Value) -> super::proto::Value {
     use super::proto::value::Value as ProtoValue;
     use super::proto::Value as ProtoValueMsg;
 
     let proto_val = match value {
-        crate::core::Value::Empty | crate::core::Value::Null(_) => {
+        graphdb_core::Value::Empty | graphdb_core::Value::Null(_) => {
             ProtoValue::StringValue(String::new())
         }
-        crate::core::Value::Bool(b) => ProtoValue::BoolValue(b),
-        crate::core::Value::SmallInt(i) => ProtoValue::IntValue(i as i64),
-        crate::core::Value::Int(i) => ProtoValue::IntValue(i as i64),
-        crate::core::Value::BigInt(i) => ProtoValue::IntValue(i),
-        crate::core::Value::Float(f) => ProtoValue::FloatValue(f as f64),
-        crate::core::Value::Double(d) => ProtoValue::DoubleValue(d),
-        crate::core::Value::Decimal128(d) => ProtoValue::StringValue(d.to_string()),
-        crate::core::Value::String(s) => ProtoValue::StringValue(s.to_string()),
-        crate::core::Value::FixedString(data) => ProtoValue::StringValue(data),
-        crate::core::Value::Date(d) => ProtoValue::StringValue(d.to_string()),
-        crate::core::Value::Time(t) => ProtoValue::StringValue(t.to_string()),
-        crate::core::Value::DateTime(dt) => ProtoValue::StringValue(dt.to_string()),
-        crate::core::Value::Blob(b) => ProtoValue::BytesValue(b),
+        graphdb_core::Value::Bool(b) => ProtoValue::BoolValue(b),
+        graphdb_core::Value::SmallInt(i) => ProtoValue::IntValue(i as i64),
+        graphdb_core::Value::Int(i) => ProtoValue::IntValue(i as i64),
+        graphdb_core::Value::BigInt(i) => ProtoValue::IntValue(i),
+        graphdb_core::Value::Float(f) => ProtoValue::FloatValue(f as f64),
+        graphdb_core::Value::Double(d) => ProtoValue::DoubleValue(d),
+        graphdb_core::Value::Decimal128(d) => ProtoValue::StringValue(d.to_string()),
+        graphdb_core::Value::String(s) => ProtoValue::StringValue(s.to_string()),
+        graphdb_core::Value::FixedString(data) => ProtoValue::StringValue(data),
+        graphdb_core::Value::Date(d) => ProtoValue::StringValue(d.to_string()),
+        graphdb_core::Value::Time(t) => ProtoValue::StringValue(t.to_string()),
+        graphdb_core::Value::DateTime(dt) => ProtoValue::StringValue(dt.to_string()),
+        graphdb_core::Value::Blob(b) => ProtoValue::BytesValue(b),
         other => ProtoValue::StringValue(format!("{:?}", other)),
     };
 

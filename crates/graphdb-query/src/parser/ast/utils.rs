@@ -1,9 +1,9 @@
 //! Tool functions and auxiliary features
 
 use super::stmt::*;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-use crate::core::Value;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+use graphdb_core::Value;
 use std::sync::Arc;
 
 /// Expression Factory – Used for creating expression nodes
@@ -29,7 +29,7 @@ impl ExprFactory {
     /// Create a binary expression
     pub fn binary(
         left: ContextualExpression,
-        op: crate::core::types::operators::BinaryOperator,
+        op: graphdb_core::types::operators::BinaryOperator,
         right: ContextualExpression,
     ) -> ContextualExpression {
         let ctx = left.context().clone();
@@ -55,7 +55,7 @@ impl ExprFactory {
 
     /// Create a monomial expression.
     pub fn unary(
-        op: crate::core::types::operators::UnaryOperator,
+        op: graphdb_core::types::operators::UnaryOperator,
         operand: ContextualExpression,
     ) -> ContextualExpression {
         let ctx = operand.context().clone();
@@ -250,7 +250,7 @@ impl ExprFactory {
     /// Create a comparative expression
     pub fn compare(
         left: ContextualExpression,
-        op: crate::core::types::operators::BinaryOperator,
+        op: graphdb_core::types::operators::BinaryOperator,
         right: ContextualExpression,
     ) -> ContextualExpression {
         Self::binary(left, op, right)
@@ -259,7 +259,7 @@ impl ExprFactory {
     /// Create a logical expression
     pub fn logical(
         left: ContextualExpression,
-        op: crate::core::types::operators::BinaryOperator,
+        op: graphdb_core::types::operators::BinaryOperator,
         right: ContextualExpression,
     ) -> ContextualExpression {
         Self::binary(left, op, right)
@@ -268,7 +268,7 @@ impl ExprFactory {
     /// Create arithmetic expressions.
     pub fn arithmetic(
         left: ContextualExpression,
-        op: crate::core::types::operators::BinaryOperator,
+        op: graphdb_core::types::operators::BinaryOperator,
         right: ContextualExpression,
     ) -> ContextualExpression {
         Self::binary(left, op, right)
@@ -687,7 +687,7 @@ impl AstBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use std::sync::Arc;
 
     #[test]
@@ -707,7 +707,7 @@ mod tests {
         let right = ExprFactory::constant(Value::Int(3), ctx.clone());
         let binary_expression = ExprFactory::binary(
             left,
-            crate::core::types::operators::BinaryOperator::Add,
+            graphdb_core::types::operators::BinaryOperator::Add,
             right,
         );
         assert!(binary_expression.expression().is_some());

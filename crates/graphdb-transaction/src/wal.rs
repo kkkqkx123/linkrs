@@ -38,9 +38,9 @@ pub mod recovery;
 pub mod writer;
 
 // Direct imports from core WAL layer
-pub use crate::core::types::{TableId, TableTracker, TableTrackerConfig, TableType};
-pub use crate::core::wal::redo::*;
-pub use crate::core::wal::types::*;
+pub use graphdb_core::types::{TableId, TableTracker, TableTrackerConfig, TableType};
+pub use graphdb_core::wal::redo::*;
+pub use graphdb_core::wal::types::*;
 pub use checkpoint::{Checkpoint, CheckpointManager, CheckpointMode, CheckpointResult};
 pub use commit::{collect_committed_transactions, CommittedWalTransaction, TransactionWalEntry};
 pub use filter::{filter_intents_for_index, filter_intents_for_indexes};
@@ -51,7 +51,7 @@ pub use parser::{
 pub use recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager, RecoveryStats};
 
 // Re-export core types for callers working in wal context
-pub use crate::core::types::{ColumnId, EdgeId, LabelId, Timestamp, VertexId};
+pub use graphdb_core::types::{ColumnId, EdgeId, LabelId, Timestamp, VertexId};
 pub use writer::{LocalWalWriter, WalWriter};
 
 #[cfg(test)]

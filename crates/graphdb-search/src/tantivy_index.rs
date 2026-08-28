@@ -18,12 +18,12 @@ use tantivy::TantivyDocument;
 #[cfg(feature = "jieba")]
 use crate::jieba_tokenizer::JiebaTokenizer;
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::engine::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
 
-pub use crate::config::common::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
+pub use graphdb_config::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
 
 fn build_schema(config: &TantivyConfig) -> (Schema, Field, Field) {
     let tokenizer_name = config.tokenizer.name();

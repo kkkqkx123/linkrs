@@ -1,6 +1,6 @@
-use crate::core::value::geography::{Geography, GeographyValue, LineStringValue, PolygonValue};
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::geography::{Geography, GeographyValue, LineStringValue, PolygonValue};
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 
 use super::measurements::{calculate_distance, point_to_segment_distance};

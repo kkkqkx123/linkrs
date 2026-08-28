@@ -2,24 +2,24 @@
 //!
 //! Provide the GraphDatabase structure as the main entry point for the embedded API.
 
-use crate::core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
+use graphdb_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use crate::embedded::config::{DatabaseConfig, EmbeddedVectorEngine};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
-use crate::core::{StatsManager, Value};
-use crate::search::FulltextConfig;
+use graphdb_core::{StatsManager, Value};
+use graphdb_search::FulltextConfig;
 #[cfg(feature = "fulltext-search")]
-use crate::search::FulltextIndexManager;
+use graphdb_search::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
-use crate::search::SyncFailurePolicy;
+use graphdb_search::SyncFailurePolicy;
 use crate::storage::{GraphStorage, StorageClient};
 #[cfg(feature = "vector")]
-use crate::sync::backend::VectorBackend;
+use graphdb_sync::backend::VectorBackend;
 #[cfg(feature = "fulltext-search")]
-use crate::sync::SyncConfig;
-use crate::sync::SyncManager;
-use crate::transaction::wal::SyncPolicy;
-use crate::transaction::{TransactionManager, TransactionManagerConfig};
+use graphdb_sync::SyncConfig;
+use graphdb_sync::SyncManager;
+use graphdb_transaction::wal::SyncPolicy;
+use graphdb_transaction::{TransactionManager, TransactionManagerConfig};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
@@ -109,7 +109,7 @@ fn attach_vector_coordinator(
 ) -> CoreResult<SyncManager> {
     if let Some(backend) = create_vector_backend(config, runtime)? {
         let vector_coordinator = Arc::new(
-            crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+            graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
                 backend,
                 runtime.clone(),
             ),
@@ -135,7 +135,7 @@ fn setup_sync_with_vector_only(
         return Ok((None, None));
     };
     let vector_coordinator = Arc::new(
-        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+        graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
             backend,
             runtime.clone(),
         ),
@@ -156,20 +156,20 @@ fn setup_sync_with_vector_only(
         return Ok((None, None));
     };
     let vector_coordinator = Arc::new(
-        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+        graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
             backend,
             runtime.clone(),
         ),
     );
 
     let sync_config = SyncConfig::default();
-    let batch_config = crate::sync::batch::BatchConfig::from(sync_config.clone());
+    let batch_config = graphdb_sync::batch::BatchConfig::from(sync_config.clone());
     let manager = Arc::new(
         FulltextIndexManager::new(FulltextConfig::default()).map_err(|e| {
             CoreError::Internal(format!("Failed to initialize fulltext manager: {}", e))
         })?,
     );
-    let sync_coordinator = Arc::new(crate::sync::coordinator::SyncCoordinator::new(
+    let sync_coordinator = Arc::new(graphdb_sync::coordinator::SyncCoordinator::new(
         manager.clone(),
         batch_config,
     ));
@@ -298,8 +298,8 @@ impl GraphDatabase<GraphStorage> {
                     failure_policy: SyncFailurePolicy::FailOpen,
                 };
 
-                let batch_config = crate::sync::batch::BatchConfig::from(sync_config.clone());
-                let sync_coordinator = Arc::new(crate::sync::coordinator::SyncCoordinator::new(
+                let batch_config = graphdb_sync::batch::BatchConfig::from(sync_config.clone());
+                let sync_coordinator = Arc::new(graphdb_sync::coordinator::SyncCoordinator::new(
                     manager.clone(),
                     batch_config,
                 ));

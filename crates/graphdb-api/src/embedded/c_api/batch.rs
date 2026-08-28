@@ -5,9 +5,9 @@
 use crate::embedded::c_api::error::{graphdb_error_code_t, set_last_error_message};
 use crate::embedded::c_api::session::GraphDbSessionHandle;
 use crate::embedded::c_api::types::{graphdb_batch_t, graphdb_session_t, graphdb_value_t};
-use crate::core::types::VertexId;
-use crate::core::vertex_edge_path::Tag;
-use crate::core::{Edge, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, Vertex};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr};
 
@@ -510,8 +510,8 @@ pub unsafe extern "C" fn graphdb_batch_buffered_edges(batch: *mut graphdb_batch_
         .count() as c_int
 }
 
-fn value_to_vertex_id(value: &crate::core::Value) -> Option<VertexId> {
-    use crate::core::Value;
+fn value_to_vertex_id(value: &graphdb_core::Value) -> Option<VertexId> {
+    use graphdb_core::Value;
     match value {
         Value::Int(i) => Some(VertexId::from_int64(*i as i64)),
         Value::BigInt(i) => Some(VertexId::from_int64(*i)),

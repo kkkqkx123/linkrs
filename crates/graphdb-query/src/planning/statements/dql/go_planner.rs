@@ -7,8 +7,8 @@
 //! Improving the handling of JOIN operations
 //! - Add support for attribute projection.
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::{ContextualExpression, EdgeDirection};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, EdgeDirection};
 use crate::parser::ast::{GoStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
@@ -137,7 +137,7 @@ impl Planner for GoPlanner {
         }
 
         // Set src_vids from FROM clause if they are literals
-        let src_vids: Vec<crate::core::Value> = if use_start_node {
+        let src_vids: Vec<graphdb_core::Value> = if use_start_node {
             from_vertices
                 .iter()
                 .filter_map(|expr| expr.as_literal())
@@ -221,35 +221,35 @@ impl GoPlanner {
     fn build_yield_columns(
         go_stmt: &GoStmt,
         expr_context: &Arc<ExpressionAnalysisContext>,
-    ) -> Result<Vec<crate::core::YieldColumn>, PlannerError> {
+    ) -> Result<Vec<graphdb_core::YieldColumn>, PlannerError> {
         let mut columns = Vec::new();
 
         if let Some(ref yield_clause) = go_stmt.yield_clause {
             for item in &yield_clause.items {
-                columns.push(crate::core::YieldColumn {
+                columns.push(graphdb_core::YieldColumn {
                     expression: item.expression.clone(),
                     alias: item.alias.clone().unwrap_or_default(),
                     is_matched: false,
                 });
             }
         } else {
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::Expression::Variable("dst".to_string()),
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("dst".to_string()),
             );
             let id = expr_context.register_expression(expr_meta);
             let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(crate::core::YieldColumn {
+            columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "dst".to_string(),
                 is_matched: false,
             });
 
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::Expression::Variable("edge".to_string()),
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("edge".to_string()),
             );
             let id = expr_context.register_expression(expr_meta);
             let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(crate::core::YieldColumn {
+            columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "edge".to_string(),
                 is_matched: false,
@@ -257,12 +257,12 @@ impl GoPlanner {
         }
 
         if columns.is_empty() {
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::Expression::Variable("*".to_string()),
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("*".to_string()),
             );
             let id = expr_context.register_expression(expr_meta);
             let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(crate::core::YieldColumn {
+            columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
                 is_matched: false,

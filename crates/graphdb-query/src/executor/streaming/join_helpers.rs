@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::executor::ValueRowContext;
 use crate::executor::streaming::slot::{combine_layouts, SlotLayout};

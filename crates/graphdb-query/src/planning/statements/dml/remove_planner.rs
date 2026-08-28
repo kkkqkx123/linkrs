@@ -2,8 +2,8 @@
 //!
 //! Query planning for handling the REMOVE statement
 
-use crate::core::types::ContextualExpression;
-use crate::core::YieldColumn;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::YieldColumn;
 use crate::parser::ast::{RemoveStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -71,8 +71,8 @@ impl Planner for RemovePlanner {
             let expr = item.get_expression();
             if let Some(expression) = expr {
                 let item_type = match expression {
-                    crate::core::Expression::Property { .. } => "property",
-                    crate::core::Expression::Label { .. } => "tag",
+                    graphdb_core::Expression::Property { .. } => "property",
+                    graphdb_core::Expression::Label { .. } => "tag",
                     _ => "property",
                 };
                 remove_items.push((item_type.to_string(), item.clone()));
@@ -87,8 +87,8 @@ impl Planner for RemovePlanner {
         let remove_node_enum = PlanNodeEnum::Remove(remove_node);
 
         // Build the output column – Return the number of attributes/tagging elements that were deleted.
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable("removed_count".to_string()),
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("removed_count".to_string()),
         );
         let id = validated.expr_context().register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, validated.expr_context().clone());

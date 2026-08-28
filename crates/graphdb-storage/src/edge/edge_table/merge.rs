@@ -10,7 +10,7 @@ use super::super::{CsrBase, EdgeId, Nbr};
 use super::free_space::SegmentFreeList;
 use super::segment::{CsrSegment, DeletionInfo};
 use super::stats::DirectionMergeMetrics;
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 
 /// Result of freezing delta CSR to segments
 #[derive(Debug)]

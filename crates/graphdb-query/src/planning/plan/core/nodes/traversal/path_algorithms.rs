@@ -3,8 +3,8 @@
 //!
 //! The selection of the algorithm was completed during the Planner phase; this module only contains the planning nodes related to the specific algorithm.
 
-use crate::core::types::{ContextualExpression, VertexId};
-use crate::core::{EdgeDirection, Value};
+use graphdb_core::types::{ContextualExpression, VertexId};
+use graphdb_core::{EdgeDirection, Value};
 use crate::define_binary_input_node;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;

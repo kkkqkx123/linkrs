@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult};
 use crate::cold::ColdSnapshot;
 use crate::edge::{EdgeRecord, Nbr};
 use crate::engine::data_store::EdgeTableKey;

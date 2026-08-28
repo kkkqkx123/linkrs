@@ -587,9 +587,9 @@ fn first_tag_of_input(node: &PlanNodeEnum) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-    use crate::core::value::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+    use graphdb_core::value::Value;
     use crate::optimizer::stats::StatisticsManager;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;

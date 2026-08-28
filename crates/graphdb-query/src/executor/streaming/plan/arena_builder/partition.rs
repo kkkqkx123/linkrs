@@ -27,9 +27,9 @@ use super::specs::{
     build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
     is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -390,11 +390,11 @@ fn equality_join_keys_are_simple(
         && hash_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| matches!(m.inner(), crate::core::types::expr::Expression::Variable(_)))
+            .is_some_and(|m| matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_)))
         && probe_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| matches!(m.inner(), crate::core::types::expr::Expression::Variable(_)))
+            .is_some_and(|m| matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_)))
 }
 
 /// Whether a join key references the vertex-id partition key (`vid`), the only
@@ -1079,9 +1079,9 @@ fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
+    use graphdb_core::Expression;
     use crate::executor::base::ExecutionContext;
     use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
     use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -1115,7 +1115,7 @@ mod tests {
 
     fn simple_filter(input: PlanNodeEnum) -> PlanNodeEnum {
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr = Expression::Literal(crate::core::Value::Int(1));
+        let expr = Expression::Literal(graphdb_core::Value::Int(1));
         let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
         let cond = ContextualExpression::new(id, expr_ctx);
         let filter = FilterNode::new(input, cond).expect("filter plan should build");

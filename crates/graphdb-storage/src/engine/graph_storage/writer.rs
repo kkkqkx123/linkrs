@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 
-use crate::core::metadata::IndexMetadataManager;
-use crate::core::types::{
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::{
     ColumnId, EdgeIdentifier, EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp,
     UpdateInfo, UpdateOp, UpdateTarget, VertexId,
 };
-use crate::core::wal::redo::{
+use graphdb_core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertEdgeRedo, InsertVertexRedo, UpdateVertexPropRedo,
 };
-use crate::core::wal::types::WalOpType;
-use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::wal::types::WalOpType;
+use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::index::traits::VertexIndexOps;
 use crate::index::types::EdgeIdentity;
-use crate::transaction::undo_log::{
+use graphdb_transaction::undo_log::{
     InsertEdgeUndo, InsertVertexUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogEntry,
     UpdateVertexPropUndo,
 };
-use crate::transaction::wal::TransactionWalEntry;
-use crate::transaction::{MutationEntityKey, MutationResult};
+use graphdb_transaction::wal::TransactionWalEntry;
+use graphdb_transaction::{MutationEntityKey, MutationResult};
 
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
@@ -137,7 +137,7 @@ fn record_vertex_property_update(
                 col_id,
                 old_value: old_value
                     .cloned()
-                    .unwrap_or(Value::Null(crate::core::value::null::NullType::Null)),
+                    .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
             })),
             redo_entry,
             modified_table: Some("vertex".to_string()),
@@ -1217,7 +1217,7 @@ pub(crate) fn insert_vertex_data(
             Ok(true)
         }
         Err(ref e)
-            if e.kind() == crate::core::error::storage::StorageErrorKind::VertexAlreadyExists =>
+            if e.kind() == graphdb_core::error::storage::StorageErrorKind::VertexAlreadyExists =>
         {
             Ok(false)
         }
@@ -1336,7 +1336,7 @@ pub(crate) fn insert_edge_data(
             }
         }
         Err(ref e)
-            if e.kind() == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists =>
+            if e.kind() == graphdb_core::error::storage::StorageErrorKind::EdgeAlreadyExists =>
         {
             Ok(false)
         }
@@ -1529,10 +1529,10 @@ pub(crate) fn update_data(
                         .iter()
                         .find(|(k, _)| k == prop)
                         .map(|(_, v)| v);
-                    if let (Some(crate::core::Value::Int(cv)), crate::core::Value::Int(add_val)) =
+                    if let (Some(graphdb_core::Value::Int(cv)), graphdb_core::Value::Int(add_val)) =
                         (current_val, &info.value)
                     {
-                        crate::core::Value::Int(cv + add_val)
+                        graphdb_core::Value::Int(cv + add_val)
                     } else {
                         info.value.clone()
                     }
@@ -1547,10 +1547,10 @@ pub(crate) fn update_data(
                         .iter()
                         .find(|(k, _)| k == prop)
                         .map(|(_, v)| v);
-                    if let (Some(crate::core::Value::Int(cv)), crate::core::Value::Int(sub_val)) =
+                    if let (Some(graphdb_core::Value::Int(cv)), graphdb_core::Value::Int(sub_val)) =
                         (current_val, &info.value)
                     {
-                        crate::core::Value::Int(cv - sub_val)
+                        graphdb_core::Value::Int(cv - sub_val)
                     } else {
                         info.value.clone()
                     }
@@ -1598,7 +1598,7 @@ pub(crate) fn update_data(
 }
 
 fn tag_index_names(
-    index_metadata_manager: &crate::core::metadata::IndexManager,
+    index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
     tag_name: &str,
 ) -> StorageResult<Vec<String>> {
@@ -1612,7 +1612,7 @@ fn tag_index_names(
 
 fn update_vertex_indexes(
     ctx: &GraphStorageContext,
-    index_metadata_manager: &crate::core::metadata::IndexManager,
+    index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
@@ -1665,7 +1665,7 @@ fn update_vertex_indexes(
 
 fn refresh_vertex_indexes(
     ctx: &GraphStorageContext,
-    index_metadata_manager: &crate::core::metadata::IndexManager,
+    index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
@@ -1691,7 +1691,7 @@ fn refresh_vertex_indexes(
 
 fn delete_vertex_indexes(
     ctx: &GraphStorageContext,
-    index_metadata_manager: &crate::core::metadata::IndexManager,
+    index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,

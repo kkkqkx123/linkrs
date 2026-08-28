@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::error::QueryError;
-use crate::core::{NullType, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::{NullType, Value};
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
@@ -26,7 +26,7 @@ fn manage_result_layout() -> Arc<SlotLayout> {
                     slot_id: 0,
                     name: "action".to_string(),
                     alias: None,
-                    data_type: Some(crate::core::DataType::String),
+                    data_type: Some(graphdb_core::DataType::String),
                     nullable: false,
                     origin: None,
                 },
@@ -34,7 +34,7 @@ fn manage_result_layout() -> Arc<SlotLayout> {
                     slot_id: 1,
                     name: "name".to_string(),
                     alias: None,
-                    data_type: Some(crate::core::DataType::String),
+                    data_type: Some(graphdb_core::DataType::String),
                     nullable: true,
                     origin: None,
                 },
@@ -42,7 +42,7 @@ fn manage_result_layout() -> Arc<SlotLayout> {
                     slot_id: 2,
                     name: "status".to_string(),
                     alias: None,
-                    data_type: Some(crate::core::DataType::String),
+                    data_type: Some(graphdb_core::DataType::String),
                     nullable: false,
                     origin: None,
                 },

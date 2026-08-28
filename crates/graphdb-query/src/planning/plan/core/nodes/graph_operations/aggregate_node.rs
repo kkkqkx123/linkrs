@@ -2,8 +2,8 @@
 //!
 //! The `AggregateNode` is used to perform aggregation operations on the input data.
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 use crate::define_plan_node_with_deps;
 
 define_plan_node_with_deps! {

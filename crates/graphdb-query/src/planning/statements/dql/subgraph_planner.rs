@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::EdgeDirection;
-use crate::core::Expression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::Expression;
 use crate::parser::ast::stmt::Steps;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::{
@@ -190,9 +190,9 @@ impl SubgraphPlanner {
         let mut current = input;
 
         for condition in filters {
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition.clone());
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition.clone());
             let id = expr_context.register_expression(expr_meta);
-            let ctx_expr = crate::core::types::ContextualExpression::new(id, expr_context.clone());
+            let ctx_expr = graphdb_core::types::ContextualExpression::new(id, expr_context.clone());
             current = match FilterNode::new(current.clone(), ctx_expr) {
                 Ok(node) => PlanNodeEnum::Filter(node),
                 Err(_) => current,

@@ -5,7 +5,7 @@
 //! Note: This context is used for the evaluation of runtime expressions.
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::storage::StorageReader;

@@ -1,5 +1,5 @@
-use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::core::Value;
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::Value;
 use crate::edge::EdgeStrategy;
 use crate::types::StoragePropertyDef;
 

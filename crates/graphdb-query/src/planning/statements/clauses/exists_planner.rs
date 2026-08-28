@@ -15,10 +15,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::{ContextualExpression, Expression};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use graphdb_core::types::{ContextualExpression, Expression};
 use crate::binder::validation::ValidationInfo;
 use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::parser::ast::pattern::PatternUtils;
@@ -50,7 +50,7 @@ use crate::QueryContext;
 #[derive(Debug, Clone)]
 pub struct ExistsSpec {
     /// The subquery body (patterns + WHERE + optional RETURN).
-    pub body: crate::core::types::expr::SubqueryBody,
+    pub body: graphdb_core::types::expr::SubqueryBody,
     /// NOT EXISTS / NOT IN.
     pub negated: bool,
     /// IN's left-hand expression (`None` for EXISTS).
@@ -184,7 +184,7 @@ pub fn extract_conjunctive_exists(expr: &Expression, specs: &mut Vec<ExistsSpec>
 /// needs no filter node.
 pub fn is_trivially_true(expr: &Expression) -> bool {
     match expr {
-        Expression::Literal(crate::core::Value::Bool(true)) => true,
+        Expression::Literal(graphdb_core::Value::Bool(true)) => true,
         Expression::Binary {
             left,
             op: BinaryOperator::And,
@@ -228,7 +228,7 @@ impl SubqueryIdAllocator {
 pub fn collect_expression_subqueries(
     expr: &mut Expression,
     id_alloc: &mut SubqueryIdAllocator,
-) -> Vec<crate::core::types::expr::SubqueryBody> {
+) -> Vec<graphdb_core::types::expr::SubqueryBody> {
     let mut bodies = Vec::new();
     collect_expression_subqueries_inner(expr, id_alloc, &mut bodies);
     bodies
@@ -237,7 +237,7 @@ pub fn collect_expression_subqueries(
 fn collect_expression_subqueries_inner(
     expr: &mut Expression,
     id_alloc: &mut SubqueryIdAllocator,
-    out: &mut Vec<crate::core::types::expr::SubqueryBody>,
+    out: &mut Vec<graphdb_core::types::expr::SubqueryBody>,
 ) {
     match expr {
         Expression::Exists { body } => {
@@ -384,7 +384,7 @@ fn expression_subquery_position_error() -> PlannerError {
 ///   can bind the hosting row as the correlation frame, and the optional
 ///   RETURN expression becomes a top `Project` node.
 fn plan_scalar_subquery(
-    body: &crate::core::types::expr::SubqueryBody,
+    body: &graphdb_core::types::expr::SubqueryBody,
     qctx: &Arc<QueryContext>,
     space_id: u64,
     space_name: &str,
@@ -652,11 +652,11 @@ fn build_group_join_right_subtree(
     let key_names: Vec<String> = (0..probe_keys.len())
         .map(|i| format!("__gj_key_{i}"))
         .collect();
-    let columns: Vec<crate::core::YieldColumn> = probe_keys
+    let columns: Vec<graphdb_core::YieldColumn> = probe_keys
         .iter()
         .zip(&key_names)
         .map(|(expr, name)| {
-            crate::core::YieldColumn::new(to_contextual(expr.clone(), context), name.clone())
+            graphdb_core::YieldColumn::new(to_contextual(expr.clone(), context), name.clone())
         })
         .collect();
     let project = ProjectNode::new(input_node, columns)?;
@@ -714,7 +714,7 @@ fn wrap_project_with_subqueries(
         PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
     })?;
     let column =
-        crate::core::YieldColumn::new(expression.clone(), expression.to_expression_string());
+        graphdb_core::YieldColumn::new(expression.clone(), expression.to_expression_string());
     let project_node =
         ProjectNode::new(input_node, vec![column.clone()])?.with_subqueries(subqueries);
 
@@ -1269,7 +1269,7 @@ fn split_correlated(
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     fn prop(var: &str, name: &str) -> Expression {
         Expression::property(Expression::variable(var), name)
@@ -1285,7 +1285,7 @@ mod tests {
             eq(prop("t", "age"), Expression::literal(30)),
             BinaryOperator::And,
             Expression::Exists {
-                body: Box::new(crate::core::types::expr::SubqueryBody {
+                body: Box::new(graphdb_core::types::expr::SubqueryBody {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: None,
@@ -1313,7 +1313,7 @@ mod tests {
         let cond = Expression::unary(
             UnaryOperator::Not,
             Expression::Exists {
-                body: Box::new(crate::core::types::expr::SubqueryBody {
+                body: Box::new(graphdb_core::types::expr::SubqueryBody {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: None,
@@ -1335,7 +1335,7 @@ mod tests {
             UnaryOperator::Not,
             Expression::in_subquery(
                 Expression::variable("t"),
-                crate::core::types::expr::SubqueryBody {
+                graphdb_core::types::expr::SubqueryBody {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: Some(Box::new(prop("p", "name"))),
@@ -1356,7 +1356,7 @@ mod tests {
     fn leaves_non_conjunctive_exists_untouched() {
         // EXISTS under OR must not be extracted.
         let inner = Expression::Exists {
-            body: Box::new(crate::core::types::expr::SubqueryBody {
+            body: Box::new(graphdb_core::types::expr::SubqueryBody {
                 patterns: vec!["(p:person)".to_string()],
                 where_clause: None,
                 return_expr: None,
@@ -1446,7 +1446,7 @@ mod tests {
 
     #[test]
     fn plans_correlated_exists_as_mark_join() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
 
         let spec = ExistsSpec {
             body: SubqueryBody {
@@ -1522,7 +1522,7 @@ mod tests {
 
     #[test]
     fn plans_correlated_scalar_aggregate_as_group_join() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         // `t.city IN { (p:person) WHERE p.city = t.city RETURN max(p.age) }`
@@ -1534,7 +1534,7 @@ mod tests {
             patterns: vec!["(p:person)".to_string()],
             where_clause: Some(Box::new(eq(prop("p", "city"), prop("t", "city")))),
             return_expr: Some(Box::new(Expression::Aggregate {
-                func: crate::core::types::operators::AggregateFunction::Max,
+                func: graphdb_core::types::operators::AggregateFunction::Max,
                 args: vec![prop("p", "age")],
                 distinct: false,
                 filter: None,
@@ -1562,7 +1562,7 @@ mod tests {
         assert_eq!(gj.key_columns, 1);
         assert_eq!(
             gj.function,
-            crate::core::types::operators::AggregateFunction::Max
+            graphdb_core::types::operators::AggregateFunction::Max
         );
         assert!(!gj.distinct);
         // The outer-side hash key references the outer variable `t`.
@@ -1585,7 +1585,7 @@ mod tests {
 
     #[test]
     fn non_equi_scalar_aggregate_keeps_correlated_apply_fallback() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         // Non-equi correlation cannot reduce to equi keys: the extracted-key
@@ -1598,7 +1598,7 @@ mod tests {
                 prop("t", "age"),
             ))),
             return_expr: Some(Box::new(Expression::Aggregate {
-                func: crate::core::types::operators::AggregateFunction::Count,
+                func: graphdb_core::types::operators::AggregateFunction::Count,
                 args: vec![Expression::Literal(Value::string("*"))],
                 distinct: false,
                 filter: None,
@@ -1634,7 +1634,7 @@ mod tests {
 
     #[test]
     fn filtered_aggregate_return_skips_group_join() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
 
         // An aggregate with a FILTER clause is outside the Group-Join shape:
         // the RETURN expression keeps its plain projection.
@@ -1642,7 +1642,7 @@ mod tests {
             patterns: vec!["(p:person)".to_string()],
             where_clause: None,
             return_expr: Some(Box::new(Expression::Aggregate {
-                func: crate::core::types::operators::AggregateFunction::Count,
+                func: graphdb_core::types::operators::AggregateFunction::Count,
                 args: vec![prop("p", "age")],
                 distinct: false,
                 filter: Some(Box::new(Expression::binary(
@@ -1673,7 +1673,7 @@ mod tests {
 
     #[test]
     fn plans_complex_correlated_exists_as_correlated_apply() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         // A multi-pattern (cross-joined) correlated subquery is not a simple
@@ -1743,7 +1743,7 @@ mod tests {
 
     #[test]
     fn nested_correlated_exists_wraps_inner_mark_join() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         // Outer EXISTS over `(p:person)` whose WHERE contains a nested EXISTS
@@ -1800,7 +1800,7 @@ mod tests {
 
     #[test]
     fn in_with_correlated_where_keeps_synthesized_equality_in_mark_join_condition() {
-        use crate::core::types::expr::SubqueryBody;
+        use graphdb_core::types::expr::SubqueryBody;
 
         let spec = ExistsSpec {
             body: SubqueryBody {
@@ -1865,8 +1865,8 @@ mod tests {
 
     // ── expression-level subquery collection ───────────────────
 
-    fn body() -> crate::core::types::expr::SubqueryBody {
-        crate::core::types::expr::SubqueryBody {
+    fn body() -> graphdb_core::types::expr::SubqueryBody {
+        graphdb_core::types::expr::SubqueryBody {
             id: 0,
             patterns: vec!["(p:person)".to_string()],
             where_clause: None,
@@ -1982,7 +1982,7 @@ mod tests {
     #[test]
     fn collects_inside_type_cast_subscript_range_path() {
         assert_collected(
-            Expression::cast(exists(), crate::core::types::DataType::Bool),
+            Expression::cast(exists(), graphdb_core::types::DataType::Bool),
             1,
         );
         assert_collected(Expression::subscript(exists(), Expression::literal(0)), 1);
@@ -2021,7 +2021,7 @@ mod tests {
             2,
         );
         let agg = Expression::Aggregate {
-            func: crate::core::types::operators::AggregateFunction::Count,
+            func: graphdb_core::types::operators::AggregateFunction::Count,
             args: vec![exists()],
             distinct: false,
             filter: Some(Box::new(in_subq(Expression::variable("t")))),
@@ -2077,7 +2077,7 @@ mod tests {
         // A subquery whose WHERE / RETURN themselves contain EXISTS / IN must
         // not be collected at expression level: those are compiled
         // recursively by the subquery planner.
-        let inner = crate::core::types::expr::SubqueryBody {
+        let inner = graphdb_core::types::expr::SubqueryBody {
             id: 0,
             patterns: vec!["(p:person)".to_string()],
             where_clause: Some(Box::new(Expression::binary(

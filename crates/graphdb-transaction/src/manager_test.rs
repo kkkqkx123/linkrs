@@ -512,7 +512,7 @@ fn test_shutdown_manager() {
 
 #[test]
 fn test_check_write_set_conflict_no_conflict() {
-    use crate::core::types::VertexId;
+    use graphdb_core::types::VertexId;
 
     let manager = create_test_manager();
 
@@ -552,7 +552,7 @@ fn test_check_write_set_conflict_no_conflict() {
 
 #[test]
 fn test_check_write_set_conflict_with_conflict() {
-    use crate::core::types::VertexId;
+    use graphdb_core::types::VertexId;
 
     let manager = create_test_manager();
 
@@ -656,7 +656,7 @@ fn test_shared_version_manager_is_preserved() {
     let version_manager = Arc::new(VersionManager::new());
     let manager = TransactionManager::with_shared_version_manager(
         TransactionManagerConfig::default(),
-        Arc::new(crate::core::stats::StatsManager::new()),
+        Arc::new(graphdb_core::stats::StatsManager::new()),
         Arc::clone(&version_manager),
     );
 
@@ -744,7 +744,7 @@ fn test_cross_shard_final_review_no_false_abort() {
     use std::sync::Barrier;
     use std::thread;
 
-    use crate::core::types::{CommitLsn, VertexId};
+    use graphdb_core::types::{CommitLsn, VertexId};
     use crate::participant::{
         TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
     };

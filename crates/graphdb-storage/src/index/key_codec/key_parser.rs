@@ -3,7 +3,7 @@
 //! This module provides functions for parsing index keys encoded with the
 //! `OrderedCodec`.
 
-use crate::core::{StorageError, Value};
+use graphdb_core::{StorageError, Value};
 
 use super::key_builder::codec;
 
@@ -304,7 +304,7 @@ impl KeyParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::index::key_codec::key_builder::KeyBuilder;
 
     #[test]

@@ -9,7 +9,7 @@ use super::buffer::OpBatchBuffer;
 use super::config::BatchConfig;
 use super::error::{BatchError, BatchResult};
 use super::trait_def::BatchProcessor;
-use crate::search::tantivy_index::TantivySearchEngine;
+use graphdb_search::tantivy_index::TantivySearchEngine;
 use crate::types::{ChangeType, IndexOperation};
 
 pub struct FulltextBatchProcessor {

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
 

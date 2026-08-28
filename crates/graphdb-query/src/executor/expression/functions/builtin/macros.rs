@@ -61,8 +61,8 @@ macro_rules! define_function_enum {
             }
 
             /// Execute the function
-            $vis fn execute(&self, args: &[$crate::core::Value]) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
-                let handler: fn(&[$crate::core::Value]) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> = match self {
+            $vis fn execute(&self, args: &[graphdb_core::Value]) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
+                let handler: fn(&[graphdb_core::Value]) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> = match self {
                     $(Self::$variant => $handler,)*
                 };
                 handler(args)
@@ -76,8 +76,8 @@ macro_rules! define_function_enum {
 macro_rules! define_unary_float_fn {
     ($name:ident, $op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.is_empty() {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -109,8 +109,8 @@ macro_rules! define_unary_float_fn {
 macro_rules! define_unary_numeric_fn {
     ($name:ident, int: $int_op:expr, float: $float_op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.is_empty() {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -141,8 +141,8 @@ macro_rules! define_unary_numeric_fn {
 macro_rules! define_unary_string_fn {
     ($name:ident, $op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.is_empty() {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -170,8 +170,8 @@ macro_rules! define_unary_string_fn {
 macro_rules! define_datetime_extractor {
     ($name:ident, Date => $date_field:ident, DateTime => $datetime_field:ident) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.is_empty() {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -194,8 +194,8 @@ macro_rules! define_datetime_extractor {
     };
     ($name:ident, Time => $time_field:ident, DateTime => $datetime_field:ident) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.is_empty() {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -223,8 +223,8 @@ macro_rules! define_datetime_extractor {
 macro_rules! define_arg_checked_fn {
     ($name:ident, $arity:expr, $handler:expr, $type_desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.len() != $arity {
                 return Err(
                     $crate::executor::expression::ExpressionError::type_error(concat!(
@@ -245,8 +245,8 @@ macro_rules! define_arg_checked_fn {
 macro_rules! define_binary_numeric_fn {
     ($name:ident, $op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.len() != 2 {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -282,8 +282,8 @@ macro_rules! define_binary_numeric_fn {
 macro_rules! define_binary_string_bool_fn {
     ($name:ident, $op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.len() != 2 {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
@@ -311,8 +311,8 @@ macro_rules! define_binary_string_bool_fn {
 macro_rules! define_binary_geography_fn {
     ($name:ident, $op:expr, $desc:literal) => {
         fn $name(
-            args: &[$crate::core::Value],
-        ) -> Result<$crate::core::Value, $crate::executor::expression::ExpressionError> {
+            args: &[graphdb_core::Value],
+        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
             if args.len() != 2 {
                 return Err($crate::executor::expression::ExpressionError::new(
                     $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,

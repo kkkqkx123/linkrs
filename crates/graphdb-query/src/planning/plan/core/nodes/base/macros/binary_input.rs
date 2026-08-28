@@ -14,13 +14,13 @@ macro_rules! define_join_node {
             id: i64,
             left: Box<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
             right: Box<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-            hash_keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>,
-            probe_keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>,
+            hash_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
+            probe_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
             deps: Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
-            column_types: Vec<$crate::core::DataType>,
+            column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -66,11 +66,11 @@ macro_rules! define_join_node {
                 self.col_names = names;
             }
 
-            pub fn column_types(&self) -> &[$crate::core::DataType] {
+            pub fn column_types(&self) -> &[graphdb_core::DataType] {
                 &self.column_types
             }
 
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) {
                 self.column_types = types;
             }
 
@@ -78,19 +78,19 @@ macro_rules! define_join_node {
                 &self.deps
             }
 
-            pub fn hash_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            pub fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
             }
 
-            pub fn set_hash_keys(&mut self, keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>) {
+            pub fn set_hash_keys(&mut self, keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>) {
                 self.hash_keys = keys;
             }
 
-            pub fn probe_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            pub fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.probe_keys
             }
 
-            pub fn set_probe_keys(&mut self, keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>) {
+            pub fn set_probe_keys(&mut self, keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>) {
                 self.probe_keys = keys;
             }
 
@@ -214,11 +214,11 @@ macro_rules! define_join_node {
         }
 
         impl $crate::planning::plan::core::nodes::base::plan_node_traits::JoinNode for $name {
-            fn hash_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
             }
 
-            fn probe_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.probe_keys
             }
         }
@@ -238,7 +238,7 @@ macro_rules! define_join_node {
 
                 let col_names_size = $crate::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
-                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+                let column_types_size = std::mem::size_of::<Vec<graphdb_core::DataType>>() * self.column_types.capacity();
 
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
@@ -276,7 +276,7 @@ macro_rules! define_binary_input_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
-            column_types: Vec<$crate::core::DataType>,
+            column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -320,11 +320,11 @@ macro_rules! define_binary_input_node {
                 self.col_names = names;
             }
 
-            pub fn column_types(&self) -> &[$crate::core::DataType] {
+            pub fn column_types(&self) -> &[graphdb_core::DataType] {
                 &self.column_types
             }
 
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) {
                 self.column_types = types;
             }
 
@@ -438,7 +438,7 @@ macro_rules! define_binary_input_node {
 
                 let col_names_size = $crate::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
-                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+                let column_types_size = std::mem::size_of::<Vec<graphdb_core::DataType>>() * self.column_types.capacity();
 
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()

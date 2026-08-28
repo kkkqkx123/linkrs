@@ -1,8 +1,8 @@
 //! Implementation of string functions
 
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 
 define_function_enum! {
@@ -292,7 +292,7 @@ define_binary_string_bool_fn!(
 );
 
 fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
-    use crate::core::value::list::List;
+    use graphdb_core::value::list::List;
     if args.len() != 2 {
         return Err(ExpressionError::type_error(
             "The split function takes 2 arguments",

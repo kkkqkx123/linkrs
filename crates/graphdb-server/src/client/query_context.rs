@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 use log::{info, warn};
 use parking_lot::RwLock;
 
-use crate::core::error::{QueryError, QueryResult};
+use graphdb_core::error::{QueryError, QueryResult};
 use graphdb_query::executor::streaming::runtime::ExecutionRuntime;
 
 #[derive(Debug)]

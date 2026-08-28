@@ -126,8 +126,8 @@ impl MergeRule for MergeGetVerticesAndProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, YieldColumn};
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetVerticesNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn test_merge_get_vertices_and_project() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
         use std::sync::Arc;
 
         // Create the starting node.

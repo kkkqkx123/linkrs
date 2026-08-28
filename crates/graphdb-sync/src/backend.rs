@@ -113,13 +113,6 @@ impl VectorBackend {
                     "Qdrant engine requires async construction; use from_config_async".to_string(),
                 )))
             }
-            #[cfg(not(feature = "vector-qdrant"))]
-            graphdb_config::VectorEngineKind::Qdrant => {
-                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
-                    "Qdrant engine requested but the `vector-qdrant` feature is not enabled"
-                        .to_string(),
-                )))
-            }
         }
     }
 

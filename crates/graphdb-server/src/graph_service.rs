@@ -1,10 +1,10 @@
-use graphdb_api::core::{QueryApi, QueryResult, SyncApi};
+use graphdb_api::api_core::{QueryApi, QueryResult, SyncApi};
 
 use crate::config::Config;
-use crate::core::metadata::SchemaManager;
-use crate::core::stats::StatsManager;
-use crate::core::types::SpaceSummary;
-use crate::core::{MetricType, Permission};
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::SpaceSummary;
+use graphdb_core::{MetricType, Permission};
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::transaction_scope::CancelReason;
@@ -21,10 +21,10 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 #[cfg(feature = "vector")]
-use crate::sync::backend::VectorBackend;
-use crate::transaction::{TransactionId, TransactionManager};
+use graphdb_sync::backend::VectorBackend;
+use graphdb_transaction::{TransactionId, TransactionManager};
 #[cfg(feature = "vector")]
-use graphdb_api::core::VectorApi;
+use graphdb_api::api_core::VectorApi;
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -220,11 +220,11 @@ impl<
                     let engine = vector_search::LocalVectorEngine::open(config.vector_data_dir())
                         .unwrap_or_else(|_| panic!("Failed to open local vector engine"));
                     if let Some(hnsw) =
-                        graphdb_api::local_hnsw_config(&config.vector_config().local)
+                        graphdb_api::vector_config::local_hnsw_config(&config.vector_config().local)
                     {
                         engine.set_default_hnsw_config(hnsw);
                     }
-                    if let Some(ivf) = graphdb_api::local_ivf_config(&config.vector_config().local)
+                    if let Some(ivf) = graphdb_api::vector_config::local_ivf_config(&config.vector_config().local)
                     {
                         engine.set_default_ivf_config(ivf);
                     }
@@ -233,7 +233,7 @@ impl<
                     ) {
                         engine.set_default_quantization_config(quant);
                     }
-                    crate::sync::backend::VectorBackend::local(engine)
+                    graphdb_sync::backend::VectorBackend::local(engine)
                 }
             };
 
@@ -429,8 +429,8 @@ impl<
         &self,
         session_id: i64,
         stmt: &str,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -558,7 +558,7 @@ impl<
         // Assign a server-side monotonic query ID up front so the request-scoped
         // id is threaded through QueryRequestContext → ExecutionContext → runtime.
         let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
-        let query_request = graphdb_api::core::QueryRequest {
+        let query_request = graphdb_api::api_core::QueryRequest {
             isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
@@ -696,8 +696,8 @@ impl<
         stmt: &Stmt,
         parsed_ast: Arc<Ast>,
         space_id: i64,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
@@ -727,7 +727,7 @@ impl<
                         // write transactions.
                         if matches!(
                             e.kind(),
-                            crate::transaction::TransactionErrorKind::WriteTransactionConflict
+                            graphdb_transaction::TransactionErrorKind::WriteTransactionConflict
                         ) {
                             txn_manager.cleanup_expired_transactions();
                             match txn_manager
@@ -956,8 +956,8 @@ impl<
         parsed_ast: Arc<Ast>,
         space_id: i64,
         transaction_id: Option<TransactionId>,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1022,8 +1022,8 @@ impl<
         assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
         stmt: &str,
         space_id: i64,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         let result = self.execute_query_with_permission(
             session.id(),
@@ -1056,7 +1056,7 @@ impl<
         };
         session.set_variable(assign.name.clone(), value);
         info!("Session {} set session variable", session.id());
-        Ok(graphdb_api::core::QueryResult::empty())
+        Ok(graphdb_api::api_core::QueryResult::empty())
     }
 
     fn execute_query_with_permission(
@@ -1065,8 +1065,8 @@ impl<
         stmt: &str,
         parsed_ast: Option<Arc<Ast>>,
         space_id: i64,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1184,9 +1184,9 @@ impl<
         stmt: &str,
         parsed_ast: Option<Arc<Ast>>,
         transaction_id: Option<TransactionId>,
-        execution: Option<crate::transaction::types::TransactionExecution>,
-        parameters: Option<HashMap<String, crate::core::Value>>,
-        session_variables: Option<HashMap<String, crate::core::Value>>,
+        execution: Option<graphdb_transaction::types::TransactionExecution>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         // Session variables are injected through the dedicated
         // session_variables channel (captured once per statement), fully
@@ -1201,7 +1201,7 @@ impl<
             }
             None => Some(session.variables_snapshot()),
         };
-        let query_request = graphdb_api::core::QueryRequest {
+        let query_request = graphdb_api::api_core::QueryRequest {
             isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
@@ -1469,7 +1469,7 @@ where
             permitted.push(stmt.clone());
         }
 
-        let query_request = graphdb_api::core::QueryRequest {
+        let query_request = graphdb_api::api_core::QueryRequest {
             isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
@@ -1577,7 +1577,7 @@ where
             permitted.push(stmt.clone());
         }
 
-        let query_request = graphdb_api::core::QueryRequest {
+        let query_request = graphdb_api::api_core::QueryRequest {
             isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
@@ -1613,7 +1613,7 @@ fn merge_batch_outcomes(
     results: &mut [Option<Result<QueryResult, String>>],
     batch_indices: &[usize],
     denied: &[(usize, String)],
-    outcomes: Vec<Result<graphdb_api::core::QueryResult, graphdb_api::core::CoreError>>,
+    outcomes: Vec<Result<graphdb_api::api_core::QueryResult, graphdb_api::api_core::CoreError>>,
 ) {
     let mut permitted_outcomes = outcomes.into_iter();
     for (batch_pos, original_index) in batch_indices.iter().enumerate() {

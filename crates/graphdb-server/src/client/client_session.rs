@@ -12,9 +12,9 @@ use super::space_context::SpaceContext;
 use super::statistics::StatisticsContext;
 use super::transaction_context::TransactionContext;
 use crate::api::session_variables::SessionVariables;
-use crate::core::error::QueryResult;
-use crate::core::types::SpaceSummary;
-use crate::core::Value;
+use graphdb_core::error::QueryResult;
+use graphdb_core::types::SpaceSummary;
+use graphdb_core::Value;
 
 #[derive(Debug)]
 pub struct ClientSession {
@@ -67,11 +67,11 @@ impl ClientSession {
         self.session_context.user()
     }
 
-    pub fn roles(&self) -> std::collections::HashMap<i64, crate::core::RoleType> {
+    pub fn roles(&self) -> std::collections::HashMap<i64, graphdb_core::RoleType> {
         self.role_context.roles()
     }
 
-    pub fn role_with_space(&self, space: i64) -> Option<crate::core::RoleType> {
+    pub fn role_with_space(&self, space: i64) -> Option<graphdb_core::RoleType> {
         self.role_context.role_with_space(space)
     }
 
@@ -83,7 +83,7 @@ impl ClientSession {
         self.role_context.is_admin()
     }
 
-    pub fn set_role(&self, space: i64, role: crate::core::RoleType) {
+    pub fn set_role(&self, space: i64, role: graphdb_core::RoleType) {
         self.role_context.set_role(space, role);
     }
 
@@ -170,11 +170,11 @@ impl ClientSession {
             .kill_multiple_queries(query_ids, self.id())
     }
 
-    pub fn current_transaction(&self) -> Option<crate::transaction::TransactionId> {
+    pub fn current_transaction(&self) -> Option<graphdb_transaction::TransactionId> {
         self.transaction_context.current_transaction()
     }
 
-    pub fn bind_transaction(&self, txn_id: crate::transaction::TransactionId) {
+    pub fn bind_transaction(&self, txn_id: graphdb_transaction::TransactionId) {
         self.transaction_context.bind_transaction(txn_id, self.id());
     }
 
@@ -195,20 +195,20 @@ impl ClientSession {
             .set_auto_commit(auto_commit, self.id());
     }
 
-    pub fn transaction_options(&self) -> crate::transaction::TransactionOptions {
+    pub fn transaction_options(&self) -> graphdb_transaction::TransactionOptions {
         self.transaction_context.transaction_options()
     }
 
-    pub fn set_transaction_options(&self, options: crate::transaction::TransactionOptions) {
+    pub fn set_transaction_options(&self, options: graphdb_transaction::TransactionOptions) {
         self.transaction_context.set_transaction_options(options);
     }
 
-    pub fn push_savepoint(&self, savepoint_id: crate::transaction::SavepointId) {
+    pub fn push_savepoint(&self, savepoint_id: graphdb_transaction::SavepointId) {
         self.transaction_context
             .push_savepoint(savepoint_id, self.id());
     }
 
-    pub fn savepoint_stack(&self) -> Vec<crate::transaction::SavepointId> {
+    pub fn savepoint_stack(&self) -> Vec<graphdb_transaction::SavepointId> {
         self.transaction_context.savepoint_stack()
     }
 
@@ -220,7 +220,7 @@ impl ClientSession {
         self.transaction_context.savepoint_count()
     }
 
-    pub fn statistics(&self) -> &crate::core::SessionStatistics {
+    pub fn statistics(&self) -> &graphdb_core::SessionStatistics {
         self.statistics_context.statistics()
     }
 
@@ -280,7 +280,7 @@ impl ClientSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::DataType;
+    use graphdb_core::types::DataType;
 
     #[test]
     fn test_client_session_creation() {
@@ -351,17 +351,17 @@ mod tests {
         assert!(!client_session.is_admin());
         assert!(!client_session.is_god());
 
-        client_session.set_role(1, crate::core::RoleType::Admin);
+        client_session.set_role(1, graphdb_core::RoleType::Admin);
         assert_eq!(
             client_session
                 .role_with_space(1)
                 .expect("role should exist"),
-            crate::core::RoleType::Admin
+            graphdb_core::RoleType::Admin
         );
         assert!(client_session.is_admin());
         assert!(!client_session.is_god());
 
-        client_session.set_role(2, crate::core::RoleType::God);
+        client_session.set_role(2, graphdb_core::RoleType::God);
         assert!(client_session.is_god());
     }
 
@@ -445,12 +445,12 @@ mod tests {
         assert!(!client_session.has_active_transaction());
         assert!(client_session.is_auto_commit());
 
-        client_session.bind_transaction(crate::transaction::TransactionId(1001));
+        client_session.bind_transaction(graphdb_transaction::TransactionId(1001));
         assert_eq!(
             client_session
                 .current_transaction()
                 .expect("current_transaction should exist"),
-            crate::transaction::TransactionId(1001)
+            graphdb_transaction::TransactionId(1001)
         );
         assert!(client_session.has_active_transaction());
 
@@ -460,7 +460,7 @@ mod tests {
         client_session.set_auto_commit(false);
         assert!(!client_session.is_auto_commit());
 
-        let options = crate::transaction::TransactionOptions::default();
+        let options = graphdb_transaction::TransactionOptions::default();
         client_session.set_transaction_options(options.clone());
         assert_eq!(client_session.transaction_options(), options);
     }
@@ -531,7 +531,7 @@ mod tests {
         // Pre-transaction value.
         client_session.set_variable("x".to_string(), Value::Int(1));
 
-        client_session.bind_transaction(crate::transaction::TransactionId(7));
+        client_session.bind_transaction(graphdb_transaction::TransactionId(7));
         assert!(client_session.has_active_transaction());
 
         // Assignments inside the transaction go to the overlay.
@@ -562,7 +562,7 @@ mod tests {
 
         let client_session = ClientSession::new(session);
 
-        client_session.bind_transaction(crate::transaction::TransactionId(8));
+        client_session.bind_transaction(graphdb_transaction::TransactionId(8));
         client_session.set_variable("a".to_string(), Value::Int(5));
 
         client_session.commit_variables();
@@ -582,7 +582,7 @@ mod tests {
 
         let client_session = ClientSession::new(session);
 
-        client_session.bind_transaction(crate::transaction::TransactionId(9));
+        client_session.bind_transaction(graphdb_transaction::TransactionId(9));
 
         client_session.set_variable("a".to_string(), Value::Int(1));
         client_session.push_variable_savepoint("sp1");

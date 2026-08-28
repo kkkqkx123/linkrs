@@ -3,9 +3,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 
 /// Memory ownership categories used by the storage engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

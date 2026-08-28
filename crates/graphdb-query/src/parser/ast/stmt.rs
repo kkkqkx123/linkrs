@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 pub use super::pattern::*;
 pub use super::types::*;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 mod dcl;
 mod ddl;
@@ -324,15 +324,15 @@ impl Stmt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::contextual::ContextualExpression;
+    use graphdb_core::types::expr::contextual::ContextualExpression;
     use crate::parser::ast::vector::{
         VectorDistance, VectorIndexConfig, VectorMatchCondition,
     };
 
     fn ctx_expr() -> ContextualExpression {
         let expr_context = Arc::new(ExpressionAnalysisContext::new());
-        let expr = crate::core::types::expr::Expression::Variable("x".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr = graphdb_core::types::expr::Expression::Variable("x".to_string());
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_context.register_expression(expr_meta);
         ContextualExpression::new(expr_id, expr_context)
     }
@@ -656,7 +656,7 @@ mod tests {
                     "idx".to_string(),
                     "s".to_string(),
                     vec![],
-                    crate::core::types::FulltextEngineType::Bm25,
+                    graphdb_core::types::FulltextEngineType::Bm25,
                 )),
                 Ddl,
             ),
@@ -1063,11 +1063,11 @@ mod tests {
         use std::sync::Arc;
 
         let expr_context = Arc::new(ExpressionAnalysisContext::new());
-        let expr = crate::core::types::expr::Expression::Variable("target".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr = graphdb_core::types::expr::Expression::Variable("target".to_string());
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_context.register_expression(expr_meta);
         let to_expr =
-            crate::core::types::expr::contextual::ContextualExpression::new(expr_id, expr_context);
+            graphdb_core::types::expr::contextual::ContextualExpression::new(expr_id, expr_context);
 
         let stmt = Stmt::FindPath(FindPathStmt {
             span: Span::default(),

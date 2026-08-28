@@ -3,7 +3,7 @@
 //! Responsible for planning the execution of the WHERE clause and filtering the input data.
 //! The ClausePlanner interface has been implemented, providing comprehensive filtering capabilities.
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
@@ -213,8 +213,8 @@ fn extract_where_condition(stmt: &Stmt) -> Result<ContextualExpression, PlannerE
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Expression;
     use crate::parser::ast::Span;
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
@@ -230,7 +230,7 @@ mod tests {
     fn test_extract_where_condition() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -272,7 +272,7 @@ mod tests {
     fn test_transform_clause() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
 

@@ -146,10 +146,10 @@ impl crate::optimizer::heuristic::rule::PushDownRule for PushProjectDownGetVerti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, Value, YieldColumn};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, Value, YieldColumn};
     use crate::optimizer::heuristic::context::RewriteContext;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -225,7 +225,7 @@ mod tests {
                 get_vertices("v"),
                 contextual(Expression::Binary {
                     left: Box::new(prop("v", "age")),
-                    op: crate::core::types::operators::BinaryOperator::GreaterThan,
+                    op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
                     right: Box::new(Expression::Literal(Value::Int(30))),
                 }),
             )

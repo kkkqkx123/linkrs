@@ -27,7 +27,7 @@ pub use types::*;
 pub use vector_api::{VectorApi, VectorSearchResult};
 
 // Re-export the statistical types from the core layer.
-pub use crate::core::{
+pub use graphdb_core::{
     ErrorInfo, ErrorSummary, ErrorType, MetricType, MetricValue, QueryMetrics, QueryPhase,
     QueryProfile, QueryStatus, StatsManager,
 };

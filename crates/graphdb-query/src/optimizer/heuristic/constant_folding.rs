@@ -21,10 +21,10 @@
 //!   group context even with constant arguments).
 //! - evaluation failures keep the original expression (conservative).
 
-use crate::core::types::expr::analysis_utils::is_evaluable;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::expr::analysis_utils::is_evaluable;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use crate::executor::expression::evaluation_context::DefaultExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::expression::functions::global_registry_ref;
@@ -594,13 +594,13 @@ impl RewriteRule for FoldConstantsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::analysis_utils::is_evaluable;
-    use crate::core::types::expr::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Value;
-    use crate::core::YieldColumn;
+    use graphdb_core::types::expr::analysis_utils::is_evaluable;
+    use graphdb_core::types::expr::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Value;
+    use graphdb_core::YieldColumn;
     use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::FilterNode;
@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn test_fold_aggregate_is_not_folded() {
         let expr = Expression::Aggregate {
-            func: crate::core::AggregateFunction::Count,
+            func: graphdb_core::AggregateFunction::Count,
             args: vec![Expression::Literal(Value::Int(1))],
             distinct: false,
             filter: None,
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn test_fold_aggregate_node_filters() {
-        use crate::core::AggregateFunction;
+        use graphdb_core::AggregateFunction;
         use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 
         let start = PlanNodeEnum::Start(StartNode::new());

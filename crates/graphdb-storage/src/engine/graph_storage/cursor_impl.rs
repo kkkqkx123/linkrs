@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use crate::core::vertex_edge_path::Tag;
-use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::cold::ColdSnapshot;
 use crate::cursor::{EdgeCursor, FlatVertexRecord, ScanOptions, VertexCursor};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
@@ -529,7 +529,7 @@ impl GraphVertexCursor {
                 .zip(columns)
                 .map(|(name, values)| crate::cursor::PropertyColumn {
                     name,
-                    data_type: crate::core::types::DataType::Empty,
+                    data_type: graphdb_core::types::DataType::Empty,
                     values,
                 })
                 .collect()
@@ -547,7 +547,7 @@ impl GraphVertexCursor {
                         });
                     crate::cursor::PropertyColumn {
                         name: name.clone(),
-                        data_type: crate::core::types::DataType::Empty,
+                        data_type: graphdb_core::types::DataType::Empty,
                         values,
                     }
                 })

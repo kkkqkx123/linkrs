@@ -17,7 +17,7 @@ pub mod selector;
 
 use std::io::Write;
 
-use crate::core::{DataType, StorageResult, Value};
+use graphdb_core::{DataType, StorageResult, Value};
 
 pub use alp::AlpColumn;
 pub use bitpacking::BitPackedIntColumn;
@@ -142,8 +142,8 @@ impl ColumnEncoding {
         Ok(written)
     }
 
-    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> crate::core::StorageResult<()> {
-        use crate::core::StorageError;
+    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> graphdb_core::StorageResult<()> {
+        use graphdb_core::StorageError;
 
         match self {
             Self::None => Err(StorageError::invalid_operation(
@@ -200,7 +200,7 @@ impl ColumnEncoding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::NullBitmap;
+    use graphdb_core::NullBitmap;
 
     fn build_fsst_column(strings: &[Option<&str>], _max_symbols: usize) -> FsstColumn {
         let encoder = FsstEncoder::new();

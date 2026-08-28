@@ -1,5 +1,5 @@
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{Edge, EdgeDirection, Vertex};
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, EdgeDirection, Vertex};
 use crate::storage::QueryStorage;
 
 pub struct TraversalGraphReader<'a> {

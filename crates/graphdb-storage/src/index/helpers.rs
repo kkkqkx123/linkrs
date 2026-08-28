@@ -1,8 +1,8 @@
 #[cfg(test)]
-use crate::core::types::IndexType;
-use crate::core::types::{Index, Timestamp};
-use crate::core::wal::{EntityRef, OutboxIntent};
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::IndexType;
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::wal::{EntityRef, OutboxIntent};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::chunk::serialize::write_chunked_index_checkpoint;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
@@ -146,14 +146,14 @@ pub(crate) fn flush_split_generation(
 pub(crate) fn vertex_entity_ref(value: &Value) -> Option<EntityRef> {
     match value {
         Value::BigInt(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id),
+            graphdb_core::types::storage_ids::VertexId::from_int64(*id),
         )),
         Value::Int(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id as i64),
+            graphdb_core::types::storage_ids::VertexId::from_int64(*id as i64),
         )),
         Value::String(id) => Some(EntityRef::Vertex(id.parse::<i64>().map_or_else(
-            |_| crate::core::types::storage_ids::VertexId::from_string(id.clone()),
-            crate::core::types::storage_ids::VertexId::from_int64,
+            |_| graphdb_core::types::storage_ids::VertexId::from_string(id.clone()),
+            graphdb_core::types::storage_ids::VertexId::from_int64,
         ))),
         Value::Vertex(vertex) => Some(EntityRef::Vertex(vertex.vid)),
         _ => None,
@@ -240,8 +240,8 @@ pub(crate) fn merged_included_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::types::{IndexConfig, IndexField};
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::types::{IndexConfig, IndexField};
 
     #[test]
     fn stable_hash_is_deterministic() {

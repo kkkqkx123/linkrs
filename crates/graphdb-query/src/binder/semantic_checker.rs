@@ -6,10 +6,10 @@
 
 use std::collections::HashSet;
 
-use crate::core::error::{DBError, DBResult, QueryError};
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression;
-use crate::core::types::DataType;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::DataType;
 
 const MAX_EXPR_DEPTH: usize = 100;
 const MAX_FUNCTION_ARGS: usize = 100;
@@ -132,14 +132,14 @@ fn check_division_by_zero(expr: &Expression, depth: usize) -> DBResult<()> {
     }
     match expr {
         Expression::Binary {
-            op: crate::core::BinaryOperator::Divide | crate::core::BinaryOperator::Modulo,
+            op: graphdb_core::BinaryOperator::Divide | graphdb_core::BinaryOperator::Modulo,
             right,
             ..
         } => {
             if matches!(
                 right.as_ref(),
-                Expression::Literal(crate::core::Value::Int(0))
-                    | Expression::Literal(crate::core::Value::Float(0.0))
+                Expression::Literal(graphdb_core::Value::Int(0))
+                    | Expression::Literal(graphdb_core::Value::Float(0.0))
             ) {
                 return Err(DBError::from(QueryError::invalid_query(
                     "The divisor cannot be 0".to_string(),

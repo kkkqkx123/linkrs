@@ -3,7 +3,7 @@
 //! Provides centralized statistics collection and reporting for all cache types.
 //! Uses the `metrics` crate for production metrics export.
 
-pub use crate::core::stats::utils::CacheStats;
+pub use graphdb_core::stats::utils::CacheStats;
 
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};

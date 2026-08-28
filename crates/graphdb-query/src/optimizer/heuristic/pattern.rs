@@ -288,10 +288,10 @@ impl NodeVisitor for NodeVisitorFinder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
-    use crate::core::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
+    use graphdb_core::Value;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -307,7 +307,7 @@ mod tests {
         );
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta =
-            crate::core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
+            graphdb_core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
         let filter_node = PlanNodeEnum::Filter(
@@ -352,7 +352,7 @@ mod tests {
         );
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta =
-            crate::core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
+            graphdb_core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx.clone());
         let filter = PlanNodeEnum::Filter(
@@ -364,7 +364,7 @@ mod tests {
 
         // “The ‘Filter’ -> ‘Scan’ functions should not match each other.”
         let expr_meta2 =
-            crate::core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
+            graphdb_core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id2 = ctx.register_expression(expr_meta2);
         let ctx_expr2 = ContextualExpression::new(id2, ctx);
         let filter2 = PlanNodeEnum::Filter(

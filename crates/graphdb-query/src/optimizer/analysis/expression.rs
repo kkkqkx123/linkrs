@@ -5,12 +5,12 @@
 //! Complexity score
 //! Attribute/variable/function extraction
 
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::expr::visitor_collectors::{
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::{
     FunctionCollector, PropertyCollector, VariableCollector,
 };
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Expression analysis results
 #[derive(Debug, Clone, Default)]
@@ -270,7 +270,7 @@ impl<'a> AnalysisVisitor<'a> {
 }
 
 impl ExpressionVisitor for AnalysisVisitor<'_> {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {
+    fn visit_literal(&mut self, _value: &graphdb_core::Value) {
         if self.options.check_complexity {
             self.analysis.complexity_score += 1;
         }
@@ -294,13 +294,13 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
 
     fn visit_binary(
         &mut self,
-        op: crate::core::types::BinaryOperator,
+        op: graphdb_core::types::BinaryOperator,
         left: &Expression,
         right: &Expression,
     ) {
         if self.options.check_complexity {
             self.analysis.complexity_score += 2;
-            if op == crate::core::types::BinaryOperator::Like {
+            if op == graphdb_core::types::BinaryOperator::Like {
                 self.analysis.complexity_score += 5;
             }
         }
@@ -309,7 +309,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
         self.visit(right);
     }
 
-    fn visit_unary(&mut self, _op: crate::core::types::UnaryOperator, operand: &Expression) {
+    fn visit_unary(&mut self, _op: graphdb_core::types::UnaryOperator, operand: &Expression) {
         if self.options.check_complexity {
             self.analysis.complexity_score += 1;
         }
@@ -332,7 +332,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
 
     fn visit_aggregate(
         &mut self,
-        _func: &crate::core::types::operators::AggregateFunction,
+        _func: &graphdb_core::types::operators::AggregateFunction,
         args: &[Expression],
         _distinct: bool,
     ) {
@@ -371,7 +371,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &graphdb_core::types::DataType,
     ) {
         if self.options.check_complexity {
             self.analysis.complexity_score += 3;
@@ -543,8 +543,8 @@ impl Default for ExpressionAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Value;
     use std::sync::Arc;
 
     #[test]
@@ -558,9 +558,9 @@ mod tests {
         let analyzer = ExpressionAnalyzer::new();
         let expr = Expression::Literal(Value::Int(42));
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(analysis.is_deterministic);
         assert_eq!(analysis.node_count, 1);
@@ -571,9 +571,9 @@ mod tests {
         let analyzer = ExpressionAnalyzer::new();
         let expr = Expression::Variable("x".to_string());
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(analysis.referenced_variables.contains(&"x".to_string()));
     }
@@ -586,9 +586,9 @@ mod tests {
             args: vec![],
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(!analysis.is_deterministic);
     }
@@ -601,9 +601,9 @@ mod tests {
             args: vec![Expression::Literal(Value::Int(-5))],
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(analysis.is_deterministic);
     }
@@ -616,9 +616,9 @@ mod tests {
             property: "name".to_string(),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let expr_id = expr_ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(expr_id, expr_ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(analysis.referenced_properties.contains(&"name".to_string()));
     }
@@ -629,10 +629,10 @@ mod tests {
         // Simple expressions
         let simple = Expression::Literal(Value::Int(1));
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let simple_meta = crate::core::types::expr::ExpressionMeta::new(simple);
+        let simple_meta = graphdb_core::types::expr::ExpressionMeta::new(simple);
         let simple_id = expr_ctx.register_expression(simple_meta);
         let simple_ctx_expr =
-            crate::core::types::ContextualExpression::new(simple_id, expr_ctx.clone());
+            graphdb_core::types::ContextualExpression::new(simple_id, expr_ctx.clone());
         let simple_analysis = analyzer.analyze(&simple_ctx_expr);
         assert!(simple_analysis.complexity_score < 10);
 
@@ -648,12 +648,12 @@ mod tests {
                     object: Box::new(Expression::Variable("b".to_string())),
                     property: "y".to_string(),
                 },
-                Expression::Literal(Value::Null(crate::core::value::NullType::Null)),
+                Expression::Literal(Value::Null(graphdb_core::value::NullType::Null)),
             ],
         };
-        let complex_meta = crate::core::types::expr::ExpressionMeta::new(complex);
+        let complex_meta = graphdb_core::types::expr::ExpressionMeta::new(complex);
         let complex_id = expr_ctx.register_expression(complex_meta);
-        let complex_ctx_expr = crate::core::types::ContextualExpression::new(complex_id, expr_ctx);
+        let complex_ctx_expr = graphdb_core::types::ContextualExpression::new(complex_id, expr_ctx);
         let complex_analysis = analyzer.analyze(&complex_ctx_expr);
         assert!(complex_analysis.complexity_score > simple_analysis.complexity_score);
     }

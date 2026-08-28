@@ -7,7 +7,7 @@ use crate::parser::TokenKind;
 use super::DdlParser;
 
 type AlterOpsResult = (
-    Vec<crate::core::types::PropertyDef>,
+    Vec<graphdb_core::types::PropertyDef>,
     Vec<String>,
     Vec<PropertyChange>,
 );

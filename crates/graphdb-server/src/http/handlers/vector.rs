@@ -8,7 +8,7 @@ use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use crate::sync::vector_sync::SearchOptions;
+use graphdb_sync::vector_sync::SearchOptions;
 use vector_search::{DistanceMetric, VectorFilter};
 
 /// Vector index creation request
@@ -410,7 +410,7 @@ pub async fn get_vector<
         let point = vector_api
             .get_vector(space_id, &tag_name, &field_name, &point_id)
             .await
-            .map_err(|e: graphdb_api::core::error::CoreError| {
+            .map_err(|e: graphdb_api::api_core::error::CoreError| {
                 HttpError::InternalError(e.to_string())
             })?;
 
@@ -456,7 +456,7 @@ pub async fn count<
         let count = vector_api
             .count(space_id, &tag_name, &field_name)
             .await
-            .map_err(|e: graphdb_api::core::error::CoreError| {
+            .map_err(|e: graphdb_api::api_core::error::CoreError| {
                 HttpError::InternalError(e.to_string())
             })?;
 
@@ -656,7 +656,7 @@ pub async fn scroll<
 
     if let Some(vector_api) = vector_api {
         let (points, next_offset) = vector_api
-            .scroll(graphdb_api::core::vector_api::ScrollQuery {
+            .scroll(graphdb_api::api_core::vector_api::ScrollQuery {
                 space_id: request.space_id,
                 tag_name: &request.tag_name,
                 field_name: &request.field_name,

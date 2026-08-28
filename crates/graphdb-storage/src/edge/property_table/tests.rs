@@ -168,7 +168,7 @@ fn test_delete() {
 
 #[test]
 fn test_parameterized_schema_survives_dump_load() {
-    use crate::core::{ArrayTypeInfo, StructTypeInfo};
+    use graphdb_core::{ArrayTypeInfo, StructTypeInfo};
     use std::sync::Arc;
 
     let mut table = PropertyTable::new();
@@ -508,7 +508,7 @@ fn test_concurrent_update_conflict() {
         .unwrap_err();
     assert_eq!(
         err.kind(),
-        crate::core::error::storage::StorageErrorKind::Conflict
+        graphdb_core::error::storage::StorageErrorKind::Conflict
     );
 
     // The newer version is unchanged.
@@ -539,7 +539,7 @@ fn test_concurrent_update_conflict() {
         .unwrap_err();
     assert_eq!(
         err2.kind(),
-        crate::core::error::storage::StorageErrorKind::Conflict
+        graphdb_core::error::storage::StorageErrorKind::Conflict
     );
 }
 
@@ -1047,7 +1047,7 @@ fn test_update_rejects_conflicting_write() {
         .unwrap_err();
     assert_eq!(
         err.kind(),
-        crate::core::error::storage::StorageErrorKind::Conflict
+        graphdb_core::error::storage::StorageErrorKind::Conflict
     );
 
     // Writing to a row tombstoned at ts=400, at a later ts, is a conflict.
@@ -1057,7 +1057,7 @@ fn test_update_rejects_conflicting_write() {
         .unwrap_err();
     assert_eq!(
         err2.kind(),
-        crate::core::error::storage::StorageErrorKind::Conflict
+        graphdb_core::error::storage::StorageErrorKind::Conflict
     );
 
     // The rejected writes left the row untouched.

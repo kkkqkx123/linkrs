@@ -22,7 +22,7 @@ use super::invalidation::{
 };
 use super::plan_cache::QueryPlanCache;
 use super::stats::GlobalCacheStatsSnapshot;
-use crate::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 
 /// Unified Cache Manager
 ///

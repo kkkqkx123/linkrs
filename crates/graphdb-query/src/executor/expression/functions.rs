@@ -45,14 +45,14 @@ pub use builtin::regex::RegexFunction;
 pub use builtin::string::StringFunction;
 pub use builtin::utility::UtilityFunction;
 
-use crate::core::types::operators::AggregateFunction;
-use crate::core::Value;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 
 use std::ffi::c_void;
 
-use crate::core::utils::value_conversion::core_value_to_graphdb;
+use graphdb_core::value_conversion::core_value_to_graphdb;
 
 /// Function reference enumeration, used to reference functions in expressions
 #[derive(Debug, Clone)]
@@ -485,7 +485,7 @@ pub struct CFunctionContext {
     /// Number of parameters
     pub argc: usize,
     /// Parameter array (converted to C API format)
-    pub argv: Vec<crate::core::types::c_api::graphdb_value_t>,
+    pub argv: Vec<graphdb_core::types::c_api::graphdb_value_t>,
 }
 
 impl Default for CFunctionContext {
@@ -543,11 +543,11 @@ impl CFunctionContext {
 
 /// Scalar function callback type
 pub type ScalarFunctionCallback =
-    extern "C" fn(*mut CFunctionContext, i32, *mut crate::core::types::c_api::graphdb_value_t);
+    extern "C" fn(*mut CFunctionContext, i32, *mut graphdb_core::types::c_api::graphdb_value_t);
 
 /// Aggregation step callback type
 pub type AggregateStepCallback =
-    extern "C" fn(*mut CFunctionContext, i32, *mut crate::core::types::c_api::graphdb_value_t);
+    extern "C" fn(*mut CFunctionContext, i32, *mut graphdb_core::types::c_api::graphdb_value_t);
 
 /// Aggregate final callback type
 pub type AggregateFinalCallback = extern "C" fn(*mut CFunctionContext);

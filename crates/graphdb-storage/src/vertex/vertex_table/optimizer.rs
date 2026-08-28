@@ -8,7 +8,7 @@
 
 use super::compaction::CompactionCoordinator;
 use super::core::VertexTable;
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 use crate::vertex::IdKey;
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ impl VertexTable {
     /// cold snapshots) so vertex references stay stable.
     pub fn compact_with_ts_collect_mapping(
         &mut self,
-        ts: crate::core::types::Timestamp,
+        ts: graphdb_core::types::Timestamp,
     ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>)> {
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(ts).collect();
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Edge, Value};
+use graphdb_core::{Edge, Value};
 use crate::types::ChangeType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

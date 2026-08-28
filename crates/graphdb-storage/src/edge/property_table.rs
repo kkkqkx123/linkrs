@@ -48,8 +48,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
-use crate::core::types::Timestamp;
-use crate::core::{
+use graphdb_core::types::Timestamp;
+use graphdb_core::{
     data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
     TypeInfo, Value,
 };
@@ -930,7 +930,7 @@ mod tests;
 #[cfg(test)]
 mod olap_phase1_tests {
     use super::*;
-    use crate::core::{DataType, Value};
+    use graphdb_core::{DataType, Value};
 
     #[test]
     fn test_columnar_insert_and_projected_read() {

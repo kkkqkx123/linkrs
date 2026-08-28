@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;

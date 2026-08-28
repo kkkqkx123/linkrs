@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use crate::core::types::Position;
+use graphdb_core::types::Position;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {

@@ -1,4 +1,4 @@
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::executor::expression::evaluation_context::default_context::DefaultExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;

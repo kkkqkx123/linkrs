@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use crate::core::value::Value;
+use graphdb_core::value::Value;
 
 use super::histogram::Histogram;
 
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn observe_value_ignores_null_and_keeps_first_family() {
         let mut stat = PropertyStatistics::new("v".to_string(), None);
-        stat.observe_value(&Value::Null(crate::core::value::NullType::Null));
+        stat.observe_value(&Value::Null(graphdb_core::value::NullType::Null));
         assert_eq!(stat.min_value, None);
         stat.observe_value(&Value::Double(1.5));
         // A different family does not replace an existing envelope.

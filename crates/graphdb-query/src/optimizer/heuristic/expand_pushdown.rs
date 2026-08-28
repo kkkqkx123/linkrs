@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::types::expr::Expression;
+use graphdb_core::types::expr::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -307,8 +307,8 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
 }
 
 fn join_references_var(
-    hash_keys: &[crate::core::types::ContextualExpression],
-    probe_keys: &[crate::core::types::ContextualExpression],
+    hash_keys: &[graphdb_core::types::ContextualExpression],
+    probe_keys: &[graphdb_core::types::ContextualExpression],
     var: &str,
 ) -> bool {
     hash_keys.iter().chain(probe_keys.iter()).any(|key| {
@@ -325,7 +325,7 @@ fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
         && agg
             .aggregation_functions()
             .iter()
-            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count))
+            .all(|f| matches!(f, graphdb_core::types::operators::AggregateFunction::Count))
 }
 
 /// Apply the flag decisions to the matching `ExpandAll` nodes in place.
@@ -450,11 +450,11 @@ fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
-    use crate::core::types::operators::AggregateFunction;
-    use crate::core::Expression;
-    use crate::core::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
+    use graphdb_core::types::operators::AggregateFunction;
+    use graphdb_core::Expression;
+    use graphdb_core::Value;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -484,7 +484,7 @@ mod tests {
 
     fn project_pass_dst(input: PlanNodeEnum, dst: &str) -> PlanNodeEnum {
         let expr = Expression::Variable(dst.to_string());
-        let col = crate::core::YieldColumn {
+        let col = graphdb_core::YieldColumn {
             expression: ctx_expr(expr),
             alias: dst.to_string(),
             is_matched: false,
@@ -500,7 +500,7 @@ mod tests {
 
     fn project_pass_var(input: PlanNodeEnum, var: &str) -> PlanNodeEnum {
         let expr = Expression::Variable(var.to_string());
-        let col = crate::core::YieldColumn {
+        let col = graphdb_core::YieldColumn {
             expression: ctx_expr(expr),
             alias: var.to_string(),
             is_matched: false,
@@ -584,7 +584,7 @@ mod tests {
                 object: Box::new(Expression::Variable("b".to_string())),
                 property: "value".to_string(),
             }),
-            op: crate::core::types::operators::BinaryOperator::LessThan,
+            op: graphdb_core::types::operators::BinaryOperator::LessThan,
             right: Box::new(Expression::Literal(Value::Int(5))),
         }));
         hop2.add_input(hop("Link", ["a", "e1", "b"], anchor_scan("a")));

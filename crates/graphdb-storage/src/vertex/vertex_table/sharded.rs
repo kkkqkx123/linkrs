@@ -3,8 +3,8 @@ use std::path::Path;
 use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
-use crate::core::types::Timestamp;
-use crate::core::{StorageResult, Value};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageResult, Value};
 use crate::compression::CompressionType;
 use crate::mvcc::SnapshotHandle;
 use crate::schema::ChangeDetails;
@@ -61,13 +61,13 @@ fn decode_id(global_id: u32, num_shards: usize) -> (usize, u32) {
 pub struct ShardedVertexTable {
     shards: Vec<RwLock<VertexTable>>,
     num_shards: usize,
-    label: crate::core::types::LabelId,
+    label: graphdb_core::types::LabelId,
     label_name: String,
 }
 
 impl ShardedVertexTable {
     pub fn new(
-        label: crate::core::types::LabelId,
+        label: graphdb_core::types::LabelId,
         label_name: String,
         schema: crate::vertex::VertexSchema,
     ) -> Self {
@@ -75,7 +75,7 @@ impl ShardedVertexTable {
     }
 
     pub fn with_config(
-        label: crate::core::types::LabelId,
+        label: graphdb_core::types::LabelId,
         label_name: String,
         schema: crate::vertex::VertexSchema,
         num_shards: usize,
@@ -109,8 +109,8 @@ impl ShardedVertexTable {
     }
 
     #[cfg(test)]
-    pub(crate) fn verify_invariants(&self) -> crate::core::StorageResult<()> {
-        use crate::core::error::storage::StorageErrorKind;
+    pub(crate) fn verify_invariants(&self) -> graphdb_core::StorageResult<()> {
+        use graphdb_core::error::storage::StorageErrorKind;
 
         for shard in &self.shards {
             let table = shard.read();
@@ -119,7 +119,7 @@ impl ShardedVertexTable {
             for (key, idx) in table.id_indexer.iter() {
                 let start_ts = table.timestamps.get_start_ts(idx);
                 if start_ts.is_none() {
-                    return Err(crate::core::StorageError::new(
+                    return Err(graphdb_core::StorageError::new(
                         StorageErrorKind::StorageError,
                         format!("ID {} for key {:?} missing in timestamps", idx, key),
                     ));
@@ -130,7 +130,7 @@ impl ShardedVertexTable {
                 if let Some(_start_ts) = table.timestamps.get_start_ts(idx as u32) {
                     let key = table.id_indexer.get_key(idx as u32);
                     if key.is_none() {
-                        return Err(crate::core::StorageError::new(
+                        return Err(graphdb_core::StorageError::new(
                             StorageErrorKind::StorageError,
                             format!("Timestamp entry {} missing in id_indexer", idx),
                         ));
@@ -139,7 +139,7 @@ impl ShardedVertexTable {
             }
 
             if table.columns.row_count() != id_count {
-                return Err(crate::core::StorageError::new(
+                return Err(graphdb_core::StorageError::new(
                     StorageErrorKind::StorageError,
                     format!(
                         "Column count ({}) mismatch with id_indexer.len() ({})",
@@ -227,8 +227,8 @@ impl ShardedVertexTable {
     ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
         use crate::stats_reader::ColumnStatsSnapshot;
 
-        let mut min: Option<crate::core::Value> = None;
-        let mut max: Option<crate::core::Value> = None;
+        let mut min: Option<graphdb_core::Value> = None;
+        let mut max: Option<graphdb_core::Value> = None;
         let mut null_count: Option<u64> = None;
         let mut distinct_count: Option<u64> = None;
         let mut any_info = false;
@@ -520,7 +520,7 @@ impl ShardedVertexTable {
         }
     }
 
-    pub fn label(&self) -> crate::core::types::LabelId {
+    pub fn label(&self) -> graphdb_core::types::LabelId {
         self.label
     }
 
@@ -647,13 +647,13 @@ impl ShardedVertexTable {
         &self,
         global_ids: &[u32],
         ts: Timestamp,
-    ) -> Vec<Option<crate::core::types::VertexId>> {
+    ) -> Vec<Option<graphdb_core::types::VertexId>> {
         let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
         for (out_idx, &global_id) in global_ids.iter().enumerate() {
             let (shard_idx, local_id) = self.decode_id(global_id);
             groups[shard_idx].push((out_idx, local_id));
         }
-        let mut out: Vec<Option<crate::core::types::VertexId>> =
+        let mut out: Vec<Option<graphdb_core::types::VertexId>> =
             global_ids.iter().map(|_| None).collect();
         for (shard_idx, group) in groups.into_iter().enumerate() {
             if group.is_empty() {
@@ -689,7 +689,7 @@ impl ShardedVertexTable {
         } else {
             names.to_vec()
         };
-        let types: Vec<Option<crate::core::types::DataType>> = {
+        let types: Vec<Option<graphdb_core::types::DataType>> = {
             let table = self.shards[0].read();
             resolved_names
                 .iter()
@@ -871,9 +871,9 @@ fn fxhash_i64(n: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::MAX_TIMESTAMP;
+    use graphdb_core::types::MAX_TIMESTAMP;
     const TEST_TS: Timestamp = MAX_TIMESTAMP - 1;
-    use crate::core::{DataType, Value};
+    use graphdb_core::{DataType, Value};
     use crate::types::StoragePropertyDef;
     use std::sync::Arc;
 

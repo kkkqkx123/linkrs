@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::optimizer::analysis::{
     ExpressionAnalysis, ExpressionAnalyzer, FingerprintCalculator, PlanFingerprint,
     ReferenceCountAnalysis, SubplanId, SubplanReferenceInfo,

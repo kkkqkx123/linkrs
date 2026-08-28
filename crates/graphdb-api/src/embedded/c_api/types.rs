@@ -6,7 +6,7 @@
 use std::ffi::{c_char, c_int, c_void};
 
 // Re-export value-related types from core (defined in core/types/c_api.rs)
-pub use crate::core::types::c_api::{
+pub use graphdb_core::types::c_api::{
     graphdb_blob_t, graphdb_string_t, graphdb_value_data_t, graphdb_value_t, graphdb_value_type_t,
 };
 

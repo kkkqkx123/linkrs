@@ -1,15 +1,15 @@
-use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
+use graphdb_core::{StorageError, StorageResult};
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
-use crate::transaction::wal::{
+use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo,
     DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, WalOpType,
 };
-use crate::transaction::MutationResult;
+use graphdb_transaction::MutationResult;
 
 use super::context::GraphStorageContext;
 use super::ops::{
@@ -49,7 +49,7 @@ fn append_schema_redo<T: serde::Serialize>(
     ctx: &GraphStorageContext,
     op_type: WalOpType,
     redo: &T,
-) -> StorageResult<crate::transaction::wal::TransactionWalEntry> {
+) -> StorageResult<graphdb_transaction::wal::TransactionWalEntry> {
     let timestamp = ctx.get_write_timestamp()?;
 
     let result = ctx.append_wal_redo(op_type, timestamp, redo);
@@ -359,7 +359,7 @@ pub(crate) fn drop_tag(
             .and_then(|tag| vertex_tables.get(&tag.tag_id))
             .map(|table| {
                 table
-                    .id_hole_stats(crate::transaction::wal::Timestamp::MAX)
+                    .id_hole_stats(graphdb_transaction::wal::Timestamp::MAX)
                     .0
                     > 0
             })

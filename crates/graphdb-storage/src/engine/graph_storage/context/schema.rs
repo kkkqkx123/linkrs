@@ -1,5 +1,5 @@
-use crate::core::types::LabelId;
-use crate::core::StorageResult;
+use graphdb_core::types::LabelId;
+use graphdb_core::StorageResult;
 use crate::edge::EdgeStrategy;
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;

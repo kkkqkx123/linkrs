@@ -10,10 +10,10 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::Index;
-use crate::core::value::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::Index;
+use graphdb_core::value::Value;
 use crate::optimizer::cost_based::traversal::rewrite_children;
 use crate::optimizer::cost_based::traversal_logical::rewrite_children_logical;
 use crate::optimizer::cost_based::{
@@ -433,7 +433,7 @@ fn try_decide_index_scan_logical(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::optimizer::cost::CostCalculator;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use std::sync::Arc;
@@ -458,8 +458,8 @@ mod tests {
             schema_name: tag.to_string(),
             fields: Vec::new(),
             properties: vec![property.to_string()],
-            index_type: crate::core::types::IndexType::TagIndex,
-            status: crate::core::types::IndexStatus::Active,
+            index_type: graphdb_core::types::IndexType::TagIndex,
+            status: graphdb_core::types::IndexStatus::Active,
             is_unique: false,
             comment: None,
             covering: false,
@@ -469,7 +469,7 @@ mod tests {
     }
 
     fn build_scan_filter(tag: &str, property: &str, value: Value) -> PlanNodeEnum {
-        use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
+        use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
 
         let mut scan = ScanVerticesNode::new(1, "test");
         scan.set_tag(tag);
@@ -608,7 +608,7 @@ mod tests {
     use crate::planning::plan::logical::LogicalNodeEnum;
 
     fn build_logical_scan_filter(tag: &str, property: &str, value: Value) -> LogicalNodeEnum {
-        use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
+        use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
 
         let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
             id: 1,

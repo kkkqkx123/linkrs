@@ -14,12 +14,12 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::DataType;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::DataType;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::evaluator::functions::FunctionEvaluator;
@@ -599,7 +599,7 @@ impl CompiledExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+    use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
     use crate::executor::streaming::slot::SlotLayout;
 
     fn layout(names: &[&str]) -> Arc<SlotLayout> {
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn subquery_stays_fallback() {
         let expr = Expression::Exists {
-            body: Box::new(crate::core::types::expr::SubqueryBody {
+            body: Box::new(graphdb_core::types::expr::SubqueryBody {
                 id: 0,
                 patterns: vec![],
                 where_clause: None,

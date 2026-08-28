@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::parser::ast::stmt::{Ast, Stmt};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;

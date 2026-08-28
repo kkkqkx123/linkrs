@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::core::types::semantic::{AliasType, ValueType};
+use graphdb_core::types::semantic::{AliasType, ValueType};
 
 #[derive(Debug, Clone)]
 pub struct BinderVariable {

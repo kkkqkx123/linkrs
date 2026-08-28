@@ -3,8 +3,8 @@
 //! This module provides functions for parameterizing query requests and extracting templates, which are used for planning the caching process.
 //! Replace the specific parameter values with placeholders, so that queries with semantically equivalent content can share the cache.
 
-use crate::core::types::expr::{ContextualExpression, Expression};
-use crate::core::{NullType, Value};
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::{NullType, Value};
 use crate::parser::ast::stmt::OrderDirection;
 use crate::parser::ast::stmt::{
     DeleteStmt, FetchStmt, FromClause, GoStmt, InsertStmt, LookupStmt, MatchStmt, Pattern,
@@ -1148,7 +1148,7 @@ impl Default for TemplateExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     #[test]
     fn test_parameterize_literal() {
@@ -1163,7 +1163,7 @@ mod tests {
 
     #[test]
     fn test_parameterize_binary_expr() {
-        use crate::core::types::operators::BinaryOperator;
+        use graphdb_core::types::operators::BinaryOperator;
 
         let mut transformer = ParameterizingTransformer::new();
         let expr = Expression::Binary {
@@ -1181,7 +1181,7 @@ mod tests {
     fn test_expr_to_template_string() {
         let expr = Expression::Binary {
             left: Box::new(Expression::Variable("$1".to_string())),
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             right: Box::new(Expression::Variable("name".to_string())),
         };
 

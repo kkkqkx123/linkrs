@@ -9,9 +9,9 @@
 //! 4. Pagination: The number of results can be limited using the SKIP/LIMIT parameters.
 //! 5. Scope reset: Only the variables that are output are retained; all other variables become invisible.
 
-use crate::core::types::expr::expression_utils::extract_group_info;
-use crate::core::types::semantic::AliasType;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::expression_utils::extract_group_info;
+use graphdb_core::types::semantic::AliasType;
+use graphdb_core::YieldColumn;
 use crate::binder::validation::{
     CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
 };
@@ -107,7 +107,7 @@ impl WithClausePlanner {
     fn create_filter_node(
         &self,
         input_plan: &SubPlan,
-        condition: &crate::core::types::expr::contextual::ContextualExpression,
+        condition: &graphdb_core::types::expr::contextual::ContextualExpression,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let input_node = input_plan.root().as_ref().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
@@ -241,7 +241,7 @@ impl WithClausePlanner {
     /// - Collecting information about aliases
     /// - Handling aggregate expressions and grouping keys
     fn extract_with_context(stmt: &Stmt) -> Result<WithClauseContext, PlannerError> {
-        use crate::core::YieldColumn;
+        use graphdb_core::YieldColumn;
         use crate::binder::validation::{
             OrderByClauseContext, PaginationContext, YieldClauseContext,
         };
@@ -305,11 +305,11 @@ impl WithClausePlanner {
                     .enumerate()
                     .map(|(idx, item)| {
                         let direction = match item.direction {
-                            crate::core::types::OrderDirection::Asc => {
-                                crate::core::types::graph_schema::OrderDirection::Asc
+                            graphdb_core::types::OrderDirection::Asc => {
+                                graphdb_core::types::graph_schema::OrderDirection::Asc
                             }
-                            crate::core::types::OrderDirection::Desc => {
-                                crate::core::types::graph_schema::OrderDirection::Desc
+                            graphdb_core::types::OrderDirection::Desc => {
+                                graphdb_core::types::graph_schema::OrderDirection::Desc
                             }
                         };
                         (idx, direction)
@@ -366,14 +366,14 @@ impl WithClausePlanner {
     /// Determine the alias type based on the expression.
     /// Refer to the implementation of DeduceAliasTypeVisitor in NebulaGraph.
     fn deduce_alias_type(
-        expression: &crate::core::types::expr::contextual::ContextualExpression,
+        expression: &graphdb_core::types::expr::contextual::ContextualExpression,
     ) -> AliasType {
         Self::deduce_alias_type_from_contextual(expression)
     }
 
     /// Infer the alias type from the ContextualExpression (auxiliary method)
     fn deduce_alias_type_from_contextual(
-        expression: &crate::core::types::expr::contextual::ContextualExpression,
+        expression: &graphdb_core::types::expr::contextual::ContextualExpression,
     ) -> AliasType {
         // For most expressions, it is not possible to determine their type; therefore, the default value returned is “Runtime”.
         if expression.is_literal()
@@ -437,9 +437,9 @@ impl WithClausePlanner {
 
     /// Generate default aliases
     fn generate_default_alias(
-        expression: &crate::core::types::expr::contextual::ContextualExpression,
+        expression: &graphdb_core::types::expr::contextual::ContextualExpression,
     ) -> String {
-        use crate::core::Expression;
+        use graphdb_core::Expression;
 
         if let Some(e) = expression.get_expression() {
             match e {

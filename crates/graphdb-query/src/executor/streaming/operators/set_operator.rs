@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -472,7 +472,7 @@ impl SetOperator {
     pub fn spill_with_manager(
         &mut self,
         sm: &crate::executor::streaming::spill::SpillManager,
-    ) -> Result<(), crate::core::error::QueryError> {
+    ) -> Result<(), graphdb_core::error::QueryError> {
         match &mut self.kind {
             SetOperatorKind::Union {
                 seen_rows,
@@ -480,9 +480,9 @@ impl SetOperator {
                 ..
             } => {
                 if !seen_rows.is_empty() {
-                    let rows: Vec<Vec<crate::core::Value>> = seen_rows
+                    let rows: Vec<Vec<graphdb_core::Value>> = seen_rows
                         .iter()
-                        .map(|s| vec![crate::core::Value::string(s.clone())])
+                        .map(|s| vec![graphdb_core::Value::string(s.clone())])
                         .collect();
                     let mut writer = sm.create_writer()?;
                     writer.write_rows(&rows)?;

@@ -3,9 +3,9 @@
 //! Decorator pattern implementation that wraps any StorageClient to automatically
 //! synchronize storage operations with external index systems (fulltext, vector).
 
-use crate::core::metadata::{IndexMetadataManager, SchemaManager};
-use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
-use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::types::{EdgeTypeInfo, TagInfo, VertexId};
+use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
@@ -24,7 +24,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct SyncWrapper<S: StorageClient + Debug> {
     inner: S,
-    sync_manager: Option<Arc<crate::sync::SyncManager>>,
+    sync_manager: Option<Arc<graphdb_sync::SyncManager>>,
     enabled: bool,
     auto_commit_owner: bool,
 }
@@ -41,7 +41,7 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 
     /// Create a new wrapper with a SyncManager for index synchronization.
-    pub fn with_sync_manager(storage: S, sync_manager: Arc<crate::sync::SyncManager>) -> Self {
+    pub fn with_sync_manager(storage: S, sync_manager: Arc<graphdb_sync::SyncManager>) -> Self {
         let frontier_manager = sync_manager.clone();
         storage.set_outbox_materialized_lsn_provider(Arc::new(move || {
             frontier_manager
@@ -67,7 +67,7 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 
     /// Get reference to the sync manager.
-    pub fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+    pub fn get_sync_manager(&self) -> Option<Arc<graphdb_sync::SyncManager>> {
         self.sync_manager.clone()
     }
 
@@ -124,26 +124,26 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps
 
 impl<S: StorageClient> SyncWrapper<S> {
     /// Get the current transaction ID from storage context.
-    fn get_current_txn_id(&self) -> Option<crate::core::types::TransactionId> {
+    fn get_current_txn_id(&self) -> Option<graphdb_core::types::TransactionId> {
         self.inner
             .operation_context()
             .and_then(|ctx| ctx.transaction_id)
     }
     fn commit_transaction_fact(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-    ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        transaction_id: graphdb_core::types::TransactionId,
+    ) -> Result<graphdb_core::types::CommitLsn, StorageError> {
         self.commit_transaction_fact_with_durability(
             transaction_id,
-            crate::core::types::DurabilityLevel::Sync,
+            graphdb_core::types::DurabilityLevel::Sync,
         )
     }
 
     fn commit_transaction_fact_with_durability(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        durability: crate::core::types::DurabilityLevel,
-    ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        transaction_id: graphdb_core::types::TransactionId,
+        durability: graphdb_core::types::DurabilityLevel,
+    ) -> Result<graphdb_core::types::CommitLsn, StorageError> {
         let intents = match self.sync_manager.as_ref() {
             Some(manager) => manager
                 .pending_transaction_intents(transaction_id)
@@ -177,8 +177,8 @@ impl<S: StorageClient> SyncWrapper<S> {
 
     fn finalize_commit_fact(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        commit_lsn: crate::core::types::CommitLsn,
+        transaction_id: graphdb_core::types::TransactionId,
+        commit_lsn: graphdb_core::types::CommitLsn,
     ) -> Result<(), StorageError> {
         if let Some(manager) = self.sync_manager.as_ref() {
             let intents = manager
@@ -222,7 +222,7 @@ impl<S: StorageClient> SyncWrapper<S> {
 
     fn commit_auto_transaction(
         &self,
-    ) -> Result<Option<crate::core::types::CommitLsn>, StorageError> {
+    ) -> Result<Option<graphdb_core::types::CommitLsn>, StorageError> {
         let Some(context) = self.inner.operation_context() else {
             return Ok(None);
         };
@@ -245,7 +245,7 @@ impl<S: StorageClient> SyncWrapper<S> {
 
     fn abort_transaction_fact(
         &self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
     ) -> Result<(), StorageError> {
         self.inner.abort_staged_writes(transaction_id)?;
         if let Some(manager) = self.sync_manager.as_ref() {
@@ -263,7 +263,7 @@ impl<S: StorageClient> SyncWrapper<S> {
 
     fn stage_index_create(
         &self,
-        index: &crate::core::types::Index,
+        index: &graphdb_core::types::Index,
         index_type: &str,
     ) -> Result<(), StorageError> {
         if !self.enabled {
@@ -285,7 +285,7 @@ impl<S: StorageClient> SyncWrapper<S> {
         sync_manager
             .on_index_create(
                 transaction_id,
-                crate::sync::manager::IndexCreateRequest {
+                graphdb_sync::manager::IndexCreateRequest {
                     space_id: index.space_id,
                     index_name: index.name.clone(),
                     schema_name: index.schema_name.clone(),
@@ -343,21 +343,21 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 }
 
-impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
-    crate::transaction::TransactionCommitSink for SyncWrapper<S>
+impl<S: StorageClient + graphdb_transaction::UndoTarget + 'static>
+    graphdb_transaction::TransactionCommitSink for SyncWrapper<S>
 {
     fn commit_transaction(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-    ) -> Result<crate::core::types::CommitLsn, String> {
+        transaction_id: graphdb_core::types::TransactionId,
+    ) -> Result<graphdb_core::types::CommitLsn, String> {
         self.commit_transaction_fact(transaction_id)
             .map_err(|error| error.to_string())
     }
 
     fn commit_transaction_with_descriptor(
         &self,
-        descriptor: &crate::transaction::TransactionCommitDescriptor,
-    ) -> Result<crate::core::types::CommitLsn, String> {
+        descriptor: &graphdb_transaction::TransactionCommitDescriptor,
+    ) -> Result<graphdb_core::types::CommitLsn, String> {
         self.commit_transaction_fact_with_durability(
             descriptor.transaction_id,
             descriptor.durability,
@@ -367,8 +367,8 @@ impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
 
     fn finalize_commit(
         &self,
-        descriptor: &crate::transaction::TransactionCommitDescriptor,
-        commit_lsn: crate::core::types::CommitLsn,
+        descriptor: &graphdb_transaction::TransactionCommitDescriptor,
+        commit_lsn: graphdb_core::types::CommitLsn,
     ) -> Result<(), String> {
         self.finalize_commit_fact(descriptor.transaction_id, commit_lsn)
             .map_err(|error| error.to_string())
@@ -376,7 +376,7 @@ impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
 
     fn abort_transaction(
         &self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
     ) -> Result<(), String> {
         self.abort_transaction_fact(transaction_id)
             .map_err(|error| error.to_string())
@@ -384,7 +384,7 @@ impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
 
     fn abort_transaction_with_descriptor(
         &self,
-        descriptor: &crate::transaction::TransactionAbortDescriptor,
+        descriptor: &graphdb_transaction::TransactionAbortDescriptor,
     ) -> Result<(), String> {
         descriptor
             .context
@@ -405,81 +405,81 @@ mod write;
 mod write_edge;
 mod write_vertex;
 
-impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::UndoTarget
+impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::UndoTarget
     for SyncWrapper<S>
 {
     fn delete_vertex_type(
         &self,
-        label: crate::core::types::LabelId,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        label: graphdb_core::types::LabelId,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.delete_vertex_type(label)
     }
 
     fn delete_edge_type(
         &self,
-        edge_key: crate::core::types::EdgeKey,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_key: graphdb_core::types::EdgeKey,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.delete_edge_type(edge_key)
     }
 
     fn delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.delete_vertex(vertex, ts)
     }
 
     fn delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.delete_edge(edge_ctx)
     }
 
     fn restore_edge(
         &self,
-        edge: crate::core::types::EdgeIdentifier,
-        properties: Vec<(String, crate::core::Value)>,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge: graphdb_core::types::EdgeIdentifier,
+        properties: Vec<(String, graphdb_core::Value)>,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.restore_edge(edge, properties, ts)
     }
 
     fn undo_update_vertex_property(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .undo_update_vertex_property(vertex, col_id, value, ts)
     }
 
     fn undo_update_edge_property(
         &self,
-        edge_id: crate::core::types::EdgeIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_id: graphdb_core::types::EdgeIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .undo_update_edge_property(edge_id, col_id, value, ts)
     }
 
     fn revert_delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.revert_delete_vertex(vertex, ts)
     }
 
     fn revert_delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.revert_delete_edge(edge_ctx)
     }
 
@@ -487,7 +487,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         &self,
         label_name: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_delete_vertex_properties(label_name, prop_names)
     }
@@ -498,7 +498,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         dst_label: &str,
         edge_label: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
     }
@@ -506,7 +506,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
     fn revert_delete_vertex_label(
         &self,
         label_name: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.revert_delete_vertex_label(label_name)
     }
 
@@ -515,7 +515,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_delete_edge_label(src_label, dst_label, edge_label)
     }
@@ -525,7 +525,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         label_name: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_rename_vertex_properties(label_name, current_names, original_names)
     }
@@ -537,7 +537,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         edge_label: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.revert_rename_edge_properties(
             src_label,
             dst_label,
@@ -614,20 +614,20 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             space: &str,
             node_id: &VertexId,
-            direction: crate::core::EdgeDirection,
+            direction: graphdb_core::EdgeDirection,
         ) -> Result<Vec<Edge>, StorageError>;
         fn neighbor_dst_ids_batch(
             &self,
             space: &str,
             src_ids: &[VertexId],
-            direction: crate::core::EdgeDirection,
+            direction: graphdb_core::EdgeDirection,
             edge_types: &[String],
         ) -> Result<Vec<Vec<VertexId>>, StorageError>;
         fn out_degree_batch(
             &self,
             space: &str,
             src_ids: &[VertexId],
-            direction: crate::core::EdgeDirection,
+            direction: graphdb_core::EdgeDirection,
             edge_types: &[String],
         ) -> Result<Vec<usize>, StorageError>;
         fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
@@ -666,47 +666,47 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         fn get_space(
             &self,
             space: &str,
-        ) -> Result<Option<crate::core::types::SpaceInfo>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::SpaceInfo>, StorageError>;
         fn get_space_by_id(
             &self,
             space_id: u64,
-        ) -> Result<Option<crate::core::types::SpaceInfo>, StorageError>;
-        fn list_spaces(&self) -> Result<Vec<crate::core::types::SpaceInfo>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::SpaceInfo>, StorageError>;
+        fn list_spaces(&self) -> Result<Vec<graphdb_core::types::SpaceInfo>, StorageError>;
         fn get_space_id(&self, space: &str) -> Result<u64, StorageError>;
         fn space_exists(&self, space: &str) -> bool;
         fn get_tag(
             &self,
             space: &str,
             tag: &str,
-        ) -> Result<Option<crate::core::types::TagInfo>, StorageError>;
-        fn list_tags(&self, space: &str) -> Result<Vec<crate::core::types::TagInfo>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::TagInfo>, StorageError>;
+        fn list_tags(&self, space: &str) -> Result<Vec<graphdb_core::types::TagInfo>, StorageError>;
         fn get_edge_type(
             &self,
             space: &str,
             edge: &str,
-        ) -> Result<Option<crate::core::types::EdgeTypeInfo>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::EdgeTypeInfo>, StorageError>;
         fn list_edge_types(
             &self,
             space: &str,
-        ) -> Result<Vec<crate::core::types::EdgeTypeInfo>, StorageError>;
+        ) -> Result<Vec<graphdb_core::types::EdgeTypeInfo>, StorageError>;
         fn get_tag_index(
             &self,
             space: &str,
             index: &str,
-        ) -> Result<Option<crate::core::types::Index>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::Index>, StorageError>;
         fn list_tag_indexes(
             &self,
             space: &str,
-        ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        ) -> Result<Vec<graphdb_core::types::Index>, StorageError>;
         fn get_edge_index(
             &self,
             space: &str,
             index: &str,
-        ) -> Result<Option<crate::core::types::Index>, StorageError>;
+        ) -> Result<Option<graphdb_core::types::Index>, StorageError>;
         fn list_edge_indexes(
             &self,
             space: &str,
-        ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        ) -> Result<Vec<graphdb_core::types::Index>, StorageError>;
         fn get_vertex_version_history(
             &self,
             space: &str,
@@ -764,21 +764,21 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
 
 impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
     forward_auto_commit_methods!(inner;
-        fn create_space(&mut self, space: &mut crate::core::types::SpaceInfo) -> Result<bool, StorageError>;
+        fn create_space(&mut self, space: &mut graphdb_core::types::SpaceInfo) -> Result<bool, StorageError>;
         fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
         fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
         fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
-        fn create_tag(&mut self, space: &str, tag: &crate::core::types::TagInfo) -> Result<u32, StorageError>;
+        fn create_tag(&mut self, space: &str, tag: &graphdb_core::types::TagInfo) -> Result<u32, StorageError>;
         fn alter_tag(
             &mut self,
             space: &str,
             tag: &str,
-            additions: Vec<crate::core::types::PropertyDef>,
+            additions: Vec<graphdb_core::types::PropertyDef>,
             deletions: Vec<String>,
         ) -> Result<bool, StorageError>;
         fn rename_vertex_property(
             &mut self,
-            label: crate::core::types::LabelId,
+            label: graphdb_core::types::LabelId,
             old_name: &str,
             new_name: &str,
         ) -> Result<(), StorageError>;
@@ -793,13 +793,13 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
         fn create_edge_type(
             &mut self,
             space: &str,
-            edge: &crate::core::types::EdgeTypeInfo,
+            edge: &graphdb_core::types::EdgeTypeInfo,
         ) -> Result<u32, StorageError>;
         fn alter_edge_type(
             &mut self,
             space: &str,
             edge_type: &str,
-            additions: Vec<crate::core::types::PropertyDef>,
+            additions: Vec<graphdb_core::types::PropertyDef>,
             deletions: Vec<String>,
         ) -> Result<bool, StorageError>;
         fn drop_edge_type(&mut self, space: &str, edge: &str) -> Result<bool, StorageError>;
@@ -810,7 +810,7 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
     fn create_tag_index(
         &mut self,
         space: &str,
-        info: &crate::core::types::Index,
+        info: &graphdb_core::types::Index,
     ) -> Result<bool, StorageError> {
         self.validate_schema_sync_context()?;
         let result = self.inner.create_tag_index(space, info)?;
@@ -860,7 +860,7 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
     fn create_edge_index(
         &mut self,
         space: &str,
-        info: &crate::core::types::Index,
+        info: &graphdb_core::types::Index,
     ) -> Result<bool, StorageError> {
         self.validate_schema_sync_context()?;
         let result = self.inner.create_edge_index(space, info)?;
@@ -911,15 +911,15 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
 
 impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
     forward_methods!(inner;
-        fn change_password(&mut self, info: &crate::core::types::PasswordInfo) -> Result<bool, StorageError>;
-        fn create_user(&mut self, info: &crate::core::types::UserInfo) -> Result<bool, StorageError>;
-        fn alter_user(&mut self, info: &crate::core::types::UserAlterInfo) -> Result<bool, StorageError>;
+        fn change_password(&mut self, info: &graphdb_core::types::PasswordInfo) -> Result<bool, StorageError>;
+        fn create_user(&mut self, info: &graphdb_core::types::UserInfo) -> Result<bool, StorageError>;
+        fn alter_user(&mut self, info: &graphdb_core::types::UserAlterInfo) -> Result<bool, StorageError>;
         fn drop_user(&mut self, username: &str) -> Result<bool, StorageError>;
         fn grant_role(
             &mut self,
             username: &str,
             space_id: u64,
-            role: crate::core::RoleType,
+            role: graphdb_core::RoleType,
         ) -> Result<bool, StorageError>;
         fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError>;
     );
@@ -950,21 +950,21 @@ impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {
 impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
     forward_methods!(inner;
         fn flush(&self) -> Result<(), StorageError>;
-        fn save_data(&self) -> crate::core::StorageResult<()>;
-        fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
-        fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool>;
-        fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize>;
+        fn save_data(&self) -> graphdb_core::StorageResult<()>;
+        fn save_data_to_dir(&self, dir: &std::path::Path) -> graphdb_core::StorageResult<()>;
+        fn verify_snapshot(&self, snapshot_id: u64) -> graphdb_core::StorageResult<bool>;
+        fn cleanup_snapshots(&self) -> graphdb_core::StorageResult<usize>;
         fn snapshot_stats(&self) -> crate::SnapshotStats;
         fn persistence_diagnostics(&self) -> Option<crate::PersistenceDiagnostics>;
-        fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()>;
-        fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool>;
+        fn compact(&self, config: &graphdb_core::types::CompactConfig) -> graphdb_core::StorageResult<()>;
+        fn auto_flush_if_needed(&self) -> graphdb_core::StorageResult<bool>;
         fn should_flush(&self) -> bool;
         fn should_checkpoint(&self) -> bool;
     );
 
     fn create_checkpoint(
         &self,
-    ) -> crate::core::StorageResult<Option<crate::CheckpointStats>> {
+    ) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
         if self.enabled {
             let manager = self.sync_manager.as_ref().ok_or_else(|| {
                 StorageError::invalid_operation(
@@ -984,7 +984,7 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
 
     fn auto_checkpoint_if_needed(
         &self,
-    ) -> crate::core::StorageResult<Option<crate::CheckpointStats>> {
+    ) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
         if !self.should_checkpoint() {
             return Ok(None);
         }
@@ -1043,7 +1043,7 @@ impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
         self.inner.operation_context()
     }
 
-    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+    fn finalize_operation(&self, committed: bool) -> graphdb_core::StorageResult<()> {
         self.inner.finalize_operation(committed)
     }
 }
@@ -1051,39 +1051,39 @@ impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
 impl<S: StorageClient + 'static> StorageCommitOps for SyncWrapper<S> {
     fn commit_staged_writes(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         self.inner.commit_staged_writes(transaction_id, intents)
     }
 
     fn abort_staged_writes(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-    ) -> crate::core::StorageResult<()> {
+        transaction_id: graphdb_core::types::TransactionId,
+    ) -> graphdb_core::StorageResult<()> {
         self.inner.abort_staged_writes(transaction_id)
     }
 
     fn commit_staged_writes_with_durability(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-        durability: crate::core::types::DurabilityLevel,
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+        durability: graphdb_core::types::DurabilityLevel,
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         self.inner
             .commit_staged_writes_with_durability(transaction_id, intents, durability)
     }
 
     fn recover_outbox_projection(
         &self,
-        sync_manager: &crate::sync::SyncManager,
-    ) -> crate::core::StorageResult<usize> {
+        sync_manager: &graphdb_sync::SyncManager,
+    ) -> graphdb_core::StorageResult<usize> {
         self.inner.recover_outbox_projection(sync_manager)
     }
 }
 
 impl<S: StorageClient + 'static> StorageSyncContextOps for SyncWrapper<S> {
-    fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+    fn get_sync_manager(&self) -> Option<Arc<graphdb_sync::SyncManager>> {
         self.sync_manager.clone()
     }
 }
@@ -1091,12 +1091,12 @@ impl<S: StorageClient + 'static> StorageSyncContextOps for SyncWrapper<S> {
 impl<S: StorageClient + 'static> StorageRecoveryOps for SyncWrapper<S> {
     forward_methods!(inner;
         fn needs_recovery(&self) -> bool;
-        fn recover_from_wal(&self) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
+        fn recover_from_wal(&self) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats>;
         fn recover_from_wal_with_config(
             &self,
-            config: crate::transaction::wal::recovery::RecoveryConfig,
-        ) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
-        fn init_with_recovery(&self) -> crate::core::StorageResult<Option<crate::transaction::wal::recovery::RecoveryStats>>;
+            config: graphdb_transaction::wal::recovery::RecoveryConfig,
+        ) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats>;
+        fn init_with_recovery(&self) -> graphdb_core::StorageResult<Option<graphdb_transaction::wal::recovery::RecoveryStats>>;
     );
 }
 
@@ -1115,20 +1115,20 @@ impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
     crate::client::StorageSnapshotOps for SyncWrapper<S>
 {
     forward_methods!(inner;
-        fn export_snapshot(&self, ts: crate::core::types::Timestamp) -> crate::core::StorageResult<Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
+        fn export_snapshot(&self, ts: graphdb_core::types::Timestamp) -> graphdb_core::StorageResult<Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
         fn get_freeze_stats(&self) -> Option<crate::engine::background_freeze::FreezeStats>;
     );
 
     forward_methods!(inner;
-        fn trigger_background_freeze(&self) -> crate::core::StorageResult<()>;
+        fn trigger_background_freeze(&self) -> graphdb_core::StorageResult<()>;
     );
 
     forward_methods!(inner;
-        fn list_cold_snapshots(&self) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
-        fn load_cold_snapshot(&self, path: &std::path::Path) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo>;
-        fn remove_cold_snapshot(&self, label: crate::core::types::LabelId) -> crate::core::StorageResult<()>;
-        fn export_cold_snapshot(&self, label: crate::core::types::LabelId, path: &std::path::Path) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo>;
-        fn merge_cold_snapshots(&self, labels: &[crate::core::types::LabelId]) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
+        fn list_cold_snapshots(&self) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
+        fn load_cold_snapshot(&self, path: &std::path::Path) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo>;
+        fn remove_cold_snapshot(&self, label: graphdb_core::types::LabelId) -> graphdb_core::StorageResult<()>;
+        fn export_cold_snapshot(&self, label: graphdb_core::types::LabelId, path: &std::path::Path) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo>;
+        fn merge_cold_snapshots(&self, labels: &[graphdb_core::types::LabelId]) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
         fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf>;
     );
 }

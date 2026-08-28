@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::sort::*;
 use super::*;
-use crate::core::value::NullType;
+use graphdb_core::value::NullType;
 use crate::executor::base::MemoryBudget;
 use crate::executor::streaming::spill::{RunReader, SpillConfig, SpillManager};
 
@@ -356,19 +356,19 @@ fn test_columnar_sort_matches_row_sort() {
         // Date values (stored as days in the typed column).
         vec![
             vec![Value::Date(
-                crate::core::value::date_time::DateValue::from_days(20000),
+                graphdb_core::value::date_time::DateValue::from_days(20000),
             )],
             vec![Value::Date(
-                crate::core::value::date_time::DateValue::from_days(100),
+                graphdb_core::value::date_time::DateValue::from_days(100),
             )],
             vec![Value::Date(
-                crate::core::value::date_time::DateValue::from_days(999),
+                graphdb_core::value::date_time::DateValue::from_days(999),
             )],
         ],
         // NULLs (fallback column).
         vec![
             vec![Value::BigInt(3)],
-            vec![Value::Null(crate::core::value::NullType::Null)],
+            vec![Value::Null(graphdb_core::value::NullType::Null)],
             vec![Value::BigInt(1)],
             vec![Value::BigInt(2)],
         ],
@@ -416,7 +416,7 @@ fn test_columnar_sort_matches_row_sort() {
 /// evaluation and must still match the row-based result.
 #[test]
 fn test_columnar_sort_non_bare_expression() {
-    use crate::core::types::operators::BinaryOperator;
+    use graphdb_core::types::operators::BinaryOperator;
     // Sort by `val + 1` — not a bare column reference.
     let expr = Expression::Binary {
         left: Box::new(make_sort_expr("val")),
@@ -451,7 +451,7 @@ fn test_columnar_sort_non_bare_expression() {
 /// Multi-column columnar sort with mixed typed/fallback keys.
 #[test]
 fn test_columnar_sort_multi_column() {
-    use crate::core::types::expr::Expression;
+    use graphdb_core::types::expr::Expression;
     let col_names = vec!["a".to_string(), "b".to_string()];
     let rows: Vec<Vec<Value>> = vec![
         vec![Value::BigInt(1), Value::String("z".into())],
@@ -489,7 +489,7 @@ fn test_columnar_sort_multi_column() {
 /// (mixed Int/BigInt compare by `to_string`).
 #[test]
 fn test_columnar_batch_fallback_compare_semantics() {
-    use crate::core::value::NullType;
+    use graphdb_core::value::NullType;
     let mut batch = ColumnarBatch::new(1);
     batch.append_chunk(&typed_chunk(vec![
         vec![Value::BigInt(100)],

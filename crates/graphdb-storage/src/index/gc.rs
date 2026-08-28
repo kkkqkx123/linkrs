@@ -1,5 +1,5 @@
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use crate::index::traits::IndexGcOps;
 use crate::index::types::GcStats;
 use crate::index::IndexDataManagerImpl;
@@ -38,8 +38,8 @@ impl IndexGcOps for IndexDataManagerImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{Index, IndexConfig, IndexField, IndexType};
-    use crate::core::Value;
+    use graphdb_core::types::{Index, IndexConfig, IndexField, IndexType};
+    use graphdb_core::Value;
     use crate::index::traits::{IndexGcOps, VertexIndexOps};
     use crate::index::IndexDataManagerImpl;
 

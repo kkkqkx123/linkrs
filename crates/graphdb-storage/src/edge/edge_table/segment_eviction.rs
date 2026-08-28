@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::CsrSegment;
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 
 /// Direction of edge traversal for segment selection.
 #[derive(Debug, Clone, Copy)]

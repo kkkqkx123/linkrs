@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::stats::StatsManager;
-use crate::core::types::{LabelId, TableId, Timestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{LabelId, TableId, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::cold::ColdSnapshot;
 use crate::engine::graph_storage::context::VertexIdDomainEvidence;
 use crate::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
@@ -96,7 +96,7 @@ impl GraphStorageContext {
             .version_manager
             .try_next_write_timestamp()
             .map_err(|error| StorageError::db_error(error.to_string()))?;
-        let transaction_id = crate::core::types::TransactionId::new(
+        let transaction_id = graphdb_core::types::TransactionId::new(
             self.persistent
                 .next_auto_transaction_id
                 .fetch_add(1, Ordering::SeqCst),
@@ -476,13 +476,13 @@ impl GraphStorageContext {
         snapshot
     }
 
-    pub fn check_write_admission(&self) -> crate::core::StorageResult<()> {
+    pub fn check_write_admission(&self) -> graphdb_core::StorageResult<()> {
         if self
             .operation_context
             .as_ref()
             .is_some_and(|context| context.read_only)
         {
-            return Err(crate::core::StorageError::invalid_operation(
+            return Err(graphdb_core::StorageError::invalid_operation(
                 "Read-only transaction cannot perform writes",
             ));
         }
@@ -496,14 +496,14 @@ impl GraphStorageContext {
             self.spiller().spill_cold_data(overage);
             let snapshot = self.resource_snapshot();
             if snapshot.hard_limit_exceeded() {
-                return Err(crate::core::StorageError::capacity_exceeded());
+                return Err(graphdb_core::StorageError::capacity_exceeded());
             }
         }
         let resources = &self.persistent.config.resources;
         if snapshot.tombstone_count >= resources.max_tombstones
             || snapshot.tombstone_memory_bytes >= resources.max_tombstone_bytes
         {
-            return Err(crate::core::StorageError::capacity_exceeded());
+            return Err(graphdb_core::StorageError::capacity_exceeded());
         }
         if snapshot.soft_limit_exceeded() {
             log::debug!(
@@ -515,17 +515,17 @@ impl GraphStorageContext {
         Ok(())
     }
 
-    pub fn check_snapshot_admission(&self) -> crate::core::StorageResult<()> {
+    pub fn check_snapshot_admission(&self) -> graphdb_core::StorageResult<()> {
         let tracker = self.persistent.version_manager.snapshot_tracker();
         let active = tracker.active_count();
         if active >= self.persistent.config.resources.max_active_snapshots {
-            return Err(crate::core::StorageError::capacity_exceeded());
+            return Err(graphdb_core::StorageError::capacity_exceeded());
         }
         if tracker
             .oldest_age()
             .is_some_and(|age| age >= self.persistent.config.resources.max_snapshot_age)
         {
-            return Err(crate::core::StorageError::invalid_operation(
+            return Err(graphdb_core::StorageError::invalid_operation(
                 "Oldest active snapshot exceeded max_snapshot_age",
             ));
         }
@@ -549,7 +549,7 @@ impl GraphStorageContext {
         &self.persistent.index_data_manager
     }
 
-    pub(crate) fn schema_manager(&self) -> &Arc<crate::core::metadata::SchemaManager> {
+    pub(crate) fn schema_manager(&self) -> &Arc<graphdb_core::metadata::SchemaManager> {
         &self.persistent.schema_manager
     }
 
@@ -559,15 +559,15 @@ impl GraphStorageContext {
         &self.persistent.serial_allocator
     }
 
-    pub(crate) fn index_metadata_manager(&self) -> &Arc<crate::core::metadata::IndexManager> {
+    pub(crate) fn index_metadata_manager(&self) -> &Arc<graphdb_core::metadata::IndexManager> {
         &self.persistent.index_metadata_manager
     }
 
-    pub(crate) fn version_manager(&self) -> &Arc<crate::transaction::VersionManager> {
+    pub(crate) fn version_manager(&self) -> &Arc<graphdb_transaction::VersionManager> {
         &self.persistent.version_manager
     }
 
-    pub(crate) fn user_storage(&self) -> &Arc<crate::core::UserStorage> {
+    pub(crate) fn user_storage(&self) -> &Arc<graphdb_core::UserStorage> {
         &self.persistent.user_storage
     }
 
@@ -621,7 +621,7 @@ impl GraphStorageContext {
         &self,
         category: crate::engine::resource_budget::MemoryCategory,
         bytes: u64,
-    ) -> crate::core::StorageResult<crate::engine::resource_budget::MemoryReservation>
+    ) -> graphdb_core::StorageResult<crate::engine::resource_budget::MemoryReservation>
     {
         self.persistent
             .spiller
@@ -634,12 +634,12 @@ impl GraphStorageContext {
 
     pub(crate) fn append_wal_redo<T: serde::Serialize>(
         &self,
-        op_type: crate::core::wal::types::WalOpType,
+        op_type: graphdb_core::wal::types::WalOpType,
         timestamp: Timestamp,
         redo: &T,
-    ) -> crate::core::StorageResult<crate::transaction::wal::TransactionWalEntry> {
+    ) -> graphdb_core::StorageResult<graphdb_transaction::wal::TransactionWalEntry> {
         let payload = postcard::to_allocvec(redo).map_err(|error| {
-            crate::core::StorageError::serialize_error(format!(
+            graphdb_core::StorageError::serialize_error(format!(
                 "Failed to serialize WAL redo: {}",
                 error
             ))
@@ -649,7 +649,7 @@ impl GraphStorageContext {
             .as_ref()
             .and_then(|operation| operation.transaction_id)
         {
-            let entry = crate::transaction::wal::TransactionWalEntry {
+            let entry = graphdb_transaction::wal::TransactionWalEntry {
                 op_type,
                 timestamp,
                 payload,
@@ -668,7 +668,7 @@ impl GraphStorageContext {
             };
             if let Some(wal) = wal_manager {
                 wal.read().append_redo(op_type, timestamp, redo)?;
-                return Ok(crate::transaction::wal::TransactionWalEntry {
+                return Ok(graphdb_transaction::wal::TransactionWalEntry {
                     op_type,
                     timestamp,
                     payload,
@@ -676,7 +676,7 @@ impl GraphStorageContext {
             }
         }
 
-        Ok(crate::transaction::wal::TransactionWalEntry {
+        Ok(graphdb_transaction::wal::TransactionWalEntry {
             op_type,
             timestamp,
             payload,
@@ -685,22 +685,22 @@ impl GraphStorageContext {
 
     pub(crate) fn commit_staged_writes(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         self.commit_staged_writes_with_durability(
             transaction_id,
             intents,
-            crate::core::types::DurabilityLevel::Sync,
+            graphdb_core::types::DurabilityLevel::Sync,
         )
     }
 
     pub(crate) fn commit_staged_writes_with_durability(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-        durability: crate::core::types::DurabilityLevel,
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+        durability: graphdb_core::types::DurabilityLevel,
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         let entries = self
             .persistent
             .staged_wal
@@ -709,7 +709,7 @@ impl GraphStorageContext {
             .unwrap_or_default();
         let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
             let wal_manager = persistence.read().wal_manager().ok_or_else(|| {
-                crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
+                graphdb_core::StorageError::wal_error("WAL manager is not initialized".to_string())
             })?;
             let result = wal_manager.read().append_transaction_with_durability(
                 transaction_id,
@@ -719,7 +719,7 @@ impl GraphStorageContext {
             )?;
             result
         } else {
-            crate::core::types::CommitLsn::ZERO
+            graphdb_core::types::CommitLsn::ZERO
         };
         self.persistent
             .index_data_manager
@@ -733,9 +733,9 @@ impl GraphStorageContext {
     /// are deferred to the group commit point (`finalize_group`).
     pub(crate) fn commit_staged_writes_grouped(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         let entries = self
             .persistent
             .staged_wal
@@ -745,24 +745,24 @@ impl GraphStorageContext {
         let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
             let guard = persistence.read();
             let wal_manager = guard.wal_manager().ok_or_else(|| {
-                crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
+                graphdb_core::StorageError::wal_error("WAL manager is not initialized".to_string())
             })?;
             let result = wal_manager.read().append_transaction_with_durability(
                 transaction_id,
                 entries,
                 intents,
-                crate::core::types::DurabilityLevel::None,
+                graphdb_core::types::DurabilityLevel::None,
             )?;
             result
         } else {
-            crate::core::types::CommitLsn::ZERO
+            graphdb_core::types::CommitLsn::ZERO
         };
         // Deliberately no advance_barriers: deferred to finalize_group.
         self.persistent.staged_wal.remove(&transaction_id);
         Ok(commit_lsn)
     }
 
-    pub(crate) fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) {
+    pub(crate) fn abort_staged_writes(&self, transaction_id: graphdb_core::types::TransactionId) {
         self.persistent.staged_wal.remove(&transaction_id);
     }
 
@@ -781,7 +781,7 @@ impl GraphStorageContext {
 
     pub(crate) fn defer_edge_insert(
         &self,
-        edge: crate::core::wal::redo::InsertEdgeRedo,
+        edge: graphdb_core::wal::redo::InsertEdgeRedo,
         ts: Timestamp,
     ) {
         self.runtime.deferred_wal_ops.push_edge(edge, ts);
@@ -789,7 +789,7 @@ impl GraphStorageContext {
 
     pub(crate) fn defer_edge_delete(
         &self,
-        delete: crate::core::wal::redo::DeleteEdgeRedo,
+        delete: graphdb_core::wal::redo::DeleteEdgeRedo,
         ts: Timestamp,
     ) {
         self.runtime.deferred_wal_ops.push_delete(delete, ts);
@@ -797,13 +797,13 @@ impl GraphStorageContext {
 
     pub(crate) fn take_deferred_edge_inserts(
         &self,
-    ) -> Vec<(crate::core::wal::redo::InsertEdgeRedo, Timestamp)> {
+    ) -> Vec<(graphdb_core::wal::redo::InsertEdgeRedo, Timestamp)> {
         self.runtime.deferred_wal_ops.drain_edges()
     }
 
     pub(crate) fn take_deferred_edge_deletes(
         &self,
-    ) -> Vec<(crate::core::wal::redo::DeleteEdgeRedo, Timestamp)> {
+    ) -> Vec<(graphdb_core::wal::redo::DeleteEdgeRedo, Timestamp)> {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
 

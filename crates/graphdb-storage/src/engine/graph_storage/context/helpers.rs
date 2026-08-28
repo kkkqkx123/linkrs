@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use crate::vertex::ShardedVertexTable;
 
 pub fn resolve_internal_id(

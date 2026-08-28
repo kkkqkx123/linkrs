@@ -3,7 +3,7 @@
 use super::schema::{ColumnInfo, Schema};
 use super::typed::TypedColumn;
 use super::view::ChunkView;
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::base::MemoryReservation;
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
@@ -89,13 +89,13 @@ impl DataChunk {
     pub fn try_new_with_layout(
         rows: Vec<Vec<Value>>,
         layout: Arc<SlotLayout>,
-    ) -> Result<Self, crate::core::error::QueryError> {
+    ) -> Result<Self, graphdb_core::error::QueryError> {
         let row_width = rows.first().map(Vec::len).unwrap_or(0);
         if !layout.is_empty()
             && !rows.is_empty()
             && !rows.iter().all(|row| row.len() == layout.len())
         {
-            return Err(crate::core::error::QueryError::execution(format!(
+            return Err(graphdb_core::error::QueryError::execution(format!(
                 "DataChunk::new_with_layout: row width {} does not match layout width {}",
                 row_width,
                 layout.len()

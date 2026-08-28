@@ -1,10 +1,10 @@
 //! Implementation of aggregate functions
 
-use crate::core::types::operators::AggregateFunction;
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Expression;
-use crate::core::Value;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Expression;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 use serde::{Deserialize, Serialize};
 
@@ -225,11 +225,11 @@ impl AggregateExpression {
             AggregateFunction::Min => Ok(state
                 .min
                 .clone()
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             AggregateFunction::Max => Ok(state
                 .max
                 .clone()
-                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+                .unwrap_or(Value::Null(graphdb_core::value::NullType::Null))),
             AggregateFunction::Avg => {
                 if state.count > 0 {
                     match &state.sum {
@@ -273,7 +273,7 @@ impl AggregateExpression {
                 if state.count > 0 {
                     Ok(state.vec_avg.clone())
                 } else {
-                    Ok(Value::Null(crate::core::value::NullType::NaN))
+                    Ok(Value::Null(graphdb_core::value::NullType::NaN))
                 }
             }
         }
@@ -330,8 +330,8 @@ impl AggregateState {
             bool_and_value: None,
             bool_or_value: None,
             group_concat_values: Vec::new(),
-            vec_sum: Value::Null(crate::core::value::NullType::NaN),
-            vec_avg: Value::Null(crate::core::value::NullType::NaN),
+            vec_sum: Value::Null(graphdb_core::value::NullType::NaN),
+            vec_avg: Value::Null(graphdb_core::value::NullType::NaN),
         }
     }
 
@@ -352,8 +352,8 @@ impl AggregateState {
         self.bool_and_value = None;
         self.bool_or_value = None;
         self.group_concat_values.clear();
-        self.vec_sum = Value::Null(crate::core::value::NullType::NaN);
-        self.vec_avg = Value::Null(crate::core::value::NullType::NaN);
+        self.vec_sum = Value::Null(graphdb_core::value::NullType::NaN);
+        self.vec_avg = Value::Null(graphdb_core::value::NullType::NaN);
     }
 
     /// Update the aggregation status.
@@ -576,7 +576,7 @@ impl AggregateState {
     /// Calculating percentiles
     pub fn calculate_percentile(&self, percentile: f64) -> Result<Value, ExpressionError> {
         if self.percentile_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         if !(0.0..=100.0).contains(&percentile) {
@@ -606,7 +606,7 @@ impl AggregateState {
     /// Calculate the standard deviation
     pub fn calculate_std(&self) -> Result<Value, ExpressionError> {
         if self.std_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         let n = self.std_values.len() as f64;
@@ -627,7 +627,7 @@ impl AggregateState {
         if let Some(value) = self.bit_and_value {
             Ok(Value::BigInt(value))
         } else {
-            Ok(Value::Null(crate::core::value::NullType::Null))
+            Ok(Value::Null(graphdb_core::value::NullType::Null))
         }
     }
 
@@ -636,7 +636,7 @@ impl AggregateState {
         if let Some(value) = self.bit_or_value {
             Ok(Value::BigInt(value))
         } else {
-            Ok(Value::Null(crate::core::value::NullType::Null))
+            Ok(Value::Null(graphdb_core::value::NullType::Null))
         }
     }
 
@@ -657,7 +657,7 @@ impl AggregateState {
     /// Calculate the variance
     pub fn calculate_variance(&self) -> Result<Value, ExpressionError> {
         if self.std_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         let n = self.std_values.len() as f64;
@@ -675,7 +675,7 @@ impl AggregateState {
     /// Calculate the median
     pub fn calculate_median(&self) -> Result<Value, ExpressionError> {
         if self.median_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         let mut sorted_values = self.median_values.clone();
@@ -695,7 +695,7 @@ impl AggregateState {
     /// Calculate the mode
     pub fn calculate_mode(&self) -> Result<Value, ExpressionError> {
         if self.mode_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         let mut frequency_map = std::collections::HashMap::new();
@@ -723,7 +723,7 @@ impl AggregateState {
                     Ok(Value::string(mode_str))
                 }
             }
-            None => Ok(Value::Null(crate::core::value::NullType::Null)),
+            None => Ok(Value::Null(graphdb_core::value::NullType::Null)),
         }
     }
 
@@ -732,7 +732,7 @@ impl AggregateState {
         if let Some(value) = self.bool_and_value {
             Ok(Value::Bool(value))
         } else {
-            Ok(Value::Null(crate::core::value::NullType::Null))
+            Ok(Value::Null(graphdb_core::value::NullType::Null))
         }
     }
 
@@ -741,14 +741,14 @@ impl AggregateState {
         if let Some(value) = self.bool_or_value {
             Ok(Value::Bool(value))
         } else {
-            Ok(Value::Null(crate::core::value::NullType::Null))
+            Ok(Value::Null(graphdb_core::value::NullType::Null))
         }
     }
 
     /// Calculate population standard deviation (divide by n)
     pub fn calculate_stddev_pop(&self) -> Result<Value, ExpressionError> {
         if self.std_values.is_empty() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
         let n = self.std_values.len() as f64;
         let mean: f64 = self.std_values.iter().sum::<f64>() / n;
@@ -765,7 +765,7 @@ impl AggregateState {
     pub fn calculate_stddev_samp(&self) -> Result<Value, ExpressionError> {
         let n = self.std_values.len() as f64;
         if n < 2.0 {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
         let mean: f64 = self.std_values.iter().sum::<f64>() / n;
         let variance: f64 = self

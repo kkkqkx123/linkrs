@@ -2,9 +2,9 @@
 //!
 //! Converts between Vertex/Edge and row representations.
 
-use crate::core::value::NullType;
-use crate::core::Value;
-use crate::core::{Edge, Vertex};
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
+use graphdb_core::{Edge, Vertex};
 
 /// Convert a Vertex to row representation
 pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
@@ -86,7 +86,7 @@ pub fn edges_to_rows(edges: Vec<Edge>, partition_range: &std::ops::Range<i64>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
+    use graphdb_core::types::storage_ids::VertexId;
 
     #[test]
     fn test_vertex_conversion() {

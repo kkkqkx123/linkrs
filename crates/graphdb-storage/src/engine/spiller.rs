@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::cache_manager::CacheManager;
 use crate::engine::data_store::GraphDataStore;

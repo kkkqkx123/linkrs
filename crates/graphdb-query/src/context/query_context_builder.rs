@@ -17,9 +17,9 @@
 //!     .build();
 //! ```
 
-use crate::core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
+use graphdb_core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
 use crate::executor::streaming::query_registry::CancelToken;
-use crate::utils::{Arena, IdGenerator};
+use graphdb_core::{Arena, IdGenerator};
 use std::sync::Arc;
 
 use super::{QueryContext, QueryRequestContext};
@@ -47,7 +47,7 @@ pub struct QueryContextBuilder {
     space_info: Option<SpaceInfo>,
     charset_info: Option<Box<CharsetInfo>>,
     snapshot_ts: Option<Timestamp>,
-    isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     arena: Option<Arena>,
 }
 
@@ -131,14 +131,14 @@ impl QueryContextBuilder {
     /// explicit transaction. Absent for auto-commit statements.
     pub fn with_isolation_level(
         mut self,
-        isolation_level: crate::core::types::TransactionIsolationLevel,
+        isolation_level: graphdb_core::types::TransactionIsolationLevel,
     ) -> Self {
         self.isolation_level = Some(isolation_level);
         self
     }
 
     /// The configured transaction isolation level (if any).
-    pub fn isolation_level(&self) -> Option<crate::core::types::TransactionIsolationLevel> {
+    pub fn isolation_level(&self) -> Option<graphdb_core::types::TransactionIsolationLevel> {
         self.isolation_level
     }
 
@@ -169,7 +169,7 @@ impl QueryContextBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{DataType, EngineType, IsolationLevel, MetadataVersion, SpaceStatus};
+    use graphdb_core::types::{DataType, EngineType, IsolationLevel, MetadataVersion, SpaceStatus};
     use std::collections::HashMap;
 
     #[test]

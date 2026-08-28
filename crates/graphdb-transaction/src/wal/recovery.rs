@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use postcard::from_bytes;
 use serde::de::DeserializeOwned;
 
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
@@ -63,7 +63,7 @@ pub struct RecoveryStats {
     pub max_transaction_id: u64,
 }
 
-pub use crate::core::wal::traits::RecoveryApplier;
+pub use graphdb_core::wal::traits::RecoveryApplier;
 
 pub struct RecoveryManager {
     config: RecoveryConfig,
@@ -132,17 +132,17 @@ impl RecoveryManager {
                 let op_type = WalOpType::try_from(entry.header.op_type).ok()?;
                 match op_type {
                     WalOpType::OutboxIntent => {
-                        from_bytes::<crate::core::wal::OutboxIntent>(&entry.payload)
+                        from_bytes::<graphdb_core::wal::OutboxIntent>(&entry.payload)
                             .ok()
                             .map(|intent| intent.transaction_id.as_u64())
                     }
                     WalOpType::TransactionCommit => {
-                        from_bytes::<crate::core::wal::TransactionCommit>(&entry.payload)
+                        from_bytes::<graphdb_core::wal::TransactionCommit>(&entry.payload)
                             .ok()
                             .map(|commit| commit.transaction_id.as_u64())
                     }
                     WalOpType::TransactionAbort => {
-                        from_bytes::<crate::core::wal::TransactionAbort>(&entry.payload)
+                        from_bytes::<graphdb_core::wal::TransactionAbort>(&entry.payload)
                             .ok()
                             .map(|abort| abort.transaction_id.as_u64())
                     }
@@ -570,7 +570,7 @@ impl Default for RecoveryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::wal::writer::LocalWalWriter;
     use crate::wal::writer::WalWriter;
     use crate::wal::{
@@ -677,7 +677,7 @@ mod tests {
             to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
         let lsn = writer
             .append_transaction_batch(
-                crate::core::types::TransactionId::new(timestamp),
+                graphdb_core::types::TransactionId::new(timestamp),
                 vec![TransactionWalEntry {
                     op_type: WalOpType::InsertVertex,
                     timestamp,
@@ -712,7 +712,7 @@ mod tests {
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
         let first_lsn = writer
             .append_transaction_batch(
-                crate::core::types::TransactionId::new(1),
+                graphdb_core::types::TransactionId::new(1),
                 vec![TransactionWalEntry {
                     op_type: WalOpType::InsertVertex,
                     timestamp: 1,
@@ -730,7 +730,7 @@ mod tests {
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
         let second_lsn = writer
             .append_transaction_batch(
-                crate::core::types::TransactionId::new(2),
+                graphdb_core::types::TransactionId::new(2),
                 vec![TransactionWalEntry {
                     op_type: WalOpType::InsertVertex,
                     timestamp: 2,

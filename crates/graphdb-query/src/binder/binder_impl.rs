@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use crate::core::error::DBError;
-use crate::core::metadata::SchemaManager;
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression;
-use crate::core::types::semantic::{AliasType, ValueType};
-use crate::core::types::EdgeDirection;
-use crate::core::value::NullType;
-use crate::core::DBResult;
-use crate::core::DataType;
-use crate::core::Value;
+use graphdb_core::error::DBError;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::semantic::{AliasType, ValueType};
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::value::NullType;
+use graphdb_core::DBResult;
+use graphdb_core::DataType;
+use graphdb_core::Value;
 use crate::parser::ast::pattern::{PathElement, Pattern};
 use crate::parser::ast::stmt::Ast;
 use crate::parser::ast::{
@@ -101,7 +101,7 @@ impl Binder {
         let type_hint = expr.data_type();
         let Some(inner) = expr.get_expression() else {
             return Err(DBError::from(
-                crate::core::error::QueryError::invalid_query(
+                graphdb_core::error::QueryError::invalid_query(
                     "Expression not found in context".to_string(),
                 ),
             ));
@@ -117,14 +117,14 @@ impl Binder {
     /// than a silently-null value.
     fn ensure_variables_defined(
         &self,
-        expr: &crate::core::types::ContextualExpression,
+        expr: &graphdb_core::types::ContextualExpression,
     ) -> DBResult<()> {
         fn check(scope: &crate::binder::scope::BinderScope, e: &Expression) -> DBResult<()> {
             match e {
                 Expression::Variable(name) => {
                     if !scope.contains(name) {
                         return Err(DBError::from(
-                            crate::core::error::QueryError::invalid_query(format!(
+                            graphdb_core::error::QueryError::invalid_query(format!(
                                 "Undefined variable: {}",
                                 name
                             )),
@@ -366,7 +366,7 @@ impl Binder {
                         common = if common == DataType::Unknown {
                             item_type
                         } else {
-                            crate::core::type_system::TypeUtils::get_common_type(
+                            graphdb_core::type_system::TypeUtils::get_common_type(
                                 &common, &item_type,
                             )
                         };
@@ -775,12 +775,12 @@ impl Binder {
     }
 
     /// Wrap a raw expression into a contextual expression for binding.
-    fn plain_expression(expr: Expression) -> crate::core::types::ContextualExpression {
+    fn plain_expression(expr: Expression) -> graphdb_core::types::ContextualExpression {
         let ctx = Arc::new(
-            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
-        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
-        crate::core::types::ContextualExpression::new(id, ctx)
+        let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
+        graphdb_core::types::ContextualExpression::new(id, ctx)
     }
 
     /// Bind the body of an EXISTS / IN subquery into a nested MATCH
@@ -792,7 +792,7 @@ impl Binder {
     /// correlated references.
     fn bind_subquery_body(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
     ) -> DBResult<BoundStatement> {
         let parent = self.scope.clone();
         let outer_scope = std::mem::replace(&mut self.scope, BinderScope::with_parent(parent));
@@ -803,7 +803,7 @@ impl Binder {
 
     fn bind_subquery_body_inner(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
     ) -> DBResult<BoundStatement> {
         let mut patterns = Vec::with_capacity(body.patterns.len());
         let mut parser = crate::parser::parsing::TraversalParser::new();
@@ -811,7 +811,7 @@ impl Binder {
             let pattern = parser
                 .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
                 .map_err(|e| {
-                    DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                    DBError::from(graphdb_core::error::QueryError::invalid_query(format!(
                         "Invalid subquery pattern `{pattern_str}`: {e}"
                     )))
                 })?;
@@ -882,7 +882,7 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::Match(BoundMatchStatement {
-            span: crate::core::types::Span::default(),
+            span: graphdb_core::types::Span::default(),
             query_graph,
             where_clause,
             return_clause,
@@ -956,7 +956,7 @@ impl Binder {
             Pattern::Variable(vp) => {
                 if !self.scope.contains(&vp.name) {
                     return Err(DBError::from(
-                        crate::core::error::QueryError::invalid_query(format!(
+                        graphdb_core::error::QueryError::invalid_query(format!(
                             "Undefined variable: {}",
                             vp.name
                         )),
@@ -1034,12 +1034,12 @@ impl Binder {
                     let tag_info =
                         sm.get_tag(space_name, label)
                             .map_err(|e| {
-                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                DBError::from(graphdb_core::error::QueryError::invalid_query(
                                     format!("Failed to resolve tag '{}': {}", label, e),
                                 ))
                             })?
                             .ok_or_else(|| {
-                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                DBError::from(graphdb_core::error::QueryError::invalid_query(
                                     format!("Tag '{}' not found in space '{}'", label, space_name),
                                 ))
                             })?;
@@ -1082,13 +1082,13 @@ impl Binder {
                     let edge_info = sm
                         .get_edge_type(space_name, et)
                         .map_err(|e| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                            DBError::from(graphdb_core::error::QueryError::invalid_query(format!(
                                 "Failed to resolve edge type '{}': {}",
                                 et, e
                             )))
                         })?
                         .ok_or_else(|| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                            DBError::from(graphdb_core::error::QueryError::invalid_query(format!(
                                 "Edge type '{}' not found in space '{}'",
                                 et, space_name
                             )))
@@ -1650,7 +1650,7 @@ fn inner_scope_with_variable(
 fn local_variable(name: &str) -> crate::binder::scope::BinderVariable {
     crate::binder::scope::BinderVariable {
         name: name.to_string(),
-        alias_type: crate::core::types::semantic::AliasType::Runtime,
+        alias_type: graphdb_core::types::semantic::AliasType::Runtime,
         tags: Vec::new(),
         properties: std::collections::HashMap::new(),
         is_defined: true,
@@ -1680,7 +1680,7 @@ mod tests {
         let mut parser = crate::parser::Parser::new(query);
         let result = parser
             .parse()
-            .map_err(|e| DBError::from(crate::core::error::QueryError::pipeline_parse_error(e)))?;
+            .map_err(|e| DBError::from(graphdb_core::error::QueryError::pipeline_parse_error(e)))?;
         Binder::new()
             .with_space(None, 0)
             .bind(result.ast, test_qctx())

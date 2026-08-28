@@ -1,7 +1,6 @@
 pub use graphdb_api as api;
 pub use graphdb_config as config;
 pub use graphdb_core as core;
-pub use graphdb_core::utils;
 pub use graphdb_query as query;
 pub use graphdb_search as search;
 pub use graphdb_storage as storage;

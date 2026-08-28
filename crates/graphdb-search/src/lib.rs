@@ -17,7 +17,7 @@ pub mod warmup;
 #[cfg(test)]
 mod isolation_test;
 
-pub use crate::config::common::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
+pub use crate::config::{Bm25Params, TantivyConfig, TokenizerKind};
 pub use config::{FulltextConfig, SyncConfig, SyncFailurePolicy};
 pub use engine::{ConsistencyState, EngineType};
 pub use error::{Result, SearchError};
@@ -35,5 +35,4 @@ pub use tantivy_index::TantivySearchEngine;
 #[cfg(feature = "fulltext-search")]
 pub use warmup::IndexWarmer;
 
-pub use graphdb_config::config;
-pub use graphdb_core::core;
+

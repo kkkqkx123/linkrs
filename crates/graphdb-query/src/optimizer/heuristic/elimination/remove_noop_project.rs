@@ -23,7 +23,7 @@
 //! The list expression for the project represents a simple property reference (either VarProperty or InputProperty).
 //! The child node is in the allowed list (removing a project is not allowed for certain types of nodes).
 
-use crate::core::Expression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -236,9 +236,9 @@ impl EliminationRule for RemoveNoopProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, YieldColumn};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use crate::optimizer::heuristic::rule::RewriteRule;
     use crate::planning::plan::core::nodes::access::{IndexScanNode, ScanType};
     use crate::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
@@ -246,7 +246,7 @@ mod tests {
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
         YieldColumn {

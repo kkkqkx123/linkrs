@@ -23,8 +23,8 @@
 //!
 //! The filtering condition is a permanently false value (such as FALSE, null, etc.).
 
-use crate::core::types::operators::BinaryOperator;
-use crate::core::{Expression, Value};
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::{Expression, Value};
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -188,7 +188,7 @@ mod tests {
 
         // Testing null
         assert!(rule.is_contradiction(&Expression::Literal(Value::Null(
-            crate::core::value::NullType::Null
+            graphdb_core::value::NullType::Null
         ))));
 
         // Test 1 = 0

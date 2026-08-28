@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::types::{
+use graphdb_core::types::{
     CommitLsn, DurabilityLevel, EdgeIdentifier, Timestamp, TransactionId, VertexId,
 };
 

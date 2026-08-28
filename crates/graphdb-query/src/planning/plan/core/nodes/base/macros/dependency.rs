@@ -18,7 +18,7 @@ macro_rules! define_plan_node_with_deps {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
-            column_types: Vec<$crate::core::DataType>,
+            column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -61,11 +61,11 @@ macro_rules! define_plan_node_with_deps {
                 self.col_names = names;
             }
 
-            pub fn column_types(&self) -> &[$crate::core::DataType] {
+            pub fn column_types(&self) -> &[graphdb_core::DataType] {
                 &self.column_types
             }
 
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) {
                 self.column_types = types;
             }
 
@@ -141,7 +141,7 @@ macro_rules! define_plan_node_with_deps {
 
                 let col_names_size = $crate::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
-                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+                let column_types_size = std::mem::size_of::<Vec<graphdb_core::DataType>>() * self.column_types.capacity();
 
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()

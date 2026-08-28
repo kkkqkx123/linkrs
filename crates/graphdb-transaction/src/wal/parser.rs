@@ -6,8 +6,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::core::types::Timestamp;
-use crate::core::wal::types::{
+use graphdb_core::types::Timestamp;
+use graphdb_core::wal::types::{
     Lsn, RecordType, WalCompression, WalError, WalFileHeader, WalHeader, WalOpType,
     WalRecoveryMode, WalResult, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE,
 };
@@ -807,7 +807,7 @@ impl WalParserFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::wal::types::WalConfig;
+    use graphdb_core::wal::types::WalConfig;
     use crate::wal::writer::{LocalWalWriter, WalWriter};
     use crate::wal::WalOpType;
     use std::fs::OpenOptions;

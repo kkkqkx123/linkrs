@@ -4,8 +4,8 @@
 //! These functions currently operate as row-level functions.
 //! Full OVER clause support (PARTITION BY, ORDER BY, frame specification) will be added in a future phase.
 
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 
 define_function_enum! {

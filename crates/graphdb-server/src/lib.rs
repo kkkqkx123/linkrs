@@ -4,14 +4,10 @@
 //! (`graphdb-api`) and the wire contract (`graphdb-wire`). The service
 //! exposes the core API over HTTP/gRPC and the web management interface.
 
-pub use graphdb_api::api;
-pub use graphdb_config::config;
-pub use graphdb_core::core;
-pub use graphdb_core::utils;
-pub use graphdb_query::query;
-pub use graphdb_search::search;
-pub use graphdb_sync::sync;
-pub use graphdb_transaction::transaction;
+pub use graphdb_api as api;
+pub use graphdb_config as config;
+pub use graphdb_core as core;
+pub use graphdb_query as query;
 
 pub mod storage {
     pub use graphdb_storage::*;
@@ -22,7 +18,6 @@ pub mod storage {
 
 // Network service modules (moved from `graphdb-api::api::server`).
 pub mod http_server;
-pub mod server;
 mod shutdown;
 pub mod startup;
 pub mod value;

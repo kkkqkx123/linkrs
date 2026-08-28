@@ -8,8 +8,8 @@ use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
-use crate::core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
-use crate::core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use crate::edge::PropertyTable;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::{
@@ -143,7 +143,7 @@ pub struct TimeTravelEdgeStore {
     pub is_open: bool,
     pub next_edge_id: EdgeId,
     pub config: EdgeTableConfig,
-    pub stats_manager: Option<std::sync::Arc<crate::core::stats::StatsManager>>,
+    pub stats_manager: Option<std::sync::Arc<graphdb_core::stats::StatsManager>>,
     /// Version history tracking for schema changes
     pub version_history: Arc<Mutex<LabelVersionHistory>>,
     /// Cache for property name → schema index mapping to avoid O(n) linear lookups.
@@ -282,7 +282,7 @@ impl TimeTravelEdgeStore {
         )
     }
 
-    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<crate::core::stats::StatsManager>) {
+    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_core::stats::StatsManager>) {
         self.stats_manager = Some(stats);
     }
 
@@ -1689,7 +1689,7 @@ impl TimeTravelEdgeStore {
         let mut index = EdgePropertyIndex::new(pool_capacity);
         // MAX_TIMESTAMP (not INVALID_TIMESTAMP) satisfies `create_ts <= ts < delete_ts`
         // for live edges, so all non-tombstoned edges are scanned.
-        let all_ts = crate::core::types::MAX_TIMESTAMP;
+        let all_ts = graphdb_core::types::MAX_TIMESTAMP;
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
         let edge_records: Vec<EdgeRecord> = iter.collect();

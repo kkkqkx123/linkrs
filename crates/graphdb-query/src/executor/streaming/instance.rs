@@ -22,13 +22,13 @@ use super::plan::validator::PhysicalPlanValidator;
 use super::result_utils::convert_chunks_to_dataset;
 use super::runtime::ExecutionRuntime;
 use super::stream_result::StreamingQueryResult;
-use crate::core::error::QueryError;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 use crate::executor::base::{ExecutionResult, MemoryBudget};
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
 use crate::storage::QueryStorage;
-use crate::utils::Arena;
+use graphdb_core::Arena;
 
 use super::parameters::{ParameterFrame, ParameterSchema};
 use super::query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
@@ -109,9 +109,9 @@ pub struct QueryBindings {
     /// Injected by the pipeline from the optimizer engine.
     pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
     #[cfg(feature = "fulltext-search")]
-    pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+    pub fulltext_manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
     #[cfg(feature = "vector")]
-    pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+    pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
 }
 
 impl std::fmt::Debug for QueryBindings {
@@ -172,7 +172,7 @@ impl QueryBindings {
                 .get(&param.name)
                 .cloned()
                 .or_else(|| param.default.clone())
-                .unwrap_or(crate::core::Value::Null(Default::default()));
+                .unwrap_or(graphdb_core::Value::Null(Default::default()));
             values.push(value);
         }
         self.parameter_frame = Some(ParameterFrame::new(values));

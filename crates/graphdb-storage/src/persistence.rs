@@ -3,8 +3,8 @@
 //! Provides standardized file headers with magic bytes and versioning
 //! for all persistence files in the storage layer.
 
-use crate::core::error::StorageError;
-use crate::core::StorageResult;
+use graphdb_core::error::StorageError;
+use graphdb_core::StorageResult;
 use std::path::Path;
 
 /// Magic bytes identifying GraphDB persistence files
@@ -130,10 +130,10 @@ pub fn read_versioned_payload<R: std::io::Read>(
         StorageError::deserialize_error(format!("{file_name}: failed to read version: {e}"))
     })?;
     let version = u32::from_le_bytes(version_buf);
-    if version < crate::core::types::StorageVersion::MIN_SUPPORTED as u32 {
+    if version < graphdb_core::types::StorageVersion::MIN_SUPPORTED as u32 {
         return Err(StorageError::unsupported_version(
             version,
-            crate::core::types::StorageVersion::CURRENT as u32,
+            graphdb_core::types::StorageVersion::CURRENT as u32,
         ));
     }
     let mut payload = Vec::new();
@@ -250,7 +250,7 @@ mod tests {
         let err = read_versioned_payload(&mut reader, "test").unwrap_err();
         assert_eq!(
             err.kind(),
-            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
+            graphdb_core::error::storage::StorageErrorKind::UnsupportedVersion
         );
     }
 }

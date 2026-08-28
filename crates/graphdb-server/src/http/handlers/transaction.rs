@@ -11,8 +11,8 @@ use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use crate::transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
-use graphdb_api::core::{SavepointId, TransactionHandle};
+use graphdb_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
+use graphdb_api::api_core::{SavepointId, TransactionHandle};
 
 /// Start a transaction
 pub async fn begin<

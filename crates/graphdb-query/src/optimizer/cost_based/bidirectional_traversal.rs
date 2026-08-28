@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::EdgeDirection;
+use graphdb_core::types::EdgeDirection;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::{EdgeTypeStatistics, StatisticsManager};
 

@@ -1,8 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{Edge, Vertex};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, Vertex};
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::traversal::config::{TraversalConfig, TraversalOrder, VisitedPolicy};
 use crate::executor::traversal::graph_reader::TraversalGraphReader;

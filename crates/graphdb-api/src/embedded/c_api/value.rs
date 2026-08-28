@@ -1,5 +1,5 @@
 use crate::embedded::c_api::types::graphdb_value_t;
-use crate::core::Value;
+use graphdb_core::Value;
 
 /// Convert a C value to a core Value.
 ///

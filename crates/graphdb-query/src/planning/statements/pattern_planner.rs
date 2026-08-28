@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ContextualExpression;
 use crate::binder::validation::ValidationInfo;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::pattern::{
@@ -816,11 +816,11 @@ pub fn plan_repeated_element(
     let expr_ctx = expr_context.as_ref().ok_or_else(|| {
         PlannerError::PlanGenerationFailed("Expression context is unavailable".to_string())
     })?;
-    let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-        crate::core::Expression::Variable(condition_str),
+    let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+        graphdb_core::Expression::Variable(condition_str),
     );
     let id = expr_ctx.register_expression(expr_meta);
-    let ctx_expr = crate::core::types::ContextualExpression::new(id, expr_ctx.clone());
+    let ctx_expr = graphdb_core::types::ContextualExpression::new(id, expr_ctx.clone());
 
     let mut loop_node = LoopNode::new(-1, ctx_expr.clone());
 
@@ -859,9 +859,9 @@ fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::graph_schema::EdgeDirection;
-    use crate::core::types::Span;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::graph_schema::EdgeDirection;
+    use graphdb_core::types::Span;
     use crate::binder::validation::ValidationInfo;
     use crate::metadata::MetadataContext;
     use crate::parser::ast::pattern::PathPattern;

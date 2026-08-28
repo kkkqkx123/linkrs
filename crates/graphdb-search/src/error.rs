@@ -51,7 +51,7 @@ pub enum SearchError {
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
-impl From<SearchError> for crate::core::error::DBError {
+impl From<SearchError> for graphdb_core::error::DBError {
     fn from(e: SearchError) -> Self {
         Self::search(e.to_string())
     }

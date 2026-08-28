@@ -1,5 +1,5 @@
-use crate::core::types::Index;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Index;
+use graphdb_core::{StorageError, StorageResult};
 use crate::cursor::IndexScanPlan;
 use crate::index::edge_index_manager::{compute_edge_index_scan_range, EdgeIndexCursor};
 use crate::index::key_codec::key_types::SecondaryIndexKey;

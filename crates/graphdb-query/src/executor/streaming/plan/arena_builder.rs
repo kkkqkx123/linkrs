@@ -176,7 +176,7 @@ impl PhysicalPlanBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::executor::base::ExecutionContext;
     use crate::executor::streaming::plan::types::{InputContract, OperatorKindSpec};
     use crate::executor::streaming::SourceSpec;
@@ -322,8 +322,8 @@ mod tests {
 
     #[test]
     fn correlated_apply_builds_nested_sub_plan_rooted_at_argument() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::{ContextualExpression, ExpressionMeta};
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::{ContextualExpression, ExpressionMeta};
         use crate::executor::streaming::operators::spec::ApplySpec;
         use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
         use crate::planning::plan::core::nodes::control_flow::ArgumentNode;
@@ -342,7 +342,7 @@ mod tests {
             .expect("cross join should build");
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_id = expr_ctx.register_expression(ExpressionMeta::new(
-            crate::core::Expression::Literal(crate::core::Value::Bool(true)),
+            graphdb_core::Expression::Literal(graphdb_core::Value::Bool(true)),
         ));
         let condition = ContextualExpression::new(expr_id, expr_ctx);
         let filter = FilterNode::new(cross.into_enum(), condition).expect("filter should build");

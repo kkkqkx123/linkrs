@@ -3,14 +3,14 @@
 //! Unified WAL (Write-Ahead Log) manager that properly integrates with LocalWalWriter.
 //! This module provides a single source of truth for LSN management and WAL operations.
 
-use crate::core::types::{CommitLsn, Timestamp, TransactionId};
-use crate::core::wal::types::WalOpType;
-use crate::core::wal::OutboxIntent;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{CommitLsn, Timestamp, TransactionId};
+use graphdb_core::wal::types::WalOpType;
+use graphdb_core::wal::OutboxIntent;
+use graphdb_core::{StorageError, StorageResult};
 use crate::index::shard_runtime::IndexBarrierRegistry;
-use crate::transaction::wal::writer::WalWriter;
-use crate::transaction::wal::TransactionWalEntry;
-use crate::transaction::wal::{LocalWalWriter, Lsn, WalConfig};
+use graphdb_transaction::wal::writer::WalWriter;
+use graphdb_transaction::wal::TransactionWalEntry;
+use graphdb_transaction::wal::{LocalWalWriter, Lsn, WalConfig};
 use parking_lot::Mutex;
 use postcard::to_allocvec;
 use serde::Serialize;
@@ -179,7 +179,7 @@ impl WalManager {
         transaction_id: TransactionId,
         entries: Vec<TransactionWalEntry>,
         intents: &[OutboxIntent],
-        durability: crate::core::types::DurabilityLevel,
+        durability: graphdb_core::types::DurabilityLevel,
     ) -> StorageResult<CommitLsn> {
         let Some(writer) = self.local_writer.as_ref() else {
             return Err(StorageError::wal_error(
@@ -214,7 +214,7 @@ impl WalManager {
             coordinator.record_appended(lsn.get());
         }
 
-        if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
+        if matches!(durability, graphdb_core::types::DurabilityLevel::Sync) {
             if let Some(ref coordinator) = coordinator {
                 coordinator.append_and_wait(lsn.get()).map_err(|error| {
                     StorageError::wal_error(format!(
@@ -344,10 +344,10 @@ mod tests {
         // Async append: recorded in the coordinator but must not block on fsync.
         let lsn = manager
             .append_transaction_with_durability(
-                crate::core::types::TransactionId::new(1),
+                graphdb_core::types::TransactionId::new(1),
                 Vec::new(),
                 &[],
-                crate::core::types::DurabilityLevel::Async,
+                graphdb_core::types::DurabilityLevel::Async,
             )
             .expect("async append must not wait");
         assert!(lsn.get() > 0, "async append must still advance the WAL LSN");
@@ -372,10 +372,10 @@ mod tests {
 
         let lsn = manager
             .append_transaction_with_durability(
-                crate::core::types::TransactionId::new(2),
+                graphdb_core::types::TransactionId::new(2),
                 Vec::new(),
                 &[],
-                crate::core::types::DurabilityLevel::None,
+                graphdb_core::types::DurabilityLevel::None,
             )
             .expect("none durability append must not wait");
         assert!(lsn.get() > 0);

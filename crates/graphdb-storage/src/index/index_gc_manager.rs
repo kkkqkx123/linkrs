@@ -38,9 +38,9 @@
 //! handle.join().unwrap();
 //! ```
 
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
-use crate::transaction::VersionManager;
+use graphdb_transaction::VersionManager;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -357,7 +357,7 @@ mod tests {
 
     use crate::index::*;
     use crate::thread_pool::StorageThreadPool;
-    use crate::transaction::VersionManager;
+    use graphdb_transaction::VersionManager;
 
     #[test]
     fn test_gc_config_default() {

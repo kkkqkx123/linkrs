@@ -38,7 +38,7 @@ use super::super::subquery::SubqueryExecutor;
 use super::types::{
     FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
 };
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::executor::base::MemoryTracker;
 
 use super::super::instance::QueryBindings;
@@ -74,7 +74,7 @@ impl PhysicalPlanMaterializer {
         }
 
         let parameter_values = if let Some(ref frame) = mutable_bindings.parameter_frame {
-            let map: std::collections::HashMap<String, crate::core::Value> = plan
+            let map: std::collections::HashMap<String, graphdb_core::Value> = plan
                 .parameter_schema
                 .params
                 .iter()
@@ -417,9 +417,9 @@ impl PhysicalPlanMaterializer {
     /// Rough type compatibility check for parameter values.
     /// M1.3: ensures the runtime value is semantically assignable to the
     /// declared parameter type.
-    fn type_compatible(value: &crate::core::Value, expected_type: &crate::core::DataType) -> bool {
-        use crate::core::DataType;
-        use crate::core::Value;
+    fn type_compatible(value: &graphdb_core::Value, expected_type: &graphdb_core::DataType) -> bool {
+        use graphdb_core::DataType;
+        use graphdb_core::Value;
         matches!(
             (value, expected_type),
             (Value::Null(_), _)
@@ -438,11 +438,11 @@ impl PhysicalPlanMaterializer {
     /// Composite (Struct/Array) parameter type compatibility: recursive field
     /// and element checks plus the declared fixed length for ARRAY(n).
     fn type_compatible_composite(
-        value: &crate::core::Value,
-        expected_type: &crate::core::DataType,
+        value: &graphdb_core::Value,
+        expected_type: &graphdb_core::DataType,
     ) -> bool {
-        use crate::core::DataType;
-        use crate::core::Value;
+        use graphdb_core::DataType;
+        use graphdb_core::Value;
         match (value, expected_type) {
             (Value::Struct(s), DataType::Struct(expected)) => {
                 // Every field of the value must exist in the declared type
@@ -480,7 +480,7 @@ impl PhysicalPlanMaterializer {
     fn create_runtime(
         bindings: &QueryBindings,
         parameter_values: Option<
-            std::sync::Arc<std::collections::HashMap<String, crate::core::Value>>,
+            std::sync::Arc<std::collections::HashMap<String, graphdb_core::Value>>,
         >,
     ) -> Arc<ExecutionRuntime> {
         let mut runtime = ExecutionRuntime::new(
@@ -642,8 +642,8 @@ fn take_binary_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::{ContextualExpression, ExpressionMeta};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::{ContextualExpression, ExpressionMeta};
     use crate::executor::base::ExecutionContext;
 
     use crate::executor::streaming::parameters::ParameterSchema;
@@ -668,7 +668,7 @@ mod tests {
             .expect("cross join should build");
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_id = expr_ctx.register_expression(ExpressionMeta::new(
-            crate::core::Expression::Literal(crate::core::Value::Bool(true)),
+            graphdb_core::Expression::Literal(graphdb_core::Value::Bool(true)),
         ));
         let condition = ContextualExpression::new(expr_id, expr_ctx);
         let filter = FilterNode::new(cross.into_enum(), condition).expect("filter should build");
@@ -770,14 +770,14 @@ mod tests {
             crate::executor::streaming::parameters::ParameterDesc {
                 name: "p".to_string(),
                 slot: crate::executor::streaming::parameters::ParameterSlot(0),
-                value_type: Some(crate::core::DataType::String),
+                value_type: Some(graphdb_core::DataType::String),
                 nullable: true,
                 default: None,
             },
         ]);
         let mut raw = bindings();
         raw.parameters = Arc::new(
-            [("p".to_string(), crate::core::Value::string("value"))]
+            [("p".to_string(), graphdb_core::Value::string("value"))]
                 .into_iter()
                 .collect(),
         );

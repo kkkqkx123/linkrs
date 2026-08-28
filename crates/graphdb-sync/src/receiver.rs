@@ -5,9 +5,9 @@ use std::sync::Arc;
 #[cfg(any(feature = "fulltext-search", feature = "vector"))]
 use tokio::sync::{Mutex, RwLock};
 
-use crate::core::types::CommitLsn;
+use graphdb_core::types::CommitLsn;
 #[cfg(feature = "fulltext-search")]
-use crate::core::wal::IndexMutation;
+use graphdb_core::wal::IndexMutation;
 
 pub struct ApplyReceipt {
     pub commit_lsn: CommitLsn,
@@ -22,7 +22,7 @@ pub struct LateArrivalResult {
 
 #[cfg(feature = "fulltext-search")]
 pub struct FulltextReceiver {
-    engine: Arc<crate::search::tantivy_index::TantivySearchEngine>,
+    engine: Arc<graphdb_search::tantivy_index::TantivySearchEngine>,
     receipts: Arc<RwLock<HashSet<String>>>,
     applied_lsn: Arc<RwLock<CommitLsn>>,
     apply_lock: Mutex<()>,
@@ -39,7 +39,7 @@ struct FulltextCommitState {
 
 #[cfg(feature = "fulltext-search")]
 impl FulltextReceiver {
-    pub fn new(engine: Arc<crate::search::tantivy_index::TantivySearchEngine>) -> Self {
+    pub fn new(engine: Arc<graphdb_search::tantivy_index::TantivySearchEngine>) -> Self {
         let state = engine
             .commit_payload()
             .ok()
@@ -86,19 +86,19 @@ impl FulltextReceiver {
             }
 
             match mutation.operation {
-                crate::core::wal::IndexOperation::Delete => {
+                graphdb_core::wal::IndexOperation::Delete => {
                     let entity_id = match &mutation.entity_ref {
-                        crate::core::wal::EntityRef::Vertex(vid) => vid.to_string(),
-                        crate::core::wal::EntityRef::Edge { src, dst, .. } => {
+                        graphdb_core::wal::EntityRef::Vertex(vid) => vid.to_string(),
+                        graphdb_core::wal::EntityRef::Edge { src, dst, .. } => {
                             format!("{}->{}", src, dst)
                         }
                     };
                     deletes.push(entity_id);
                 }
-                crate::core::wal::IndexOperation::Upsert => {
+                graphdb_core::wal::IndexOperation::Upsert => {
                     let entity_id = match &mutation.entity_ref {
-                        crate::core::wal::EntityRef::Vertex(vid) => vid.to_string(),
-                        crate::core::wal::EntityRef::Edge { src, dst, .. } => {
+                        graphdb_core::wal::EntityRef::Vertex(vid) => vid.to_string(),
+                        graphdb_core::wal::EntityRef::Edge { src, dst, .. } => {
                             format!("{}->{}", src, dst)
                         }
                     };

@@ -4,26 +4,26 @@ use std::sync::Arc;
 
 use super::execution_result::ExecutionResult;
 use super::MemoryBudget;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::Value;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::Value;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::executor::expression::functions::OwnedFunctionRef;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::JoinAlgorithm;
 #[cfg(feature = "fulltext-search")]
-use crate::search::manager::FulltextIndexManager;
+use graphdb_search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
-use crate::search::tantivy_index::TantivySearchEngine;
+use graphdb_search::tantivy_index::TantivySearchEngine;
 use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
-use crate::sync::VectorSyncCoordinator;
-use crate::utils::Arena;
+use graphdb_sync::VectorSyncCoordinator;
+use graphdb_core::Arena;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
     pub results: Arc<RwLock<HashMap<String, ExecutionResult>>>,
-    pub variables: Arc<RwLock<HashMap<String, crate::core::Value>>>,
+    pub variables: Arc<RwLock<HashMap<String, graphdb_core::Value>>>,
     pub expression_context: Arc<ExpressionAnalysisContext>,
     #[cfg(feature = "fulltext-search")]
     pub search_engine: Option<Arc<TantivySearchEngine>>,
@@ -39,10 +39,10 @@ pub struct ExecutionContext {
     /// the execution layer observe which snapshot the query reads at.
     pub bound_snapshot: Option<crate::storage::SnapshotHandle>,
     pub space_name: Option<String>,
-    pub parameters: Arc<HashMap<String, crate::core::Value>>,
+    pub parameters: Arc<HashMap<String, graphdb_core::Value>>,
     /// Session variable snapshot for this query (resolves
     /// `Expression::SessionVariable`); captured once per statement.
-    pub session_variables: Arc<HashMap<String, crate::core::Value>>,
+    pub session_variables: Arc<HashMap<String, graphdb_core::Value>>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
     /// Maximum intra-query workers. 1 = serial only.
@@ -80,7 +80,7 @@ pub struct ExecutionContext {
     /// Transaction isolation level for this execution, when running inside
     /// an explicit transaction. Execution-time knob threaded from the
     /// API layer through [`crate::QueryContext`]; `None` = auto-commit.
-    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
 }
 
 impl ExecutionContext {
@@ -120,7 +120,7 @@ impl ExecutionContext {
 
     pub fn with_parameters(
         expression_context: Arc<ExpressionAnalysisContext>,
-        parameters: HashMap<String, crate::core::Value>,
+        parameters: HashMap<String, graphdb_core::Value>,
     ) -> Self {
         Self {
             results: Arc::new(RwLock::new(HashMap::new())),
@@ -236,11 +236,11 @@ impl ExecutionContext {
         self.results.write().get(name).cloned()
     }
 
-    pub fn set_variable(&self, name: String, value: crate::core::Value) {
+    pub fn set_variable(&self, name: String, value: graphdb_core::Value) {
         self.variables.write().insert(name, value);
     }
 
-    pub fn get_variable(&self, name: &str) -> Option<crate::core::Value> {
+    pub fn get_variable(&self, name: &str) -> Option<graphdb_core::Value> {
         self.variables.write().get(name).cloned()
     }
 
@@ -253,7 +253,7 @@ impl ExecutionContext {
         self.search_engine.as_ref()
     }
 
-    pub fn get_param(&self, name: &str) -> Option<&crate::core::Value> {
+    pub fn get_param(&self, name: &str) -> Option<&graphdb_core::Value> {
         self.parameters.get(name)
     }
 

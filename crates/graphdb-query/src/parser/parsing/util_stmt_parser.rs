@@ -2,7 +2,7 @@
 //!
 //! Responsible for parsing statements related to tool functions, including USE, SHOW, EXPLAIN, FETCH, LOOKUP, UNWIND, RETURN, WITH, YIELD, SET, REMOVE, etc.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::stmt::*;
 use crate::parser::ast::types::OrderDirection;
 use crate::parser::core::error::{ParseError, ParseErrorKind};

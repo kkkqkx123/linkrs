@@ -6,7 +6,7 @@
 /// and does not own its data.
 #[derive(Debug)]
 pub struct ChunkView<'a> {
-    pub(crate) rows: &'a [Vec<crate::core::Value>],
+    pub(crate) rows: &'a [Vec<graphdb_core::Value>],
 }
 
 impl ChunkView<'_> {
@@ -18,7 +18,7 @@ impl ChunkView<'_> {
         self.rows.is_empty()
     }
 
-    pub fn row(&self, idx: usize) -> Option<&[crate::core::Value]> {
+    pub fn row(&self, idx: usize) -> Option<&[graphdb_core::Value]> {
         self.rows.get(idx).map(|r| r.as_slice())
     }
 }

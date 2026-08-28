@@ -1,9 +1,9 @@
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::value::list::List;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::value::list::List;
 /// Arithmetic and logical operations module
 ///
 /// This module is responsible for handling basic arithmetic operations, comparison operations, logical operations, and other fundamental operations involved in the evaluation of expressions.
-use crate::core::value::Value;
+use graphdb_core::value::Value;
 use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
 use crate::executor::expression::ExpressionError;
 
@@ -140,22 +140,22 @@ impl BinaryOperationEvaluator {
 
     fn eval_like(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_bad_null() || right.is_bad_null() {
-            return Ok(Value::Null(crate::core::value::NullType::BadData));
+            return Ok(Value::Null(graphdb_core::value::NullType::BadData));
         }
 
         if (!left.is_null() && !left.is_empty() && !matches!(left, Value::String(_)))
             || (!right.is_null() && !right.is_empty() && !matches!(right, Value::String(_)))
         {
-            return Ok(Value::Null(crate::core::value::NullType::BadData));
+            return Ok(Value::Null(graphdb_core::value::NullType::BadData));
         }
 
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (left, right) {
             (Value::String(l), Value::String(r)) => Self::eval_like_operation(l, r),
-            _ => Ok(Value::Null(crate::core::value::NullType::BadData)),
+            _ => Ok(Value::Null(graphdb_core::value::NullType::BadData)),
         }
     }
 
@@ -210,13 +210,13 @@ impl BinaryOperationEvaluator {
 
     fn eval_in(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match right {
             Value::List(items) => {
                 if items.iter().any(|item| item.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 Ok(Value::Bool(items.contains(left)))
             }
@@ -228,13 +228,13 @@ impl BinaryOperationEvaluator {
 
     fn eval_not_in(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match right {
             Value::List(items) => {
                 if items.iter().any(|item| item.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 Ok(Value::Bool(!items.contains(left)))
             }
@@ -246,14 +246,14 @@ impl BinaryOperationEvaluator {
 
     fn eval_contains(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (&left, &right) {
             (Value::String(s), Value::String(sub)) => Ok(Value::Bool(s.contains(&**sub))),
             (Value::List(items), item) => {
                 if items.iter().any(|i| i.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 Ok(Value::Bool(items.contains(item)))
             }
@@ -265,7 +265,7 @@ impl BinaryOperationEvaluator {
 
     fn eval_starts_with(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (&left, &right) {
@@ -278,7 +278,7 @@ impl BinaryOperationEvaluator {
 
     fn eval_ends_with(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (&left, &right) {
@@ -291,13 +291,13 @@ impl BinaryOperationEvaluator {
 
     fn eval_union(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (left, right) {
             (Value::List(l), Value::List(r)) => {
                 if l.iter().any(|item| item.is_null()) || r.iter().any(|item| item.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 let mut result = (**l).clone();
                 result.extend(r.iter().cloned());
@@ -309,13 +309,13 @@ impl BinaryOperationEvaluator {
 
     fn eval_intersect(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (left, right) {
             (Value::List(l), Value::List(r)) => {
                 if l.iter().any(|item| item.is_null()) || r.iter().any(|item| item.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 let result: Vec<Value> =
                     l.iter().filter(|item| r.contains(item)).cloned().collect();
@@ -329,13 +329,13 @@ impl BinaryOperationEvaluator {
 
     fn eval_except(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
         if left.is_null() || right.is_null() {
-            return Ok(Value::Null(crate::core::value::NullType::Null));
+            return Ok(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         match (left, right) {
             (Value::List(l), Value::List(r)) => {
                 if l.iter().any(|item| item.is_null()) || r.iter().any(|item| item.is_null()) {
-                    return Ok(Value::Null(crate::core::value::NullType::Null));
+                    return Ok(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 let result: Vec<Value> =
                     l.iter().filter(|item| !r.contains(item)).cloned().collect();
@@ -368,7 +368,7 @@ impl BinaryOperationEvaluator {
         as_text: bool,
         is_path: bool,
     ) -> Result<Value, ExpressionError> {
-        use crate::core::value::NullType;
+        use graphdb_core::value::NullType;
         use serde_json::Value as JsonValue;
 
         if json.is_null() || key_or_path.is_null() {
@@ -504,7 +504,7 @@ impl BinaryOperationEvaluator {
                             }
                         })
                         .collect();
-                    Value::List(Box::new(crate::core::value::list::List::from(items)))
+                    Value::List(Box::new(graphdb_core::value::list::List::from(items)))
                 }
                 JsonValue::Object(_) => {
                     Value::string(serde_json::to_string(&result).unwrap_or_default())

@@ -2,13 +2,13 @@
 //!
 //! Provides full transaction management functionality, including savepoint support
 
-use crate::core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
+use graphdb_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::Session;
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::storage::StorageClient;
-use crate::transaction::types::{SavepointId, SavepointInfo};
-use crate::transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
+use graphdb_transaction::types::{SavepointId, SavepointInfo};
+use graphdb_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -271,7 +271,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
 
         txn_manager
             .commit_transaction(self.txn_handle.0)
-            .map_err(|e| crate::core::CoreError::TransactionFailed(e.to_string()))?;
+            .map_err(|e| crate::api_core::error::CoreError::TransactionFailed(e.to_string()))?;
         self.committed = true;
         Ok(())
     }
@@ -294,7 +294,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
 
         txn_manager
             .abort_transaction(self.txn_handle.0)
-            .map_err(|e| crate::core::CoreError::TransactionFailed(e.to_string()))?;
+            .map_err(|e| crate::api_core::error::CoreError::TransactionFailed(e.to_string()))?;
 
         self.rolled_back = true;
         Ok(())

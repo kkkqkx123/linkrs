@@ -9,9 +9,9 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{IndexInfo, SeekResult, SeekStrategyContext, SeekStrategyType};
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::expr::visitor_collectors::OrConditionCollector;
-use crate::core::{StorageError, Value};
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::OrConditionCollector;
+use graphdb_core::{StorageError, Value};
 use crate::storage::StorageReader;
 
 /// Attribute filtering criteria
@@ -80,7 +80,7 @@ impl PropIndexSeek {
     }
 
     /// Extract attribute predicates from the list of expressions.
-    pub fn extract_predicates(expressions: &[crate::core::Expression]) -> Vec<PropertyPredicate> {
+    pub fn extract_predicates(expressions: &[graphdb_core::Expression]) -> Vec<PropertyPredicate> {
         let mut predicates = Vec::new();
 
         for expr in expressions {
@@ -94,7 +94,7 @@ impl PropIndexSeek {
 
     /// Extract attribute predicates from the list of expressions, supporting the conversion of OR conditions.
     pub fn extract_predicates_with_or(
-        expressions: &[crate::core::Expression],
+        expressions: &[graphdb_core::Expression],
     ) -> Vec<PropertyPredicate> {
         let mut predicates = Vec::new();
 
@@ -103,7 +103,7 @@ impl PropIndexSeek {
             collector.visit(expr);
 
             if collector.can_convert_to_in() {
-                use crate::core::value::list::List;
+                use graphdb_core::value::list::List;
                 predicates.push(PropertyPredicate {
                     property: collector
                         .property_name()
@@ -123,11 +123,11 @@ impl PropIndexSeek {
     }
 
     /// Extracting attribute predicates from a single expression
-    fn extract_predicate(expr: &crate::core::Expression) -> Option<PropertyPredicate> {
-        use crate::core::types::operators::BinaryOperator;
+    fn extract_predicate(expr: &graphdb_core::Expression) -> Option<PropertyPredicate> {
+        use graphdb_core::types::operators::BinaryOperator;
 
         match expr {
-            crate::core::Expression::Binary { op, left, right } => {
+            graphdb_core::Expression::Binary { op, left, right } => {
                 let op_str = match op {
                     BinaryOperator::Equal => "=",
                     BinaryOperator::NotEqual => "!=",
@@ -176,11 +176,11 @@ impl PropIndexSeek {
     }
 
     /// Extract attribute names from the expression.
-    fn extract_property(expr: &crate::core::Expression) -> Option<String> {
+    fn extract_property(expr: &graphdb_core::Expression) -> Option<String> {
         match expr {
-            crate::core::Expression::Property { object, property } => {
+            graphdb_core::Expression::Property { object, property } => {
                 // Check for node attribute access, e.g. v.name
-                if matches!(object.as_ref(), crate::core::Expression::Variable(_)) {
+                if matches!(object.as_ref(), graphdb_core::Expression::Variable(_)) {
                     Some(property.clone())
                 } else {
                     None
@@ -191,9 +191,9 @@ impl PropIndexSeek {
     }
 
     /// Extract values from the expression.
-    fn extract_value(expr: &crate::core::Expression) -> Option<Value> {
+    fn extract_value(expr: &graphdb_core::Expression) -> Option<Value> {
         match expr {
-            crate::core::Expression::Literal(val) => Some(val.clone()),
+            graphdb_core::Expression::Literal(val) => Some(val.clone()),
             _ => None,
         }
     }
@@ -324,7 +324,7 @@ impl SeekStrategy for PropIndexSeek {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Expression;
+    use graphdb_core::Expression;
 
     #[test]
     fn test_predicate_op_from_str() {
@@ -343,7 +343,7 @@ mod tests {
     fn test_extract_predicate_eq() {
         let expr = Expression::binary(
             Expression::property(Expression::variable("v"), "age"),
-            crate::core::BinaryOperator::Equal,
+            graphdb_core::BinaryOperator::Equal,
             Expression::int(18),
         );
 
@@ -376,13 +376,13 @@ mod tests {
         let expr = Expression::binary(
             Expression::binary(
                 Expression::property(Expression::variable("v"), "age"),
-                crate::core::BinaryOperator::Equal,
+                graphdb_core::BinaryOperator::Equal,
                 Expression::int(10),
             ),
-            crate::core::BinaryOperator::Or,
+            graphdb_core::BinaryOperator::Or,
             Expression::binary(
                 Expression::property(Expression::variable("v"), "age"),
-                crate::core::BinaryOperator::Equal,
+                graphdb_core::BinaryOperator::Equal,
                 Expression::int(20),
             ),
         );
@@ -407,13 +407,13 @@ mod tests {
         let expr = Expression::binary(
             Expression::binary(
                 Expression::property(Expression::variable("v"), "age"),
-                crate::core::BinaryOperator::Equal,
+                graphdb_core::BinaryOperator::Equal,
                 Expression::literal(10),
             ),
-            crate::core::BinaryOperator::Or,
+            graphdb_core::BinaryOperator::Or,
             Expression::binary(
                 Expression::property(Expression::variable("v"), "name"),
-                crate::core::BinaryOperator::Equal,
+                graphdb_core::BinaryOperator::Equal,
                 Expression::literal("Alice"),
             ),
         );

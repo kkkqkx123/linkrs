@@ -1,5 +1,5 @@
-use crate::core::types::Timestamp;
-use crate::core::Value;
+use graphdb_core::types::Timestamp;
+use graphdb_core::Value;
 
 /// Key for vertex cache: (label_id, internal_id)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

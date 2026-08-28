@@ -14,10 +14,10 @@
 //! The API layer (`GraphService`) owns the `TransactionManager` reference and
 //! performs the actual begin/commit/rollback; the controller tracks state.
 
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::executor::base::ExecutionResult;
 
-pub use crate::core::types::TransactionId;
+pub use graphdb_core::types::TransactionId;
 
 // ── CancelReason ───────────────────────────────────────────────────────────
 
@@ -469,8 +469,8 @@ impl TransactionCommandResult {
     /// Convert to an [`ExecutionResult`].
     pub fn into_execution_result(self) -> ExecutionResult {
         let row = vec![
-            crate::core::Value::string(self.command),
-            crate::core::Value::string(self.message),
+            graphdb_core::Value::string(self.command),
+            graphdb_core::Value::string(self.message),
         ];
         let col_names = vec!["command".to_string(), "result".to_string()];
         let dataset = crate::data_set::DataSet::from_rows(vec![row], col_names);

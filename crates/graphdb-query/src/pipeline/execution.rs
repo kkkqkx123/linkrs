@@ -1,8 +1,8 @@
 use super::QueryPipelineManager;
-use crate::core::error::{DBError, DBResult, QueryError};
-use crate::core::types::SpaceInfo;
-use crate::core::types::TransactionId;
-use crate::core::{
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::SpaceInfo;
+use graphdb_core::types::TransactionId;
+use graphdb_core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
 use crate::executor::base::{ExecutionContext, ExecutionResult};
@@ -289,9 +289,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn build_execution_context(&self, query_context: &QueryContext) -> ExecutionContext {
         use std::collections::HashMap;
 
-        let params: HashMap<String, crate::core::Value> =
+        let params: HashMap<String, graphdb_core::Value> =
             query_context.request_context().parameters.clone();
-        let session_variables: HashMap<String, crate::core::Value> =
+        let session_variables: HashMap<String, graphdb_core::Value> =
             query_context.request_context().session_variables.clone();
 
         let mut context = ExecutionContext {
@@ -347,7 +347,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         context.isolation_level = query_context.isolation_level();
         if query_context.has_arena() {
             context.arena = Some(Arc::new(
-                parking_lot::Mutex::new(crate::utils::Arena::new()),
+                parking_lot::Mutex::new(graphdb_core::Arena::new()),
             ));
         }
         // Stats feedback loop: share the engine's feedback history

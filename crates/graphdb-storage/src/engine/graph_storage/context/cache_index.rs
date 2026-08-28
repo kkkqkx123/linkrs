@@ -1,6 +1,6 @@
-use crate::core::metadata::IndexMetadataManager;
-use crate::core::types::{LabelId, Timestamp};
-use crate::core::{StorageResult, Value};
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::{StorageResult, Value};
 use crate::edge::ExportedEdgeSnapshot;
 use crate::index::traits::IndexGcOps;
 use crate::index::types::{EdgeIdentity, GcStats};

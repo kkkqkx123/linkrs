@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use super::super::super::common::{EdgeProp, TagProp};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::{ContextualExpression, EdgeDirection, SerializableExpression};
-use crate::core::Expression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, EdgeDirection, SerializableExpression};
+use graphdb_core::Expression;
 use crate::define_binary_input_node;
 use crate::define_plan_node;
 use crate::define_plan_node_with_deps;
@@ -70,8 +70,8 @@ impl ExpandNode {
     }
 
     pub fn set_filter_string(&mut self, filter: String, ctx: Arc<ExpressionAnalysisContext>) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable(filter),
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable(filter),
         );
         let id = ctx.register_expression(expr);
         self.filter = Some(ContextualExpression::new(id, ctx));
@@ -209,7 +209,7 @@ pub struct ExpandAllNode {
     vertex_props: Vec<TagProp>,
     filter: Option<ContextualExpression>,
     filter_serializable: Option<SerializableExpression>,
-    src_vids: Vec<crate::core::Value>,
+    src_vids: Vec<graphdb_core::Value>,
     include_empty_paths: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
@@ -263,11 +263,11 @@ impl ExpandAllNode {
         }
     }
 
-    pub fn set_src_vids(&mut self, src_vids: Vec<crate::core::Value>) {
+    pub fn set_src_vids(&mut self, src_vids: Vec<graphdb_core::Value>) {
         self.src_vids = src_vids;
     }
 
-    pub fn src_vids(&self) -> &[crate::core::Value] {
+    pub fn src_vids(&self) -> &[graphdb_core::Value] {
         &self.src_vids
     }
 
@@ -357,8 +357,8 @@ impl ExpandAllNode {
     }
 
     pub fn set_filter_string(&mut self, filter: String, ctx: Arc<ExpressionAnalysisContext>) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable(filter),
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable(filter),
         );
         let id = ctx.register_expression(expr);
         self.filter = Some(ContextualExpression::new(id, ctx));
@@ -450,8 +450,8 @@ impl crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimata
             + self.vertex_props.len() * std::mem::size_of::<TagProp>();
 
         // Estimate src_vids Vec<Value>
-        let src_vids_size = std::mem::size_of::<Vec<crate::core::Value>>()
-            + self.src_vids.len() * std::mem::size_of::<crate::core::Value>();
+        let src_vids_size = std::mem::size_of::<Vec<graphdb_core::Value>>()
+            + self.src_vids.len() * std::mem::size_of::<graphdb_core::Value>();
 
         // Estimate output_var Option<String>
         let output_var_size = std::mem::size_of::<Option<String>>()
@@ -608,7 +608,7 @@ impl TraverseNode {
         filter: Expression,
         ctx: Arc<ExpressionAnalysisContext>,
     ) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(filter);
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(filter);
         let id = ctx.register_expression(expr);
         self.e_filter = Some(ContextualExpression::new(id, ctx));
         self.e_filter_serializable = None;
@@ -628,7 +628,7 @@ impl TraverseNode {
         filter: Expression,
         ctx: Arc<ExpressionAnalysisContext>,
     ) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(filter);
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(filter);
         let id = ctx.register_expression(expr);
         self.v_filter = Some(ContextualExpression::new(id, ctx));
         self.v_filter_serializable = None;
@@ -648,7 +648,7 @@ impl TraverseNode {
         filter: Expression,
         ctx: Arc<ExpressionAnalysisContext>,
     ) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(filter);
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(filter);
         let id = ctx.register_expression(expr);
         self.first_step_filter = Some(ContextualExpression::new(id, ctx));
         self.first_step_filter_serializable = None;
@@ -759,8 +759,8 @@ impl AppendVerticesNode {
     }
 
     pub fn set_filter_string(&mut self, filter: String, ctx: Arc<ExpressionAnalysisContext>) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable(filter),
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable(filter),
         );
         let id = ctx.register_expression(expr);
         self.filter = Some(ContextualExpression::new(id, ctx));
@@ -789,7 +789,7 @@ impl AppendVerticesNode {
         expr: Expression,
         ctx: Arc<ExpressionAnalysisContext>,
     ) {
-        let meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);
         self.src_expression = Some(ContextualExpression::new(id, ctx));
         self.src_expression_serializable = None;
@@ -809,7 +809,7 @@ impl AppendVerticesNode {
         filter: Expression,
         ctx: Arc<ExpressionAnalysisContext>,
     ) {
-        let expr = crate::core::types::expr::ExpressionMeta::new(filter);
+        let expr = graphdb_core::types::expr::ExpressionMeta::new(filter);
         let id = ctx.register_expression(expr);
         self.v_filter = Some(ContextualExpression::new(id, ctx));
         self.v_filter_serializable = None;

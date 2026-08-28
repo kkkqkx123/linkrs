@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::{ContextualExpression, SerializableExpression};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node;
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
@@ -68,7 +68,7 @@ pub struct SelectNode {
         Option<Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for SelectNode {
@@ -308,7 +308,7 @@ pub struct LoopNode {
         Option<Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LoopNode {
@@ -1068,8 +1068,8 @@ mod tests {
     #[test]
     fn test_select_node_creation() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable("condition".to_string()),
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("condition".to_string()),
         );
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
@@ -1083,8 +1083,8 @@ mod tests {
     #[test]
     fn test_loop_node_creation() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::Variable("condition".to_string()),
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("condition".to_string()),
         );
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);

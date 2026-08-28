@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::YieldColumn;
 use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::Stmt;
 use crate::planning::physical_planner::convert_logical_to_physical;

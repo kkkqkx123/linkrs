@@ -2,7 +2,7 @@
 //!
 //! Query planning for queries that handle the WITH statement
 
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
 use crate::planning::plan::core::{
     next_node_id,
@@ -166,13 +166,13 @@ impl Planner for WithPlanner {
         if with_stmt.recursive {
             // For recursive CTE, create a loop node for iterative expansion
             let expr_ctx =
-                crate::core::types::expr::expression_context::ExpressionAnalysisContext::new();
+                graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new();
             let expr_id =
-                expr_ctx.register_expression(crate::core::types::ExpressionMeta::with_span(
-                    crate::core::Expression::literal(true),
-                    crate::core::types::Span::default(),
+                expr_ctx.register_expression(graphdb_core::types::ExpressionMeta::with_span(
+                    graphdb_core::Expression::literal(true),
+                    graphdb_core::types::Span::default(),
                 ));
-            let condition_expr = crate::core::types::ContextualExpression::new(
+            let condition_expr = graphdb_core::types::ContextualExpression::new(
                 expr_id,
                 std::sync::Arc::new(expr_ctx),
             );
@@ -196,10 +196,10 @@ impl Planner for WithPlanner {
                 .map(|item| {
                     let direction = match item.direction {
                         OrderDirection::Asc => {
-                            crate::core::types::graph_schema::OrderDirection::Asc
+                            graphdb_core::types::graph_schema::OrderDirection::Asc
                         }
                         OrderDirection::Desc => {
-                            crate::core::types::graph_schema::OrderDirection::Desc
+                            graphdb_core::types::graph_schema::OrderDirection::Desc
                         }
                     };
                     let expression = item
@@ -207,7 +207,7 @@ impl Planner for WithPlanner {
                         .expression()
                         .map(|e| e.inner().clone())
                         .unwrap_or_else(|| {
-                            crate::core::Expression::Variable(
+                            graphdb_core::Expression::Variable(
                                 item.expression.to_expression_string(),
                             )
                         });

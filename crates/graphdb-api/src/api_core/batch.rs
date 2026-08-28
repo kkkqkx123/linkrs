@@ -3,8 +3,8 @@
 //! Provides transport layer-independent batch operation capabilities
 //! Supports both synchronous and asynchronous execution modes
 
-use crate::core::CoreResult;
-use crate::core::{Edge, Vertex};
+use crate::CoreResult;
+use graphdb_core::{Edge, Vertex};
 use crate::storage::StorageClient;
 
 /// Batch operation configuration
@@ -331,7 +331,7 @@ mod tests {
     fn test_batch_operation_add_items() {
         let mut batch = BatchOperation::new(BatchConfig::default());
 
-        let vertex = Vertex::with_vid(crate::core::types::VertexId::from_int64(1));
+        let vertex = Vertex::with_vid(graphdb_core::types::VertexId::from_int64(1));
         batch.add_vertex(vertex);
 
         assert_eq!(batch.len(), 1);
@@ -345,7 +345,7 @@ mod tests {
 
         assert!(!batch.should_flush());
 
-        let vertex = Vertex::with_vid(crate::core::types::VertexId::from_int64(1));
+        let vertex = Vertex::with_vid(graphdb_core::types::VertexId::from_int64(1));
         batch.add_vertex(vertex.clone());
         batch.add_vertex(vertex);
 

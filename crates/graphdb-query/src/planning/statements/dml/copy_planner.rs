@@ -113,8 +113,8 @@ impl Default for CopyPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::Span;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::Span;
     use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::{Ast, CopyStmt, CopyTarget as AstCopyTarget};
 

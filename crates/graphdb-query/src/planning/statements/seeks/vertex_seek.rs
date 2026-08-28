@@ -4,8 +4,8 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{NodePattern, SeekResult, SeekStrategyContext, SeekStrategyType};
-use crate::core::types::VertexId;
-use crate::core::{StorageError, Value, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::{StorageError, Value, Vertex};
 use crate::storage::StorageReader;
 
 #[derive(Debug, Clone)]
@@ -91,9 +91,9 @@ impl VertexSeek {
 
     fn extract_vid_from_predicate(
         &self,
-        predicate: &crate::core::types::expr::Expression,
+        predicate: &graphdb_core::types::expr::Expression,
     ) -> Option<Value> {
-        use crate::core::types::expr::Expression;
+        use graphdb_core::types::expr::Expression;
 
         match predicate {
             Expression::Literal(value) => Some(value.clone()),

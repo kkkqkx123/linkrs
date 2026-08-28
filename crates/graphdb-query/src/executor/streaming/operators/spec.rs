@@ -11,11 +11,11 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::{ContextualExpression, Expression};
-use crate::core::types::operators::AggregateFunction;
-use crate::core::types::user::PasswordInfo;
-use crate::core::types::PropertyDef;
-use crate::core::{EdgeDirection, Value};
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::types::user::PasswordInfo;
+use graphdb_core::types::PropertyDef;
+use graphdb_core::{EdgeDirection, Value};
 use crate::executor::streaming::executor::SortDirection;
 use crate::executor::streaming::plan::types::PhysicalPlan;
 use crate::executor::streaming::slot::SlotLayout;
@@ -143,7 +143,7 @@ pub enum SourceSpec {
         index_id: u64,
         predicate: Box<BoundIndexPredicate>,
         projection: IndexProjection,
-        residual_filter: Option<crate::core::types::expr::Expression>,
+        residual_filter: Option<graphdb_core::types::expr::Expression>,
         output_layout: Arc<SlotLayout>,
     },
     /// Produces one singleton row from which correlated apply can pull.

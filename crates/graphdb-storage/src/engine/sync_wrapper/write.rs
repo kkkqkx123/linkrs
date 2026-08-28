@@ -1,8 +1,8 @@
 use super::SyncWrapper;
-use crate::core::types::{InsertEdgeInfo, InsertVertexInfo, UpdateInfo, UpdateOp, VertexId};
-use crate::core::{Edge, StorageError, Value, Vertex};
+use graphdb_core::types::{InsertEdgeInfo, InsertVertexInfo, UpdateInfo, UpdateOp, VertexId};
+use graphdb_core::{Edge, StorageError, Value, Vertex};
 use crate::{StorageClient, StorageWriter};
-use crate::sync::types::ChangeType;
+use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
     fn reject_staged_write(&self, error: StorageError) -> StorageError {

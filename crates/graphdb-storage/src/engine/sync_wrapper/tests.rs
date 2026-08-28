@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::SyncWrapper;
-use crate::core::types::VertexId;
+use graphdb_core::types::VertexId;
 #[cfg(feature = "fulltext-search")]
-use crate::core::types::{PropertyDef, SpaceInfo, TagInfo};
+use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo};
 #[cfg(feature = "fulltext-search")]
-use crate::core::vertex_edge_path::Tag;
+use graphdb_core::vertex_edge_path::Tag;
 #[cfg(feature = "fulltext-search")]
-use crate::core::DataType;
-use crate::core::Edge;
+use graphdb_core::DataType;
+use graphdb_core::Edge;
 #[cfg(feature = "fulltext-search")]
 use crate::{
     GraphStorage, StorageCommitOps, StorageOperationContextOps, StoragePersistenceOps,
     StorageReader, StorageSchemaOps,
 };
 use crate::{MockStorage, StorageWriter};
-use crate::sync::SyncManager;
+use graphdb_sync::SyncManager;
 
 #[test]
 fn does_not_buffer_sync_events_when_edge_insert_fails() {
@@ -42,8 +42,8 @@ fn does_not_buffer_sync_events_when_edge_insert_fails() {
 #[test]
 #[cfg(feature = "fulltext-search")]
 fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
-    use crate::sync::batch::BatchConfig;
-    use crate::sync::coordinator::SyncCoordinator;
+    use graphdb_sync::batch::BatchConfig;
+    use graphdb_sync::coordinator::SyncCoordinator;
     use graphdb_search::config::FulltextConfig;
     use graphdb_search::FulltextIndexManager;
 
@@ -86,11 +86,11 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     writer
         .insert_vertex(
             "test_space",
-            crate::core::Vertex::new(
+            graphdb_core::Vertex::new(
                 VertexId::from_int64(1),
                 vec![Tag::new(
                     "Person".to_string(),
-                    [("name".to_string(), crate::core::Value::string("one"))]
+                    [("name".to_string(), graphdb_core::Value::string("one"))]
                         .into_iter()
                         .collect(),
                 )],
@@ -120,11 +120,11 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     writer
         .insert_vertex(
             "test_space",
-            crate::core::Vertex::new(
+            graphdb_core::Vertex::new(
                 VertexId::from_int64(2),
                 vec![Tag::new(
                     "Person".to_string(),
-                    [("name".to_string(), crate::core::Value::string("two"))]
+                    [("name".to_string(), graphdb_core::Value::string("two"))]
                         .into_iter()
                         .collect(),
                 )],

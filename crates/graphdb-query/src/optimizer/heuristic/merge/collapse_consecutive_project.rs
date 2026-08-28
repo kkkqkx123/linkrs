@@ -12,7 +12,7 @@
 //! Two Project nodes appear in succession.
 //! The upper-level project does not rely on the alias resolution of the lower-level project.
 
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::rewrite_contextual_expression;
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -158,8 +158,8 @@ impl MergeRule for CollapseConsecutiveProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 
     #[test]
@@ -177,8 +177,8 @@ mod tests {
 
     #[test]
     fn test_collapse_consecutive_projects() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
         use std::sync::Arc;
 
         // Create the starting node.

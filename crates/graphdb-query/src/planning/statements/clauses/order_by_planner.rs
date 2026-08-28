@@ -3,7 +3,7 @@
 //! Responsible for planning the execution of the ORDER BY clause and sorting the results.
 //! Supports both simple column references and complex expressions (e.g., function calls).
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::parser::OrderByItem;
@@ -50,7 +50,7 @@ fn extract_order_by_items(stmt: &Stmt) -> Vec<OrderByItem> {
 /// Extract the expression from a ContextualExpression.
 ///
 /// Returns a clone of the inner Expression, or a Variable expression as fallback.
-fn extract_expression(expr: &ContextualExpression) -> crate::core::Expression {
+fn extract_expression(expr: &ContextualExpression) -> graphdb_core::Expression {
     if let Some(expr_meta) = expr.expression() {
         expr_meta.inner().clone()
     } else {
@@ -59,7 +59,7 @@ fn extract_expression(expr: &ContextualExpression) -> crate::core::Expression {
             .expression()
             .map(|e| e.inner().to_expression_string())
             .unwrap_or_default();
-        crate::core::Expression::Variable(expr_string)
+        graphdb_core::Expression::Variable(expr_string)
     }
 }
 
@@ -140,9 +140,9 @@ impl ClausePlanner for OrderByClausePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::OrderDirection;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::OrderDirection;
+    use graphdb_core::Expression;
     use crate::parser::ast::{OrderByItem, Span};
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
@@ -158,9 +158,9 @@ mod tests {
     fn test_extract_order_by_items() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),
@@ -207,9 +207,9 @@ mod tests {
     fn test_extract_expression() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let result = extract_expression(&ctx_expr);
         assert_eq!(result, Expression::Variable("age".to_string()));
@@ -222,9 +222,9 @@ mod tests {
             object: Box::new(Expression::Variable("n".to_string())),
             property: "name".to_string(),
         };
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr.clone());
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr.clone());
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let result = extract_expression(&ctx_expr);
         assert_eq!(result, expr);
@@ -240,9 +240,9 @@ mod tests {
                 Expression::Variable("b".to_string()),
             ],
         };
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr.clone());
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr.clone());
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let result = extract_expression(&ctx_expr);
         assert_eq!(result, expr);
@@ -252,9 +252,9 @@ mod tests {
     fn test_transform_clause() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),
@@ -351,9 +351,9 @@ mod tests {
     fn test_transform_clause_empty_input_plan() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr = Expression::Variable("age".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let match_stmt = Stmt::Match(crate::parser::ast::stmt::MatchStmt {
             span: Span::default(),

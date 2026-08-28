@@ -4,8 +4,8 @@
 //! since the last checkpoint. On checkpoint, the full state is written to the
 //! data files and the WAL is truncated.
 
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use crate::index::entity_ref_codec::{write_entity_ref, EntityRefReader};
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::types::IndexRecord;
@@ -61,7 +61,7 @@ impl WalEntry {
                         let name_bytes = name.as_bytes();
                         writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
                         writer.write_all(name_bytes)?;
-                        let value_bytes = crate::core::value::ordered_codec::OrderedCodec::new()
+                        let value_bytes = graphdb_core::value::ordered_codec::OrderedCodec::new()
                             .encode(value)
                             .map_err(|e| {
                                 std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
@@ -149,7 +149,7 @@ impl WalEntry {
                     let value_len = u32::from_le_bytes(value_len_bytes) as usize;
                     let mut value_bytes = vec![0u8; value_len];
                     reader.read_exact(&mut value_bytes)?;
-                    let value = crate::core::value::ordered_codec::OrderedCodec::new()
+                    let value = graphdb_core::value::ordered_codec::OrderedCodec::new()
                         .decode(&value_bytes)
                         .map_err(|e| {
                             std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
@@ -281,9 +281,9 @@ pub(crate) fn truncate_wal<P: AsRef<Path>>(wal_path: P) -> StorageResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::wal::EntityRef;
-    use crate::core::Value;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::wal::EntityRef;
+    use graphdb_core::Value;
 
     #[test]
     fn serialize_insert_roundtrip() {

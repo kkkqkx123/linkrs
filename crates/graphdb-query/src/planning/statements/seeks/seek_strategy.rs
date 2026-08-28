@@ -2,7 +2,7 @@
 //!
 //! Define vertex search strategies and selectors to determine the method for finding the starting vertex in MATCH queries.
 
-use crate::core::StorageError;
+use graphdb_core::StorageError;
 use crate::storage::StorageReader;
 
 use super::edge_seek::{EdgePattern, EdgeSeek};

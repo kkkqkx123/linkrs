@@ -1,7 +1,7 @@
 //! Maintenance Operation Planner
 //! Handling query planning related to maintenance tasks (such as SUBMIT JOB, etc.)
 
-use crate::core::types::PropertyDef;
+use graphdb_core::types::PropertyDef;
 use crate::parser::ast::{AlterTarget, CreateTarget, IndexType, ShowTarget, Stmt};
 use crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo;
 use crate::planning::plan::core::nodes::management::index_nodes::IndexManageInfo;

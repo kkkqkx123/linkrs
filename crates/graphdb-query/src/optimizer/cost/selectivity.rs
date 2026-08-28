@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::BinaryOperator;
-use crate::core::types::Expression;
-use crate::core::value::Value;
+use graphdb_core::types::BinaryOperator;
+use graphdb_core::types::Expression;
+use graphdb_core::value::Value;
 use crate::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
 use crate::optimizer::stats::{RangeCondition, StatisticsManager};
 
@@ -477,11 +477,11 @@ impl SelectivityEstimator {
     fn estimate_unary_expression(
         &self,
         space: Option<&str>,
-        op: &crate::core::types::UnaryOperator,
+        op: &graphdb_core::types::UnaryOperator,
         expr: &Expression,
         tag_name: Option<&str>,
     ) -> f64 {
-        use crate::core::types::UnaryOperator;
+        use graphdb_core::types::UnaryOperator;
 
         match op {
             UnaryOperator::Not => {
@@ -501,7 +501,7 @@ impl SelectivityEstimator {
         match name_lower.as_str() {
             "like" | "ilike" if args.len() >= 2 => {
                 // Try to extract the LIKE pattern.
-                if let Expression::Literal(crate::core::value::Value::String(pattern)) = &args[1] {
+                if let Expression::Literal(graphdb_core::value::Value::String(pattern)) = &args[1] {
                     return self.estimate_like_selectivity(pattern);
                 }
                 defaults::EQUALITY

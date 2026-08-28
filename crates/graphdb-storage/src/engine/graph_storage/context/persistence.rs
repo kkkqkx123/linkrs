@@ -1,6 +1,6 @@
-use crate::core::metadata::IndexMetadataManager;
-use crate::core::types::LabelId;
-use crate::core::StorageResult;
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::LabelId;
+use graphdb_core::StorageResult;
 use crate::engine::data_store::EdgeTableKey;
 use rayon::prelude::*;
 use std::path::Path;
@@ -152,7 +152,7 @@ impl GraphStorageContext {
                             }
                         }
                     }
-                    Ok::<(), crate::core::StorageError>(())
+                    Ok::<(), graphdb_core::StorageError>(())
                 })?;
         }
 

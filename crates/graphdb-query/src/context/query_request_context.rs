@@ -2,7 +2,7 @@
 //!
 //! This module provides the minimum amount of contextual information required to execute the query, thereby avoiding the need for the query layer to rely on the API layer.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::storage::QueryStorage;
 use crate::storage::StorageOperationContext;
 use parking_lot::RwLock;
@@ -40,13 +40,13 @@ pub struct QueryRequestContext {
     /// [`QueryRegistry`]: crate::executor::streaming::query_registry::QueryRegistry
     pub query_id: Option<u64>,
     /// Transaction identity and storage binding for this execution.
-    pub transaction_id: Option<crate::core::types::TransactionId>,
+    pub transaction_id: Option<graphdb_core::types::TransactionId>,
     pub auto_commit: bool,
     pub read_only: bool,
     /// Transaction isolation level injected by the API layer for queries
     /// running inside an explicit transaction. `None` = auto-commit
     /// statement-level snapshot semantics.
-    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     pub operation_context: Option<StorageOperationContext>,
     pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Pre-parsed statement AST supplied by the API layer.

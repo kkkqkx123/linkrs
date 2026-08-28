@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-use crate::core::{StorageResult, Value};
+use graphdb_core::{StorageResult, Value};
 use crate::encoding::EncodingType;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,7 +180,7 @@ fn serialize_value(writer: &mut impl Write, value: &Value) -> StorageResult<usiz
             writer.write_all(bytes)?;
             Ok(5 + bytes.len())
         }
-        _ => Err(crate::core::StorageError::not_supported(format!(
+        _ => Err(graphdb_core::StorageError::not_supported(format!(
             "Stats serialization for value type {:?}",
             value.data_type()
         ))),
@@ -229,10 +229,10 @@ fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
             let mut bytes = vec![0u8; len];
             reader.read_exact(&mut bytes)?;
             let s = String::from_utf8(bytes)
-                .map_err(|e| crate::core::StorageError::deserialize_error(e.to_string()))?;
+                .map_err(|e| graphdb_core::StorageError::deserialize_error(e.to_string()))?;
             Ok(Value::string(s))
         }
-        _ => Err(crate::core::StorageError::deserialize_error(format!(
+        _ => Err(graphdb_core::StorageError::deserialize_error(format!(
             "Unknown value tag {} in stats",
             tag[0]
         ))),
@@ -283,7 +283,7 @@ pub fn compute_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     #[test]
     fn test_stats_serialize_roundtrip() {

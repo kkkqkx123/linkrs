@@ -1,7 +1,7 @@
 use bitvec::prelude::*;
 use std::collections::HashSet;
 
-use crate::core::types::storage_ids::VertexId;
+use graphdb_core::types::storage_ids::VertexId;
 
 const DENSE_THRESHOLD: usize = 64;
 

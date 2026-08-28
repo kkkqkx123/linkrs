@@ -1,6 +1,6 @@
 //! Join and apply (correlated subquery) spec builders.
 
-use crate::core::types::expr::Expression;
+use graphdb_core::types::expr::Expression;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{ApplySpec, BuildSide, JoinSpec};
 
@@ -127,7 +127,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_semi_join_spec(
         join_condition = Some(match join_condition {
             Some(equi) => Expression::Binary {
                 left: Box::new(equi),
-                op: crate::core::types::operators::BinaryOperator::And,
+                op: graphdb_core::types::operators::BinaryOperator::And,
                 right: Box::new(residual),
             },
             None => residual,
@@ -144,8 +144,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_semi_join_spec(
 /// Returns `Ok(None)` when the keys do not form a valid equi join (missing,
 /// empty or unequal-length key lists).
 fn equi_condition_from_keys(
-    hash_keys: &[crate::core::types::expr::ContextualExpression],
-    probe_keys: &[crate::core::types::expr::ContextualExpression],
+    hash_keys: &[graphdb_core::types::expr::ContextualExpression],
+    probe_keys: &[graphdb_core::types::expr::ContextualExpression],
 ) -> Result<Option<Expression>, PlanBuildError> {
     if hash_keys.is_empty() || probe_keys.is_empty() || hash_keys.len() != probe_keys.len() {
         return Ok(None);
@@ -168,7 +168,7 @@ fn equi_condition_from_keys(
     })?;
     let mut condition = Expression::Binary {
         left: Box::new(left_first),
-        op: crate::core::types::operators::BinaryOperator::Equal,
+        op: graphdb_core::types::operators::BinaryOperator::Equal,
         right: Box::new(right_first),
     };
     for i in 1..hash_keys.len() {
@@ -190,12 +190,12 @@ fn equi_condition_from_keys(
         })?;
         let eq = Expression::Binary {
             left: Box::new(left),
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             right: Box::new(right),
         };
         condition = Expression::Binary {
             left: Box::new(condition),
-            op: crate::core::types::operators::BinaryOperator::And,
+            op: graphdb_core::types::operators::BinaryOperator::And,
             right: Box::new(eq),
         };
     }
@@ -203,7 +203,7 @@ fn equi_condition_from_keys(
 }
 
 fn hash_key_expressions(
-    keys: &[crate::core::types::expr::ContextualExpression],
+    keys: &[graphdb_core::types::expr::ContextualExpression],
 ) -> Result<Vec<Expression>, PlanBuildError> {
     keys.iter().map(contextual_to_expression).collect()
 }
@@ -211,8 +211,8 @@ fn hash_key_expressions(
 /// Default join spec builder: valid equi keys produce the hash join form
 /// (`HashJoin`/`HashLeftJoin`), invalid keys fall back to `default`.
 pub(in crate::executor::streaming::plan::arena_builder) fn build_join_with_keys(
-    hash_keys: &[crate::core::types::expr::ContextualExpression],
-    probe_keys: &[crate::core::types::expr::ContextualExpression],
+    hash_keys: &[graphdb_core::types::expr::ContextualExpression],
+    probe_keys: &[graphdb_core::types::expr::ContextualExpression],
     default: JoinSpec,
 ) -> Result<JoinSpec, PlanBuildError> {
     match equi_condition_from_keys(hash_keys, probe_keys)? {
@@ -238,8 +238,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_join_with_keys(
 /// Condition (nested-loop) join spec builder: the equi-condition is attached
 /// to `default` but no hash table is requested.
 fn build_join_with_condition(
-    hash_keys: &[crate::core::types::expr::ContextualExpression],
-    probe_keys: &[crate::core::types::expr::ContextualExpression],
+    hash_keys: &[graphdb_core::types::expr::ContextualExpression],
+    probe_keys: &[graphdb_core::types::expr::ContextualExpression],
     default: JoinSpec,
 ) -> Result<JoinSpec, PlanBuildError> {
     let Some(condition) = equi_condition_from_keys(hash_keys, probe_keys)? else {

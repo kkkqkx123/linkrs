@@ -20,7 +20,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 use crate::executor::streaming::plan::PhysicalPlan;
 
 use super::config::{CachePriority, PlanCacheConfig};
@@ -36,7 +36,7 @@ pub struct ParamPosition {
     /// Position of the parameter in the query
     pub position: usize,
     /// Desired data types
-    pub expected_type: Option<crate::core::types::DataType>,
+    pub expected_type: Option<graphdb_core::types::DataType>,
 }
 
 /// Context stored with a cached plan.
@@ -1466,7 +1466,7 @@ mod tests {
             index: 1,
             name: None,
             position: 0,
-            expected_type: Some(crate::core::types::DataType::String),
+            expected_type: Some(graphdb_core::types::DataType::String),
         }];
         let param_sig = QueryPlanCache::compute_param_type_signature(&param_positions);
         let context = PlanCacheContext {

@@ -2,10 +2,10 @@
 //!
 //! Business types that are independent of the transport layer
 
-use crate::core::types::{SpaceSummary, TransactionId};
-use crate::core::Value;
-use crate::query::executor::base::ExecutionResult;
-use crate::query::parser::ast::stmt::Ast;
+use graphdb_core::types::{SpaceSummary, TransactionId};
+use graphdb_core::Value;
+use graphdb_query::executor::base::ExecutionResult;
+use graphdb_query::parser::ast::stmt::Ast;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ pub struct QueryRequest {
     /// Transaction isolation level for executions inside an explicit
     /// transaction (injected by the API layer from `TransactionExecution`).
     /// `None` = auto-commit statement-level snapshot semantics.
-    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     /// Pre-parsed statement AST from the API-layer classification pass.
     ///
     /// When present, the query engine skips its own parse of the query text
@@ -57,7 +57,7 @@ pub struct QueryRequest {
     pub consistency: ConsistencyLevel,
     /// Minimum LSN to wait for when `consistency` is `ReadYourWrites`. When
     /// `None`, the current outbox `materialized_lsn` is used.
-    pub minimum_lsn: Option<crate::core::types::CommitLsn>,
+    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
 impl Default for QueryRequest {
@@ -171,7 +171,7 @@ impl QueryResult {
                         Value::String(s) => s.parse().ok(),
                         _ => None,
                     })
-                    .unwrap_or(crate::core::DataType::String);
+                    .unwrap_or(graphdb_core::DataType::String);
                 Some(SpaceSummary::new(id, name, vid_type))
             }
             _ => None,
@@ -216,7 +216,7 @@ pub struct SavepointId(pub u64);
 #[derive(Debug, Clone)]
 pub struct PropertyDef {
     pub name: String,
-    pub data_type: crate::core::DataType,
+    pub data_type: graphdb_core::DataType,
     pub nullable: bool,
     pub default_value: Option<Value>,
     pub comment: Option<String>,
@@ -234,7 +234,7 @@ pub enum IndexTarget {
 pub struct SpaceConfig {
     pub partition_num: i32,
     pub replica_factor: i32,
-    pub vid_type: crate::core::DataType,
+    pub vid_type: graphdb_core::DataType,
     pub comment: Option<String>,
 }
 
@@ -243,7 +243,7 @@ impl Default for SpaceConfig {
         Self {
             partition_num: 100,
             replica_factor: 1,
-            vid_type: crate::core::DataType::String,
+            vid_type: graphdb_core::DataType::String,
             comment: None,
         }
     }

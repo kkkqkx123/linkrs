@@ -421,12 +421,12 @@ mod tests {
         let start_enum = PlanNodeEnum::Start(start);
 
         let ctx = std::sync::Arc::new(
-            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
-        let expr = crate::core::Expression::Variable("test".to_string());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr = graphdb_core::Expression::Variable("test".to_string());
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
-        let condition = crate::core::types::expr::contextual::ContextualExpression::new(id, ctx);
+        let condition = graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx);
 
         let filter =
             crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(

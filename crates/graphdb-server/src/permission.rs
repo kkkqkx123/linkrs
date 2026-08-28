@@ -7,7 +7,7 @@ pub mod permission_checker;
 pub mod permission_manager;
 
 // Re-exporting permission types from the core layer
-pub use crate::core::{Permission, RoleType};
+pub use graphdb_core::{Permission, RoleType};
 
 pub use error::{PermissionError, PermissionResult};
 pub use permission_checker::{OperationType, PermissionChecker};

@@ -36,9 +36,9 @@ pub use stats::{MergeMetrics, MergeMetricsResult, MergeStats};
 // Re-export from parent
 pub use super::{CsrBase, CsrVariant, Nbr};
 
-use crate::core::types::CompactConfig;
-use crate::core::types::{EdgeId, Timestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::CompactConfig;
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::cold::{ColdPropertyIndex, ColdSnapshot};
 use crate::edge::edge_table::core::EdgeTableConfig;
 use crate::edge::edge_table::snapshot::max_edge_row;
@@ -124,7 +124,7 @@ impl EdgeStore {
         self.0.schema_mut()
     }
 
-    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<crate::core::stats::StatsManager>) {
+    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_core::stats::StatsManager>) {
         self.0.set_stats_manager(stats)
     }
 
@@ -140,7 +140,7 @@ impl EdgeStore {
         src: u32,
         dst: u32,
         rank: i64,
-        property_values: &[(String, crate::core::Value)],
+        property_values: &[(String, graphdb_core::Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         self.0.insert_edge(src, dst, rank, property_values, ts)
@@ -216,7 +216,7 @@ impl EdgeStore {
         dst: u32,
         rank: i64,
         prop_name: &str,
-        value: &crate::core::Value,
+        value: &graphdb_core::Value,
         ts: Timestamp,
     ) -> StorageResult<bool> {
         self.0
@@ -234,7 +234,7 @@ impl EdgeStore {
     pub fn add_property(
         &mut self,
         name: String,
-        data_type: crate::core::DataType,
+        data_type: graphdb_core::DataType,
         nullable: bool,
     ) -> StorageResult<()> {
         self.0.add_property(name, data_type, nullable)
@@ -962,8 +962,8 @@ impl core::TimeTravelEdgeStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::DataType;
-    use crate::core::Value;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::CsrBase;
     use crate::edge::EdgeSchema;

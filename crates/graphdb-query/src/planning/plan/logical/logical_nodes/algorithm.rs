@@ -1,8 +1,8 @@
 //! Logical algorithm nodes: MultiShortestPath, BFSShortest, AllPaths, ShortestPath.
 
-use crate::core::types::EdgeDirection;
-use crate::core::types::VertexId;
-use crate::core::Value;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::types::VertexId;
+use graphdb_core::Value;
 use crate::define_logical_binary_input_node;
 
 define_logical_binary_input_node! {
@@ -44,7 +44,7 @@ define_logical_binary_input_node! {
         has_step_limit: bool,
         limit: i64,
         offset: i64,
-        filter: Option<crate::core::types::expr::contextual::ContextualExpression>,
+        filter: Option<graphdb_core::types::expr::contextual::ContextualExpression>,
         start_vertex_ids: Vec<VertexId>,
         end_vertex_ids: Vec<VertexId>,
     }

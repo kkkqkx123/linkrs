@@ -2,8 +2,8 @@
 //!
 //! Defines the data structure of the actuator's execution result, supporting multiple result types.
 
-use crate::core::error::DBError;
-use crate::core::types::{SpaceStatus, SpaceSummary};
+use graphdb_core::error::DBError;
+use graphdb_core::types::{SpaceStatus, SpaceSummary};
 use crate::data_set::DataSet;
 
 /// Type of execution result
@@ -116,7 +116,7 @@ pub fn check_space_accessible(space: &SpaceSummary) -> Result<(), ExecutionResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::DataType;
+    use graphdb_core::types::DataType;
 
     fn create_test_summary_with_status(status: SpaceStatus) -> SpaceSummary {
         SpaceSummary {

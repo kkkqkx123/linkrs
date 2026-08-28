@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
-use crate::core::error::storage::StorageErrorKind;
-use crate::core::error::StorageError;
-use crate::core::types::Timestamp;
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::error::StorageError;
+use graphdb_core::types::Timestamp;
 
 /// Tracks all active snapshots and their reference counts
 ///

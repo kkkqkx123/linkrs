@@ -1,12 +1,12 @@
 //! Batch Task Manager
 
-use crate::core::types::VertexId;
-use crate::core::{Edge, Value, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, Value, Vertex};
 use crate::batch::types::*;
 use crate::storage::StorageClient;
 use dashmap::DashMap;
-use graphdb_api::core::{BatchConfig, BatchOperation};
-use graphdb_api::core::{CoreError, CoreResult};
+use graphdb_api::api_core::{BatchConfig, BatchOperation};
+use graphdb_api::api_core::{CoreError, CoreResult};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -162,7 +162,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         space_name: &str,
     ) -> CoreResult<BatchResultData> {
         // Convert BatchItem to core BatchItem
-        let core_items: Vec<graphdb_api::core::BatchItem> = items
+        let core_items: Vec<graphdb_api::api_core::BatchItem> = items
             .into_iter()
             .filter_map(|item| self.convert_to_core_item(item))
             .collect();
@@ -186,8 +186,8 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
                 .map(|e| BatchErrorData {
                     index: e.index,
                     item_type: match e.item_type {
-                        graphdb_api::core::BatchItemType::Vertex => BatchItemType::Vertex,
-                        graphdb_api::core::BatchItemType::Edge => BatchItemType::Edge,
+                        graphdb_api::api_core::BatchItemType::Vertex => BatchItemType::Vertex,
+                        graphdb_api::api_core::BatchItemType::Edge => BatchItemType::Edge,
                     },
                     error: e.message,
                 })
@@ -196,14 +196,14 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
     }
 
     /// Convert server BatchItem to core BatchItem
-    fn convert_to_core_item(&self, item: BatchItem) -> Option<graphdb_api::core::BatchItem> {
+    fn convert_to_core_item(&self, item: BatchItem) -> Option<graphdb_api::api_core::BatchItem> {
         match item {
             BatchItem::Vertex(data) => self
                 .convert_vertex_data(data)
-                .map(graphdb_api::core::BatchItem::Vertex),
+                .map(graphdb_api::api_core::BatchItem::Vertex),
             BatchItem::Edge(data) => self
                 .convert_edge_data(data)
-                .map(graphdb_api::core::BatchItem::Edge),
+                .map(graphdb_api::api_core::BatchItem::Edge),
         }
     }
 
@@ -211,11 +211,11 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         let vid_value = json_to_value(data.vid)?;
         let vid = value_to_vertex_id(&vid_value)?;
 
-        let tags: Vec<crate::core::vertex_edge_path::Tag> = data
+        let tags: Vec<graphdb_core::vertex_edge_path::Tag> = data
             .tags
             .into_iter()
             .map(|name| {
-                crate::core::vertex_edge_path::Tag::new(name, std::collections::HashMap::new())
+                graphdb_core::vertex_edge_path::Tag::new(name, std::collections::HashMap::new())
             })
             .collect();
 
@@ -255,7 +255,7 @@ fn value_to_vertex_id(value: &Value) -> Option<VertexId> {
 
 fn json_to_value(json: serde_json::Value) -> Option<Value> {
     match json {
-        serde_json::Value::Null => Some(Value::Null(crate::core::NullType::Null)),
+        serde_json::Value::Null => Some(Value::Null(graphdb_core::NullType::Null)),
         serde_json::Value::Bool(b) => Some(Value::Bool(b)),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -267,11 +267,11 @@ fn json_to_value(json: serde_json::Value) -> Option<Value> {
         serde_json::Value::String(s) => Some(Value::string(s)),
         serde_json::Value::Array(arr) => {
             let values: Vec<Value> = arr.into_iter().filter_map(json_to_value).collect();
-            Some(Value::list(crate::core::value::List::from(values)))
+            Some(Value::list(graphdb_core::value::List::from(values)))
         }
         serde_json::Value::Object(data) => {
             let obj = serde_json::Value::Object(data);
-            crate::core::value::Json::parse(&obj.to_string())
+            graphdb_core::value::Json::parse(&obj.to_string())
                 .ok()
                 .map(|j| Value::Json(Box::new(j)))
         }
@@ -287,7 +287,7 @@ mod tests {
         // Test null
         assert_eq!(
             json_to_value(serde_json::Value::Null),
-            Some(Value::Null(crate::core::NullType::Null))
+            Some(Value::Null(graphdb_core::NullType::Null))
         );
 
         // Test bool

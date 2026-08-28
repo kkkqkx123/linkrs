@@ -7,7 +7,7 @@ use log::{info, warn};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::core::error::{ManagerError, ManagerResult};
+use graphdb_core::error::{ManagerError, ManagerResult};
 
 /// Query status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

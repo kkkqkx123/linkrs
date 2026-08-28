@@ -1,7 +1,7 @@
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::wal::EntityRef;
-use crate::core::{Edge, Value, Vertex};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{Edge, Value, Vertex};
 use crate::executor::base::{MemoryBudget, MemoryReservation};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -31,7 +31,7 @@ pub(crate) fn make_flat_vertex_record_row(
     let tags = if record.tag_name.is_empty() {
         Vec::new()
     } else {
-        vec![crate::core::Tag::new(record.tag_name, properties.clone())]
+        vec![graphdb_core::Tag::new(record.tag_name, properties.clone())]
     };
     let vertex = Vertex {
         vid: record.vid,
@@ -48,7 +48,7 @@ pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[String]) -> Vec<Va
         .map(|prop| {
             vertex
                 .property_value(prop)
-                .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
         })
         .collect();
     let mut row = Vec::with_capacity(flatten.len() + 1);
@@ -80,7 +80,7 @@ pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[String]) -> Vec<Value> {
             edge.properties()
                 .get(prop)
                 .cloned()
-                .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
         })
         .collect();
     let mut row = Vec::with_capacity(flatten.len() + 1);
@@ -165,8 +165,8 @@ pub(crate) fn attach_columnar_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::Tag;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::Tag;
 
     #[test]
     fn flat_vertex_row_contains_projected_properties_in_order() {

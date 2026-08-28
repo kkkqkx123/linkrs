@@ -6,8 +6,8 @@ use std::time::Instant;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::cursor::PartitionSelector;
 
 const MANIFEST_FORMAT_VERSION: u16 = 3;
@@ -348,7 +348,7 @@ impl IndexManifest {
         let mut versioned = Vec::new();
         crate::persistence::write_versioned_payload(
             &mut versioned,
-            crate::core::types::StorageVersion::CURRENT as u32,
+            graphdb_core::types::StorageVersion::CURRENT as u32,
             &bytes,
         );
         crate::persistence::write_file_atomic(path, &versioned)
@@ -596,7 +596,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{IndexManifest, IndexShard, ManifestCatalog};
-    use crate::core::types::IndexGeneration;
+    use graphdb_core::types::IndexGeneration;
     use crate::cursor::PartitionSelector;
 
     fn shard(shard_id: u32, lower: Option<&[u8]>, upper: Option<&[u8]>) -> IndexShard {

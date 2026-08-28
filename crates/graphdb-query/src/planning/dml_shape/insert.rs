@@ -1,6 +1,6 @@
 //! INSERT statement shape renderer.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::parser::ast::{InsertStmt, InsertTarget};
 
 use super::render_contextual;

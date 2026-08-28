@@ -1,14 +1,14 @@
-use crate::core::types::{CompactConfig, CompactResult, CompactStats, CompactTarget};
-use crate::core::types::{CompactError, Timestamp};
+use graphdb_core::types::{CompactConfig, CompactResult, CompactStats, CompactTarget};
+use graphdb_core::types::{CompactError, Timestamp};
 use crate::engine::graph_storage::GraphStorageContext;
 
 impl CompactTarget for GraphStorageContext {
     fn compact(&self, config: &CompactConfig, ts: Timestamp) -> CompactResult<()> {
         let strategy_desc = match &config.strategy {
-            crate::core::types::CompactionStrategy::Fixed(ratio) => {
+            graphdb_core::types::CompactionStrategy::Fixed(ratio) => {
                 format!("fixed(ratio={})", ratio)
             }
-            crate::core::types::CompactionStrategy::Adaptive(cfg) => {
+            graphdb_core::types::CompactionStrategy::Adaptive(cfg) => {
                 format!(
                     "adaptive(base={}, reduced={}, threshold={})",
                     cfg.base_ratio, cfg.reduced_ratio, cfg.size_threshold

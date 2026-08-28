@@ -128,7 +128,7 @@ impl SegmentFreeList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{EdgeId, VertexId};
+    use graphdb_core::types::{EdgeId, VertexId};
     use crate::edge::CsrBase;
 
     #[test]

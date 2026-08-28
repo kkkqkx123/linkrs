@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::core::types::LabelId;
+use graphdb_core::types::LabelId;
 
 /// Standard storage layout rooted at a database work directory.
 #[derive(Debug, Clone)]

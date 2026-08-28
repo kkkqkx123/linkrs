@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::{Position, Span};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{Position, Span};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::lexing::LexError;
 use crate::parser::lexing::Lexer;
@@ -857,31 +857,31 @@ impl<'a> ParseContext<'a> {
         }
     }
 
-    pub fn consume_value(&mut self) -> Result<crate::core::Value, ParseError> {
+    pub fn consume_value(&mut self) -> Result<graphdb_core::Value, ParseError> {
         match &self.current_token.kind {
             TokenKind::StringLiteral(s) => {
                 let s = s.clone();
                 self.next_token();
-                Ok(crate::core::Value::string(s))
+                Ok(graphdb_core::Value::string(s))
             }
             TokenKind::IntegerLiteral(n) => {
                 let n = *n;
                 self.next_token();
-                Ok(crate::core::Value::BigInt(n))
+                Ok(graphdb_core::Value::BigInt(n))
             }
             TokenKind::FloatLiteral(f) => {
                 let f = *f;
                 self.next_token();
-                Ok(crate::core::Value::Double(f))
+                Ok(graphdb_core::Value::Double(f))
             }
             TokenKind::BooleanLiteral(b) => {
                 let b = *b;
                 self.next_token();
-                Ok(crate::core::Value::Bool(b))
+                Ok(graphdb_core::Value::Bool(b))
             }
             TokenKind::Null => {
                 self.next_token();
-                Ok(crate::core::Value::Null(crate::core::null::NullType::Null))
+                Ok(graphdb_core::Value::Null(graphdb_core::null::NullType::Null))
             }
             _ => {
                 let pos = self.current_position();

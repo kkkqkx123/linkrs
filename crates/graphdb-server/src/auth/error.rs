@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
+use graphdb_core::error::codes::{ErrorCode, PublicError, ToPublicError};
 
 /// Authentication operation result type alias
 pub type AuthResult<T> = Result<T, AuthError>;

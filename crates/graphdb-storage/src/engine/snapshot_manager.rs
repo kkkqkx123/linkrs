@@ -36,7 +36,7 @@ use std::time::{Duration, SystemTime};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 
 /// Snapshot format version
 const SNAPSHOT_FORMAT_VERSION: u32 = 1;

@@ -155,7 +155,7 @@ pub(super) fn populate_input_contracts(
                     let key_slot = hash_expressions
                         .first()
                         .and_then(|expr| {
-                            if let crate::core::types::expr::Expression::Variable(name) = expr {
+                            if let graphdb_core::types::expr::Expression::Variable(name) = expr {
                                 inputs.first().and_then(|input| input.layout.slot_id(name))
                             } else {
                                 None

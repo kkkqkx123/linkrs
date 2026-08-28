@@ -25,14 +25,14 @@ pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::core::metadata::{IndexMetadataManager, SchemaManager};
-use crate::core::stats::StatsManager;
-use crate::core::types::{
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{
     CommitLsn, CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId,
     PasswordInfo, PropertyDef, SnapshotTimestamp, SpaceInfo, TagInfo, Timestamp, UpdateInfo,
     UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::client::ColdSnapshotInfo;
 use crate::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
@@ -92,7 +92,7 @@ impl crate::stats_reader::ColumnStatsReader for GraphStorage {
 
 impl GraphStorage {
     /// Return the MVCC manager used by this storage instance.
-    pub fn version_manager(&self) -> Arc<crate::transaction::VersionManager> {
+    pub fn version_manager(&self) -> Arc<graphdb_transaction::VersionManager> {
         self.ctx.version_manager().clone()
     }
 
@@ -225,7 +225,7 @@ impl GraphStorage {
     pub fn open_with_persistence(
         path: PathBuf,
         enable_wal: bool,
-        sync_policy: Option<crate::transaction::wal::SyncPolicy>,
+        sync_policy: Option<graphdb_transaction::wal::SyncPolicy>,
     ) -> StorageResult<Self> {
         let mut config = PersistenceConfig::for_work_dir(&path);
         config.enable_wal = enable_wal;
@@ -614,10 +614,10 @@ impl GraphStorage {
                 .get_edge_index(space_id, index_name)?)
             .ok_or_else(|| StorageError::not_found(format!("Index {index_name} not found")))?;
         let boundary = match index.index_type {
-            crate::core::types::IndexType::TagIndex => {
+            graphdb_core::types::IndexType::TagIndex => {
                 KeyBuilder::build_vertex_index_value_prefix(space_id, index_name, value)?.0
             }
-            crate::core::types::IndexType::EdgeIndex => {
+            graphdb_core::types::IndexType::EdgeIndex => {
                 KeyBuilder::build_edge_index_value_prefix(space_id, index_name, value)?.0
             }
         };
@@ -1097,13 +1097,13 @@ impl StorageReader for GraphStorage {
             let ctx = self.ctx.clone();
             let stale_checker: Option<crate::index::types::StaleChecker> = Some(Arc::new(
                 move |entity_ref, _entity_version| match entity_ref {
-                    crate::core::wal::EntityRef::Vertex(vid) => {
+                    graphdb_core::wal::EntityRef::Vertex(vid) => {
                         reader::get_vertex(&ctx, &space_name, vid)
                             .ok()
                             .flatten()
                             .is_some()
                     }
-                    crate::core::wal::EntityRef::Edge { .. } => true,
+                    graphdb_core::wal::EntityRef::Edge { .. } => true,
                 },
             ));
             let cursor = self
@@ -1120,13 +1120,13 @@ impl StorageReader for GraphStorage {
             let ctx = self.ctx.clone();
             let stale_checker: Option<crate::index::types::StaleChecker> = Some(Arc::new(
                 move |entity_ref, _entity_version| match entity_ref {
-                    crate::core::wal::EntityRef::Vertex(vid) => {
+                    graphdb_core::wal::EntityRef::Vertex(vid) => {
                         reader::get_vertex(&ctx, &space_name, vid)
                             .ok()
                             .flatten()
                             .is_some()
                     }
-                    crate::core::wal::EntityRef::Edge { .. } => true,
+                    graphdb_core::wal::EntityRef::Edge { .. } => true,
                 },
             ));
             let cursor = self
@@ -1434,7 +1434,7 @@ impl StorageSchemaOps for GraphStorage {
         let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
         let start_lsn = match index_manager::current_wal_lsn(&self.ctx) {
-            crate::core::types::CommitLsn::ZERO => crate::core::types::CommitLsn::new(1),
+            graphdb_core::types::CommitLsn::ZERO => graphdb_core::types::CommitLsn::new(1),
             lsn => lsn,
         };
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
@@ -1456,7 +1456,7 @@ impl StorageSchemaOps for GraphStorage {
             space,
             index_name,
             &vertices,
-            crate::core::types::SnapshotTimestamp::new(snapshot_timestamp),
+            graphdb_core::types::SnapshotTimestamp::new(snapshot_timestamp),
             start_lsn,
         );
         if let Some(stats) = self.ctx.stats_manager() {
@@ -1487,7 +1487,7 @@ impl StorageSchemaOps for GraphStorage {
         let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
         let start_lsn = match index_manager::current_wal_lsn(&self.ctx) {
-            crate::core::types::CommitLsn::ZERO => crate::core::types::CommitLsn::new(1),
+            graphdb_core::types::CommitLsn::ZERO => graphdb_core::types::CommitLsn::new(1),
             lsn => lsn,
         };
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
@@ -1509,7 +1509,7 @@ impl StorageSchemaOps for GraphStorage {
             space,
             index_name,
             &edges,
-            crate::core::types::SnapshotTimestamp::new(snapshot_timestamp),
+            graphdb_core::types::SnapshotTimestamp::new(snapshot_timestamp),
             start_lsn,
         );
         if let Some(stats) = self.ctx.stats_manager() {
@@ -1648,7 +1648,7 @@ impl StoragePersistenceOps for GraphStorage {
     fn set_outbox_materialized_lsn_provider(
         &self,
         provider: Arc<
-            dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync,
+            dyn Fn() -> StorageResult<Option<graphdb_core::types::CommitLsn>> + Send + Sync,
         >,
     ) {
         if let Some(persistence) = self.ctx.persistence() {
@@ -1692,7 +1692,7 @@ impl StorageOperationContextOps for GraphStorage {
         self.ctx.operation_context()
     }
 
-    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+    fn finalize_operation(&self, committed: bool) -> graphdb_core::StorageResult<()> {
         self.ctx.finalize_operation(committed)
     }
 }
@@ -1700,15 +1700,15 @@ impl StorageOperationContextOps for GraphStorage {
 impl crate::StorageCommitOps for GraphStorage {
     fn commit_staged_writes(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> StorageResult<graphdb_core::types::CommitLsn> {
         self.ctx.commit_staged_writes(transaction_id, intents)
     }
 
     fn abort_staged_writes(
         &self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
     ) -> StorageResult<()> {
         self.ctx.abort_staged_writes(transaction_id);
         Ok(())
@@ -1716,19 +1716,19 @@ impl crate::StorageCommitOps for GraphStorage {
 
     fn commit_staged_writes_with_durability(
         &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-        durability: crate::core::types::DurabilityLevel,
-    ) -> StorageResult<crate::core::types::CommitLsn> {
+        transaction_id: graphdb_core::types::TransactionId,
+        intents: &[graphdb_core::wal::OutboxIntent],
+        durability: graphdb_core::types::DurabilityLevel,
+    ) -> StorageResult<graphdb_core::types::CommitLsn> {
         self.ctx
             .commit_staged_writes_with_durability(transaction_id, intents, durability)
     }
 
     fn recover_outbox_projection(
         &self,
-        sync_manager: &crate::sync::SyncManager,
+        sync_manager: &graphdb_sync::SyncManager,
     ) -> StorageResult<usize> {
-        use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
+        use graphdb_transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
         let Some(paths) = self.ctx.storage_paths() else {
             return Ok(0);
         };
@@ -1803,7 +1803,7 @@ impl crate::StorageCommitOps for GraphStorage {
 }
 
 impl StorageSyncContextOps for GraphStorage {
-    fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+    fn get_sync_manager(&self) -> Option<Arc<graphdb_sync::SyncManager>> {
         None
     }
 }
@@ -1813,20 +1813,20 @@ impl StorageRecoveryOps for GraphStorage {
         persistence::needs_recovery(&self.ctx)
     }
 
-    fn recover_from_wal(&self) -> StorageResult<crate::transaction::wal::recovery::RecoveryStats> {
+    fn recover_from_wal(&self) -> StorageResult<graphdb_transaction::wal::recovery::RecoveryStats> {
         persistence::recover_from_wal(&self.ctx)
     }
 
     fn recover_from_wal_with_config(
         &self,
-        config: crate::transaction::wal::recovery::RecoveryConfig,
-    ) -> StorageResult<crate::transaction::wal::recovery::RecoveryStats> {
+        config: graphdb_transaction::wal::recovery::RecoveryConfig,
+    ) -> StorageResult<graphdb_transaction::wal::recovery::RecoveryStats> {
         persistence::recover_from_wal_with_config(&self.ctx, config)
     }
 
     fn init_with_recovery(
         &self,
-    ) -> StorageResult<Option<crate::transaction::wal::recovery::RecoveryStats>> {
+    ) -> StorageResult<Option<graphdb_transaction::wal::recovery::RecoveryStats>> {
         persistence::initialize_with_recovery(&self.ctx)
     }
 }
@@ -1862,20 +1862,20 @@ impl GraphStorage {
     /// Batch delete vertices by external string IDs.
     pub fn batch_delete_vertices(
         &self,
-        label: crate::core::types::LabelId,
+        label: graphdb_core::types::LabelId,
         external_ids: &[&str],
-        ts: crate::core::types::Timestamp,
-    ) -> crate::core::StorageResult<usize> {
+        ts: graphdb_core::types::Timestamp,
+    ) -> graphdb_core::StorageResult<usize> {
         self.ctx.batch_delete_vertices(label, external_ids, ts)
     }
 
     /// Batch delete vertices by external i64 IDs.
     pub fn batch_delete_vertices_by_i64(
         &self,
-        label: crate::core::types::LabelId,
+        label: graphdb_core::types::LabelId,
         external_ids: &[i64],
-        ts: crate::core::types::Timestamp,
-    ) -> crate::core::StorageResult<usize> {
+        ts: graphdb_core::types::Timestamp,
+    ) -> graphdb_core::StorageResult<usize> {
         self.ctx
             .batch_delete_vertices_by_i64(label, external_ids, ts)
     }
@@ -2013,90 +2013,90 @@ fn cold_snapshot_info(
     })
 }
 
-impl crate::transaction::UndoTarget for GraphStorage {
+impl graphdb_transaction::UndoTarget for GraphStorage {
     fn delete_vertex_type(
         &self,
-        label: crate::core::types::LabelId,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::delete_vertex_type(&*self.ctx, label)
+        label: graphdb_core::types::LabelId,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::delete_vertex_type(&*self.ctx, label)
     }
 
     fn delete_edge_type(
         &self,
-        edge_key: crate::core::types::EdgeKey,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::delete_edge_type(&*self.ctx, edge_key)
+        edge_key: graphdb_core::types::EdgeKey,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::delete_edge_type(&*self.ctx, edge_key)
     }
 
     fn delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::delete_vertex(&*self.ctx, vertex, ts)
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::delete_vertex(&*self.ctx, vertex, ts)
     }
 
     fn delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::delete_edge(&*self.ctx, edge_ctx)
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::delete_edge(&*self.ctx, edge_ctx)
     }
 
     fn restore_edge(
         &self,
-        edge: crate::core::types::EdgeIdentifier,
-        properties: Vec<(String, crate::core::Value)>,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::restore_edge(&*self.ctx, edge, properties, ts)
+        edge: graphdb_core::types::EdgeIdentifier,
+        properties: Vec<(String, graphdb_core::Value)>,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::restore_edge(&*self.ctx, edge, properties, ts)
     }
 
     fn undo_update_vertex_property(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::undo_update_vertex_property(
+        vertex: graphdb_core::types::VertexIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::undo_update_vertex_property(
             &*self.ctx, vertex, col_id, value, ts,
         )
     }
 
     fn undo_update_edge_property(
         &self,
-        edge_id: crate::core::types::EdgeIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::undo_update_edge_property(
+        edge_id: graphdb_core::types::EdgeIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::undo_update_edge_property(
             &*self.ctx, edge_id, col_id, value, ts,
         )
     }
 
     fn revert_delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_vertex(&*self.ctx, vertex, ts)
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_vertex(&*self.ctx, vertex, ts)
     }
 
     fn revert_delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_edge(&*self.ctx, edge_ctx)
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_edge(&*self.ctx, edge_ctx)
     }
 
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_vertex_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_vertex_properties(
             &*self.ctx, label_name, prop_names,
         )
     }
@@ -2107,8 +2107,8 @@ impl crate::transaction::UndoTarget for GraphStorage {
         dst_label: &str,
         edge_label: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_edge_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_edge_properties(
             &*self.ctx, src_label, dst_label, edge_label, prop_names,
         )
     }
@@ -2116,8 +2116,8 @@ impl crate::transaction::UndoTarget for GraphStorage {
     fn revert_delete_vertex_label(
         &self,
         label_name: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_vertex_label(&*self.ctx, label_name)
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_vertex_label(&*self.ctx, label_name)
     }
 
     fn revert_delete_edge_label(
@@ -2125,8 +2125,8 @@ impl crate::transaction::UndoTarget for GraphStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_delete_edge_label(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_delete_edge_label(
             &*self.ctx, src_label, dst_label, edge_label,
         )
     }
@@ -2136,8 +2136,8 @@ impl crate::transaction::UndoTarget for GraphStorage {
         label: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_rename_vertex_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_rename_vertex_properties(
             &*self.ctx,
             label,
             current_names,
@@ -2152,8 +2152,8 @@ impl crate::transaction::UndoTarget for GraphStorage {
         edge_label: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::core::types::UndoTarget::revert_rename_edge_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_core::types::UndoTarget::revert_rename_edge_properties(
             &*self.ctx,
             src_label,
             dst_label,

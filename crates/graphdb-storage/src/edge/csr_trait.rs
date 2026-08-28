@@ -3,7 +3,7 @@
 //! Unified trait interface for different CSR implementations.
 //! Supports runtime polymorphism for edge storage selection.
 
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 
 use super::{EdgeId, Nbr, Timestamp, VertexId};
 

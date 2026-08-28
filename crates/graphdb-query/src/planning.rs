@@ -42,7 +42,7 @@ pub use crate::cache::{
 };
 
 // Re-export the JoinType from the core module.
-pub use crate::core::types::JoinType;
+pub use graphdb_core::types::JoinType;
 pub use statements::MatchStatementPlanner;
 
 // Export related to static registration

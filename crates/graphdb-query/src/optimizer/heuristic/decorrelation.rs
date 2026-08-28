@@ -97,11 +97,11 @@ impl RewriteRule for UnnestSimplePatternApplyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use crate::optimizer::heuristic::context::RewriteContext;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -136,7 +136,7 @@ mod tests {
                 property: "age".to_string(),
             }),
             op: BinaryOperator::Equal,
-            right: Box::new(Expression::Literal(crate::core::Value::Int(18))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(18))),
         });
         let filter = PlanNodeEnum::Filter(FilterNode::new(test_scan(), condition).expect("filter"));
         let pattern_apply = PlanNodeEnum::PatternApply(

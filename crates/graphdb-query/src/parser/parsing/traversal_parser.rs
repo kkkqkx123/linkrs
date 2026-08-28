@@ -2,9 +2,9 @@
 //!
 //! Responsible for parsing statements related to graph traversal, including MATCH, GO, FIND PATH, GET SUBGRAPH, etc.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression as CoreExpression;
-use crate::core::types::graph_schema::EdgeDirection;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::graph_schema::EdgeDirection;
 use crate::parser::ast::pattern::{
     EdgePattern, EdgeRange, NodePattern, PathElement, PathPattern, Pattern, VariablePattern,
 };
@@ -886,7 +886,7 @@ impl TraversalParser {
 
         let expr = CoreExpression::map(mapped_properties);
 
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.expression_context().register_expression(expr_meta);
         Ok(ContextualExpression::new(
             id,
@@ -897,7 +897,7 @@ impl TraversalParser {
     /// Create the default true expression.
     fn create_true_expression(ctx: &mut ParseContext) -> Result<ContextualExpression, ParseError> {
         let expr = CoreExpression::literal(true);
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.expression_context().register_expression(expr_meta);
         Ok(ContextualExpression::new(
             id,

@@ -3,10 +3,10 @@
 //! This module defines the Abstract Syntax Tree (AST) nodes for full-text search queries,
 //! including CREATE FULLTEXT INDEX, SEARCH, and related statements.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::span::Span;
-use crate::core::types::FulltextEngineType;
-use crate::core::Value;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::span::Span;
+use graphdb_core::types::FulltextEngineType;
+use graphdb_core::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -314,8 +314,8 @@ mod tests {
 
     #[test]
     fn test_yield_clause() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
         use std::sync::Arc;
 
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());

@@ -1,5 +1,5 @@
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::state::GlobalState;

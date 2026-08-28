@@ -983,9 +983,9 @@ mod tests {
         // filter, must converge within the bounded chain passes: the
         // optimized plan is unchanged when optimized again (fixed point),
         // and no cross-batch oscillation is reported.
-        use crate::core::types::expr::ExpressionMeta;
-        use crate::core::Expression;
-        use crate::core::Value;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
+        use graphdb_core::Value;
         use crate::optimizer::analysis::FingerprintCalculator;
         use crate::optimizer::heuristic::rule_enum::RuleRegistry;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
@@ -998,17 +998,17 @@ mod tests {
         scan.set_tag("person");
         let input = PlanNodeEnum::ScanVertices(scan);
 
-        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let expr_ctx = Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
         let condition = Expression::Binary {
             left: Box::new(Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "age".to_string(),
             }),
-            op: crate::core::types::BinaryOperator::GreaterThan,
+            op: graphdb_core::types::BinaryOperator::GreaterThan,
             right: Box::new(Expression::Literal(Value::Int(18))),
         };
         let id = expr_ctx.register_expression(ExpressionMeta::new(condition));
-        let condition = crate::core::types::ContextualExpression::new(id, expr_ctx);
+        let condition = graphdb_core::types::ContextualExpression::new(id, expr_ctx);
         let plan = PlanNodeEnum::Filter(
             FilterNode::new(input, condition).expect("FilterNode creation should succeed"),
         );

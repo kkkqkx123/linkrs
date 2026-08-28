@@ -5,7 +5,7 @@
 use dashmap::DashMap;
 use std::sync::Arc;
 
-use crate::core::types::Index;
+use graphdb_core::types::Index;
 
 use super::{EdgeTypeStatistics, PropertyCombinationStats, PropertyStatistics, TagStatistics};
 

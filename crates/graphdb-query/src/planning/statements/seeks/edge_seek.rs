@@ -9,7 +9,7 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{SeekResult, SeekStrategyContext, SeekStrategyType};
-use crate::core::{StorageError, Value};
+use graphdb_core::{StorageError, Value};
 use crate::storage::StorageReader;
 
 /// Edge pattern information
@@ -65,7 +65,7 @@ impl EdgeSeek {
     }
 
     /// Evaluating whether a border matches a pattern
-    fn edge_matches_pattern(&self, edge: &crate::core::Edge) -> bool {
+    fn edge_matches_pattern(&self, edge: &graphdb_core::Edge) -> bool {
         // Check edge type
         if !self.edge_pattern.edge_types.is_empty()
             && !self.edge_pattern.edge_types.contains(&edge.edge_type)
@@ -177,7 +177,7 @@ impl EdgeSeekResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
+    use graphdb_core::types::VertexId;
 
     #[test]
     fn test_edge_direction_from_str() {
@@ -216,7 +216,7 @@ mod tests {
         });
 
         // Test edge type matching
-        let edge = crate::core::Edge::new_empty(
+        let edge = graphdb_core::Edge::new_empty(
             VertexId::from_int64(1),
             VertexId::from_int64(2),
             "KNOWS".to_string(),
@@ -225,7 +225,7 @@ mod tests {
         assert!(seek.edge_matches_pattern(&edge));
 
         // Test edge type mismatch
-        let edge2 = crate::core::Edge::new_empty(
+        let edge2 = graphdb_core::Edge::new_empty(
             VertexId::from_int64(1),
             VertexId::from_int64(2),
             "FOLLOWS".to_string(),
@@ -244,7 +244,7 @@ mod tests {
             properties: vec![],
         });
 
-        let edge = crate::core::Edge::new_empty(
+        let edge = graphdb_core::Edge::new_empty(
             VertexId::from_int64(1),
             VertexId::from_int64(2),
             "KNOWS".to_string(),
@@ -252,7 +252,7 @@ mod tests {
         );
         assert!(seek.edge_matches_pattern(&edge));
 
-        let edge2 = crate::core::Edge::new_empty(
+        let edge2 = graphdb_core::Edge::new_empty(
             VertexId::from_int64(3),
             VertexId::from_int64(2),
             "KNOWS".to_string(),

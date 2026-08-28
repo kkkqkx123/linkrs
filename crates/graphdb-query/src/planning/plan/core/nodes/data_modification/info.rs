@@ -2,7 +2,7 @@
 //!
 //! Provides shared information structures for INSERT, UPDATE, DELETE operations.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use std::collections::HashMap;
 
 // ==================== INSERT Info Structures ====================

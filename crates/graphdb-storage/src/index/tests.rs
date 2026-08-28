@@ -1,9 +1,9 @@
-use crate::core::types::StorageVersion;
-use crate::core::types::{
+use graphdb_core::types::StorageVersion;
+use graphdb_core::types::{
     CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
     MAX_TIMESTAMP,
 };
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::cursor::{
     IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
 };
@@ -686,8 +686,8 @@ fn included_columns_survive_rebuild_from_snapshot() {
 
 #[test]
 fn wal_recovers_data_after_checkpoint() {
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::wal::EntityRef;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::wal::EntityRef;
     use crate::index::shard_runtime::ShardRuntime;
     use crate::index::types::IndexRecord;
 

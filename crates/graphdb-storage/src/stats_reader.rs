@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::core::Value;
+use graphdb_core::Value;
 
 /// Immutable point-in-time statistics for one property column of a vertex
 /// tag or an edge type.

@@ -13,10 +13,10 @@ use crate::planning::plan::core::nodes::graph_operations::graph_operations_node:
     DataCollectNode, DedupNode, PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 
-use crate::core::types::operators::AggregateFunction;
-use crate::core::types::ContextualExpression;
-use crate::core::types::EdgeDirection;
-use crate::core::YieldColumn;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::YieldColumn;
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::planning::plan::core::nodes::operation::sort_node::{
     LimitNode, SortItem, SortNode,
@@ -269,7 +269,7 @@ impl PlanNodeFactory {
     pub fn create_unwind(
         input: PlanNodeEnum,
         alias: &str,
-        list_expression: crate::core::types::expr::contextual::ContextualExpression,
+        list_expression: graphdb_core::types::expr::contextual::ContextualExpression,
     ) -> Result<PlanNodeEnum, crate::planning::planner::PlannerError> {
         let unwind_node = UnwindNode::new(input, alias, list_expression)?;
         Ok(PlanNodeEnum::Unwind(unwind_node))
@@ -299,8 +299,8 @@ impl PlanNodeFactory {
     pub fn create_pattern_apply(
         left_input: PlanNodeEnum,
         right_input: PlanNodeEnum,
-        hash_keys: Vec<crate::core::types::ContextualExpression>,
-        probe_keys: Vec<crate::core::types::ContextualExpression>,
+        hash_keys: Vec<graphdb_core::types::ContextualExpression>,
+        probe_keys: Vec<graphdb_core::types::ContextualExpression>,
         is_anti_predicate: bool,
     ) -> Result<PlanNodeEnum, crate::planning::planner::PlannerError> {
         let pattern_apply_node = PatternApplyNode::new(

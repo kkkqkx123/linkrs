@@ -5,7 +5,7 @@
 
 use super::BuiltinFunction;
 use super::CustomFunction;
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use std::collections::HashMap;
@@ -269,7 +269,7 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CovarSamp));
 
         // Register aggregate functions
-        use crate::core::types::operators::AggregateFunction;
+        use graphdb_core::types::operators::AggregateFunction;
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Count));
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Sum));
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Avg));

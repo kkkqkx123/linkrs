@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
 use super::runtime::ExecutionRuntime;
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::data_set::DataSet;
 
 /// Streaming result handle for pull-based chunk consumption.
@@ -198,7 +198,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::executor::StreamingExecutor;
     use crate::executor::streaming::operators::base::OperatorBase;

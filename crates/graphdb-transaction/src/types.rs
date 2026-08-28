@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{CommitLsn, EdgeIdentifier, Timestamp, VertexId};
+use graphdb_core::types::{CommitLsn, EdgeIdentifier, Timestamp, VertexId};
 use crate::undo_log::UndoLogEntry;
 use crate::wal::TransactionWalEntry;
 
 /// Transaction ID
-pub use crate::core::types::TransactionId;
+pub use graphdb_core::types::TransactionId;
 
 /// Savepoint ID
 pub type SavepointId = u64;
@@ -46,7 +46,7 @@ pub struct MutationResult {
     pub undo_entry: Option<UndoLogEntry>,
     pub redo_entry: Option<TransactionWalEntry>,
     pub modified_table: Option<String>,
-    pub index_intents: Vec<crate::core::wal::OutboxIntent>,
+    pub index_intents: Vec<graphdb_core::wal::OutboxIntent>,
 }
 
 impl MutationResult {
@@ -72,14 +72,14 @@ impl MutationResult {
         self
     }
 
-    pub fn with_index_intent(mut self, intent: crate::core::wal::OutboxIntent) -> Self {
+    pub fn with_index_intent(mut self, intent: graphdb_core::wal::OutboxIntent) -> Self {
         self.index_intents.push(intent);
         self
     }
 }
 
 /// Transaction Isolation Level
-pub use crate::core::types::TransactionIsolationLevel as IsolationLevel;
+pub use graphdb_core::types::TransactionIsolationLevel as IsolationLevel;
 
 /// Retry Configuration
 #[derive(Debug, Clone, Copy)]
@@ -387,7 +387,7 @@ impl TransactionOptions {
 }
 
 /// Durability Level
-pub use crate::core::types::DurabilityLevel;
+pub use graphdb_core::types::DurabilityLevel;
 
 /// Transaction Configuration
 #[derive(Debug, Clone)]
@@ -949,7 +949,7 @@ impl ReadRange {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceId {
     Vertex(VertexId),
-    Edge(crate::core::types::EdgeIdentifier),
+    Edge(graphdb_core::types::EdgeIdentifier),
     Schema(String),
     Index(String),
 }

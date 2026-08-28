@@ -1,7 +1,7 @@
 //! Unary, blocking, graph-pattern and recursive-fragment spec builders.
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{
@@ -104,7 +104,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn is_count_only_aggrega
         && agg
             .aggregation_functions()
             .iter()
-            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count))
+            .all(|f| matches!(f, graphdb_core::types::operators::AggregateFunction::Count))
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_project_spec(
@@ -346,10 +346,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn sort_items_to_express
     for item in items {
         expressions.push(item.expression.clone());
         let direction = match item.direction {
-            crate::core::types::graph_schema::OrderDirection::Asc => {
+            graphdb_core::types::graph_schema::OrderDirection::Asc => {
                 crate::executor::streaming::executor::SortDirection::Ascending
             }
-            crate::core::types::graph_schema::OrderDirection::Desc => {
+            graphdb_core::types::graph_schema::OrderDirection::Desc => {
                 crate::executor::streaming::executor::SortDirection::Descending
             }
         };
@@ -387,9 +387,9 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
     Ok(GraphSpec::ExpandAll {
         edge_types: node.edge_types().to_vec(),
         direction: match node.direction().to_lowercase().as_str() {
-            "out" | "outgoing" => crate::core::EdgeDirection::Out,
-            "in" | "incoming" => crate::core::EdgeDirection::In,
-            _ => crate::core::EdgeDirection::Both,
+            "out" | "outgoing" => graphdb_core::EdgeDirection::Out,
+            "in" | "incoming" => graphdb_core::EdgeDirection::In,
+            _ => graphdb_core::EdgeDirection::Both,
         },
         filter_expr: node.filter().map(contextual_to_expression).transpose()?,
         col_names: node.col_names().to_vec(),
@@ -455,9 +455,9 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_shortest_path_s
     Ok(RecursiveFragmentSpec::ShortestPath {
         edge_types: node.edge_types().to_vec(),
         direction: if node.no_reverse() {
-            crate::core::EdgeDirection::Out
+            graphdb_core::EdgeDirection::Out
         } else {
-            crate::core::EdgeDirection::Both
+            graphdb_core::EdgeDirection::Both
         },
         max_depth: node.max_step(),
         start_vertices: node.start_vertex_ids().to_vec(),
@@ -486,9 +486,9 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_bfs_shortest_sp
     Ok(RecursiveFragmentSpec::BFSShortest {
         edge_types: node.edge_types().to_vec(),
         direction: if node.reverse() {
-            crate::core::EdgeDirection::In
+            graphdb_core::EdgeDirection::In
         } else {
-            crate::core::EdgeDirection::Both
+            graphdb_core::EdgeDirection::Both
         },
         max_depth: node.steps(),
         allow_loops: node.with_loop(),
@@ -539,13 +539,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_all_paths_spec(
             .start_vertex_ids()
             .iter()
             .copied()
-            .map(crate::core::Value::from)
+            .map(graphdb_core::Value::from)
             .collect(),
         target_vertices: node
             .end_vertex_ids()
             .iter()
             .copied()
-            .map(crate::core::Value::from)
+            .map(graphdb_core::Value::from)
             .collect(),
     })
 }

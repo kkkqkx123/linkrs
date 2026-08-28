@@ -1,5 +1,5 @@
-use crate::core::types::semantic::ValueType;
-use crate::core::types::EdgeDirection;
+use graphdb_core::types::semantic::ValueType;
+use graphdb_core::types::EdgeDirection;
 use std::collections::HashMap;
 use std::sync::Arc;
 

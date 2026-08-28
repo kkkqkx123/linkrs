@@ -39,13 +39,13 @@ use graphdb_sync::checkpoint_manifest::{
     CheckpointManifest, CheckpointManifestManager, IndexManifestRef,
 };
 
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use crate::engine::config::PropertyGraphConfig;
 use crate::engine::snapshot_manager::{SnapshotManager, SnapshotOptions};
 use crate::engine::WalManager;
 use crate::index::shard_runtime::IndexBarrierRegistry;
-use crate::transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
+use graphdb_transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
 
 /// Type alias for the outbox frontier provider callback.
 type OutboxFrontierProvider =
@@ -218,7 +218,7 @@ impl PersistenceCoordinator {
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);
         checkpoint_manager.init().map_err(|e| {
-            crate::core::StorageError::db_error(format!("Failed to init checkpoint manager: {}", e))
+            graphdb_core::StorageError::db_error(format!("Failed to init checkpoint manager: {}", e))
         })?;
         checkpoint_manager
             .adopt_published_sequence(published_sequence)
@@ -464,7 +464,7 @@ impl PersistenceCoordinator {
                     ))
                 })?;
             cm.prepare_checkpoint(timestamp, wal_lsn).map_err(|e| {
-                crate::core::StorageError::db_error(format!("Failed to create checkpoint: {}", e))
+                graphdb_core::StorageError::db_error(format!("Failed to create checkpoint: {}", e))
             })?
         };
 
@@ -611,7 +611,7 @@ impl PersistenceCoordinator {
     fn save_checkpoint_metadata(
         &self,
         dir: &Path,
-        checkpoint: &crate::transaction::wal::Checkpoint,
+        checkpoint: &graphdb_transaction::wal::Checkpoint,
         data: &CheckpointData,
         files: &[CheckpointFileEntry],
     ) -> StorageResult<()> {
@@ -1033,7 +1033,7 @@ impl PersistenceCoordinator {
     /// successful publication is WAL truncated to the common safe LSN.
     fn publish_checkpoint_manifest(
         &self,
-        checkpoint: &crate::transaction::wal::Checkpoint,
+        checkpoint: &graphdb_transaction::wal::Checkpoint,
         data: &CheckpointData,
         checkpoint_dir: &Path,
         wal_lsn: Lsn,
@@ -1291,7 +1291,7 @@ mod tests {
 
         let wal = coordinator.wal_manager().expect("WAL should be enabled");
         wal.read()
-            .append_redo(crate::core::wal::types::WalOpType::Compact, 1, &())
+            .append_redo(graphdb_core::wal::types::WalOpType::Compact, 1, &())
             .expect("WAL entry should append");
         wal.read().sync().expect("WAL should be durable");
         let checkpoint_lsn = wal.read().durable_lsn();

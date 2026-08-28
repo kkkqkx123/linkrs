@@ -74,7 +74,7 @@ pub struct ConflictReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
+    use graphdb_core::types::VertexId;
 
     #[test]
     fn test_have_write_conflict_no_conflict() {
@@ -142,11 +142,11 @@ mod tests {
         let vid3 = VertexId::from_int64(3);
 
         let mut ws1 = WriteSet::new();
-        let edge1 = crate::core::types::EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
+        let edge1 = graphdb_core::types::EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
         ws1.record_edge(edge1);
 
         let mut ws2 = WriteSet::new();
-        let edge2 = crate::core::types::EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0);
+        let edge2 = graphdb_core::types::EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0);
         ws2.record_edge(edge2);
 
         assert!(

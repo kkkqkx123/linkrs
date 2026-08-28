@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
 use super::comparison::compare_values;
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 /// Extract a numeric parameter (e.g. the percentile fraction) from the
 /// aggregate's `args` list. Parameters beyond the field expression live at
@@ -472,7 +472,7 @@ impl AggregateAccumulator {
                 if values.is_empty() {
                     Value::Null(NullType::Null)
                 } else {
-                    let mut list = crate::core::value::List::new();
+                    let mut list = graphdb_core::value::List::new();
                     for v in values {
                         list.push(v.clone());
                     }
@@ -681,7 +681,7 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
             Value::Null(NullType::Null)
         }
         AggregateAccumulator::Avg { sum, count } => {
-            let mut list = crate::core::value::List::new();
+            let mut list = graphdb_core::value::List::new();
             list.push(Value::Double(*sum));
             list.push(Value::BigInt(*count as i64));
             Value::List(Box::new(list))
@@ -691,7 +691,7 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
             if set.is_empty() {
                 Value::Null(NullType::Null)
             } else {
-                Value::List(Box::new(crate::core::value::List::from(
+                Value::List(Box::new(graphdb_core::value::List::from(
                     set.iter().cloned().collect::<Vec<_>>(),
                 )))
             }
@@ -707,7 +707,7 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
             if *n == 0 {
                 Value::Null(NullType::Null)
             } else {
-                let mut list = crate::core::value::List::new();
+                let mut list = graphdb_core::value::List::new();
                 list.push(Value::BigInt(*n as i64));
                 list.push(Value::Double(*mean));
                 list.push(Value::Double(*m2));
@@ -733,7 +733,7 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
             if parts.is_empty() {
                 Value::Null(NullType::Null)
             } else {
-                Value::List(Box::new(crate::core::value::List::from(
+                Value::List(Box::new(graphdb_core::value::List::from(
                     parts.iter().cloned().map(Value::string).collect::<Vec<_>>(),
                 )))
             }
@@ -746,8 +746,8 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
             if *count == 0 {
                 Value::Null(NullType::Null)
             } else {
-                let mut list = crate::core::value::List::new();
-                let mut inner = crate::core::value::List::new();
+                let mut list = graphdb_core::value::List::new();
+                let mut inner = graphdb_core::value::List::new();
                 for x in sum {
                     inner.push(Value::Double(*x as f64));
                 }
@@ -763,7 +763,7 @@ fn value_list_of_values(values: &[Value]) -> Value {
     if values.is_empty() {
         Value::Null(NullType::Null)
     } else {
-        Value::List(Box::new(crate::core::value::List::from(values.to_vec())))
+        Value::List(Box::new(graphdb_core::value::List::from(values.to_vec())))
     }
 }
 
@@ -771,7 +771,7 @@ fn value_list_of_f64(values: &[f64]) -> Value {
     if values.is_empty() {
         Value::Null(NullType::Null)
     } else {
-        Value::List(Box::new(crate::core::value::List::from(
+        Value::List(Box::new(graphdb_core::value::List::from(
             values.iter().map(|x| Value::Double(*x)).collect::<Vec<_>>(),
         )))
     }

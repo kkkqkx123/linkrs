@@ -27,10 +27,10 @@
 //! The child nodes of the Filter node are Aggregate nodes.
 //! The Filter criteria do not involve aggregate functions (they only relate to the input columns that are being aggregated).
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::visitor_checkers::AggregateFunctionChecker;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor_checkers::AggregateFunctionChecker;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -238,7 +238,7 @@ impl RewriteRule for PushFilterDownAggregateRule {
         let rewritten_condition = Self::rewrite_filter_condition(&filter_expr, group_keys);
 
         // Create metadata for the merged expression.
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(rewritten_condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(rewritten_condition);
         let id = ctx.register_expression(expr_meta);
         let rewritten_ctx_expr = ContextualExpression::new(id, ctx);
 
@@ -293,7 +293,7 @@ impl PushDownRule for PushFilterDownAggregateRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 
@@ -333,9 +333,9 @@ mod tests {
     #[test]
     fn test_no_aggregate_function_reference() {
         let condition = Expression::Binary {
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::string("test"))),
         };
 
         assert!(
@@ -370,9 +370,9 @@ mod tests {
     #[test]
     fn test_rewrite_filter_condition() {
         let condition = Expression::Binary {
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::string("test"))),
         };
 
         let rewritten = PushFilterDownAggregateRule::rewrite_filter_condition(
@@ -398,12 +398,12 @@ mod tests {
 
         // Create a Filter node (the condition only involves the grouping key).
         let condition = Expression::Binary {
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("category".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string("A"))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::string("A"))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = expr_ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, expr_ctx);
         let filter =
@@ -439,12 +439,12 @@ mod tests {
 
         // Create a Filter node (condition involves aggregate function results, e.g., HAVING COUNT(*) > 10)
         let condition = Expression::Binary {
-            op: crate::core::types::operators::BinaryOperator::GreaterThan,
+            op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
             left: Box::new(Expression::Variable("COUNT".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::Int(10))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::Int(10))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = expr_ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, expr_ctx);
         let filter =
@@ -470,12 +470,12 @@ mod tests {
 
         // Create a Filter node, but the input is not of the Aggregate type.
         let condition = Expression::Binary {
-            op: crate::core::types::operators::BinaryOperator::Equal,
+            op: graphdb_core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
+            right: Box::new(Expression::Literal(graphdb_core::Value::string("test"))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = expr_ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, expr_ctx);
         let filter = FilterNode::new(start_enum, ctx_expr).expect("Failed to create FilterNode");

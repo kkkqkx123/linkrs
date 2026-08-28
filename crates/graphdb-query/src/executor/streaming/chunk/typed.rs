@@ -4,11 +4,11 @@
 //! batch evaluation can operate on scalars (auto-vectorizable) instead of
 //! constructing one `Value` per row.
 
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::value::date_time::{DateTimeValue, DateValue};
-use crate::core::value::decimal128::Decimal128Value;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::value::date_time::{DateTimeValue, DateValue};
+use graphdb_core::value::decimal128::Decimal128Value;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -1209,9 +1209,9 @@ fn arith_typed_batches(
 /// their validity bitmap unchanged.
 pub(super) fn typed_cast_batch(
     batch: TypedBatch,
-    target_type: &crate::core::types::DataType,
+    target_type: &graphdb_core::types::DataType,
 ) -> Option<TypedBatch> {
-    use crate::core::types::DataType;
+    use graphdb_core::types::DataType;
     match target_type {
         DataType::Int | DataType::BigInt => match batch {
             TypedBatch::I64(v) => Some(TypedBatch::I64(v)),

@@ -20,12 +20,12 @@
 //! The general expression tools and functions (such as extract_property_refs, is_constant) have been moved to another location.
 //! `core::types::expression::common_utils`; this module keeps only the rewrite-specific functions.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::expr::PropertyContainsChecker;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::expr::PropertyContainsChecker;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Expression;
 use std::sync::Arc;
 
 /// Check whether the expression contains the specified attribute name.
@@ -385,7 +385,7 @@ pub fn and_conditions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
 
     #[test]
     fn test_check_col_name() {
@@ -455,8 +455,8 @@ mod tests {
 
         let picker = |expr: &Expression| -> bool {
             let mut collector =
-                crate::core::types::expr::visitor_collectors::PropertyCollector::new();
-            crate::core::types::expr::ExpressionVisitor::visit(&mut collector, expr);
+                graphdb_core::types::expr::visitor_collectors::PropertyCollector::new();
+            graphdb_core::types::expr::ExpressionVisitor::visit(&mut collector, expr);
             collector.properties.contains(&"a".to_string())
                 || collector.properties.contains(&"b".to_string())
         };
@@ -464,14 +464,14 @@ mod tests {
         let (picked, remained) = split_filter(&ctx_condition, picker);
 
         assert!(picked.is_some());
-        let picked_props = crate::core::types::expr::expression_utils::extract_property_refs(
+        let picked_props = graphdb_core::types::expr::expression_utils::extract_property_refs(
             picked.as_ref().expect("Failed to get picked expression"),
         );
         assert!(picked_props.contains(&"a".to_string()));
         assert!(picked_props.contains(&"b".to_string()));
 
         assert!(remained.is_some());
-        let remained_props = crate::core::types::expr::expression_utils::extract_property_refs(
+        let remained_props = graphdb_core::types::expr::expression_utils::extract_property_refs(
             remained
                 .as_ref()
                 .expect("Failed to get remained expression"),

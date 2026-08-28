@@ -7,7 +7,7 @@
 use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 use crate::edge::CsrVariant;
 
 impl TimeTravelEdgeStore {

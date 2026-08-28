@@ -1,6 +1,6 @@
 //! Merge the rules for obtaining neighbors and performing projection operations.
 
-use crate::core::Expression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -131,8 +131,8 @@ impl MergeRule for MergeGetNbrsAndProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, YieldColumn};
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -152,8 +152,8 @@ mod tests {
 
     #[test]
     fn test_merge_get_nbrs_and_project() {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::ExpressionMeta;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
         use std::sync::Arc;
 
         // Create the starting node.

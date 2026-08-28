@@ -16,7 +16,7 @@
 //! ScanVertices(col1, col2)
 //! ```
 
-use crate::core::types::expr::extract_property_refs;
+use graphdb_core::types::expr::extract_property_refs;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -45,7 +45,7 @@ impl PushProjectDownScanVerticesRule {
     fn create_scan_vertices_with_projection(
         &self,
         scan_node: &ScanVerticesNode,
-        project_columns: &[crate::core::YieldColumn],
+        project_columns: &[graphdb_core::YieldColumn],
     ) -> ScanVerticesNode {
         let mut properties: Vec<String> = project_columns
             .iter()
@@ -181,15 +181,15 @@ impl PushDownRule for PushProjectDownScanVerticesRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::ContextualExpression;
-    use crate::core::{Expression, YieldColumn};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use crate::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
     use std::sync::Arc;
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
         YieldColumn {

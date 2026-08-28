@@ -1,7 +1,7 @@
 //! Batch expression evaluation on DataChunk
 
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::operations::{
     BinaryOperationEvaluator, UnaryOperationEvaluator,
 };
@@ -383,7 +383,7 @@ impl DataChunk {
 
     #[cfg(debug_assertions)]
     pub(super) fn columnar_promise_holds(&self, expr: &Expression) -> bool {
-        use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+        use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
         match expr {
             Expression::Literal(_) | Expression::Parameter(_) | Expression::Variable(_) => true,
             Expression::Unary { op, operand } => {

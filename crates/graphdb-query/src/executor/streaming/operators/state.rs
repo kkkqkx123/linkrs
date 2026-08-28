@@ -7,8 +7,8 @@
 
 use std::collections::HashSet;
 
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::storage::{EdgeCursor, IndexCursor, VertexCursor};
 

@@ -83,9 +83,9 @@ impl SyncManagerBuilder {
 
 #[cfg(feature = "fulltext-search")]
 pub struct SyncCoordinatorBuilder {
-    fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+    fulltext_manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
     config: Option<crate::batch::BatchConfig>,
-    stats_manager: Option<Arc<crate::core::stats::StatsManager>>,
+    stats_manager: Option<Arc<graphdb_core::stats::StatsManager>>,
 }
 
 #[cfg(feature = "fulltext-search")]
@@ -107,7 +107,7 @@ impl SyncCoordinatorBuilder {
 
     pub fn with_fulltext_manager(
         mut self,
-        manager: Arc<crate::search::manager::FulltextIndexManager>,
+        manager: Arc<graphdb_search::manager::FulltextIndexManager>,
     ) -> Self {
         self.fulltext_manager = Some(manager);
         self
@@ -120,7 +120,7 @@ impl SyncCoordinatorBuilder {
 
     pub fn with_stats_manager(
         mut self,
-        stats_manager: Arc<crate::core::stats::StatsManager>,
+        stats_manager: Arc<graphdb_core::stats::StatsManager>,
     ) -> Self {
         self.stats_manager = Some(stats_manager);
         self

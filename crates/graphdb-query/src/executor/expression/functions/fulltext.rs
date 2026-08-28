@@ -6,10 +6,10 @@
 //! - matched_fields(): Get the list of matched fields
 //! - snippet(): Get a text snippet
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
-use crate::search::FulltextSearchEntry;
+use graphdb_search::FulltextSearchEntry;
 use std::collections::HashMap;
 
 /// Full-text search function enumeration
@@ -243,7 +243,7 @@ impl FulltextFunction {
             }
         }
 
-        Ok(Value::Null(crate::core::null::NullType::Null))
+        Ok(Value::Null(graphdb_core::null::NullType::Null))
     }
 
     /// Execute matched_fields() function
@@ -265,7 +265,7 @@ impl FulltextFunction {
             .map(|f| Value::string(f.clone()))
             .collect();
 
-        Ok(Value::list(crate::core::value::list::List {
+        Ok(Value::list(graphdb_core::value::list::List {
             values: fields,
         }))
     }
@@ -318,7 +318,7 @@ impl FulltextFunction {
             }
         }
 
-        Ok(Value::Null(crate::core::null::NullType::Null))
+        Ok(Value::Null(graphdb_core::null::NullType::Null))
     }
 
     /// Execute rank() function

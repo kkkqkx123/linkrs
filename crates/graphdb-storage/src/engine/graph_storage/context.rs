@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::core::metadata::{IndexManager, SchemaManager};
-use crate::core::stats::StatsManager;
-use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
-use crate::core::UserStorage;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::metadata::{IndexManager, SchemaManager};
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
+use graphdb_core::UserStorage;
+use graphdb_core::{StorageError, StorageResult};
 use crate::cold::ColdSnapshot;
 use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::cache_manager::CacheManager;
@@ -23,8 +23,8 @@ use crate::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::mvcc::SnapshotHandle;
 use crate::vertex::{gc_manager::VertexGcManager, IdKey};
 use crate::StorageOperationContext;
-use crate::transaction::VersionManager;
-use graphdb_transaction::core::types::EdgeIdentifier;
+use graphdb_transaction::VersionManager;
+use graphdb_core::types::EdgeIdentifier;
 use graphdb_transaction::undo_log::UndoLogManager;
 use graphdb_transaction::{
     MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
@@ -196,8 +196,8 @@ struct GraphStoragePersistent {
     auto_commit_write_gate: Arc<AutoCommitWriteGate>,
     staged_wal: Arc<
         dashmap::DashMap<
-            crate::core::types::TransactionId,
-            Vec<crate::transaction::wal::TransactionWalEntry>,
+            graphdb_core::types::TransactionId,
+            Vec<graphdb_transaction::wal::TransactionWalEntry>,
         >,
     >,
     /// Monotonic physical layout version for stale-plan detection.
@@ -252,7 +252,7 @@ impl GraphStoragePersistent {
         )
     }
 
-    pub fn new_with_config(config: PropertyGraphConfig) -> crate::core::StorageResult<Self> {
+    pub fn new_with_config(config: PropertyGraphConfig) -> graphdb_core::StorageResult<Self> {
         config.validate()?;
         Ok(Self::from_validated_config(config))
     }
@@ -346,7 +346,7 @@ impl GraphStoragePersistent {
     fn new_with_persistence(
         path: PathBuf,
         config: crate::engine::PersistenceConfig,
-    ) -> crate::core::StorageResult<Self> {
+    ) -> graphdb_core::StorageResult<Self> {
         let property_graph_config = config.property_graph_config.clone();
         property_graph_config.validate()?;
         let (
@@ -414,9 +414,9 @@ impl GraphStoragePersistent {
 /// Used to handle edge operations that depend on vertex existence.
 struct DeferredWalOps {
     /// Deferred edge insertions (InsertEdgeRedo, Timestamp)
-    edges: Arc<Mutex<Vec<(crate::core::wal::redo::InsertEdgeRedo, Timestamp)>>>,
+    edges: Arc<Mutex<Vec<(graphdb_core::wal::redo::InsertEdgeRedo, Timestamp)>>>,
     /// Deferred edge deletions (DeleteEdgeRedo, Timestamp)
-    deletes: Arc<Mutex<Vec<(crate::core::wal::redo::DeleteEdgeRedo, Timestamp)>>>,
+    deletes: Arc<Mutex<Vec<(graphdb_core::wal::redo::DeleteEdgeRedo, Timestamp)>>>,
 }
 
 impl DeferredWalOps {
@@ -427,19 +427,19 @@ impl DeferredWalOps {
         }
     }
 
-    fn push_edge(&self, edge: crate::core::wal::redo::InsertEdgeRedo, ts: Timestamp) {
+    fn push_edge(&self, edge: graphdb_core::wal::redo::InsertEdgeRedo, ts: Timestamp) {
         self.edges.lock().push((edge, ts));
     }
 
-    fn push_delete(&self, delete: crate::core::wal::redo::DeleteEdgeRedo, ts: Timestamp) {
+    fn push_delete(&self, delete: graphdb_core::wal::redo::DeleteEdgeRedo, ts: Timestamp) {
         self.deletes.lock().push((delete, ts));
     }
 
-    fn drain_edges(&self) -> Vec<(crate::core::wal::redo::InsertEdgeRedo, Timestamp)> {
+    fn drain_edges(&self) -> Vec<(graphdb_core::wal::redo::InsertEdgeRedo, Timestamp)> {
         self.edges.lock().drain(..).collect()
     }
 
-    fn drain_deletes(&self) -> Vec<(crate::core::wal::redo::DeleteEdgeRedo, Timestamp)> {
+    fn drain_deletes(&self) -> Vec<(graphdb_core::wal::redo::DeleteEdgeRedo, Timestamp)> {
         self.deletes.lock().drain(..).collect()
     }
 }
@@ -695,7 +695,7 @@ impl AutoCommitBatchWindow {
             }
         };
 
-        let transaction_id = crate::core::types::TransactionId::new(
+        let transaction_id = graphdb_core::types::TransactionId::new(
             base.persistent
                 .next_auto_transaction_id
                 .fetch_add(1, Ordering::SeqCst),
@@ -777,7 +777,7 @@ impl AutoCommitBatchWindow {
                     .persistent
                     .index_data_manager
                     .read()
-                    .advance_barriers(crate::core::types::CommitLsn::new(durable.as_u64()));
+                    .advance_barriers(graphdb_core::types::CommitLsn::new(durable.as_u64()));
             }
         }
         // 2) Visibility: commit the shared write timestamp once.
@@ -1061,7 +1061,7 @@ impl std::fmt::Debug for GraphStorageContext {
 }
 
 impl GraphStorageContext {
-    pub fn new_with_config(config: PropertyGraphConfig) -> crate::core::StorageResult<Self> {
+    pub fn new_with_config(config: PropertyGraphConfig) -> graphdb_core::StorageResult<Self> {
         let persistent = GraphStoragePersistent::new_with_config(config)?;
         if let Err(e) = persistent.spiller.cleanup_stale_files() {
             log::warn!("Failed to clean up stale spill files: {}", e);

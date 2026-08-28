@@ -2,7 +2,7 @@
 //!
 //! Manages record cache and memory tracking for the storage engine.
 
-use crate::core::types::{LabelId, Timestamp};
+use graphdb_core::types::{LabelId, Timestamp};
 use crate::cache::{
     CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats, SharedRecordCache,
     VertexCacheKey,
@@ -124,7 +124,7 @@ impl CacheManager {
         label: LabelId,
         internal_id: u32,
         external_id: String,
-        properties: Vec<(String, crate::core::Value)>,
+        properties: Vec<(String, graphdb_core::Value)>,
         ts: Timestamp,
     ) {
         if let Some(ref rc) = self.record_cache {

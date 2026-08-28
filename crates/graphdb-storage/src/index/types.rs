@@ -1,6 +1,6 @@
-use crate::core::types::{Timestamp, MAX_TIMESTAMP};
-use crate::core::wal::EntityRef;
-use crate::core::Value;
+use graphdb_core::types::{Timestamp, MAX_TIMESTAMP};
+use graphdb_core::wal::EntityRef;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 pub(crate) type StaleChecker = Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>;

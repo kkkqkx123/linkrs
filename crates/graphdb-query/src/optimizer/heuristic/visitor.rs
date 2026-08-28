@@ -369,10 +369,10 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::Expression;
-    use crate::core::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::Expression;
+    use graphdb_core::Value;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -398,7 +398,7 @@ mod tests {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let project =

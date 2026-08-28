@@ -1,9 +1,9 @@
 use super::QueryPipelineManager;
-use crate::core::error::{DBError, DBResult, QueryError};
-use crate::core::types::SpaceInfo;
-use crate::core::types::Timestamp;
-use crate::core::types::TransactionId;
-use crate::core::types::TransactionIsolationLevel;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::SpaceInfo;
+use graphdb_core::types::Timestamp;
+use graphdb_core::types::TransactionId;
+use graphdb_core::types::TransactionIsolationLevel;
 use crate::binder::BoundStatement;
 use crate::executor::base::ExecutionResult;
 use crate::executor::streaming::instance::ResultSink;
@@ -994,7 +994,7 @@ mod tests {
     #[test]
     fn explicit_transaction_inherits_snapshot_timestamp() {
         let op_ctx = crate::storage::StorageOperationContext::transaction_with_timestamps(
-            crate::core::types::TransactionId(7),
+            graphdb_core::types::TransactionId(7),
             42,
             Some(43),
             false,
@@ -1010,7 +1010,7 @@ mod tests {
     #[test]
     fn auto_commit_has_no_snapshot_timestamp() {
         let op_ctx = crate::storage::StorageOperationContext::transaction_with_timestamps(
-            crate::core::types::TransactionId(7),
+            graphdb_core::types::TransactionId(7),
             42,
             Some(43),
             false,

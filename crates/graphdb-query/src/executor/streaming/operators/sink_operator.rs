@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -587,10 +587,10 @@ impl SinkOperator {
                                 row_context(row.clone(), layout.clone(), params.clone());
                             let src_val = context
                                 .get_variable(src_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             let dst_val = context
                                 .get_variable(dst_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
                             if let (Ok(src), Ok(dst)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
@@ -663,7 +663,7 @@ impl SinkOperator {
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             if let Ok(vid) = VertexId::try_from(&vid_val) {
                                 let existing = writer
                                     .get_vertex(space_name, &vid)
@@ -783,11 +783,11 @@ impl SinkOperator {
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             let dst_val = context
                                 .get_variable(dst_col)
                                 .or_else(|| row.get(1).cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
                             if let (Ok(src), Ok(dst)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
@@ -928,10 +928,10 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             let dst_val = context
                                 .get_variable(dst_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
                                 StorageWriter::delete_edge(
                                     &mut *writer,
@@ -985,10 +985,10 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             let dst_val = context
                                 .get_variable(dst_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                             if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
                                 StorageWriter::delete_edge(
                                     &mut *writer,

@@ -3,8 +3,8 @@
 //! AST (Abstract Syntax Tree) definitions related to pattern matching in graph contexts, supporting patterns for nodes, edges, and paths.
 
 use super::types::*;
-use crate::core::types::expr::analysis_utils::collect_variables_from_contextual;
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 /// Pattern Enumeration – Graph Pattern Matching
 #[derive(Debug, Clone, PartialEq)]

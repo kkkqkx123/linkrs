@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
 #[cfg(feature = "fulltext-search")]
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "fulltext-search")]
@@ -15,7 +15,7 @@ use crate::executor::streaming::operators::spec::FulltextManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 #[cfg(feature = "fulltext-search")]
-use crate::search::manager::FulltextIndexManager;
+use graphdb_search::manager::FulltextIndexManager;
 use crate::storage::QueryStorage;
 
 #[cfg(feature = "fulltext-search")]
@@ -42,7 +42,7 @@ fn make_manage_result(
 ) -> DataChunk {
     let name_val = name
         .map(Value::string)
-        .unwrap_or(Value::Null(crate::core::NullType::Null));
+        .unwrap_or(Value::Null(graphdb_core::NullType::Null));
     DataChunk::new_with_layout(
         vec![vec![Value::string(action), name_val, Value::string(status)]],
         output_layout,

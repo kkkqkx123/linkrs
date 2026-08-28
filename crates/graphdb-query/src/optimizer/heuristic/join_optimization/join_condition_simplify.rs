@@ -33,7 +33,7 @@
 //! JOIN condition is a constant true.
 //! JOIN conditions can be simplified.
 
-use crate::core::{Expression, Value};
+use graphdb_core::{Expression, Value};
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};

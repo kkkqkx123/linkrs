@@ -1,5 +1,5 @@
-use crate::core::types::PropertyDef;
-use crate::core::{ArrayTypeInfo, NullType, StructTypeInfo, Value};
+use graphdb_core::types::PropertyDef;
+use graphdb_core::{ArrayTypeInfo, NullType, StructTypeInfo, Value};
 use crate::parser::ast::types::DataType;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression;

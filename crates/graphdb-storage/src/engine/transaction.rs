@@ -13,7 +13,7 @@ mod ops_test;
 mod recovery;
 pub mod undo;
 
-pub use crate::core::types::UndoTarget;
+pub use graphdb_core::types::UndoTarget;
 pub use ops::{
     AddEdgeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps,
     UpdateEdgePropertyUndoParams,

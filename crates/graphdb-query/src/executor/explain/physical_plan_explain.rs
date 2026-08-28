@@ -196,7 +196,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     "hash_keys",
                     hash_keys
                         .iter()
-                        .map(crate::core::types::expr::Expression::to_expression_string)
+                        .map(graphdb_core::types::expr::Expression::to_expression_string)
                         .collect::<Vec<_>>()
                         .join(", "),
                 ));
@@ -206,7 +206,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     "probe_keys",
                     probe_keys
                         .iter()
-                        .map(crate::core::types::expr::Expression::to_expression_string)
+                        .map(graphdb_core::types::expr::Expression::to_expression_string)
                         .collect::<Vec<_>>()
                         .join(", "),
                 ));

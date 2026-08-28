@@ -2,7 +2,7 @@
 //!
 //! Plan nodes related to data processing, including Union, Unwind, Dedup, etc.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_plan_node_with_deps;
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
@@ -220,7 +220,7 @@ pub struct RollUpApplyNode {
     collect_col: Option<String>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl RollUpApplyNode {
@@ -529,20 +529,20 @@ pub struct PatternApplyNode {
     left_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     right_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     deps: Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-    hash_keys: Vec<crate::core::types::ContextualExpression>,
-    probe_keys: Vec<crate::core::types::ContextualExpression>,
+    hash_keys: Vec<graphdb_core::types::ContextualExpression>,
+    probe_keys: Vec<graphdb_core::types::ContextualExpression>,
     is_anti_predicate: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl PatternApplyNode {
     pub fn new(
         left_input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
         right_input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
-        hash_keys: Vec<crate::core::types::ContextualExpression>,
-        probe_keys: Vec<crate::core::types::ContextualExpression>,
+        hash_keys: Vec<graphdb_core::types::ContextualExpression>,
+        probe_keys: Vec<graphdb_core::types::ContextualExpression>,
         is_anti_predicate: bool,
     ) -> Result<Self, crate::planning::planner::PlannerError> {
         let col_names = left_input.col_names().to_vec();
@@ -574,11 +574,11 @@ impl PatternApplyNode {
         &self.right_input
     }
 
-    pub fn hash_keys(&self) -> &[crate::core::types::ContextualExpression] {
+    pub fn hash_keys(&self) -> &[graphdb_core::types::ContextualExpression] {
         &self.hash_keys
     }
 
-    pub fn probe_keys(&self) -> &[crate::core::types::ContextualExpression] {
+    pub fn probe_keys(&self) -> &[graphdb_core::types::ContextualExpression] {
         &self.probe_keys
     }
 
@@ -750,9 +750,9 @@ impl MemoryEstimatable for PatternApplyNode {
         let base = std::mem::size_of::<PatternApplyNode>();
 
         // Estimate hash_keys and probe_keys
-        let keys_size = std::mem::size_of::<Vec<crate::core::types::ContextualExpression>>() * 2
+        let keys_size = std::mem::size_of::<Vec<graphdb_core::types::ContextualExpression>>() * 2
             + (self.hash_keys.len() + self.probe_keys.len())
-                * std::mem::size_of::<crate::core::types::ContextualExpression>();
+                * std::mem::size_of::<graphdb_core::types::ContextualExpression>();
 
         // Estimate is_anti_predicate bool
         let is_anti_size = std::mem::size_of::<bool>();
@@ -811,7 +811,7 @@ pub struct CorrelatedApplyNode {
     is_anti_predicate: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl CorrelatedApplyNode {
@@ -867,11 +867,11 @@ impl CorrelatedApplyNode {
         &self.col_names
     }
 
-    pub fn column_types(&self) -> &[crate::core::DataType] {
+    pub fn column_types(&self) -> &[graphdb_core::DataType] {
         &self.column_types
     }
 
-    pub fn set_column_types(&mut self, types: Vec<crate::core::DataType>) {
+    pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) {
         self.column_types = types;
     }
 
@@ -1108,8 +1108,8 @@ mod tests {
                 StartNode::new(),
             );
 
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
         use std::sync::Arc;
 
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -1320,7 +1320,7 @@ pub struct ApplyNode {
     apply_kind: ApplyKind,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 /// Kind of Apply operation

@@ -1,10 +1,10 @@
-use crate::core::metadata::{IndexMetadataManager, SchemaManager};
-use crate::core::types::TransactionId;
-use crate::core::types::{
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::types::TransactionId;
+use graphdb_core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
@@ -12,8 +12,8 @@ use crate::engine::background_freeze::FreezeStats;
 use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::mvcc::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, PropertyChange};
-use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
-use crate::transaction::UndoTarget;
+use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
+use graphdb_transaction::UndoTarget;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -579,7 +579,7 @@ pub trait StoragePersistenceOps: Send + Sync + std::fmt::Debug {
     fn set_outbox_materialized_lsn_provider(
         &self,
         _provider: Arc<
-            dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync,
+            dyn Fn() -> StorageResult<Option<graphdb_core::types::CommitLsn>> + Send + Sync,
         >,
     ) {
     }
@@ -718,23 +718,23 @@ pub trait StorageCommitOps: Send + Sync + std::fmt::Debug {
     fn commit_staged_writes(
         &self,
         transaction_id: TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> StorageResult<crate::core::types::CommitLsn>;
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> StorageResult<graphdb_core::types::CommitLsn>;
 
     fn abort_staged_writes(&self, transaction_id: TransactionId) -> StorageResult<()>;
 
     fn commit_staged_writes_with_durability(
         &self,
         transaction_id: TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-        _durability: crate::core::types::DurabilityLevel,
-    ) -> StorageResult<crate::core::types::CommitLsn> {
+        intents: &[graphdb_core::wal::OutboxIntent],
+        _durability: graphdb_core::types::DurabilityLevel,
+    ) -> StorageResult<graphdb_core::types::CommitLsn> {
         self.commit_staged_writes(transaction_id, intents)
     }
 
     fn recover_outbox_projection(
         &self,
-        sync_manager: &crate::sync::SyncManager,
+        sync_manager: &graphdb_sync::SyncManager,
     ) -> StorageResult<usize>;
 }
 
@@ -782,7 +782,7 @@ pub trait StorageOperationContextOps: Send + Sync + std::fmt::Debug {
 
 /// Access to sync runtime context shared with higher-level components.
 pub trait StorageSyncContextOps: Send + Sync + std::fmt::Debug {
-    fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>>;
+    fn get_sync_manager(&self) -> Option<Arc<graphdb_sync::SyncManager>>;
 }
 
 /// WAL recovery operations.

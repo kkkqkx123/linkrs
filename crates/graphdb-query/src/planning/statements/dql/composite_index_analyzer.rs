@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 
-use crate::core::Expression;
-use crate::core::Value;
+use graphdb_core::Expression;
+use graphdb_core::Value;
 use crate::optimizer::cost::CostModelConfig;
 use crate::planning::plan::core::nodes::access::IndexLimit;
 use crate::planning::statements::seeks::seek_strategy_base::IndexInfo;
@@ -520,7 +520,7 @@ pub fn extract_predicates_from_expression(expr: &Expression) -> Vec<PredicateInf
 }
 
 fn extract_predicates_recursive(expr: &Expression, predicates: &mut Vec<PredicateInfo>) {
-    use crate::core::types::operators::BinaryOperator;
+    use graphdb_core::types::operators::BinaryOperator;
 
     match expr {
         Expression::Binary { left, op, right } => match op {
@@ -572,10 +572,10 @@ fn extract_equality_predicate(
 
 fn extract_range_predicate(
     col_expr: &Expression,
-    op: &crate::core::types::operators::BinaryOperator,
+    op: &graphdb_core::types::operators::BinaryOperator,
     val_expr: &Expression,
 ) -> Option<PredicateInfo> {
-    use crate::core::types::operators::BinaryOperator;
+    use graphdb_core::types::operators::BinaryOperator;
 
     let column = extract_column_name(col_expr)?;
     let value = extract_literal_value(val_expr)?;

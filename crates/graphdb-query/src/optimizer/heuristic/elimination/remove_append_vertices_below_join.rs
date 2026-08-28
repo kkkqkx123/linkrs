@@ -32,14 +32,14 @@
 //! The `nodeAlias` of the `AppendVertices` function is only referenced once.
 //! - The Join hash keys match id() or _joinkey() patterns
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::expr::visitor_checkers::VariableContainsChecker;
-use crate::core::types::expr::visitor_collectors::PropertyCollector;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::YieldColumn;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_checkers::VariableContainsChecker;
+use graphdb_core::types::expr::visitor_collectors::PropertyCollector;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::YieldColumn;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};

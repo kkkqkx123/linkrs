@@ -9,8 +9,8 @@ use dashmap::DashMap;
 
 use super::checkpoint::CheckpointGate;
 use super::mvcc::VersionManager;
-use crate::core::types::Timestamp;
-use crate::sync::SyncManager;
+use graphdb_core::types::Timestamp;
+use graphdb_sync::SyncManager;
 use crate::context::TransactionContext;
 use crate::error::TransactionError;
 use crate::types::{TransactionId, TransactionState, TransactionStats};

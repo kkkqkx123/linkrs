@@ -65,13 +65,13 @@ impl Planner for FetchVerticesPlanner {
                 if let Some(expr_meta) = ctx_expr.expression() {
                     let expr = expr_meta.inner();
                     match expr {
-                        crate::core::Expression::Literal(crate::core::Value::Int(i)) => {
+                        graphdb_core::Expression::Literal(graphdb_core::Value::Int(i)) => {
                             i.to_string()
                         }
-                        crate::core::Expression::Literal(crate::core::Value::BigInt(i)) => {
+                        graphdb_core::Expression::Literal(graphdb_core::Value::BigInt(i)) => {
                             i.to_string()
                         }
-                        crate::core::Expression::Literal(crate::core::Value::String(s)) => {
+                        graphdb_core::Expression::Literal(graphdb_core::Value::String(s)) => {
                             s.to_string()
                         }
                         _ => expr.to_string(),
@@ -115,7 +115,7 @@ impl Planner for FetchVerticesPlanner {
         let root = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
             let mut columns = Vec::new();
             for item in &yield_clause.items {
-                columns.push(crate::core::YieldColumn {
+                columns.push(graphdb_core::YieldColumn {
                     expression: item.expression.clone(),
                     alias: item.alias.clone().unwrap_or_default(),
                     is_matched: false,

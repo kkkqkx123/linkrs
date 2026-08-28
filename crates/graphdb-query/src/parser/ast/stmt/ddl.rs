@@ -1,5 +1,5 @@
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::{EdgeDirection, PropertyDef, Span};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::{EdgeDirection, PropertyDef, Span};
 use crate::parser::ast::pattern::Pattern;
 use crate::parser::ast::types::DataType;
 

@@ -3,8 +3,8 @@
 //! This rule identifies the `vFilter` element within the Traverse/AppendVertices nodes.
 //! And push the filter conditions that can be applied “downward” (i.e., applied to the data at a lower level in the system) back to the data source.
 
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::{check_col_name, split_filter};
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -121,7 +121,7 @@ impl PushFilterDownNodeRule {
             }
         } else {
             new_traverse.set_v_filter(ContextualExpression::new(
-                crate::core::types::expr::ExpressionId::new(0),
+                graphdb_core::types::expr::ExpressionId::new(0),
                 ctx,
             ));
         }

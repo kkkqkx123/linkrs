@@ -13,7 +13,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::web::{
     error::{WebError, WebResult},
     models::{ApiResponse, PaginatedResponse, PaginationParams},

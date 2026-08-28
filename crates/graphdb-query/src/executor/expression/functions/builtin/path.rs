@@ -2,9 +2,9 @@
 //!
 //! Provide functions for path operations, including nodes and relationships.
 
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 
 /// Path function enumeration
@@ -93,8 +93,8 @@ fn execute_relationships(args: &[Value]) -> Result<Value, ExpressionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
-    use crate::core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
+    use graphdb_core::types::VertexId;
+    use graphdb_core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
     use std::collections::HashMap;
 
     fn create_test_vertex_with_id(id: i64) -> Vertex {

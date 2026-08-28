@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{EdgeDirection, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -171,7 +171,7 @@ pub(super) fn expand_single_step(
             .get(seed_slot)
             .or_else(|| row.first())
             .cloned()
-            .unwrap_or(Value::Null(crate::core::NullType::Null));
+            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             seed_vids.push(vid);
@@ -209,7 +209,7 @@ pub(super) fn expand_single_step(
             for dst in dst_ids {
                 buf.push_row(
                     seed_row,
-                    Value::Null(crate::core::NullType::Null),
+                    Value::Null(graphdb_core::NullType::Null),
                     Value::VertexId(*dst),
                 );
             }
@@ -243,7 +243,7 @@ pub(super) fn expand_single_step(
 
             let dst_vertex = reader
                 .get_vertex(space_name, &dst_vid)?
-                .unwrap_or_else(|| crate::core::Vertex::with_vid(dst_vid));
+                .unwrap_or_else(|| graphdb_core::Vertex::with_vid(dst_vid));
             buf.push_row(
                 seed_row,
                 Value::Edge(Box::new(edge.clone())),
@@ -284,7 +284,7 @@ pub(super) fn expand_count_only(
             .get(seed_slot)
             .or_else(|| row.first())
             .cloned()
-            .unwrap_or(Value::Null(crate::core::NullType::Null));
+            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             seed_vids.push(vid);
@@ -326,7 +326,7 @@ pub(super) fn expand_on_chunk(
             .get(seed_slot)
             .or_else(|| row.first())
             .cloned()
-            .unwrap_or(Value::Null(crate::core::NullType::Null));
+            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             seed_vids.push(vid);
@@ -372,7 +372,7 @@ pub(super) fn expand_on_chunk(
             if let Some(ref edge) = event.edge {
                 out_row.push(Value::Edge(Box::new(edge.clone())));
             } else {
-                out_row.push(Value::Null(crate::core::NullType::Null));
+                out_row.push(Value::Null(graphdb_core::NullType::Null));
             }
             out_row.push(Value::Vertex(Box::new(event.vertex)));
             let mut out_col_names = ctx.col_names_template.clone();
@@ -413,7 +413,7 @@ pub(super) fn traverse_on_chunk(
         let vid_val = context
             .get_variable("vid")
             .or_else(|| row.first().cloned())
-            .unwrap_or(Value::Null(crate::core::NullType::Null));
+            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             let runtime_reader = TraversalGraphReader::new(reader);
             let mut runtime = TraversalRuntime::new(runtime_reader, config.clone());

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::core::metadata::{IndexMetadataManager, SchemaManager};
-use crate::core::types::{
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
@@ -16,7 +16,7 @@ use crate::{
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
     StorageStats, StorageSyncContextOps, StorageWriter,
 };
-use crate::sync::SyncManager;
+use graphdb_sync::SyncManager;
 
 pub struct MetricsStorage<S: StorageClient> {
     inner: S,
@@ -240,16 +240,16 @@ impl<S: StorageClient> StorageAdmin for MetricsStorage<S> {
 impl<S: StorageClient> StoragePersistenceOps for MetricsStorage<S> {
     forward_methods!(inner;
         fn flush(&self) -> Result<(), StorageError>;
-        fn save_data(&self) -> crate::core::StorageResult<()>;
-        fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
-        fn create_checkpoint(&self) -> crate::core::StorageResult<Option<crate::CheckpointStats>>;
-        fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool>;
-        fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize>;
+        fn save_data(&self) -> graphdb_core::StorageResult<()>;
+        fn save_data_to_dir(&self, dir: &std::path::Path) -> graphdb_core::StorageResult<()>;
+        fn create_checkpoint(&self) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>>;
+        fn verify_snapshot(&self, snapshot_id: u64) -> graphdb_core::StorageResult<bool>;
+        fn cleanup_snapshots(&self) -> graphdb_core::StorageResult<usize>;
         fn snapshot_stats(&self) -> crate::SnapshotStats;
         fn persistence_diagnostics(&self) -> Option<crate::PersistenceDiagnostics>;
-        fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()>;
-        fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool>;
-        fn auto_checkpoint_if_needed(&self) -> crate::core::StorageResult<Option<crate::CheckpointStats>>;
+        fn compact(&self, config: &graphdb_core::types::CompactConfig) -> graphdb_core::StorageResult<()>;
+        fn auto_flush_if_needed(&self) -> graphdb_core::StorageResult<bool>;
+        fn auto_checkpoint_if_needed(&self) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>>;
         fn should_flush(&self) -> bool;
         fn should_checkpoint(&self) -> bool;
     );
@@ -285,16 +285,16 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
         self.inner.operation_context()
     }
 
-    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+    fn finalize_operation(&self, committed: bool) -> graphdb_core::StorageResult<()> {
         self.inner.finalize_operation(committed)
     }
 }
 
 impl<S: StorageClient> StorageCommitOps for MetricsStorage<S> {
     forward_methods!(inner;
-        fn commit_staged_writes(&self, transaction_id: crate::core::types::TransactionId, intents: &[crate::core::wal::OutboxIntent]) -> crate::core::StorageResult<crate::core::types::CommitLsn>;
-        fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) -> crate::core::StorageResult<()>;
-        fn recover_outbox_projection(&self, sync_manager: &crate::sync::SyncManager) -> crate::core::StorageResult<usize>;
+        fn commit_staged_writes(&self, transaction_id: graphdb_core::types::TransactionId, intents: &[graphdb_core::wal::OutboxIntent]) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn>;
+        fn abort_staged_writes(&self, transaction_id: graphdb_core::types::TransactionId) -> graphdb_core::StorageResult<()>;
+        fn recover_outbox_projection(&self, sync_manager: &graphdb_sync::SyncManager) -> graphdb_core::StorageResult<usize>;
     );
 }
 
@@ -307,12 +307,12 @@ impl<S: StorageClient + StorageSyncContextOps> StorageSyncContextOps for Metrics
 impl<S: StorageClient> StorageRecoveryOps for MetricsStorage<S> {
     forward_methods!(inner;
         fn needs_recovery(&self) -> bool;
-        fn recover_from_wal(&self) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
+        fn recover_from_wal(&self) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats>;
         fn recover_from_wal_with_config(
             &self,
-            config: crate::transaction::wal::recovery::RecoveryConfig,
-        ) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
-        fn init_with_recovery(&self) -> crate::core::StorageResult<Option<crate::transaction::wal::recovery::RecoveryStats>>;
+            config: graphdb_transaction::wal::recovery::RecoveryConfig,
+        ) -> graphdb_core::StorageResult<graphdb_transaction::wal::recovery::RecoveryStats>;
+        fn init_with_recovery(&self) -> graphdb_core::StorageResult<Option<graphdb_transaction::wal::recovery::RecoveryStats>>;
     );
 }
 
@@ -351,8 +351,8 @@ impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
 {
     fn export_snapshot(
         &self,
-        ts: crate::core::types::Timestamp,
-    ) -> crate::core::StorageResult<
+        ts: graphdb_core::types::Timestamp,
+    ) -> graphdb_core::StorageResult<
         Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>,
     > {
         self.inner.export_snapshot(ts)
@@ -362,95 +362,95 @@ impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
         self.inner.get_freeze_stats()
     }
 
-    fn trigger_background_freeze(&self) -> crate::core::StorageResult<()> {
+    fn trigger_background_freeze(&self) -> graphdb_core::StorageResult<()> {
         self.inner.trigger_background_freeze()
     }
 
     fn list_cold_snapshots(
         &self,
-    ) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
+    ) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
         self.inner.list_cold_snapshots()
     }
 
     fn load_cold_snapshot(
         &self,
         path: &std::path::Path,
-    ) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo> {
+    ) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo> {
         self.inner.load_cold_snapshot(path)
     }
 
     fn remove_cold_snapshot(
         &self,
-        label: crate::core::types::LabelId,
-    ) -> crate::core::StorageResult<()> {
+        label: graphdb_core::types::LabelId,
+    ) -> graphdb_core::StorageResult<()> {
         self.inner.remove_cold_snapshot(label)
     }
 
     fn export_cold_snapshot(
         &self,
-        label: crate::core::types::LabelId,
+        label: graphdb_core::types::LabelId,
         path: &std::path::Path,
-    ) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo> {
+    ) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo> {
         self.inner.export_cold_snapshot(label, path)
     }
 
     fn merge_cold_snapshots(
         &self,
-        labels: &[crate::core::types::LabelId],
-    ) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
+        labels: &[graphdb_core::types::LabelId],
+    ) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
         self.inner.merge_cold_snapshots(labels)
     }
 }
 
-impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::UndoTarget
+impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::UndoTarget
     for MetricsStorage<S>
 {
     fn delete_vertex_type(
         &self,
-        label: crate::core::types::LabelId,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::delete_vertex_type(&self.inner, label)
+        label: graphdb_core::types::LabelId,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::delete_vertex_type(&self.inner, label)
     }
 
     fn delete_edge_type(
         &self,
-        edge_key: crate::core::types::EdgeKey,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::delete_edge_type(&self.inner, edge_key)
+        edge_key: graphdb_core::types::EdgeKey,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::delete_edge_type(&self.inner, edge_key)
     }
 
     fn delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::delete_vertex(&self.inner, vertex, ts)
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::delete_vertex(&self.inner, vertex, ts)
     }
 
     fn delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::delete_edge(&self.inner, edge_ctx)
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::delete_edge(&self.inner, edge_ctx)
     }
 
     fn restore_edge(
         &self,
-        edge: crate::core::types::EdgeIdentifier,
-        properties: Vec<(String, crate::core::Value)>,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::restore_edge(&self.inner, edge, properties, ts)
+        edge: graphdb_core::types::EdgeIdentifier,
+        properties: Vec<(String, graphdb_core::Value)>,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::restore_edge(&self.inner, edge, properties, ts)
     }
 
     fn undo_update_vertex_property(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::undo_update_vertex_property(
+        vertex: graphdb_core::types::VertexIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::undo_update_vertex_property(
             &self.inner,
             vertex,
             col_id,
@@ -461,12 +461,12 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
 
     fn undo_update_edge_property(
         &self,
-        edge_id: crate::core::types::EdgeIdentifier,
-        col_id: crate::core::types::ColumnId,
-        value: crate::core::Value,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::undo_update_edge_property(
+        edge_id: graphdb_core::types::EdgeIdentifier,
+        col_id: graphdb_core::types::ColumnId,
+        value: graphdb_core::Value,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::undo_update_edge_property(
             &self.inner,
             edge_id,
             col_id,
@@ -477,25 +477,25 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
 
     fn revert_delete_vertex(
         &self,
-        vertex: crate::core::types::VertexIdentifier,
-        ts: crate::transaction::wal::Timestamp,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_vertex(&self.inner, vertex, ts)
+        vertex: graphdb_core::types::VertexIdentifier,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_vertex(&self.inner, vertex, ts)
     }
 
     fn revert_delete_edge(
         &self,
-        edge_ctx: crate::core::types::EdgeDeletionContext,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_edge(&self.inner, edge_ctx)
+        edge_ctx: graphdb_core::types::EdgeDeletionContext,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_edge(&self.inner, edge_ctx)
     }
 
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_vertex_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_vertex_properties(
             &self.inner,
             label_name,
             prop_names,
@@ -508,8 +508,8 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         dst_label: &str,
         edge_label: &str,
         prop_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_edge_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_edge_properties(
             &self.inner,
             src_label,
             dst_label,
@@ -521,8 +521,8 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
     fn revert_delete_vertex_label(
         &self,
         label_name: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_vertex_label(&self.inner, label_name)
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_vertex_label(&self.inner, label_name)
     }
 
     fn revert_delete_edge_label(
@@ -530,8 +530,8 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_delete_edge_label(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_delete_edge_label(
             &self.inner,
             src_label,
             dst_label,
@@ -544,8 +544,8 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         label_name: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_rename_vertex_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_rename_vertex_properties(
             &self.inner,
             label_name,
             current_names,
@@ -560,8 +560,8 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         edge_label: &str,
         current_names: &[String],
         original_names: &[String],
-    ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        crate::transaction::UndoTarget::revert_rename_edge_properties(
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::revert_rename_edge_properties(
             &self.inner,
             src_label,
             dst_label,

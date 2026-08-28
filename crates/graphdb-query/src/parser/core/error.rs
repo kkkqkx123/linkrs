@@ -8,7 +8,7 @@ use crate::QueryError;
 use std::error::Error;
 use std::fmt;
 
-use crate::core::types::Position;
+use graphdb_core::types::Position;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseErrorKind {
@@ -212,10 +212,10 @@ impl From<super::super::lexing::LexError> for ParseError {
 
 impl From<ParseError> for QueryError {
     fn from(parse_error: ParseError) -> Self {
-        use crate::core::error::query::{
+        use graphdb_core::error::query::{
             ParseErrorKind as QueryParseErrorKind, StructuredParseError,
         };
-        use crate::core::types::Position;
+        use graphdb_core::types::Position;
 
         let kind = match parse_error.kind {
             ParseErrorKind::LexicalError => QueryParseErrorKind::LexicalError,

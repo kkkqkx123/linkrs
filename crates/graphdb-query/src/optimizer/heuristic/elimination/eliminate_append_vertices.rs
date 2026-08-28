@@ -28,8 +28,8 @@
 //! The output column of the AppendVertices function is an anonymous variable.
 //! The list expression of the project does not contain the PathBuild expression.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::visitor_checkers::PathBuildContainsChecker;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor_checkers::PathBuildContainsChecker;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};

@@ -1,7 +1,7 @@
 //! Request Context Module - manages context information for query requests
 
-use crate::core::ErrorCode;
-use crate::core::Value;
+use graphdb_core::ErrorCode;
+use graphdb_core::Value;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -298,7 +298,7 @@ impl Clone for RequestContext {
 pub fn build_query_request_context(
     session: &super::ClientSession,
     query: String,
-    parameters: std::collections::HashMap<String, crate::core::Value>,
+    parameters: std::collections::HashMap<String, graphdb_core::Value>,
 ) -> crate::query::QueryRequestContext {
     use crate::query::QueryRequestContext;
 

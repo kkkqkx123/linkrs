@@ -3,8 +3,8 @@
 //! Each manifest generation owns independent shard maps. This makes the
 //! manifest handle a real data-generation pin instead of metadata only.
 
-use crate::core::types::{CommitLsn, IndexGeneration, Timestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{CommitLsn, IndexGeneration, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::chunk::serialize::{
     make_chunk_loader, make_chunk_writer, read_chunked_index_checkpoint_lazy,

@@ -1,7 +1,7 @@
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use std::sync::Arc;
 
 pub fn build_label_filter_expression(
@@ -32,7 +32,7 @@ pub fn build_label_filter_expression(
         })
     };
 
-    let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+    let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
     let id = ctx.register_expression(expr_meta);
     ContextualExpression::new(id, ctx)
 }
@@ -63,7 +63,7 @@ pub fn convert_properties_to_filter(
             .into_iter()
             .reduce(|acc, cond| Expression::binary(acc, BinaryOperator::And, cond))?;
 
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(combined);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(combined);
         let id = expr_context.register_expression(expr_meta);
         Some(ContextualExpression::new(id, expr_context.clone()))
     } else {

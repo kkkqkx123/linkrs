@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json;
 
-use crate::core::stats::MetricType;
+use graphdb_core::stats::MetricType;
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
@@ -100,8 +100,8 @@ pub async fn queries<
                 "query": profile.query_text,
                 "duration_ms": profile.total_duration_us as f64 / 1000.0,
                 "status": match profile.status {
-                    crate::core::stats::QueryStatus::Success => "success",
-                    crate::core::stats::QueryStatus::Failed => "failed",
+                    graphdb_core::stats::QueryStatus::Success => "success",
+                    graphdb_core::stats::QueryStatus::Failed => "failed",
                 },
             })
         })

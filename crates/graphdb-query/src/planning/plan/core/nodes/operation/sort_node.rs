@@ -2,8 +2,8 @@
 //!
 //! The `SortNode` is used to perform sorting operations on the input data.
 
-use crate::core::types::graph_schema::OrderDirection;
-use crate::core::Expression;
+use graphdb_core::types::graph_schema::OrderDirection;
+use graphdb_core::Expression;
 use crate::define_plan_node_with_deps;
 
 /// Sorting item definition
@@ -243,11 +243,11 @@ mod tests {
                     object: Box::new(Expression::Variable("p".to_string())),
                     property: "embedding".to_string(),
                 },
-                Expression::Literal(crate::core::Value::List(Box::new(
-                    crate::core::value::list::List {
+                Expression::Literal(graphdb_core::Value::List(Box::new(
+                    graphdb_core::value::list::List {
                         values: vec![
-                            crate::core::Value::Double(0.1),
-                            crate::core::Value::Double(0.2),
+                            graphdb_core::Value::Double(0.1),
+                            graphdb_core::Value::Double(0.2),
                         ],
                     },
                 ))),

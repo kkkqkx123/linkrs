@@ -3,10 +3,10 @@
 //! Query planning for handling Cypher-style CREATE statements
 //! supports CREATE (n:Label {props}) and CREATE (a)-[:Type]->(b) syntaxes
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::ContextualExpression;
-use crate::core::Value;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Value;
+use graphdb_core::YieldColumn;
 use crate::parser::ast::{CreateStmt, CreateTarget, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -75,8 +75,8 @@ impl CreatePlanner {
             properties.iter().map(|(_, v)| v.clone()).collect();
 
         let vid_expr = {
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::Expression::literal(Value::Null(crate::core::NullType::default())),
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::literal(Value::Null(graphdb_core::NullType::default())),
             );
             let id = expr_context.register_expression(expr_meta);
             ContextualExpression::new(id, expr_context.clone())
@@ -118,8 +118,8 @@ impl CreatePlanner {
         count: usize,
         expr_context: &Arc<ExpressionAnalysisContext>,
     ) -> Vec<YieldColumn> {
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-            crate::core::Expression::literal(Value::BigInt(count as i64)),
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::literal(Value::BigInt(count as i64)),
         );
         let id = expr_context.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, expr_context.clone());
@@ -325,11 +325,11 @@ impl CreatePlanner {
         expr_context: &Arc<ExpressionAnalysisContext>,
     ) -> Result<Vec<(String, ContextualExpression)>, PlannerError> {
         if let Some(expr_meta) = expr.expression() {
-            if let crate::core::Expression::Map(map) = expr_meta.inner() {
+            if let graphdb_core::Expression::Map(map) = expr_meta.inner() {
                 let mut result = Vec::new();
                 for (key, value_expr) in map {
                     let value_meta =
-                        crate::core::types::expr::ExpressionMeta::new(value_expr.clone());
+                        graphdb_core::types::expr::ExpressionMeta::new(value_expr.clone());
                     let id = expr_context.register_expression(value_meta);
                     let ctx_expr = ContextualExpression::new(id, expr_context.clone());
                     result.push((key.clone(), ctx_expr));
@@ -403,18 +403,18 @@ impl CreatePlanner {
                     let edge_type = edge.edge_types[0].clone();
 
                     let src_vid = {
-                        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                            crate::core::Expression::literal(Value::Null(
-                                crate::core::NullType::default(),
+                        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                            graphdb_core::Expression::literal(Value::Null(
+                                graphdb_core::NullType::default(),
                             )),
                         );
                         let id = expr_context.register_expression(expr_meta);
                         ContextualExpression::new(id, expr_context.clone())
                     };
                     let dst_vid = {
-                        let expr_meta = crate::core::types::expr::ExpressionMeta::new(
-                            crate::core::Expression::literal(Value::Null(
-                                crate::core::NullType::default(),
+                        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                            graphdb_core::Expression::literal(Value::Null(
+                                graphdb_core::NullType::default(),
                             )),
                         );
                         let id = expr_context.register_expression(expr_meta);

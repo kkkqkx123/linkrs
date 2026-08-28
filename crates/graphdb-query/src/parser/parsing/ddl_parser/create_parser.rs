@@ -7,7 +7,7 @@ use crate::parser::TokenKind;
 use super::DdlParser;
 
 type TagEdgeDefsResult = (
-    Vec<crate::core::types::PropertyDef>,
+    Vec<graphdb_core::types::PropertyDef>,
     Option<i64>,
     Option<String>,
 );

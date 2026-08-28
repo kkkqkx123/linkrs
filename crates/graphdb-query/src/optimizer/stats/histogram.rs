@@ -3,7 +3,7 @@
 //! Use an equi-depth histogram to record the distribution of attribute values.
 //! Each histogram contains a fixed number of bins, and each bin records the same number of tuples.
 
-use crate::core::value::Value;
+use graphdb_core::value::Value;
 use std::time::Instant;
 
 /// Histogram bins
@@ -337,14 +337,14 @@ mod tests {
         let mut samples: Vec<Value> = (1..=90).map(Value::Int).collect();
         // Add 10 empty values.
         for _ in 0..10 {
-            samples.push(Value::Null(crate::core::value::NullType::Null));
+            samples.push(Value::Null(graphdb_core::value::NullType::Null));
         }
 
         let hist = Histogram::from_samples(samples, 10, 100);
         assert!((hist.null_fraction() - 0.1).abs() < 0.01);
 
         let null_selectivity =
-            hist.estimate_equality_selectivity(&Value::Null(crate::core::value::NullType::Null));
+            hist.estimate_equality_selectivity(&Value::Null(graphdb_core::value::NullType::Null));
         assert!((null_selectivity - 0.1).abs() < 0.01);
     }
 }

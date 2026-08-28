@@ -11,7 +11,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
-use crate::core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 
 use super::context::TransactionContext;
 use super::error::TransactionError;

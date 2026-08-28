@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::types::EdgeDirection;
-use crate::core::vertex_edge_path::Vertex;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::vertex_edge_path::Vertex;
 use crate::storage::{QueryStorage, ScanOptions};
 
 use super::{EdgeTypeStatistics, PropertyStatistics, StatisticsManager, TagStatistics};
@@ -385,16 +385,16 @@ impl StatisticsCollector {
         sample_limit: usize,
     ) -> Result<usize, String> {
         // Stable distinct-count key for a value: type-tagged canonical form.
-        fn ndv_key(v: &crate::core::Value) -> String {
+        fn ndv_key(v: &graphdb_core::Value) -> String {
             match v {
-                crate::core::Value::Null(_) => "n".to_string(),
-                crate::core::Value::Bool(b) => format!("b:{b}"),
-                crate::core::Value::Int(i) => format!("i:{i}"),
-                crate::core::Value::BigInt(i) => format!("l:{i}"),
-                crate::core::Value::Float(f) => format!("f:{:?}", f.to_bits()),
-                crate::core::Value::Double(d) => format!("d:{:?}", d.to_bits()),
-                crate::core::Value::String(s) => format!("s:{s}"),
-                crate::core::Value::FixedString(s) => format!("s:{s}"),
+                graphdb_core::Value::Null(_) => "n".to_string(),
+                graphdb_core::Value::Bool(b) => format!("b:{b}"),
+                graphdb_core::Value::Int(i) => format!("i:{i}"),
+                graphdb_core::Value::BigInt(i) => format!("l:{i}"),
+                graphdb_core::Value::Float(f) => format!("f:{:?}", f.to_bits()),
+                graphdb_core::Value::Double(d) => format!("d:{:?}", d.to_bits()),
+                graphdb_core::Value::String(s) => format!("s:{s}"),
+                graphdb_core::Value::FixedString(s) => format!("s:{s}"),
                 other => format!("o:{other:?}"),
             }
         }

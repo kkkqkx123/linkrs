@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::Value;
+use graphdb_core::Value;
 
 pub type ResolverError = String;
 
@@ -422,7 +422,7 @@ impl ParsedPipeVariable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::value::list::List;
+    use graphdb_core::value::list::List;
     use std::collections::HashMap;
 
     fn make_list(values: Vec<Value>) -> Value {

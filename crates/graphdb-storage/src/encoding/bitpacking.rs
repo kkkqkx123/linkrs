@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 
 use bitvec::prelude::*;
 
-use crate::core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone)]
 pub struct BitPackedColumn {

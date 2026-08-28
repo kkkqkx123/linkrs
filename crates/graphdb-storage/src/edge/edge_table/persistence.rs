@@ -5,8 +5,8 @@
 
 use super::super::{CsrBase, CsrVariant};
 use super::segment::{CsrSegment, DeletionInfo};
-use crate::core::types::{EdgeId, Timestamp};
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use crate::edge::EdgeSchema;
 use crate::edge::PropertyTable;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
@@ -502,7 +502,7 @@ pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
 
     fn create_edge_table() -> TimeTravelEdgeStore {
@@ -528,7 +528,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -564,7 +564,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -596,7 +596,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -630,7 +630,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

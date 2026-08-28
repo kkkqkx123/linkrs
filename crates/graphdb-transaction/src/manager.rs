@@ -33,10 +33,10 @@ use super::recovery::RecoveryManager;
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
-use crate::core::stats::StatsManager;
-use crate::core::types::{CommitLsn, Timestamp};
-use crate::core::wal::types::Lsn;
-use crate::sync::SyncManager;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{CommitLsn, Timestamp};
+use graphdb_core::wal::types::Lsn;
+use graphdb_sync::SyncManager;
 
 /// Transaction Manager
 ///
@@ -1438,7 +1438,7 @@ impl TransactionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{
+    use graphdb_core::types::{
         ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
     };
     use crate::error::TransactionErrorKind;
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_transaction_manager_with_sync_manager() {
-        use crate::sync::SyncManager;
+        use graphdb_sync::SyncManager;
 
         let sync_manager = Arc::new(SyncManager::new_without_fulltext());
         let manager = TransactionManager::new(TransactionManagerConfig::default())
@@ -1677,7 +1677,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_savepoint_with_sync_manager() {
-        use crate::sync::SyncManager;
+        use graphdb_sync::SyncManager;
 
         struct MockUndoTarget;
         impl UndoTarget for MockUndoTarget {
@@ -1701,7 +1701,7 @@ mod tests {
                 &self,
                 _vertex: VertexIdentifier,
                 _col_id: ColumnId,
-                _value: crate::core::Value,
+                _value: graphdb_core::Value,
                 _ts: crate::Timestamp,
             ) -> UndoLogResult<()> {
                 Ok(())
@@ -1710,7 +1710,7 @@ mod tests {
                 &self,
                 _edge_id: EdgeIdentifier,
                 _col_id: ColumnId,
-                _value: crate::core::Value,
+                _value: graphdb_core::Value,
                 _ts: crate::Timestamp,
             ) -> UndoLogResult<()> {
                 Ok(())

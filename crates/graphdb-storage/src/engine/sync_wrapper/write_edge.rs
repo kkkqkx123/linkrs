@@ -1,6 +1,6 @@
 use super::SyncWrapper;
-use crate::core::types::VertexId;
-use crate::core::{Edge, StorageError, Value};
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, StorageError, Value};
 use crate::StorageClient;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {

@@ -8,16 +8,16 @@
 //! - `VariableWidthColumn`: For variable-length types (String)
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
-use crate::core::types::Timestamp;
-use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
-use crate::core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::types::Timestamp;
+use graphdb_core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::column_stats::ColumnStats;
 use crate::encoding::{
     AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
     FsstEncoder, RleIntColumn,
 };
-use crate::utils::NullBitmap;
+use graphdb_core::NullBitmap;
 use bitvec::prelude::*;
 
 /// Unified column storage interface.
@@ -355,7 +355,7 @@ impl ColumnStorage for VariableWidthColumn {
 
         let bytes = &self.data[start + 8..start + 8 + len];
         if matches!(self.data_type, DataType::Geography) {
-            postcard::from_bytes::<crate::core::value::Geography>(bytes)
+            postcard::from_bytes::<graphdb_core::value::Geography>(bytes)
                 .ok()
                 .map(Value::Geography)
         } else if matches!(self.data_type, DataType::Vector) {
@@ -372,12 +372,12 @@ impl ColumnStorage for VariableWidthColumn {
             }
         } else if matches!(self.data_type, DataType::Json) {
             let s = String::from_utf8(bytes.to_vec()).ok()?;
-            crate::core::value::Json::parse(&s)
+            graphdb_core::value::Json::parse(&s)
                 .ok()
                 .map(|j| Value::Json(Box::new(j)))
         } else if matches!(self.data_type, DataType::JsonB) {
             let s = String::from_utf8(bytes.to_vec()).ok()?;
-            crate::core::value::JsonB::parse(&s)
+            graphdb_core::value::JsonB::parse(&s)
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
         } else if matches!(self.data_type, DataType::Struct(_) | DataType::Array(_)) {
@@ -2013,7 +2013,7 @@ impl Default for ColumnStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ArrayTypeInfo, StructTypeInfo};
+    use graphdb_core::{ArrayTypeInfo, StructTypeInfo};
 
     #[test]
     fn test_column_basic() {

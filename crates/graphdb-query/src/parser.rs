@@ -9,12 +9,12 @@ pub mod lexing;
 pub mod parsing;
 
 // Re-export the common types of the core module
-pub use crate::core::types::{Position, Span};
+pub use graphdb_core::types::{Position, Span};
 pub use core::{ParseError, ParseErrors, Token, TokenKind};
 
 // Re-export types
-pub use crate::core::types::EdgeDirection;
-pub use crate::core::types::OrderDirection;
+pub use graphdb_core::types::EdgeDirection;
+pub use graphdb_core::types::OrderDirection;
 
 // Re-export commonly used types from ast
 pub use ast::stmt::OrderByItem;

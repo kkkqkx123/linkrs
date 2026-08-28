@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use graphdb_core::core::vector::{
+pub use graphdb_core::vector::{
     ConditionType, FilterCondition, GeoBoundingBox, GeoPoint, GeoRadius, MinShouldCondition,
     Payload, PayloadSchemaType, PayloadSelector, PayloadValue, PointId, RangeCondition,
     ValuesCountCondition, VectorFilter,

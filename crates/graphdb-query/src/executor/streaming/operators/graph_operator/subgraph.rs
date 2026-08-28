@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{Edge, EdgeDirection, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
@@ -45,7 +45,7 @@ pub(super) fn handle(
                 let vid_val = ctx
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
-                    .unwrap_or(Value::Null(crate::core::NullType::Null));
+                    .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
                 if let Ok(seed_vid) = VertexId::try_from(&vid_val) {
                     let mut visited: HashSet<VertexId> = HashSet::new();
@@ -92,14 +92,14 @@ pub(super) fn handle(
                             .ok()
                             .flatten()
                             .unwrap_or_else(|| {
-                                crate::core::vertex_edge_path::Vertex::with_vid(edge.src)
+                                graphdb_core::vertex_edge_path::Vertex::with_vid(edge.src)
                             });
                         let dst_vertex = reader
                             .get_vertex(space_name, &edge.dst)
                             .ok()
                             .flatten()
                             .unwrap_or_else(|| {
-                                crate::core::vertex_edge_path::Vertex::with_vid(edge.dst)
+                                graphdb_core::vertex_edge_path::Vertex::with_vid(edge.dst)
                             });
                         out_row.push(Value::Vertex(Box::new(src_vertex)));
                         out_row.push(Value::Vertex(Box::new(dst_vertex)));

@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::{ContextualExpression, SerializableExpression};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node_with_deps;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
@@ -94,8 +94,8 @@ impl FilterNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::Expression;
     use std::sync::Arc;
     use ExpressionAnalysisContext;
 

@@ -1,4 +1,4 @@
-use crate::core::DataType;
+use graphdb_core::DataType;
 use std::collections::HashMap;
 
 pub type SlotId = usize;

@@ -6,7 +6,7 @@
 
 use parking_lot::Mutex;
 
-use crate::core::types::{CommitLsn, Timestamp, TransactionId};
+use graphdb_core::types::{CommitLsn, Timestamp, TransactionId};
 
 use super::error::TransactionError;
 use super::participant::TransactionCommitSink;

@@ -8,8 +8,8 @@
 //! Support for the shortest path with weights
 //! Improve the logic for path filtering.
 
-use crate::core::types::VertexId;
-use crate::core::Value;
+use graphdb_core::types::VertexId;
+use graphdb_core::Value;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
 use crate::planning::plan::core::PlanNode;
@@ -148,7 +148,7 @@ impl PathPlanner {
             .over
             .as_ref()
             .map(|over| over.direction)
-            .unwrap_or(crate::core::EdgeDirection::Out);
+            .unwrap_or(graphdb_core::EdgeDirection::Out);
 
         let mut all_paths_node = AllPathsNode::new(
             params.left_input,
@@ -197,7 +197,7 @@ impl PathPlanner {
 
     fn extract_vertex_ids_from_exprs(
         &self,
-        exprs: &[crate::core::types::ContextualExpression],
+        exprs: &[graphdb_core::types::ContextualExpression],
     ) -> Vec<Value> {
         let mut ids = Vec::new();
         for expr in exprs {
@@ -212,7 +212,7 @@ impl PathPlanner {
 
     fn extract_vertex_ids_from_expr(
         &self,
-        expr: &crate::core::types::ContextualExpression,
+        expr: &graphdb_core::types::ContextualExpression,
     ) -> Vec<Value> {
         self.extract_vertex_ids_from_exprs(std::slice::from_ref(expr))
     }

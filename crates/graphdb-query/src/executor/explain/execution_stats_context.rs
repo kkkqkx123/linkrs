@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 
-use crate::core::stats::utils::micros_to_millis;
+use graphdb_core::stats::utils::micros_to_millis;
 use crate::executor::base::ExecutorStats;
 
 /// Node-level execution statistics

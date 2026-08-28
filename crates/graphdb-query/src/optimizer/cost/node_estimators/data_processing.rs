@@ -8,8 +8,8 @@
 //! - Start
 
 use super::{get_input_rows, NodeEstimator};
-use crate::core::types::BinaryOperator;
-use crate::core::Expression;
+use graphdb_core::types::BinaryOperator;
+use graphdb_core::Expression;
 use crate::optimizer::cost::config::CostModelConfig;
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::expression_parser::ExpressionParser;
@@ -140,10 +140,10 @@ impl<'a> NodeEstimator for DataProcessingEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::YieldColumn;
-    use crate::core::{Expression, Value};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::YieldColumn;
+    use graphdb_core::{Expression, Value};
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::*;
@@ -151,11 +151,11 @@ mod tests {
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
 
-    fn create_test_expression() -> crate::core::types::ContextualExpression {
+    fn create_test_expression() -> graphdb_core::types::ContextualExpression {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Variable("condition".to_string()));
         let id = ctx.register_expression(expr_meta);
-        crate::core::types::ContextualExpression::new(id, ctx)
+        graphdb_core::types::ContextualExpression::new(id, ctx)
     }
 
     fn create_test_calculator_with_selectivity() -> (CostCalculator, SelectivityEstimator) {
@@ -200,7 +200,7 @@ mod tests {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Variable("col".to_string()));
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = crate::core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
         let columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "col".to_string(),
@@ -413,7 +413,7 @@ mod tests {
                 expression: {
                     let expr_meta = ExpressionMeta::new(Expression::Variable("a".to_string()));
                     let id = ctx.register_expression(expr_meta);
-                    crate::core::types::ContextualExpression::new(id, ctx.clone())
+                    graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "a".to_string(),
                 is_matched: false,
@@ -422,7 +422,7 @@ mod tests {
                 expression: {
                     let expr_meta = ExpressionMeta::new(Expression::Variable("b".to_string()));
                     let id = ctx.register_expression(expr_meta);
-                    crate::core::types::ContextualExpression::new(id, ctx.clone())
+                    graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "b".to_string(),
                 is_matched: false,
@@ -431,7 +431,7 @@ mod tests {
                 expression: {
                     let expr_meta = ExpressionMeta::new(Expression::Variable("c".to_string()));
                     let id = ctx.register_expression(expr_meta);
-                    crate::core::types::ContextualExpression::new(id, ctx.clone())
+                    graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "c".to_string(),
                 is_matched: false,

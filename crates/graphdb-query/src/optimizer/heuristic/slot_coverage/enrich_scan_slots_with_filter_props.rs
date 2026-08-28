@@ -37,8 +37,8 @@
 //! - The rewrite is a pure no-op when the predicate columns are already
 //!   projected, so fixed-point iteration terminates immediately.
 
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::Expression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
@@ -202,11 +202,11 @@ impl RewriteRule for EnrichScanSlotsWithFilterPropsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Value;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use std::sync::Arc;
 

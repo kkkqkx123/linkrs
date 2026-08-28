@@ -113,8 +113,8 @@ impl CoreError {
 /// Core layer result types
 pub type CoreResult<T> = Result<T, CoreError>;
 
-impl From<crate::core::error::QueryError> for CoreError {
-    fn from(err: crate::core::error::QueryError) -> Self {
+impl From<graphdb_core::error::QueryError> for CoreError {
+    fn from(err: graphdb_core::error::QueryError) -> Self {
         CoreError::QueryExecutionFailed(err.to_string())
     }
 }
@@ -125,9 +125,9 @@ impl From<crate::storage::StorageError> for CoreError {
     }
 }
 
-impl From<crate::core::error::DBError> for CoreError {
-    fn from(err: crate::core::error::DBError) -> Self {
-        use crate::core::error::ErrorKind;
+impl From<graphdb_core::error::DBError> for CoreError {
+    fn from(err: graphdb_core::error::DBError) -> Self {
+        use graphdb_core::error::ErrorKind;
         match err.kind() {
             ErrorKind::Query => CoreError::QueryExecutionFailed(err.message().to_string()),
             ErrorKind::Storage => CoreError::StorageError(err.message().to_string()),
@@ -137,8 +137,8 @@ impl From<crate::core::error::DBError> for CoreError {
     }
 }
 
-impl From<crate::transaction::TransactionError> for CoreError {
-    fn from(err: crate::transaction::TransactionError) -> Self {
+impl From<graphdb_transaction::TransactionError> for CoreError {
+    fn from(err: graphdb_transaction::TransactionError) -> Self {
         CoreError::TransactionFailed(err.to_string())
     }
 }

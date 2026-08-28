@@ -226,13 +226,6 @@ mod vector_config_tests {
 #[cfg(feature = "embedded")]
 pub use embedded::GraphDatabase;
 
-pub use graphdb_config::config;
-pub use graphdb_core::core;
-pub use graphdb_core::utils;
-pub use graphdb_query::query;
-pub use graphdb_search::search;
-pub use graphdb_sync::sync;
-pub use graphdb_transaction::transaction;
 
 pub mod storage {
     pub use graphdb_storage::*;

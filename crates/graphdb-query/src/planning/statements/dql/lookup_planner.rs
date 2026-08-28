@@ -8,10 +8,10 @@
 //! Add logic for selecting attribute indexes.
 //! Use IndexSelector to automatically select the optimal index.
 
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
-use crate::core::Value;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
+use graphdb_core::Value;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::{LookupStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
@@ -376,12 +376,12 @@ impl LookupPlanner {
     fn build_yield_columns(
         lookup_stmt: &LookupStmt,
         validated: &ValidatedStatement,
-    ) -> Result<Vec<crate::core::YieldColumn>, PlannerError> {
+    ) -> Result<Vec<graphdb_core::YieldColumn>, PlannerError> {
         let mut columns = Vec::new();
 
         if let Some(ref yield_clause) = lookup_stmt.yield_clause {
             for item in &yield_clause.items {
-                columns.push(crate::core::YieldColumn {
+                columns.push(graphdb_core::YieldColumn {
                     expression: item.expression.clone(),
                     alias: item.alias.clone().unwrap_or_default(),
                     is_matched: false,
@@ -391,11 +391,11 @@ impl LookupPlanner {
 
         if columns.is_empty() {
             let expr = Expression::Variable("_vertex".to_string());
-            let meta = crate::core::types::expr::ExpressionMeta::new(expr);
+            let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
             let id = validated.expr_context().register_expression(meta);
             let ctx_expr =
-                crate::core::types::ContextualExpression::new(id, validated.expr_context().clone());
-            columns.push(crate::core::YieldColumn {
+                graphdb_core::types::ContextualExpression::new(id, validated.expr_context().clone());
+            columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
                 is_matched: false,

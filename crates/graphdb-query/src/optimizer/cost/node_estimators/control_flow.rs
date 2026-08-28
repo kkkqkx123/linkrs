@@ -127,15 +127,15 @@ mod tests {
         CostCalculator::with_config(stats_manager, config)
     }
 
-    fn create_test_expression() -> crate::core::types::ContextualExpression {
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-        use crate::core::types::expr::ExpressionMeta;
-        use crate::core::Expression;
+    fn create_test_expression() -> graphdb_core::types::ContextualExpression {
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
 
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Variable("condition".to_string()));
         let id = ctx.register_expression(expr_meta);
-        crate::core::types::ContextualExpression::new(id, ctx)
+        graphdb_core::types::ContextualExpression::new(id, ctx)
     }
 
     #[test]

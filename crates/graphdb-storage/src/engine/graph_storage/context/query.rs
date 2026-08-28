@@ -1,5 +1,5 @@
-use crate::core::types::{LabelId, Timestamp};
-use crate::core::StorageResult;
+use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::StorageResult;
 
 use super::GraphStorageContext;
 

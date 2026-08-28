@@ -63,7 +63,7 @@ impl Planner for UserManagementPlanner {
                 PlanNodeEnum::UserManage(UserManageNode::Drop(node))
             }
             Stmt::ChangePassword(change_stmt) => {
-                let password_info = crate::core::types::PasswordInfo {
+                let password_info = graphdb_core::types::PasswordInfo {
                     username: change_stmt.username.clone(),
                     old_password: change_stmt.old_password.clone(),
                     new_password: change_stmt.new_password.clone(),

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::executor::base::{MemoryBudget, MemoryReservation};
 
 use super::chunk::DataChunk;

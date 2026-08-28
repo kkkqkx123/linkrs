@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Value;
 use crate::executor::streaming::helpers::accumulator_states::{
     decode_partial_with_args, AggregateAccumulator,
 };

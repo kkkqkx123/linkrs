@@ -2,9 +2,9 @@
 //!
 //! Responsible for parsing statements related to data modification, including INSERT, DELETE, UPDATE, MERGE, etc.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression as CoreExpression;
-use crate::core::types::EdgeDirection;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::EdgeDirection;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::ParseError;
 use crate::parser::core::token::TokenKindExt;
@@ -86,9 +86,9 @@ impl DmlParser {
                 // The WHERE clause is used to specify the vertex ID, so we clear it
                 // after extraction since the ID is now in the target.
                 let vid_value = Self::extract_id_from_condition(where_clause.as_ref(), &["vid"])
-                    .unwrap_or_else(|| crate::core::Value::Null(crate::core::NullType::Null));
+                    .unwrap_or_else(|| graphdb_core::Value::Null(graphdb_core::NullType::Null));
                 let vid_expr = CoreExpression::Literal(vid_value);
-                let vid_expr_meta = crate::core::types::expr::ExpressionMeta::with_span(
+                let vid_expr_meta = graphdb_core::types::expr::ExpressionMeta::with_span(
                     vid_expr,
                     ctx.current_span(),
                 );
@@ -152,9 +152,9 @@ impl DmlParser {
                 // The WHERE clause is used to specify src/dst, so we clear it
                 // after extraction since the IDs are now in the target.
                 let make_literal_expr =
-                    |ctx: &mut ParseContext, value: crate::core::Value| -> ContextualExpression {
+                    |ctx: &mut ParseContext, value: graphdb_core::Value| -> ContextualExpression {
                         let expr = CoreExpression::Literal(value);
-                        let meta = crate::core::types::expr::ExpressionMeta::with_span(
+                        let meta = graphdb_core::types::expr::ExpressionMeta::with_span(
                             expr,
                             ctx.current_span(),
                         );
@@ -163,12 +163,12 @@ impl DmlParser {
                     };
                 let src_value =
                     Self::extract_id_from_condition(where_clause.as_ref(), &["src", "source"])
-                        .unwrap_or_else(|| crate::core::Value::Null(crate::core::NullType::Null));
+                        .unwrap_or_else(|| graphdb_core::Value::Null(graphdb_core::NullType::Null));
                 let dst_value = Self::extract_id_from_condition(
                     where_clause.as_ref(),
                     &["dst", "dest", "destination"],
                 )
-                .unwrap_or_else(|| crate::core::Value::Null(crate::core::NullType::Null));
+                .unwrap_or_else(|| graphdb_core::Value::Null(graphdb_core::NullType::Null));
                 let src = make_literal_expr(ctx, src_value);
                 let dst = make_literal_expr(ctx, dst_value);
                 let end_span = ctx.current_span();
@@ -279,7 +279,7 @@ impl DmlParser {
     fn extract_id_from_condition(
         where_clause: Option<&ContextualExpression>,
         var_names: &[&str],
-    ) -> Option<crate::core::Value> {
+    ) -> Option<graphdb_core::Value> {
         let expr = where_clause?.get_expression()?;
         Self::extract_id_from_expr(&expr, var_names)
     }
@@ -287,10 +287,10 @@ impl DmlParser {
     fn extract_id_from_expr(
         expr: &CoreExpression,
         var_names: &[&str],
-    ) -> Option<crate::core::Value> {
+    ) -> Option<graphdb_core::Value> {
         match expr {
             CoreExpression::Binary { left, op, right } => {
-                use crate::core::types::operators::BinaryOperator;
+                use graphdb_core::types::operators::BinaryOperator;
                 match op {
                     BinaryOperator::Equal => {
                         if let CoreExpression::Function { name, args } = left.as_ref() {
@@ -1247,7 +1247,7 @@ impl DmlParser {
         }
 
         let expr = CoreExpression::Map(properties);
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.expression_context().register_expression(expr_meta);
         Ok(ContextualExpression::new(
             id,

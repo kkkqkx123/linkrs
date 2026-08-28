@@ -3,7 +3,7 @@
 //! This module implements the parser for vector search SQL statements,
 //! including CREATE VECTOR INDEX, SEARCH VECTOR, and related queries.
 
-use crate::core::types::expr::{create_contextual_expression, Expression};
+use graphdb_core::types::expr::{create_contextual_expression, Expression};
 use crate::parser::ast::stmt::Stmt;
 use crate::parser::ast::stmt::{OrderByClause, OrderByItem};
 use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};

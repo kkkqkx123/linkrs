@@ -22,7 +22,7 @@ macro_rules! define_logical_plan_node {
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
-            pub column_types: Vec<$crate::core::DataType>,
+            pub column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -45,8 +45,8 @@ macro_rules! define_logical_plan_node {
             pub fn col_names(&self) -> &[String] { &self.col_names }
             pub fn set_output_var(&mut self, var: String) { self.output_var = Some(var); }
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
-            pub fn column_types(&self) -> &[$crate::core::DataType] { &self.column_types }
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) { self.column_types = types; }
+            pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn clone_logical_node(&self) -> $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum {
                 use $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
@@ -86,7 +86,7 @@ macro_rules! define_logical_plan_node {
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
-            pub column_types: Vec<$crate::core::DataType>,
+            pub column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -110,8 +110,8 @@ macro_rules! define_logical_plan_node {
             pub fn col_names(&self) -> &[String] { &self.col_names }
             pub fn set_output_var(&mut self, var: String) { self.output_var = Some(var); }
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
-            pub fn column_types(&self) -> &[$crate::core::DataType] { &self.column_types }
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) { self.column_types = types; }
+            pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
                 &self.deps
@@ -190,7 +190,7 @@ macro_rules! define_logical_plan_node_with_deps {
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
-            pub column_types: Vec<$crate::core::DataType>,
+            pub column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -215,8 +215,8 @@ macro_rules! define_logical_plan_node_with_deps {
             pub fn col_names(&self) -> &[String] { &self.col_names }
             pub fn set_output_var(&mut self, var: String) { self.output_var = Some(var); }
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
-            pub fn column_types(&self) -> &[$crate::core::DataType] { &self.column_types }
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) { self.column_types = types; }
+            pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
                 &self.deps
@@ -282,13 +282,13 @@ macro_rules! define_logical_join_node {
             pub id: i64,
             pub left: Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             pub right: Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
-            pub hash_keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>,
-            pub probe_keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>,
+            pub hash_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
+            pub probe_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
             pub deps: Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
-            pub column_types: Vec<$crate::core::DataType>,
+            pub column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -316,18 +316,18 @@ macro_rules! define_logical_join_node {
             pub fn col_names(&self) -> &[String] { &self.col_names }
             pub fn set_output_var(&mut self, var: String) { self.output_var = Some(var); }
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
-            pub fn column_types(&self) -> &[$crate::core::DataType] { &self.column_types }
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) { self.column_types = types; }
+            pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
                 &self.deps
             }
 
-            pub fn hash_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            pub fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
             }
 
-            pub fn probe_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            pub fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.probe_keys
             }
 
@@ -441,11 +441,11 @@ macro_rules! define_logical_join_node {
         }
 
         impl $crate::planning::plan::logical::logical_node_traits::LogicalJoinNode for $name {
-            fn hash_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
             }
 
-            fn probe_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
+            fn probe_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.probe_keys
             }
         }
@@ -472,7 +472,7 @@ macro_rules! define_logical_binary_input_node {
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
-            pub column_types: Vec<$crate::core::DataType>,
+            pub column_types: Vec<graphdb_core::DataType>,
         }
 
         impl Clone for $name {
@@ -498,8 +498,8 @@ macro_rules! define_logical_binary_input_node {
             pub fn col_names(&self) -> &[String] { &self.col_names }
             pub fn set_output_var(&mut self, var: String) { self.output_var = Some(var); }
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
-            pub fn column_types(&self) -> &[$crate::core::DataType] { &self.column_types }
-            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) { self.column_types = types; }
+            pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
+            pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
                 &self.deps

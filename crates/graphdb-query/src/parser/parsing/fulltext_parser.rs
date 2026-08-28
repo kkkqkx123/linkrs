@@ -3,8 +3,8 @@
 //! This module implements the parser for full-text search SQL statements,
 //! including CREATE FULLTEXT INDEX, SEARCH, and related queries.
 
-use crate::core::types::expr::{create_contextual_expression, Expression};
-use crate::core::types::FulltextEngineType;
+use graphdb_core::types::expr::{create_contextual_expression, Expression};
+use graphdb_core::types::FulltextEngineType;
 use crate::parser::ast::fulltext::{
     AlterFulltextIndex, AlterIndexAction, BM25Options, CreateFulltextIndex, DescribeFulltextIndex,
     DropFulltextIndex, FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,

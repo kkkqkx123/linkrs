@@ -1,6 +1,6 @@
 use super::QueryPipelineManager;
-use crate::core::error::{DBError, DBResult, QueryError};
-use crate::core::MetricType;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::MetricType;
 use crate::binder::Binder;
 use crate::binder::BoundStatement;
 use crate::parser::Parser;

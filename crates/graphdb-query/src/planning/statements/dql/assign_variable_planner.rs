@@ -6,7 +6,7 @@
 //! stores the produced value in the session; the query engine itself never
 //! touches session state.
 
-use crate::core::YieldColumn;
+use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{AssignVariableStmt, Stmt};
 use crate::planning::plan::core::nodes::{ProjectNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};

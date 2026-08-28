@@ -1,6 +1,6 @@
 use super::PermissionResult;
 use crate::config::AuthConfig;
-use crate::core::{Permission, RoleType};
+use graphdb_core::{Permission, RoleType};
 use crate::permission::{PermissionManager, GOD_SPACE_ID};
 use crate::session::ClientSession;
 

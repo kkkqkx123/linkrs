@@ -8,10 +8,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 use crate::engine::data_store::GraphDataStore;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
-use crate::transaction::VersionManager;
+use graphdb_transaction::VersionManager;
 
 /// GC manager configuration
 #[derive(Debug, Clone)]

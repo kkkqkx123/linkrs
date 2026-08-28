@@ -10,9 +10,9 @@ use std::time::Instant;
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::group_commit::GroupCommitCoordinator;
 use super::sync::elapsed_since;
-use crate::core::types::Timestamp;
-use crate::core::wal::traits::WalWriter;
-use crate::core::wal::types::{
+use graphdb_core::types::Timestamp;
+use graphdb_core::wal::traits::WalWriter;
+use graphdb_core::wal::types::{
     ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
     WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
 };
@@ -641,13 +641,13 @@ impl LocalWalWriter {
 
     /// Append multiple entries as a batch (for group commit)
     pub fn append_batch(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<()> {
-        self.append_batch_with_durability(entries, crate::core::types::DurabilityLevel::Sync)
+        self.append_batch_with_durability(entries, graphdb_core::types::DurabilityLevel::Sync)
     }
 
     pub fn append_batch_with_durability(
         &mut self,
         entries: &[(WalOpType, Timestamp, &[u8])],
-        durability: crate::core::types::DurabilityLevel,
+        durability: graphdb_core::types::DurabilityLevel,
     ) -> WalResult<()> {
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
@@ -656,7 +656,7 @@ impl LocalWalWriter {
 
         let new_lsn = self.write_batch_entries(entries)?;
 
-        if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
+        if matches!(durability, graphdb_core::types::DurabilityLevel::Sync) {
             if let Some(ref coordinator) = self.group_commit {
                 coordinator.record_appended(new_lsn);
                 coordinator.append_and_wait(new_lsn)?;
@@ -730,32 +730,32 @@ impl LocalWalWriter {
 
     pub fn append_transaction_batch(
         &mut self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
         entries: Vec<crate::wal::TransactionWalEntry>,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> WalResult<crate::core::types::CommitLsn> {
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> WalResult<graphdb_core::types::CommitLsn> {
         self.append_transaction_batch_with_durability(
             transaction_id,
             entries,
             intents,
-            crate::core::types::DurabilityLevel::Sync,
+            graphdb_core::types::DurabilityLevel::Sync,
         )
     }
 
     pub fn append_transaction_batch_with_durability(
         &mut self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
         entries: Vec<crate::wal::TransactionWalEntry>,
-        intents: &[crate::core::wal::OutboxIntent],
-        durability: crate::core::types::DurabilityLevel,
-    ) -> WalResult<crate::core::types::CommitLsn> {
+        intents: &[graphdb_core::wal::OutboxIntent],
+        durability: graphdb_core::types::DurabilityLevel,
+    ) -> WalResult<graphdb_core::types::CommitLsn> {
         let entries = self.build_transaction_entries(transaction_id, entries, intents)?;
         let entry_refs = entries
             .iter()
             .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
             .collect::<Vec<_>>();
         self.append_batch_with_durability(&entry_refs, durability)?;
-        Ok(crate::core::types::CommitLsn::new(
+        Ok(graphdb_core::types::CommitLsn::new(
             self.current_lsn().as_u64(),
         ))
     }
@@ -768,17 +768,17 @@ impl LocalWalWriter {
     /// into a single fsync.
     pub fn append_transaction_batch_no_wait(
         &mut self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
         entries: Vec<crate::wal::TransactionWalEntry>,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> WalResult<crate::core::types::CommitLsn> {
+        intents: &[graphdb_core::wal::OutboxIntent],
+    ) -> WalResult<graphdb_core::types::CommitLsn> {
         let entries = self.build_transaction_entries(transaction_id, entries, intents)?;
         let entry_refs = entries
             .iter()
             .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
             .collect::<Vec<_>>();
         self.write_batch_entries(&entry_refs)?;
-        Ok(crate::core::types::CommitLsn::new(
+        Ok(graphdb_core::types::CommitLsn::new(
             self.current_lsn().as_u64(),
         ))
     }
@@ -787,9 +787,9 @@ impl LocalWalWriter {
     /// plus the commit record).
     fn build_transaction_entries(
         &self,
-        transaction_id: crate::core::types::TransactionId,
+        transaction_id: graphdb_core::types::TransactionId,
         mut entries: Vec<crate::wal::TransactionWalEntry>,
-        intents: &[crate::core::wal::OutboxIntent],
+        intents: &[graphdb_core::wal::OutboxIntent],
     ) -> WalResult<Vec<crate::wal::TransactionWalEntry>> {
         self.check_poisoned()?;
         for (expected, intent) in intents.iter().enumerate() {
@@ -812,8 +812,8 @@ impl LocalWalWriter {
                 payload: postcard::to_allocvec(intent)?,
             });
         }
-        let commit = crate::core::wal::TransactionCommit {
-            wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+        let commit = graphdb_core::wal::TransactionCommit {
+            wire_version: graphdb_core::wal::WAL_SYNC_WIRE_VERSION,
             transaction_id,
             intent_count: u32::try_from(intents.len()).map_err(|_| {
                 WalError::InvalidOperation("Intent count exceeds u32 range".to_string())
@@ -1107,10 +1107,10 @@ impl Drop for LocalWalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{
+    use graphdb_core::types::{
         IdempotencyKey, IndexGeneration, OrderingKey, TargetId, TransactionId, VertexId,
     };
-    use crate::core::wal::{
+    use graphdb_core::wal::{
         EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION,
     };
     use crate::wal::{

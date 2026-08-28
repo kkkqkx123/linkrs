@@ -2,7 +2,7 @@
 //!
 //! Query planning for processing UPDATE VERTEX/EDGE statements
 
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::ContextualExpression;
 use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -170,7 +170,7 @@ impl Planner for UpdatePlanner {
                 let vertex_info = VertexUpdateInfo {
                     space_name: space_name.clone(),
                     vertex_id: ContextualExpression::new(
-                        crate::core::types::expr::ExpressionId::new(0),
+                        graphdb_core::types::expr::ExpressionId::new(0),
                         validated.ast.expr_context().clone(),
                     ),
                     tag_name: Some(tag_name.clone()),

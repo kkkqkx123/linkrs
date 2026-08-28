@@ -21,8 +21,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::types::expr::Expression;
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 
 /// Precomputation decision
@@ -412,9 +412,9 @@ impl ExpressionPrecomputationOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::Expression;
-    use crate::core::value::Value;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::Expression;
+    use graphdb_core::value::Value;
     use crate::optimizer::stats::StatisticsManager;
 
     fn create_test_optimizer() -> ExpressionPrecomputationOptimizer {
@@ -426,7 +426,7 @@ mod tests {
     fn create_simple_expression() -> ContextualExpression {
         let ctx = ExpressionAnalysisContext::new();
         let expr = Expression::Literal(Value::Int(42));
-        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+        let id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(expr));
         ContextualExpression::new(id, std::sync::Arc::new(ctx))
     }
 

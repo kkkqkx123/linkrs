@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::search::SyncFailurePolicy;
+use graphdb_search::SyncFailurePolicy;
 
 /// Batch processing configuration
 #[derive(Debug, Clone)]

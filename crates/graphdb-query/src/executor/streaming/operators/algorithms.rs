@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{Edge, EdgeDirection, NPath, Path, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, EdgeDirection, NPath, Path, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::context::ValueRowContext;

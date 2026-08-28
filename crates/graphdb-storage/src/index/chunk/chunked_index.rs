@@ -1,4 +1,4 @@
-use crate::core::types::Timestamp;
+use graphdb_core::types::Timestamp;
 use crate::cache::BufferPool;
 use crate::index::chunk::data::{build_chunks, Chunk, ChunkId, CHUNK_TARGET_SIZE};
 use crate::index::key_codec::key_types::SecondaryIndexKey;

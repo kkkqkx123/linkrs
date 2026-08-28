@@ -14,9 +14,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::{Expression, ExpressionMeta};
-use crate::core::types::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{Expression, ExpressionMeta};
+use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost_based::expression_precomputation::{
     ExpressionPrecomputationOptimizer, PrecomputationDecision,
 };

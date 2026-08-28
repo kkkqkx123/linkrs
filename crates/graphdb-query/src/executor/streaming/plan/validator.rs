@@ -16,7 +16,7 @@ use super::types::{
     FragmentId, FragmentKind, InputContract, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan,
     StateOwnership,
 };
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 
 /// The two validation tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

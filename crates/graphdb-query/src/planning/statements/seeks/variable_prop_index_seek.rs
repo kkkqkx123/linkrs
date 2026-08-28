@@ -9,7 +9,7 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{IndexInfo, SeekResult, SeekStrategyContext, SeekStrategyType};
-use crate::core::{StorageError, Value};
+use graphdb_core::{StorageError, Value};
 use crate::storage::StorageReader;
 
 /// Variable attribute predicate
@@ -98,7 +98,7 @@ impl VariablePropIndexSeek {
 
     /// Extract variable attribute predicates from the list of expressions.
     pub fn extract_predicates(
-        expressions: &[crate::core::Expression],
+        expressions: &[graphdb_core::Expression],
     ) -> Vec<VariablePropertyPredicate> {
         let mut predicates = Vec::new();
 
@@ -112,11 +112,11 @@ impl VariablePropIndexSeek {
     }
 
     /// Extracting variable attribute predicates from a single expression
-    fn extract_predicate(expr: &crate::core::Expression) -> Option<VariablePropertyPredicate> {
-        use crate::core::types::operators::BinaryOperator;
+    fn extract_predicate(expr: &graphdb_core::Expression) -> Option<VariablePropertyPredicate> {
+        use graphdb_core::types::operators::BinaryOperator;
 
         match expr {
-            crate::core::Expression::Binary { op, left, right } => {
+            graphdb_core::Expression::Binary { op, left, right } => {
                 let op_str = match op {
                     BinaryOperator::Equal => "=",
                     BinaryOperator::NotEqual => "!=",
@@ -165,11 +165,11 @@ impl VariablePropIndexSeek {
     }
 
     /// Extract attribute names from the expression.
-    fn extract_property(expr: &crate::core::Expression) -> Option<String> {
+    fn extract_property(expr: &graphdb_core::Expression) -> Option<String> {
         match expr {
-            crate::core::Expression::Property { object, property } => {
+            graphdb_core::Expression::Property { object, property } => {
                 // Check for node attribute access, e.g. v.name
-                if matches!(object.as_ref(), crate::core::Expression::Variable(_)) {
+                if matches!(object.as_ref(), graphdb_core::Expression::Variable(_)) {
                     Some(property.clone())
                 } else {
                     None
@@ -180,10 +180,10 @@ impl VariablePropIndexSeek {
     }
 
     /// Extract variable names from the expression.
-    fn extract_variable(expr: &crate::core::Expression) -> Option<String> {
+    fn extract_variable(expr: &graphdb_core::Expression) -> Option<String> {
         match expr {
             // Variables that start with the symbol $ indicate parameters.
-            crate::core::Expression::Variable(name) if name.starts_with('$') => {
+            graphdb_core::Expression::Variable(name) if name.starts_with('$') => {
                 Some(name[1..].to_string())
             }
             _ => None,
@@ -322,7 +322,7 @@ impl SeekStrategy for VariablePropIndexSeek {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Expression;
+    use graphdb_core::Expression;
 
     #[test]
     fn test_variable_predicate_op_from_str() {
@@ -349,7 +349,7 @@ mod tests {
     fn test_extract_variable_predicate() {
         let expr = Expression::binary(
             Expression::property(Expression::variable("v"), "name"),
-            crate::core::BinaryOperator::Equal,
+            graphdb_core::BinaryOperator::Equal,
             Expression::variable("$varName"),
         );
 

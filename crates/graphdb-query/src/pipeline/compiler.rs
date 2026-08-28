@@ -1,5 +1,5 @@
 use super::QueryPipelineManager;
-use crate::core::error::{DBError, DBResult, QueryError};
+use graphdb_core::error::{DBError, DBResult, QueryError};
 use crate::binder::BoundStatement;
 use crate::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
@@ -354,7 +354,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     }
 
     pub(crate) fn dml_param_signature(
-        params: &std::collections::HashMap<String, crate::core::Value>,
+        params: &std::collections::HashMap<String, graphdb_core::Value>,
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut names: Vec<&String> = params
@@ -584,15 +584,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let mut indexes = Vec::new();
             for index_name in &tag_metadata.indexes {
                 if let Some(index_meta) = metadata.get_index_metadata(index_name) {
-                    indexes.push(crate::core::types::Index {
+                    indexes.push(graphdb_core::types::Index {
                         id: index_meta.index_id,
                         name: index_meta.index_name.clone(),
                         space_id,
                         schema_name: index_meta.tag_name.clone(),
                         fields: Vec::new(),
                         properties: vec![index_meta.field_name.clone()],
-                        index_type: crate::core::types::IndexType::TagIndex,
-                        status: crate::core::types::IndexStatus::Active,
+                        index_type: graphdb_core::types::IndexType::TagIndex,
+                        status: graphdb_core::types::IndexStatus::Active,
                         is_unique: false,
                         comment: None,
                         covering: false,

@@ -8,7 +8,7 @@
 //! is immutable, cacheable, and safe to share across concurrent executions.
 
 use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::executor::base::ExecutionContext;
 use crate::executor::streaming::parameters::ParameterSchema;
 use crate::executor::streaming::slot::SlotLayout;

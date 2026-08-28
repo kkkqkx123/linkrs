@@ -2,9 +2,9 @@
 //!
 //! Provides transport layer independent vector index management and search operations.
 
-use crate::core::error::{CoreError, CoreResult};
-use crate::sync::backend::VectorBackend;
-use crate::sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
+use crate::api_core::error::{CoreError, CoreResult};
+use graphdb_sync::backend::VectorBackend;
+use graphdb_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use std::sync::Arc;
 use vector_search::{
     types::{IndexMetadata, PointId},
@@ -61,7 +61,7 @@ pub struct VectorSearchResult {
 pub enum VectorWriteMode {
     Direct,
     Transactional {
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
         space_id: u64,
         tag: String,
         field: String,
@@ -78,7 +78,7 @@ impl Default for VectorWriteMode {
 pub struct VectorApi {
     backend: VectorBackend,
     coordinator: Option<Arc<VectorSyncCoordinator>>,
-    sync_manager: Option<Arc<crate::sync::SyncManager>>,
+    sync_manager: Option<Arc<graphdb_sync::SyncManager>>,
 }
 
 impl VectorApi {
@@ -108,7 +108,7 @@ impl VectorApi {
     pub fn with_coordinator_and_sync_manager(
         backend: VectorBackend,
         coordinator: Arc<VectorSyncCoordinator>,
-        sync_manager: Arc<crate::sync::SyncManager>,
+        sync_manager: Arc<graphdb_sync::SyncManager>,
     ) -> Self {
         Self {
             backend,
@@ -118,7 +118,7 @@ impl VectorApi {
     }
 
     /// Attach a sync manager after construction (for transactional writes).
-    pub fn with_sync_manager(mut self, sync_manager: Arc<crate::sync::SyncManager>) -> Self {
+    pub fn with_sync_manager(mut self, sync_manager: Arc<graphdb_sync::SyncManager>) -> Self {
         self.sync_manager = Some(sync_manager);
         self
     }
@@ -320,13 +320,13 @@ impl VectorApi {
                 // Preserve existing payload fields as vertex properties; add the
                 // vector field explicitly.
                 for (k, v) in payload {
-                    if let Ok(val) = serde_json::from_value::<crate::core::Value>(v) {
+                    if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
                         properties.push((k, val));
                     }
                 }
                 // Use the vector field as the indexed property.
-                properties.push((field.clone(), crate::core::Value::vector(vector)));
-                let vertex_id = crate::core::Value::string(point.id.to_string());
+                properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+                let vertex_id = graphdb_core::Value::string(point.id.to_string());
                 manager
                     .on_vertex_change_with_txn(
                         txn_id,
@@ -334,7 +334,7 @@ impl VectorApi {
                         &tag,
                         &vertex_id,
                         &properties,
-                        crate::sync::types::ChangeType::Insert,
+                        graphdb_sync::types::ChangeType::Insert,
                     )
                     .map_err(|e| CoreError::VectorError(e.to_string()))?;
                 Ok(())
@@ -389,12 +389,12 @@ impl VectorApi {
                     let payload = point.payload.clone().unwrap_or_default();
                     let mut properties = Vec::new();
                     for (k, v) in payload {
-                        if let Ok(val) = serde_json::from_value::<crate::core::Value>(v) {
+                        if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
                             properties.push((k, val));
                         }
                     }
-                    properties.push((field.clone(), crate::core::Value::vector(vector)));
-                    let vertex_id = crate::core::Value::string(point.id.to_string());
+                    properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+                    let vertex_id = graphdb_core::Value::string(point.id.to_string());
                     manager
                         .on_vertex_change_with_txn(
                             txn_id,
@@ -402,7 +402,7 @@ impl VectorApi {
                             &tag,
                             &vertex_id,
                             &properties,
-                            crate::sync::types::ChangeType::Insert,
+                            graphdb_sync::types::ChangeType::Insert,
                         )
                         .map_err(|e| CoreError::VectorError(e.to_string()))?;
                 }

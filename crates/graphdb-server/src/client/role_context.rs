@@ -1,4 +1,4 @@
-use crate::core::RoleType;
+use graphdb_core::RoleType;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

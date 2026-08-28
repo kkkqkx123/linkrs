@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -174,7 +174,7 @@ pub(super) fn next_left_join(
                             )
                         })?;
                 for _ in 0..right_width {
-                    unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                    unmatched_row.push(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 result_rows.push(unmatched_row);
             }
@@ -264,7 +264,7 @@ pub(super) fn next_right_join(
                         )
                     })?;
                 for _ in 0..left_width {
-                    unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                    unmatched_row.push(Value::Null(graphdb_core::value::NullType::Null));
                 }
                 unmatched_row.extend(right_row.clone());
                 result_rows.push(unmatched_row);
@@ -378,7 +378,7 @@ pub(super) fn next_full_outer_join(
                                 )
                             })?;
                         for _ in 0..right_width {
-                            unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                            unmatched_row.push(Value::Null(graphdb_core::value::NullType::Null));
                         }
                         all_results.push(unmatched_row);
                     }
@@ -423,7 +423,7 @@ pub(super) fn next_full_outer_join(
                                 )
                             })?;
                         for _ in 0..left_width {
-                            row.push(Value::Null(crate::core::value::NullType::Null));
+                            row.push(Value::Null(graphdb_core::value::NullType::Null));
                         }
                         row.extend(right_row.clone());
                         unmatched.push(row);

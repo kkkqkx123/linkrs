@@ -3,10 +3,10 @@
 //! This rule identifies the Filter -> GetNeighbors mode.
 //! And push the filtering conditions to the GetNeighbors node.
 
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -149,7 +149,7 @@ impl PushDownRule for PushFilterDownGetNbrsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Expression;
+    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn test_can_push_down() {
         let rule = PushFilterDownGetNbrsRule::new();
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use std::sync::Arc;
 
         let start = StartNode::new();
@@ -178,7 +178,7 @@ mod tests {
 
         let condition = Expression::Variable("test".to_string());
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = ContextualExpression::new(id, ctx);
         let filter =

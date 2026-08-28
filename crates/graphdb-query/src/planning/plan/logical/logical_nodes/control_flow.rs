@@ -1,6 +1,6 @@
 //! Logical control flow nodes: Argument, Loop, PassThrough, Select, BeginTransaction, Commit, Rollback.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_plan_node;
 use crate::planning::plan::core::nodes::control_flow::control_flow_node::IsolationLevel;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
@@ -28,7 +28,7 @@ pub struct LogicalSelectNode {
     else_branch: Option<Box<LogicalNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalSelectNode {
@@ -109,7 +109,7 @@ pub struct LogicalLoopNode {
     body: Option<Box<LogicalNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
+    column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalLoopNode {

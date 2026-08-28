@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::Expression;
-use crate::core::value::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::Value;
 use crate::optimizer::stats::{StatisticsManager, StatsView};
 
 use super::config::CostModelConfig;
@@ -979,13 +979,13 @@ mod tests {
         // Complex types
         assert_eq!(
             calculator
-                .get_type_cost_factor(&Value::List(Box::<crate::core::value::List>::default())),
+                .get_type_cost_factor(&Value::List(Box::<graphdb_core::value::List>::default())),
             calculator.config.complex_type_cost_factor
         );
 
         // Graph types
-        use crate::core::vertex_edge_path::Vertex;
-        let vertex = Vertex::with_vid(crate::core::types::VertexId::from_int64(1));
+        use graphdb_core::vertex_edge_path::Vertex;
+        let vertex = Vertex::with_vid(graphdb_core::types::VertexId::from_int64(1));
         assert_eq!(
             calculator.get_type_cost_factor(&Value::Vertex(Box::new(vertex))),
             calculator.config.graph_type_cost_factor

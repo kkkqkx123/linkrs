@@ -1,6 +1,6 @@
 //! Sink (write), DDL manage, fulltext and vector spec builders.
 
-use crate::core::types::expr::Expression;
+use graphdb_core::types::expr::Expression;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{
@@ -69,8 +69,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_vertices
     })
 }
 
-fn pipe_reference_column(expr: &crate::core::types::expr::ContextualExpression) -> Option<String> {
-    use crate::core::types::expr::Expression;
+fn pipe_reference_column(expr: &graphdb_core::types::expr::ContextualExpression) -> Option<String> {
+    use graphdb_core::types::expr::Expression;
     let inner = expr.expression()?;
     match inner.inner() {
         Expression::Variable(name) if name != "$-" => Some(name.clone()),
@@ -642,7 +642,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_match_fulltext_
 ) -> Result<FulltextSpec, PlanBuildError> {
     Ok(FulltextSpec::MatchFulltext {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        match_expr: Expression::Literal(crate::core::Value::string(format!(
+        match_expr: Expression::Literal(graphdb_core::Value::string(format!(
             "{}:{}",
             node.fulltext_condition.field, node.fulltext_condition.query
         ))),

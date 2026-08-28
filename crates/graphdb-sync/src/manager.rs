@@ -2,11 +2,11 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
-use crate::core::stats::{OutboxState, StatsManager};
-use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
-use crate::core::Value;
+use graphdb_core::stats::{OutboxState, StatsManager};
+use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
+use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
-use crate::search::SyncConfig;
+use graphdb_search::SyncConfig;
 use crate::checkpoint_manifest::CheckpointManifestManager;
 #[cfg(feature = "fulltext-search")]
 use crate::coordinator::{CoordinatorError, SyncCoordinator};
@@ -27,8 +27,8 @@ use crate::vector_sync::VectorSyncCoordinator;
 
 #[cfg(feature = "fulltext-search")]
 struct FulltextFieldApply<'a> {
-    manager: Arc<crate::search::manager::FulltextIndexManager>,
-    mutation: &'a crate::core::wal::IndexMutation,
+    manager: Arc<graphdb_search::manager::FulltextIndexManager>,
+    mutation: &'a graphdb_core::wal::IndexMutation,
     commit_lsn: CommitLsn,
     space_id: u64,
     index_name: &'a str,
@@ -54,7 +54,7 @@ pub struct SyncManager {
     sync_coordinator: Option<Arc<SyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
-    pending_intents: DashMap<TransactionId, Vec<crate::core::wal::OutboxIntent>>,
+    pending_intents: DashMap<TransactionId, Vec<graphdb_core::wal::OutboxIntent>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     dead_letter_queue: Option<Arc<crate::DeadLetterQueue>>,
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
@@ -649,7 +649,7 @@ impl SyncManager {
 
     async fn apply_index_mutation(
         &self,
-        mutation: &crate::core::wal::IndexMutation,
+        mutation: &graphdb_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
     ) -> Result<(), String> {
         let payload: OutboxPayload = postcard::from_bytes(&mutation.document_or_vector)
@@ -684,7 +684,7 @@ impl SyncManager {
     #[cfg(feature = "fulltext-search")]
     async fn apply_fulltext_mutation(
         &self,
-        mutation: &crate::core::wal::IndexMutation,
+        mutation: &graphdb_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
         payload: &OutboxPayload,
     ) -> Result<(), String> {
@@ -839,7 +839,7 @@ impl SyncManager {
                 format!("{}:{}:{}", request.space_id, request.index_name, field_name).as_bytes(),
             );
             field_mutation.document_or_vector = document;
-            field_mutation.idempotency_key = crate::core::types::IdempotencyKey::new(format!(
+            field_mutation.idempotency_key = graphdb_core::types::IdempotencyKey::new(format!(
                 "{}:{}",
                 request.mutation.idempotency_key.as_str(),
                 field_name
@@ -866,7 +866,7 @@ impl SyncManager {
     #[cfg(feature = "vector")]
     async fn apply_vector_mutation(
         &self,
-        mutation: &crate::core::wal::IndexMutation,
+        mutation: &graphdb_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
         payload: &OutboxPayload,
     ) -> Result<(), String> {
@@ -1115,7 +1115,7 @@ impl SyncManager {
         &self,
         txn_id: TransactionId,
         space_id: u64,
-        edge: &crate::core::Edge,
+        edge: &graphdb_core::Edge,
     ) -> Result<(), SyncError> {
         self.stage_intent(
             txn_id,
@@ -1161,7 +1161,7 @@ impl SyncManager {
 
     pub async fn rollback_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> Result<(), SyncError> {
         self.rollback_transaction_to_sequence_sync(txn_id, 0)?;
         self.pending_intents.remove(&txn_id);
@@ -1170,15 +1170,15 @@ impl SyncManager {
 
     pub fn rollback_transaction_sync(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> Result<(), SyncError> {
         self.execute_sync(|| self.rollback_transaction(txn_id))
     }
 
     pub fn pending_transaction_intents(
         &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<Vec<crate::core::wal::OutboxIntent>, SyncError> {
+        txn_id: graphdb_core::types::TransactionId,
+    ) -> Result<Vec<graphdb_core::wal::OutboxIntent>, SyncError> {
         Ok(self
             .pending_intents
             .get(&txn_id)
@@ -1192,7 +1192,7 @@ impl SyncManager {
     /// saved boundary, so an empty transaction maps to boundary zero.
     pub fn pending_transaction_intent_sequence(
         &self,
-        txn_id: crate::core::types::TransactionId,
+        txn_id: graphdb_core::types::TransactionId,
     ) -> u64 {
         self.pending_intents
             .get(&txn_id)
@@ -1206,9 +1206,9 @@ impl SyncManager {
 
     pub fn materialize_committed_transaction(
         &self,
-        txn_id: crate::core::types::TransactionId,
-        commit_lsn: crate::core::types::CommitLsn,
-        intents: &[crate::core::wal::OutboxIntent],
+        txn_id: graphdb_core::types::TransactionId,
+        commit_lsn: graphdb_core::types::CommitLsn,
+        intents: &[graphdb_core::wal::OutboxIntent],
     ) -> Result<(), SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
             return Ok(());
@@ -1241,7 +1241,7 @@ impl SyncManager {
     /// committed-WAL replay after an outbox restore.
     pub fn outbox_materialized_lsn(
         &self,
-    ) -> Result<Option<crate::core::types::CommitLsn>, SyncError> {
+    ) -> Result<Option<graphdb_core::types::CommitLsn>, SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
             return Ok(None);
         };
@@ -1295,10 +1295,10 @@ impl SyncManager {
 
     pub fn wait_for_minimum_lsn(
         &self,
-        target: &crate::core::types::TargetId,
+        target: &graphdb_core::types::TargetId,
         index_id: u64,
         generation: u64,
-        minimum_lsn: crate::core::types::CommitLsn,
+        minimum_lsn: graphdb_core::types::CommitLsn,
         timeout_ms: u64,
     ) -> Result<bool, SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
@@ -1365,7 +1365,7 @@ impl SyncManager {
     }
 
     #[cfg(feature = "fulltext-search")]
-    pub fn fulltext_manager(&self) -> Arc<crate::search::manager::FulltextIndexManager> {
+    pub fn fulltext_manager(&self) -> Arc<graphdb_search::manager::FulltextIndexManager> {
         self.sync_coordinator
             .as_ref()
             .expect("SyncCoordinator not available without fulltext-search feature")
@@ -1507,13 +1507,13 @@ impl SyncManager {
 }
 
 fn payload_to_intent(
-    txn_id: crate::core::types::TransactionId,
+    txn_id: graphdb_core::types::TransactionId,
     intent_sequence: u32,
     target_name: &str,
     payload: &OutboxPayload,
-) -> Result<crate::core::wal::OutboxIntent, SyncError> {
-    use crate::core::types::{IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId};
-    use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
+) -> Result<graphdb_core::wal::OutboxIntent, SyncError> {
+    use graphdb_core::types::{IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId};
+    use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
 
     let (space_id, index_name, entity_ref, operation) = match payload {
         OutboxPayload::Vertex {
@@ -1623,7 +1623,7 @@ fn payload_to_intent(
         OrderingKey::new(key).map_err(SyncError::PersistenceError)?
     };
     let idempotency_key = IdempotencyKey::new(id).map_err(SyncError::PersistenceError)?;
-    Ok(crate::core::wal::OutboxIntent {
+    Ok(graphdb_core::wal::OutboxIntent {
         wire_version: WAL_SYNC_WIRE_VERSION,
         transaction_id: txn_id,
         intent_sequence,
@@ -1668,7 +1668,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     hash & (i64::MAX as u64)
 }
 
-fn format_vector_point_id(vertex_id: &crate::core::Value, tag: &str, field: &str) -> String {
+fn format_vector_point_id(vertex_id: &graphdb_core::Value, tag: &str, field: &str) -> String {
     let raw = format!("{}", vertex_id);
     // Escape the delimiter '#' and the escape char '%' inside the vertex id
     // so that decoding remains unambiguous across Local and Qdrant backends.
@@ -1878,7 +1878,7 @@ mod tests {
             .expect("edge delete intent should be serializable");
 
         match intent.mutation.entity_ref {
-            crate::core::wal::EntityRef::Edge { ranking, .. } => assert_eq!(ranking, 7),
+            graphdb_core::wal::EntityRef::Edge { ranking, .. } => assert_eq!(ranking, 7),
             other => panic!("expected edge entity reference, got {other:?}"),
         }
     }
@@ -1887,12 +1887,12 @@ mod tests {
     #[test]
     fn fulltext_changes_use_only_the_fulltext_target() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let config = crate::search::FulltextConfig {
+        let config = graphdb_search::FulltextConfig {
             index_path: directory.path().to_path_buf(),
             ..Default::default()
         };
         let fulltext_manager = Arc::new(
-            crate::search::FulltextIndexManager::new(config)
+            graphdb_search::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
         );
         let coordinator = Arc::new(crate::SyncCoordinator::new(
@@ -1929,12 +1929,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_outbox_claim_apply_and_restart_receipt_are_end_to_end() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let config = crate::search::FulltextConfig {
+        let config = graphdb_search::FulltextConfig {
             index_path: directory.path().join("indexes"),
             ..Default::default()
         };
         let fulltext_manager = Arc::new(
-            crate::search::FulltextIndexManager::new(config)
+            graphdb_search::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
         );
         fulltext_manager

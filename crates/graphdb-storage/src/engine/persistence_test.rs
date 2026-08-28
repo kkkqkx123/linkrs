@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::core::{DataType, Value};
+    use graphdb_core::{DataType, Value};
     use crate::engine::graph_storage::GraphStorageContext;
     use crate::types::StoragePropertyDef;
     use tempfile::TempDir;

@@ -31,7 +31,7 @@
 //! while the coordinator orchestrates the operations.
 
 use super::core::VertexTable;
-use crate::core::StorageResult;
+use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
 /// Unified compaction coordinator for VertexTable
@@ -194,7 +194,7 @@ impl CompactionCoordinator {
             let new_idx = *new_id as usize;
 
             let values = table.columns.get(old_idx);
-            let pairs: Vec<(String, crate::core::Value)> = values
+            let pairs: Vec<(String, graphdb_core::Value)> = values
                 .into_iter()
                 .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
                 .collect();
@@ -242,7 +242,7 @@ impl CompactionCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{DataType, Value};
+    use graphdb_core::{DataType, Value};
     use crate::types::StoragePropertyDef;
     use crate::vertex::vertex_table::core::{VertexTable, VertexTableConfig};
     use crate::vertex::VertexSchema;

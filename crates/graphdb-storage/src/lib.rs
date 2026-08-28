@@ -65,13 +65,9 @@ pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, 
 pub use stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
 pub use types::StoragePropertyDef;
 
-pub use crate::core::StorageError;
+pub use graphdb_core::StorageError;
 pub use cold::cold_snapshot::ColdSnapshot;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test_mock::MockStorage;
 
-pub use graphdb_core::core;
-pub use graphdb_core::utils;
-pub use graphdb_sync::sync;
-pub use graphdb_transaction::transaction;

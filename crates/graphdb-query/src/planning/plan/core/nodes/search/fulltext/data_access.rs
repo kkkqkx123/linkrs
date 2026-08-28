@@ -2,7 +2,7 @@
 //!
 //! This module defines plan nodes for full-text search data access operations.
 
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::fulltext::{
     FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
 };

@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use crate::core::types::{
+use graphdb_core::types::{
     ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexIdentifier,
 };
 use crate::context::TransactionContext;
@@ -34,7 +34,7 @@ impl UndoTarget for MockUndoTarget {
         &self,
         _vertex: VertexIdentifier,
         _col_id: ColumnId,
-        _value: crate::core::Value,
+        _value: graphdb_core::Value,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         Ok(())
@@ -43,7 +43,7 @@ impl UndoTarget for MockUndoTarget {
         &self,
         _edge_id: EdgeIdentifier,
         _col_id: ColumnId,
-        _value: crate::core::Value,
+        _value: graphdb_core::Value,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         Ok(())

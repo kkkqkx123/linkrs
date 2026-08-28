@@ -15,16 +15,16 @@ use log::{error, info};
 use vector_client::VectorManager;
 
 use crate::config::Config;
-use crate::core::error::DBResult;
-use crate::core::types::set_bcrypt_cost;
+use graphdb_core::error::DBResult;
+use graphdb_core::types::set_bcrypt_cost;
 use crate::{GraphService, HttpServer};
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
     StorageCommitOps, SyncWrapper,
 };
 #[cfg(feature = "vector")]
-use crate::sync::backend::VectorBackend;
-use crate::transaction::{TransactionConfig, TransactionManager, TransactionManagerConfig};
+use graphdb_sync::backend::VectorBackend;
+use graphdb_transaction::{TransactionConfig, TransactionManager, TransactionManagerConfig};
 
 /// Start the service using the user configuration directory.
 pub async fn start_service() -> DBResult<()> {
@@ -57,7 +57,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     let slow_query_config = config.to_slow_query_config();
     let m = &config.monitoring;
     let stats_manager = Arc::new(
-        crate::core::stats::StatsManager::with_slow_query_logger(
+        graphdb_core::stats::StatsManager::with_slow_query_logger(
             m.enabled,
             m.memory_cache_size,
             m.slow_query_threshold_ms * 1000,
@@ -95,12 +95,12 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 match vector_search::LocalVectorEngine::open(&data_dir) {
                     Ok(engine) => {
                         if let Some(hnsw) =
-                            graphdb_api::local_hnsw_config(&config.vector_config().local)
+                            graphdb_api::vector_config::local_hnsw_config(&config.vector_config().local)
                         {
                             engine.set_default_hnsw_config(hnsw);
                         }
                         if let Some(ivf) =
-                            graphdb_api::local_ivf_config(&config.vector_config().local)
+                            graphdb_api::vector_config::local_ivf_config(&config.vector_config().local)
                         {
                             engine.set_default_ivf_config(ivf);
                         }
@@ -140,11 +140,6 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                     }
                 }
             }
-            #[cfg(not(feature = "vector-qdrant"))]
-            graphdb_config::VectorEngineKind::Qdrant => {
-                warn!("Qdrant engine requested but the `vector-qdrant` feature is not enabled. Vector search will be disabled.");
-                (None, None)
-            }
         }
     } else {
         (None, None)
@@ -177,19 +172,19 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     }
 
     let mut sync_manager = if config.fulltext.enabled || config.is_vector_enabled() {
-        use crate::sync::SyncManager;
+        use graphdb_sync::SyncManager;
 
         let sync_manager = if config.fulltext.enabled {
             #[cfg(feature = "fulltext-search")]
             {
-                use crate::search::manager::FulltextIndexManager;
+                use graphdb_search::manager::FulltextIndexManager;
 
                 let manager = Arc::new(
                     FulltextIndexManager::new(config.fulltext.clone())
                         .expect("Failed to create FulltextIndexManager"),
                 );
 
-                use crate::search::{SyncConfig, SyncFailurePolicy};
+                use graphdb_search::{SyncConfig, SyncFailurePolicy};
 
                 let sync_config = SyncConfig {
                     queue_size: 10000,
@@ -198,8 +193,8 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                     failure_policy: SyncFailurePolicy::FailOpen,
                 };
 
-                let batch_config = crate::sync::batch::BatchConfig::from(sync_config.clone());
-                let sync_coordinator = Arc::new(crate::sync::coordinator::SyncCoordinator::new(
+                let batch_config = graphdb_sync::batch::BatchConfig::from(sync_config.clone());
+                let sync_coordinator = Arc::new(graphdb_sync::coordinator::SyncCoordinator::new(
                     manager.clone(),
                     batch_config,
                 ));
@@ -257,7 +252,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         manager.set_stats_manager(stats_manager.clone());
         let outbox_path = PathBuf::from(config.storage_path()).join("outbox/outbox.sqlite");
         if let Err(error) = manager.configure_outbox(outbox_path) {
-            return Err(crate::core::DBError::storage(format!(
+            return Err(graphdb_core::DBError::storage(format!(
                 "Failed to initialize sync outbox: {}",
                 error
             )));
@@ -268,7 +263,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         let recovered = inner_storage
             .recover_outbox_projection(manager)
             .map_err(|error| {
-                crate::core::DBError::storage(format!(
+                graphdb_core::DBError::storage(format!(
                     "Failed to recover the SQLite outbox projection: {}",
                     error
                 ))
@@ -280,7 +275,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 
     if let Some(manager) = sync_manager.as_ref() {
         manager.start().await.map_err(|error| {
-            crate::core::DBError::storage(format!("Failed to start sync manager: {}", error))
+            graphdb_core::DBError::storage(format!("Failed to start sync manager: {}", error))
         })?;
     }
 
@@ -390,10 +385,10 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 /// Attach a vector sync coordinator backed by `backend` to a SyncManager.
 #[cfg(feature = "vector")]
 fn attach_vector_coordinator(
-    sync_manager: crate::sync::SyncManager,
+    sync_manager: graphdb_sync::SyncManager,
     backend: VectorBackend,
     _config: &Config,
-) -> crate::sync::SyncManager {
+) -> graphdb_sync::SyncManager {
     let handle = tokio::runtime::Handle::current();
     #[cfg(feature = "vector-qdrant")]
     let config = _config;
@@ -418,14 +413,14 @@ fn attach_vector_coordinator(
         }
     };
     #[cfg(feature = "vector-qdrant")]
-    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
+    let vector_coordinator = Arc::new(graphdb_sync::vector_sync::VectorSyncCoordinator::new(
         backend,
         embedding_service,
         handle,
     ));
     #[cfg(not(feature = "vector-qdrant"))]
     let vector_coordinator = Arc::new(
-        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+        graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
     );
     info!("Vector index sync enabled");
     sync_manager.with_vector_coordinator(vector_coordinator)
@@ -487,7 +482,7 @@ pub async fn execute_query(query_str: &str) -> DBResult<()> {
         Ok(session) => session,
         Err(e) => {
             error!("Failed to create session: {}", e);
-            return Err(crate::core::error::DBError::from(
+            return Err(graphdb_core::error::DBError::from(
                 crate::session::SessionError::manager_error(format!(
                     "Failed to create session: {}",
                     e

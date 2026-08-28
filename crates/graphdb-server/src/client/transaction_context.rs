@@ -1,4 +1,4 @@
-use crate::transaction::{SavepointId, TransactionId, TransactionOptions};
+use graphdb_transaction::{SavepointId, TransactionId, TransactionOptions};
 use log::info;
 use parking_lot::RwLock;
 use std::sync::Arc;

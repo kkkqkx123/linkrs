@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::{EdgeDirection, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
@@ -139,7 +139,7 @@ pub(super) fn handle_bi_expand(
                 let vid_val = context
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
-                    .unwrap_or(Value::Null(crate::core::NullType::Null));
+                    .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                     if let Ok(edges) = reader.get_node_edges(space_name, &vid, dir) {
                         for e in &edges {
@@ -235,7 +235,7 @@ pub(super) fn handle_bi_traverse(
                 let vid_val = ctx
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
-                    .unwrap_or(Value::Null(crate::core::NullType::Null));
+                    .unwrap_or(Value::Null(graphdb_core::NullType::Null));
                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                     let mut frontier = vec![(vid, 0u32)];
                     let mut local_visited = VisitedSet::new();

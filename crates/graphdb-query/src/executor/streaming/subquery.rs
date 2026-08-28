@@ -25,10 +25,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::expr::SubqueryBody;
-use crate::core::types::operators::AggregateFunction;
-use crate::core::{Expression, Value};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::SubqueryBody;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::{Expression, Value};
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::context::BorrowedRowContext;
@@ -457,9 +457,9 @@ impl SubqueryExecutor {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
     use crate::executor::base::{ExecutionContext, MemoryBudget};
     use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
     use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -483,7 +483,7 @@ mod tests {
         plan
     }
 
-    fn contextual(expr: crate::core::Expression) -> ContextualExpression {
+    fn contextual(expr: graphdb_core::Expression) -> ContextualExpression {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let id = ctx.register_expression(ExpressionMeta::new(expr));
         ContextualExpression::new(id, ctx)
@@ -494,9 +494,9 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let list = values
             .into_iter()
-            .map(crate::core::Expression::Literal)
+            .map(graphdb_core::Expression::Literal)
             .collect();
-        let unwind = UnwindNode::new(start, "v", contextual(crate::core::Expression::list(list)))
+        let unwind = UnwindNode::new(start, "v", contextual(graphdb_core::Expression::list(list)))
             .expect("unwind should build");
         build_plan(&PlanNodeEnum::Unwind(unwind))
     }
@@ -507,8 +507,8 @@ mod tests {
         argument.set_col_names(vec!["x".to_string()]);
         let project = ProjectNode::new(
             PlanNodeEnum::Argument(argument),
-            vec![crate::core::YieldColumn::new(
-                contextual(crate::core::Expression::variable("x")),
+            vec![graphdb_core::YieldColumn::new(
+                contextual(graphdb_core::Expression::variable("x")),
                 "x".to_string(),
             )],
         )
@@ -520,15 +520,15 @@ mod tests {
     /// v, sum(v))`. Output rows are `[v, sum]`, so the table maps each value
     /// to its duplicated-sum (e.g. `[10, 10, 20]` → `{10: 20, 20: 20}`).
     fn group_join_plan(values: Vec<i32>) -> Arc<PhysicalPlan> {
-        use crate::core::types::operators::AggregateFunction;
+        use graphdb_core::types::operators::AggregateFunction;
         use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let list = values
             .into_iter()
-            .map(|v| crate::core::Expression::Literal(Value::Int(v)))
+            .map(|v| graphdb_core::Expression::Literal(Value::Int(v)))
             .collect();
-        let unwind = UnwindNode::new(start, "v", contextual(crate::core::Expression::list(list)))
+        let unwind = UnwindNode::new(start, "v", contextual(graphdb_core::Expression::list(list)))
             .expect("unwind should build");
         let mut aggregate = AggregateNode::new(
             PlanNodeEnum::Unwind(unwind),
@@ -536,7 +536,7 @@ mod tests {
             vec![AggregateFunction::Sum],
         )
         .expect("aggregate should build");
-        aggregate.set_aggregation_args(vec![vec![crate::core::Expression::variable("v")]]);
+        aggregate.set_aggregation_args(vec![vec![graphdb_core::Expression::variable("v")]]);
         build_plan(&PlanNodeEnum::Aggregate(aggregate))
     }
 
@@ -654,7 +654,7 @@ mod tests {
     fn null_never_matches_and_skips_the_cache() {
         let plan = values_subquery_plan(vec![
             Value::Int(1),
-            Value::Null(crate::core::value::NullType::Null),
+            Value::Null(graphdb_core::value::NullType::Null),
         ]);
         let executor = test_executor(vec![SubqueryRunnerSpec {
             id: 9,
@@ -671,7 +671,7 @@ mod tests {
                 &b,
                 empty_layout(),
                 Vec::new(),
-                &Value::Null(crate::core::value::NullType::Null),
+                &Value::Null(graphdb_core::value::NullType::Null),
             )
             .expect("null never matches"));
         assert!(executor.runners.get(&9).unwrap().cache.lock().is_none());
@@ -732,13 +732,13 @@ mod tests {
     }
 
     fn group_join_spec(id: u64, values: Vec<i32>) -> SubqueryRunnerSpec {
-        use crate::core::types::operators::AggregateFunction;
+        use graphdb_core::types::operators::AggregateFunction;
         SubqueryRunnerSpec {
             id,
             plan: group_join_plan(values),
             correlated: false,
             group_join: Some(GroupJoinSpec {
-                hash_keys: vec![crate::core::Expression::variable("x")],
+                hash_keys: vec![graphdb_core::Expression::variable("x")],
                 key_columns: 1,
                 function: AggregateFunction::Sum,
                 distinct: false,
@@ -802,7 +802,7 @@ mod tests {
             .execute_exists(
                 &b,
                 layout.clone(),
-                vec![Value::Null(crate::core::NullType::Null)]
+                vec![Value::Null(graphdb_core::NullType::Null)]
             )
             .expect("null key never matches"));
         assert!(!executor

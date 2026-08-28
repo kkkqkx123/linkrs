@@ -29,7 +29,7 @@ use std::time::Duration;
 use graphdb_metrics::MetricType;
 use vector_search::{LocalVectorEngine, MetricsSnapshot};
 
-use crate::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 
 /// How often engine snapshots are sampled and forwarded.
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(10);

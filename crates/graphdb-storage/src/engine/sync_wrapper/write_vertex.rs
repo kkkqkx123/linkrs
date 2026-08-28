@@ -1,8 +1,8 @@
 use super::SyncWrapper;
-use crate::core::types::VertexId;
-use crate::core::{StorageError, Value, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::{StorageError, Value, Vertex};
 use crate::StorageClient;
-use crate::sync::types::ChangeType;
+use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
     fn detect_changed_properties(

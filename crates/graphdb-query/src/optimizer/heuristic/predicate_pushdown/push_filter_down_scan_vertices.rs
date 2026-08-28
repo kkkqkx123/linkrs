@@ -7,8 +7,8 @@
 //! pure pre-filter and the full condition still runs on top of the scan, so
 //! the rewrite can never change results.
 
-use crate::core::types::ContextualExpression;
-use crate::core::types::ExpressionMeta;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::ExpressionMeta;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
@@ -91,9 +91,9 @@ impl RewriteRule for PushFilterDownScanVerticesRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::Expression;
-    use crate::core::Value;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::Expression;
+    use graphdb_core::Value;
 
     fn scan_node(
     ) -> crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode {
@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn filter_node(
-        condition: crate::core::types::ContextualExpression,
+        condition: graphdb_core::types::ContextualExpression,
         input: PlanNodeEnum,
     ) -> PlanNodeEnum {
         PlanNodeEnum::Filter(
@@ -114,8 +114,8 @@ mod tests {
         )
     }
 
-    fn contextual(expr: Expression) -> crate::core::types::ContextualExpression {
-        let ctx = std::sync::Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+    fn contextual(expr: Expression) -> graphdb_core::types::ContextualExpression {
+        let ctx = std::sync::Arc::new(graphdb_core::types::expr::ExpressionAnalysisContext::new());
         let id = ctx.register_expression(ExpressionMeta::new(expr));
         ContextualExpression::new(id, ctx)
     }

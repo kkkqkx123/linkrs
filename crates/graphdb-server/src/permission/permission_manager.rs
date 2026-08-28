@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::PermissionResult;
 
 // Re-export the permission types from the core layer.
-pub use crate::core::{Permission, RoleType};
+pub use graphdb_core::{Permission, RoleType};
 
 /// The Space ID identifier for the God character (a global character, not bound to a specific Space)
 pub const GOD_SPACE_ID: i64 = -1;

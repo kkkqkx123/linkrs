@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
-use crate::utils::NullBitmap;
+use graphdb_core::NullBitmap;
 
 const MAX_SYMBOL_LEN: usize = 8;
 const MIN_SYMBOL_LEN: usize = 2;
@@ -312,7 +312,7 @@ impl FsstColumn {
         Some(self.encoder.decode(&self.encoded_data[row_idx]))
     }
 
-    pub fn set(&mut self, row_idx: usize, value: Option<&str>) -> crate::core::StorageResult<()> {
+    pub fn set(&mut self, row_idx: usize, value: Option<&str>) -> graphdb_core::StorageResult<()> {
         self.set_bytes(row_idx, value.map(|s| s.as_bytes()))
     }
 
@@ -320,9 +320,9 @@ impl FsstColumn {
         &mut self,
         row_idx: usize,
         value: Option<&[u8]>,
-    ) -> crate::core::StorageResult<()> {
+    ) -> graphdb_core::StorageResult<()> {
         if row_idx >= self.encoded_data.len() {
-            return Err(crate::core::StorageError::invalid_offset(row_idx as u32));
+            return Err(graphdb_core::StorageError::invalid_offset(row_idx as u32));
         }
 
         match value {
@@ -340,11 +340,11 @@ impl FsstColumn {
         Ok(())
     }
 
-    pub fn append(&mut self, value: Option<&str>) -> crate::core::StorageResult<()> {
+    pub fn append(&mut self, value: Option<&str>) -> graphdb_core::StorageResult<()> {
         self.append_bytes(value.map(|s| s.as_bytes()))
     }
 
-    pub fn append_bytes(&mut self, value: Option<&[u8]>) -> crate::core::StorageResult<()> {
+    pub fn append_bytes(&mut self, value: Option<&[u8]>) -> graphdb_core::StorageResult<()> {
         match value {
             Some(bytes) => {
                 self.encoded_data.push(self.encoder.encode_bytes(bytes));
@@ -363,12 +363,12 @@ impl FsstColumn {
         self.encoded_data.len()
     }
 
-    pub fn rebuild(&mut self, new_strings: &[String]) -> crate::core::StorageResult<()> {
+    pub fn rebuild(&mut self, new_strings: &[String]) -> graphdb_core::StorageResult<()> {
         let new_bytes: Vec<&[u8]> = new_strings.iter().map(|s| s.as_bytes()).collect();
         self.rebuild_bytes(&new_bytes)
     }
 
-    pub fn rebuild_bytes(&mut self, new_bytes: &[&[u8]]) -> crate::core::StorageResult<()> {
+    pub fn rebuild_bytes(&mut self, new_bytes: &[&[u8]]) -> graphdb_core::StorageResult<()> {
         let mut existing: Vec<(usize, Vec<u8>)> = Vec::with_capacity(self.encoded_data.len());
         for (idx, encoded) in self.encoded_data.iter().enumerate() {
             if self.null_bitmap.is_null(idx) {
@@ -397,7 +397,7 @@ impl FsstColumn {
         Ok(())
     }
 
-    pub fn rebuild_if_needed(&mut self, threshold: f64) -> crate::core::StorageResult<()> {
+    pub fn rebuild_if_needed(&mut self, threshold: f64) -> graphdb_core::StorageResult<()> {
         let threshold = threshold.clamp(0.0, 1.0);
         let existing_rows = self
             .encoded_data
@@ -418,58 +418,58 @@ impl FsstColumn {
         data_size + null_size + table_size
     }
 
-    pub fn serialize_meta(&self, writer: &mut impl Write) -> crate::core::StorageResult<usize> {
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> graphdb_core::StorageResult<usize> {
         let mut written = 0usize;
         written += self.encoder.serialize(writer).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn serialize encoder: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn serialize encoder: {}", e))
         })?;
         let data_count = self.encoded_data.len() as u32;
         writer.write_all(&data_count.to_le_bytes()).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn serialize count: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn serialize count: {}", e))
         })?;
         written += 4;
         for item in &self.encoded_data {
             let len = u32::try_from(item.len()).map_err(|_| {
-                crate::core::StorageError::serialize_error(
+                graphdb_core::StorageError::serialize_error(
                     "FSST encoded item exceeds u32 length".to_string(),
                 )
             })?;
             writer.write_all(&len.to_le_bytes()).map_err(|e| {
-                crate::core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e))
+                graphdb_core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e))
             })?;
             writer.write_all(item).map_err(|e| {
-                crate::core::StorageError::io_error(format!("FsstColumn serialize item: {}", e))
+                graphdb_core::StorageError::io_error(format!("FsstColumn serialize item: {}", e))
             })?;
             written += 4 + item.len();
         }
         let bm_len = self.null_bitmap.len() as u32;
         writer.write_all(&bm_len.to_le_bytes()).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn serialize bm_len: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn serialize bm_len: {}", e))
         })?;
         written += 4;
         for &word in self.null_bitmap.as_bits() {
             writer.write_all(&word.to_le_bytes()).map_err(|e| {
-                crate::core::StorageError::io_error(format!("FsstColumn serialize bm word: {}", e))
+                graphdb_core::StorageError::io_error(format!("FsstColumn serialize bm word: {}", e))
             })?;
             written += 8;
         }
         Ok(written)
     }
 
-    pub fn deserialize_meta(reader: &mut impl Read) -> crate::core::StorageResult<Self> {
+    pub fn deserialize_meta(reader: &mut impl Read) -> graphdb_core::StorageResult<Self> {
         let encoder = FsstEncoder::deserialize(reader).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn deserialize encoder: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn deserialize encoder: {}", e))
         })?;
         let mut count_bytes = [0u8; 4];
         reader.read_exact(&mut count_bytes).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn deserialize count: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn deserialize count: {}", e))
         })?;
         let data_count = u32::from_le_bytes(count_bytes) as usize;
         let mut encoded_data = Vec::with_capacity(data_count);
         for _ in 0..data_count {
             let mut len_bytes = [0u8; 4];
             reader.read_exact(&mut len_bytes).map_err(|e| {
-                crate::core::StorageError::io_error(format!(
+                graphdb_core::StorageError::io_error(format!(
                     "FsstColumn deserialize item len: {}",
                     e
                 ))
@@ -477,13 +477,13 @@ impl FsstColumn {
             let len = u32::from_le_bytes(len_bytes) as usize;
             let mut item = vec![0u8; len];
             reader.read_exact(&mut item).map_err(|e| {
-                crate::core::StorageError::io_error(format!("FsstColumn deserialize item: {}", e))
+                graphdb_core::StorageError::io_error(format!("FsstColumn deserialize item: {}", e))
             })?;
             encoded_data.push(item);
         }
         let mut bm_len_bytes = [0u8; 4];
         reader.read_exact(&mut bm_len_bytes).map_err(|e| {
-            crate::core::StorageError::io_error(format!("FsstColumn deserialize bm_len: {}", e))
+            graphdb_core::StorageError::io_error(format!("FsstColumn deserialize bm_len: {}", e))
         })?;
         let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
         let words = bm_len.div_ceil(64);
@@ -491,7 +491,7 @@ impl FsstColumn {
         for _ in 0..words {
             let mut word_bytes = [0u8; 8];
             reader.read_exact(&mut word_bytes).map_err(|e| {
-                crate::core::StorageError::io_error(format!(
+                graphdb_core::StorageError::io_error(format!(
                     "FsstColumn deserialize bm word: {}",
                     e
                 ))
@@ -517,7 +517,7 @@ impl Default for FsstColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::NullBitmap;
+    use graphdb_core::NullBitmap;
 
     fn build_fsst_column(strings: &[Option<&str>], max_symbols: usize) -> FsstColumn {
         let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();

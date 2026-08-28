@@ -41,7 +41,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult};
 use crate::persistence::{read_u32_le, read_u64_le};
 
 use super::{

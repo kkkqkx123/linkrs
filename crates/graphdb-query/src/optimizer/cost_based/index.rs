@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::{Expression, Index};
+use graphdb_core::types::{Expression, Index};
 use crate::optimizer::cost::{CostCalculator, SelectivityEstimator};
 
 /// Index selector
@@ -207,7 +207,7 @@ impl IndexSelector {
                     .estimate_greater_than_selectivity(None),
                 PredicateOperator::Like => {
                     // Try to extract patterns from the expression.
-                    if let Expression::Literal(crate::core::value::Value::String(pattern)) =
+                    if let Expression::Literal(graphdb_core::value::Value::String(pattern)) =
                         &predicate.value
                     {
                         self.selectivity_estimator

@@ -319,7 +319,7 @@ impl fmt::Display for ExpressionError {
     }
 }
 
-impl From<ExpressionError> for crate::core::error::DBError {
+impl From<ExpressionError> for graphdb_core::error::DBError {
     fn from(e: ExpressionError) -> Self {
         let msg = e.to_string();
         Self::expression(msg).with_source(Box::new(e))

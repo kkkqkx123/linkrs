@@ -11,7 +11,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use super::types::{SavepointId, TransactionId, TransactionState};
-use crate::core::error::BoxedError;
+use graphdb_core::error::BoxedError;
 
 /// Transaction operation result type alias
 pub type TransactionResult<T> = Result<T, TransactionError>;

@@ -9,8 +9,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::core::metadata::SchemaManager;
-    use crate::core::types::{IsolationLevel, SpaceInfo, TagInfo};
+    use graphdb_core::metadata::SchemaManager;
+    use graphdb_core::types::{IsolationLevel, SpaceInfo, TagInfo};
     use crate::metadata::IndexKey;
     use crate::{EngineType, FulltextConfig, FulltextIndexManager, SearchError};
     use std::path::PathBuf;

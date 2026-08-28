@@ -1,4 +1,4 @@
-use crate::core::EdgeDirection;
+use graphdb_core::EdgeDirection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraversalKind {

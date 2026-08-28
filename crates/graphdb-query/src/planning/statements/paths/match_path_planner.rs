@@ -2,8 +2,8 @@
 //!
 //! Responsible for planning the path patterns in MATCH queries and generating the traversal plans.
 
-use crate::core::types::graph_schema::EdgeDirection;
-use crate::core::{StorageError, Value};
+use graphdb_core::types::graph_schema::EdgeDirection;
+use graphdb_core::{StorageError, Value};
 use crate::planning::statements::seeks::seek_strategy_base::{
     NodePattern, SeekStrategyContext, SeekStrategySelector, SeekStrategyType,
 };

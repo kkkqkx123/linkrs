@@ -1,4 +1,4 @@
-use crate::core::Value;
+use graphdb_core::Value;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 

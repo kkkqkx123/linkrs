@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::core::types::expr::analysis_utils::collect_variables_from_contextual;
-use crate::core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
@@ -963,7 +963,7 @@ fn logical_output_var(node: &LogicalNodeEnum) -> Option<&str> {
 }
 
 /// The output column types of a logical node (convertible subset), if any.
-fn logical_column_types(node: &LogicalNodeEnum) -> Vec<crate::core::DataType> {
+fn logical_column_types(node: &LogicalNodeEnum) -> Vec<graphdb_core::DataType> {
     match node {
         LogicalNodeEnum::Start(n) => n.column_types().to_vec(),
         LogicalNodeEnum::GetVertices(n) => n.column_types().to_vec(),
@@ -1541,26 +1541,26 @@ mod tests {
         pk: Vec<&str>,
     ) -> PlanNodeEnum {
         let ctx = std::sync::Arc::new(
-            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
         let hash_keys: Vec<ContextualExpression> = hk
             .iter()
             .map(|s| {
-                let meta = crate::core::types::expr::ExpressionMeta::new(
-                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(
+                    graphdb_core::types::expr::Expression::Variable(s.to_string()),
                 );
                 let id = ctx.register_expression(meta);
-                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+                graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
             })
             .collect();
         let probe_keys: Vec<ContextualExpression> = pk
             .iter()
             .map(|s| {
-                let meta = crate::core::types::expr::ExpressionMeta::new(
-                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(
+                    graphdb_core::types::expr::Expression::Variable(s.to_string()),
                 );
                 let id = ctx.register_expression(meta);
-                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+                graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
             })
             .collect();
         PlanNodeEnum::InnerJoin(InnerJoinNode::new(left, right, hash_keys, probe_keys).unwrap())
@@ -1721,7 +1721,7 @@ mod tests {
         // LeftJoin with an inner join on the left and a scan on the right
         let c = make_scan("c", 100);
         let _ctx = std::sync::Arc::new(
-            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
         use crate::planning::plan::core::nodes::join::join_node::LeftJoinNode;
         let left_join =
@@ -1780,26 +1780,26 @@ mod tests {
         pk: Vec<&str>,
     ) -> LogicalNodeEnum {
         let ctx = std::sync::Arc::new(
-            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
         let hash_keys: Vec<ContextualExpression> = hk
             .iter()
             .map(|s| {
-                let meta = crate::core::types::expr::ExpressionMeta::new(
-                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(
+                    graphdb_core::types::expr::Expression::Variable(s.to_string()),
                 );
                 let id = ctx.register_expression(meta);
-                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+                graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
             })
             .collect();
         let probe_keys: Vec<ContextualExpression> = pk
             .iter()
             .map(|s| {
-                let meta = crate::core::types::expr::ExpressionMeta::new(
-                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(
+                    graphdb_core::types::expr::Expression::Variable(s.to_string()),
                 );
                 let id = ctx.register_expression(meta);
-                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+                graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
             })
             .collect();
         LogicalNodeEnum::InnerJoin(LogicalInnerJoinNode {

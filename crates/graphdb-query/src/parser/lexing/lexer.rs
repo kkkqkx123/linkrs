@@ -2,7 +2,7 @@
 //!
 //! This module implements a lexical analyzer that converts input query strings into tokens.
 
-use crate::core::types::Position;
+use graphdb_core::types::Position;
 use crate::parser::lexing::LexError;
 use crate::parser::{Token, TokenKind as Tk};
 use std::iter::Peekable;

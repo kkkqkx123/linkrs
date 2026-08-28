@@ -2,11 +2,11 @@
 //!
 //! Provide a function for evaluating specific expressions, implemented using direct recursive matching to avoid unnecessary abstract overhead.
 
-use crate::core::types::expr::analysis_utils::is_evaluable;
-use crate::core::types::expr::Expression;
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::types::expr::analysis_utils::is_evaluable;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
 use crate::executor::expression::evaluator::functions::FunctionEvaluator;
 use crate::executor::expression::evaluator::operations::{
@@ -123,7 +123,7 @@ impl ExpressionEvaluator {
                     let filter_result = Self::evaluate_recursive(filter_expr, context)?;
                     let is_true = matches!(filter_result, Value::Bool(true));
                     if !is_true {
-                        return Ok(Value::Null(crate::core::NullType::Null));
+                        return Ok(Value::Null(graphdb_core::NullType::Null));
                     }
                 }
                 FunctionEvaluator::eval_aggregate_function(func, &arg_values, *distinct)
@@ -335,9 +335,9 @@ impl ExpressionEvaluator {
     /// Type conversion for evaluation
     pub fn eval_type_cast(
         value: &Value,
-        target_type: &crate::core::types::DataType,
+        target_type: &graphdb_core::types::DataType,
     ) -> Result<Value, ExpressionError> {
-        use crate::core::types::DataType;
+        use graphdb_core::types::DataType;
 
         let result = match target_type {
             DataType::Bool => value.to_bool(),
@@ -373,7 +373,7 @@ impl ExpressionEvaluator {
             DataType::Map(_) => value.to_map(),
             DataType::Json => match value {
                 Value::String(s) => {
-                    let j = crate::core::value::json::Json::parse(s)
+                    let j = graphdb_core::value::json::Json::parse(s)
                         .map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e)))?;
                     Value::Json(Box::new(j))
                 }
@@ -392,7 +392,7 @@ impl ExpressionEvaluator {
             },
             DataType::JsonB => match value {
                 Value::String(s) => {
-                    let jb = crate::core::value::json::JsonB::parse(s)
+                    let jb = graphdb_core::value::json::JsonB::parse(s)
                         .map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e)))?;
                     Value::JsonB(Box::new(jb))
                 }

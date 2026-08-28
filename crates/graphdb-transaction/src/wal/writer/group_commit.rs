@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 
-use crate::core::wal::types::{WalError, WalResult};
+use graphdb_core::wal::types::{WalError, WalResult};
 
 /// Default timeout for group commit follower wait.
 /// If the sync leader does not complete within this duration, followers return

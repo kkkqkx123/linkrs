@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::search::error::SearchError;
+use graphdb_search::error::SearchError;
 use crate::SyncError;
 
 #[derive(Error, Debug, Clone)]

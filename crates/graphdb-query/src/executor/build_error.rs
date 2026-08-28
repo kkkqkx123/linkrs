@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 
 /// Structured error type for physical plan construction failures.
 ///

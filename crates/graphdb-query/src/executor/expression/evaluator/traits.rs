@@ -5,11 +5,11 @@
 //! Note: This trait is used for the evaluation of runtime expressions.
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
-use crate::core::types::expr::{Expression, SubqueryBody};
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::vertex_edge_path::{Path, Step};
-use crate::core::Value;
+use graphdb_core::types::expr::{Expression, SubqueryBody};
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::vertex_edge_path::{Path, Step};
+use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::functions::OwnedFunctionRef;
@@ -364,9 +364,9 @@ pub trait ExpressionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::Expression;
-    use crate::core::types::VertexId;
-    use crate::core::vertex_edge_path::{Edge, Tag};
+    use graphdb_core::types::expr::Expression;
+    use graphdb_core::types::VertexId;
+    use graphdb_core::vertex_edge_path::{Edge, Tag};
     use crate::executor::expression::evaluation_context::DefaultExpressionContext;
     use std::collections::HashMap;
 
@@ -379,7 +379,7 @@ mod tests {
             "person".to_string(),
             HashMap::from([("name".to_string(), Value::string("Alice"))]),
         );
-        Value::Vertex(Box::new(crate::core::vertex_edge_path::Vertex::new(
+        Value::Vertex(Box::new(graphdb_core::vertex_edge_path::Vertex::new(
             VertexId::from_int64(1),
             vec![tag],
         )))
@@ -421,12 +421,12 @@ mod tests {
             ]),
             Some(Expression::binary(
                 Expression::variable("x"),
-                crate::core::types::operators::BinaryOperator::GreaterThan,
+                graphdb_core::types::operators::BinaryOperator::GreaterThan,
                 Expression::Literal(Value::Int(2)),
             )),
             Some(Expression::binary(
                 Expression::variable("x"),
-                crate::core::types::operators::BinaryOperator::Multiply,
+                graphdb_core::types::operators::BinaryOperator::Multiply,
                 Expression::Literal(Value::Int(10)),
             )),
         );
@@ -477,7 +477,7 @@ mod tests {
         ]);
         let gt_two = Expression::binary(
             Expression::variable("x"),
-            crate::core::types::operators::BinaryOperator::GreaterThan,
+            graphdb_core::types::operators::BinaryOperator::GreaterThan,
             Expression::Literal(Value::Int(2)),
         );
         let args = vec![Expression::variable("x"), list.clone(), gt_two.clone()];
@@ -508,7 +508,7 @@ mod tests {
         // All elements satisfy x > 0.
         let gt_zero = Expression::binary(
             Expression::variable("x"),
-            crate::core::types::operators::BinaryOperator::GreaterThan,
+            graphdb_core::types::operators::BinaryOperator::GreaterThan,
             Expression::Literal(Value::Int(0)),
         );
         let mut ctx = context();
@@ -545,7 +545,7 @@ mod tests {
             ]),
             Expression::binary(
                 Expression::variable("acc"),
-                crate::core::types::operators::BinaryOperator::Add,
+                graphdb_core::types::operators::BinaryOperator::Add,
                 Expression::variable("x"),
             ),
         );

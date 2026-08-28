@@ -39,11 +39,11 @@ pub mod property_schema;
 pub mod property_table;
 pub mod single_mutable_csr;
 
-use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId, INVALID_TIMESTAMP};
-use crate::core::{Edge, Value};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId, INVALID_TIMESTAMP};
+use graphdb_core::{Edge, Value};
 use crate::types::StoragePropertyDef;
 
-pub use crate::core::types::EdgeStrategy;
+pub use graphdb_core::types::EdgeStrategy;
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
@@ -57,7 +57,7 @@ pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use property_table::PropertyTable;
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
-pub use crate::core::types::INVALID_EDGE_ID;
+pub use graphdb_core::types::INVALID_EDGE_ID;
 
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {
@@ -111,9 +111,9 @@ pub struct EdgeSchema {
 impl EdgeSchema {
     /// Validate that the schema has compatible CSR strategies.
     /// At least one of out-edge or in-edge must be enabled (not None).
-    pub fn validate(&self) -> crate::core::StorageResult<()> {
+    pub fn validate(&self) -> graphdb_core::StorageResult<()> {
         if self.oe_strategy == EdgeStrategy::None && self.ie_strategy == EdgeStrategy::None {
-            return Err(crate::core::StorageError::invalid_operation(format!(
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
                 "EdgeSchema '{}': both oe_strategy and ie_strategy are None. \
                          At least one direction must be enabled",
                 self.label_name
@@ -124,10 +124,10 @@ impl EdgeSchema {
 
     /// Validate schema at creation time
     /// Ensures property names are valid and edge types are well-formed
-    pub fn validate_on_creation(&self) -> crate::core::StorageResult<()> {
+    pub fn validate_on_creation(&self) -> graphdb_core::StorageResult<()> {
         // Validate edge name
         if self.label_name.is_empty() {
-            return Err(crate::core::StorageError::invalid_operation(
+            return Err(graphdb_core::StorageError::invalid_operation(
                 "Edge type name cannot be empty".to_string(),
             ));
         }
@@ -141,7 +141,7 @@ impl EdgeSchema {
         let mut seen_names = std::collections::HashSet::new();
         for prop in &self.properties {
             if !seen_names.insert(&prop.name) {
-                return Err(crate::core::StorageError::invalid_operation(format!(
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
                     "Duplicate property name in edge type '{}': '{}'",
                     self.label_name, prop.name
                 )));
@@ -149,7 +149,7 @@ impl EdgeSchema {
 
             // Validate property name format
             if prop.name.is_empty() {
-                return Err(crate::core::StorageError::invalid_operation(format!(
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
                     "Property name cannot be empty in edge type '{}'",
                     self.label_name
                 )));
@@ -165,18 +165,18 @@ impl EdgeSchema {
     }
 
     /// Validate that an identifier (name) follows valid rules
-    fn validate_identifier_internal(name: &str) -> crate::core::StorageResult<()> {
+    fn validate_identifier_internal(name: &str) -> graphdb_core::StorageResult<()> {
         let first_char = match name.chars().next() {
             Some(c) => c,
             None => {
-                return Err(crate::core::StorageError::invalid_operation(
+                return Err(graphdb_core::StorageError::invalid_operation(
                     "Identifier cannot be empty".to_string(),
                 ));
             }
         };
 
         if !first_char.is_ascii_alphabetic() && first_char != '_' {
-            return Err(crate::core::StorageError::invalid_operation(format!(
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
                 "Identifier '{}' must start with ASCII letter or underscore, got '{}'",
                 name, first_char
             )));
@@ -184,7 +184,7 @@ impl EdgeSchema {
 
         for (i, c) in name.chars().enumerate() {
             if !c.is_ascii_alphanumeric() && c != '_' {
-                return Err(crate::core::StorageError::invalid_operation(format!(
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
                     "Identifier '{}' contains invalid character '{}' at position {}. \
                      Only ASCII letters, digits, and underscores are allowed.",
                     name, c, i
@@ -197,17 +197,17 @@ impl EdgeSchema {
 
     /// Validate that a property data type is allowed
     fn validate_property_type_internal(
-        data_type: &crate::core::DataType,
+        data_type: &graphdb_core::DataType,
         prop_name: &str,
-    ) -> crate::core::StorageResult<()> {
-        use crate::core::DataType;
+    ) -> graphdb_core::StorageResult<()> {
+        use graphdb_core::DataType;
 
         match data_type {
-            DataType::Empty => Err(crate::core::StorageError::invalid_operation(format!(
+            DataType::Empty => Err(graphdb_core::StorageError::invalid_operation(format!(
                 "Property '{}' cannot have type Empty - properties must have valid types",
                 prop_name
             ))),
-            DataType::Null => Err(crate::core::StorageError::invalid_operation(format!(
+            DataType::Null => Err(graphdb_core::StorageError::invalid_operation(format!(
                 "Property '{}' cannot have type Null - use nullable=true instead",
                 prop_name
             ))),

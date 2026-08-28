@@ -830,11 +830,11 @@ impl PlanNodeVisitor for DescribeVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     use std::sync::Arc;

@@ -4,7 +4,7 @@
 //! (VertexTable, EdgeTable, PropertyTable). Implements a tiered tombstone management
 //! system for efficient garbage collection.
 
-use crate::core::types::storage_ids::Timestamp;
+use graphdb_core::types::storage_ids::Timestamp;
 use std::collections::HashMap;
 
 /// Snapshot handle for MVCC - identifies a consistent snapshot at a specific timestamp

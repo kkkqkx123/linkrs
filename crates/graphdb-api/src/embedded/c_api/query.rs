@@ -8,7 +8,7 @@ use crate::embedded::c_api::error::{
 use crate::embedded::c_api::result::GraphDbResultHandle;
 use crate::embedded::c_api::session::GraphDbSessionHandle;
 use crate::embedded::c_api::types::{graphdb_result_t, graphdb_session_t, graphdb_value_t};
-use crate::core::Value;
+use graphdb_core::Value;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr};
 use std::ptr;
@@ -178,7 +178,7 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
     use crate::embedded::c_api::types::graphdb_value_type_t;
 
     match c_value.type_ {
-        graphdb_value_type_t::GRAPHDB_NULL => Value::Null(crate::core::value::NullType::Null),
+        graphdb_value_type_t::GRAPHDB_NULL => Value::Null(graphdb_core::value::NullType::Null),
         graphdb_value_type_t::GRAPHDB_BOOL => Value::Bool(c_value.data.boolean),
         graphdb_value_type_t::GRAPHDB_INT => Value::Int(c_value.data.integer as i32),
         graphdb_value_type_t::GRAPHDB_FLOAT => Value::Float(c_value.data.floating as f32),
@@ -194,7 +194,7 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
                 Value::string(s)
             }
         }
-        _ => Value::Null(crate::core::value::NullType::Null),
+        _ => Value::Null(graphdb_core::value::NullType::Null),
     }
 }
 

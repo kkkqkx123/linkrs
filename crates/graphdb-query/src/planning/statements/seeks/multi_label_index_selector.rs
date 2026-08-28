@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::types::Expression;
+use graphdb_core::types::Expression;
 use crate::optimizer::cost::CostModelConfig;
 use crate::planning::statements::seeks::seek_strategy_base::IndexInfo;
 

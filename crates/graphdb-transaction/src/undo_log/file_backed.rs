@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use crate::core::types::UndoLogResult;
+use graphdb_core::types::UndoLogResult;
 use crate::undo_log::{UndoLogEntry, UndoTarget};
 use crate::wal::Timestamp;
 
@@ -90,7 +90,7 @@ impl FileBackedUndoLog {
     pub fn clear(&mut self) -> UndoLogResult<()> {
         if let Some(ref mut f) = self.file {
             f.set_len(0).map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to clear undo spill file: {error}"
                 ))
             })?;
@@ -150,7 +150,7 @@ impl FileBackedUndoLog {
         start_index: usize,
     ) -> UndoLogResult<()> {
         if start_index > self.total_entries {
-            return Err(crate::core::types::UndoLogError::UndoFailed(format!(
+            return Err(graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Invalid undo log rollback index: {}, undo log length: {}",
                 start_index, self.total_entries
             )));
@@ -160,7 +160,7 @@ impl FileBackedUndoLog {
 
         for _ in 0..entries_to_undo {
             if !self.execute_next(graph, ts)? {
-                return Err(crate::core::types::UndoLogError::UndoFailed(
+                return Err(graphdb_core::types::UndoLogError::UndoFailed(
                     "Unexpected: not enough entries during undo".to_string(),
                 ));
             }
@@ -175,21 +175,21 @@ impl FileBackedUndoLog {
 
         if self.file.is_none() {
             self.create_file().map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to create undo spill file: {error}"
                 ))
             })?;
         }
 
         let file = self.file.as_mut().ok_or_else(|| {
-            crate::core::types::UndoLogError::UndoFailed(
+            graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo spill file was not initialized".to_string(),
             )
         })?;
 
         // Compute new block offset (end of current file)
         let new_offset = file.seek(SeekFrom::End(0)).map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to seek undo spill file: {error}"
             ))
         })?;
@@ -197,7 +197,7 @@ impl FileBackedUndoLog {
         // Append new block
         file.write_all(&block_data).map_err(|error| {
             let _ = file.set_len(new_offset);
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to write undo spill block: {error}"
             ))
         })?;
@@ -228,14 +228,14 @@ impl FileBackedUndoLog {
         let last_offset = self.block_offsets[last_idx];
 
         if self.total_entries == 0 {
-            return Err(crate::core::types::UndoLogError::UndoFailed(
+            return Err(graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo log has a file block but no entries".to_string(),
             ));
         }
 
         // Read last block
         file.seek(SeekFrom::Start(last_offset)).map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to seek undo spill block: {error}"
             ))
         })?;
@@ -243,7 +243,7 @@ impl FileBackedUndoLog {
         let file_len = file
             .metadata()
             .map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to inspect undo spill file: {error}"
                 ))
             })?
@@ -251,25 +251,25 @@ impl FileBackedUndoLog {
 
         let mut count_buf = [0u8; 8];
         file.read_exact(&mut count_buf).map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to read undo spill block header: {error}"
             ))
         })?;
         let entry_count = u64::from_le_bytes(count_buf);
         if entry_count == 0 {
-            return Err(crate::core::types::UndoLogError::UndoFailed(
+            return Err(graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo spill block contains no entries".to_string(),
             ));
         }
 
         let entry_start = file.stream_position().map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to locate undo spill payload: {error}"
             ))
         })?;
         let remaining = file_len.saturating_sub(entry_start);
         if entry_count > remaining / 8 {
-            return Err(crate::core::types::UndoLogError::UndoFailed(
+            return Err(graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo spill block has an invalid entry count".to_string(),
             ));
         }
@@ -277,34 +277,34 @@ impl FileBackedUndoLog {
         let mut entries = Vec::new();
         for _ in 0..entry_count {
             file.read_exact(&mut count_buf).map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to read undo entry length: {error}"
                 ))
             })?;
             let len_u64 = u64::from_le_bytes(count_buf);
             let entry_start = file.stream_position().map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to locate undo entry: {error}"
                 ))
             })?;
             if len_u64 > file_len.saturating_sub(entry_start) {
-                return Err(crate::core::types::UndoLogError::UndoFailed(
+                return Err(graphdb_core::types::UndoLogError::UndoFailed(
                     "Undo spill entry exceeds the file boundary".to_string(),
                 ));
             }
             let len = usize::try_from(len_u64).map_err(|_| {
-                crate::core::types::UndoLogError::UndoFailed(
+                graphdb_core::types::UndoLogError::UndoFailed(
                     "Undo spill entry is too large for this platform".to_string(),
                 )
             })?;
             let mut entry_buf = vec![0u8; len];
             file.read_exact(&mut entry_buf).map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to read undo entry: {error}"
                 ))
             })?;
             let entry = postcard::from_bytes(&entry_buf).map_err(|error| {
-                crate::core::types::UndoLogError::UndoFailed(format!(
+                graphdb_core::types::UndoLogError::UndoFailed(format!(
                     "Failed to deserialize undo entry: {error}"
                 ))
             })?;
@@ -312,26 +312,26 @@ impl FileBackedUndoLog {
         }
 
         let block_end = file.stream_position().map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to locate undo spill block end: {error}"
             ))
         })?;
         if block_end != file_len {
-            return Err(crate::core::types::UndoLogError::UndoFailed(
+            return Err(graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo spill block contains trailing data".to_string(),
             ));
         }
 
         // The newest entry is the last one in the block
         let newest = entries.pop().ok_or_else(|| {
-            crate::core::types::UndoLogError::UndoFailed(
+            graphdb_core::types::UndoLogError::UndoFailed(
                 "Undo spill block contains no decoded entries".to_string(),
             )
         })?;
 
         // Truncate only after the whole block has been decoded successfully.
         file.set_len(last_offset).map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to remove consumed undo spill block: {error}"
             ))
         })?;
@@ -356,7 +356,7 @@ fn serialize_block(entries: &[UndoLogEntry]) -> UndoLogResult<Vec<u8>> {
     let mut serialized_count = 0u64;
     for entry in entries {
         let bytes = postcard::to_stdvec(entry).map_err(|error| {
-            crate::core::types::UndoLogError::UndoFailed(format!(
+            graphdb_core::types::UndoLogError::UndoFailed(format!(
                 "Failed to serialize undo entry: {error}"
             ))
         })?;
@@ -379,7 +379,7 @@ impl Drop for FileBackedUndoLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{
+    use graphdb_core::types::{
         ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, UndoLogError, VertexIdentifier,
     };
     use crate::undo_log::UpdateVertexPropUndo;
@@ -447,7 +447,7 @@ mod tests {
             &self,
             vertex: VertexIdentifier,
             col_id: ColumnId,
-            value: crate::core::Value,
+            value: graphdb_core::Value,
             ts: Timestamp,
         ) -> UndoLogResult<()> {
             self.record(format!(
@@ -459,7 +459,7 @@ mod tests {
             &self,
             edge_id: EdgeIdentifier,
             col_id: ColumnId,
-            value: crate::core::Value,
+            value: graphdb_core::Value,
             ts: Timestamp,
         ) -> UndoLogResult<()> {
             self.record(format!(
@@ -578,7 +578,7 @@ mod tests {
             v_label: 7,
             vid: VertexId::from_int64(99),
             col_id: ColumnId(4),
-            old_value: crate::core::Value::BigInt(42),
+            old_value: graphdb_core::Value::BigInt(42),
         }))
         .expect("Failed to append undo log");
 

@@ -2,14 +2,14 @@
 //!
 //! Supports efficient high-volume data import
 
-pub use crate::core::BatchConfig;
-use crate::core::{
+pub use graphdb_core::BatchConfig;
+use graphdb_core::{
     BatchError as CoreBatchError, BatchOperation as CoreBatchOperation,
     BatchResult as CoreBatchResult,
 };
-use crate::core::{CoreError, CoreResult};
+use graphdb_core::{CoreError, CoreResult};
 use crate::embedded::session::Session;
-use crate::core::{Edge, Vertex};
+use graphdb_core::{Edge, Vertex};
 use crate::storage::StorageClient;
 
 /// Batch Inserter
@@ -133,11 +133,11 @@ pub enum BatchItemType {
     Edge,
 }
 
-impl From<crate::core::BatchItemType> for BatchItemType {
-    fn from(item_type: crate::core::BatchItemType) -> Self {
+impl From<graphdb_core::BatchItemType> for BatchItemType {
+    fn from(item_type: graphdb_core::BatchItemType) -> Self {
         match item_type {
-            crate::core::BatchItemType::Vertex => BatchItemType::Vertex,
-            crate::core::BatchItemType::Edge => BatchItemType::Edge,
+            graphdb_core::BatchItemType::Vertex => BatchItemType::Vertex,
+            graphdb_core::BatchItemType::Edge => BatchItemType::Edge,
         }
     }
 }
@@ -296,7 +296,7 @@ mod tests {
             failed_count: 1,
             errors: vec![CoreBatchError {
                 index: 0,
-                item_type: crate::core::BatchItemType::Vertex,
+                item_type: graphdb_core::BatchItemType::Vertex,
                 message: "Test error".to_string(),
             }],
         };

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use graphdb_core::{Edge, Tag, Value, Vertex};
-use graphdb_storage::core::error::storage::StorageErrorKind;
-use graphdb_storage::core::StorageError;
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::StorageError;
 use graphdb_storage::{StorageClient, StorageWriter};
 
 use crate::converter::convert_value;

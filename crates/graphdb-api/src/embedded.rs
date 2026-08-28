@@ -54,7 +54,7 @@ pub use statistics::QueryStatistics;
 pub use transaction::{Transaction, TransactionConfig, TransactionInfo};
 
 // Re-export SessionStatistics from core
-pub use crate::core::SessionStatistics;
+pub use graphdb_core::SessionStatistics;
 
 // C API re-export
 pub use c_api::{
@@ -67,4 +67,4 @@ pub use c_api::{
 };
 
 // Error type
-pub use crate::core::CoreError as EmbeddedError;
+pub use crate::api_core::error::CoreError as EmbeddedError;

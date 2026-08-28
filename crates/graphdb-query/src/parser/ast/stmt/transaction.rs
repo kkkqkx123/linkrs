@@ -1,5 +1,5 @@
-use crate::core::types::expr::ContextualExpression;
-use crate::core::types::Span;
+use graphdb_core::types::expr::ContextualExpression;
+use graphdb_core::types::Span;
 
 /// `BEGIN [TRANSACTION] [READ ONLY | READ WRITE]` statement.
 #[derive(Debug, Clone, PartialEq)]

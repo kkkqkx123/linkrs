@@ -41,8 +41,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use crate::core::{StorageError, StorageResult, Value};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::{Csr, CsrBase, Nbr};
 
@@ -624,7 +624,7 @@ fn decode_value(data: &[u8], pos: &mut usize) -> StorageResult<Value> {
             let year = i32::from_le_bytes(read_exact(pos, 4)?.try_into().unwrap());
             let month = u32::from_le_bytes(read_exact(pos, 4)?.try_into().unwrap());
             let day = u32::from_le_bytes(read_exact(pos, 4)?.try_into().unwrap());
-            Value::Date(crate::core::DateValue { year, month, day })
+            Value::Date(graphdb_core::DateValue { year, month, day })
         }
         other => {
             return Err(StorageError::deserialize_error(format!(
@@ -649,7 +649,7 @@ fn encode_props(buf: &mut Vec<u8>, props: &[(String, Value)]) -> StorageResult<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::cold::ColdSnapshot;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
@@ -662,8 +662,8 @@ mod tests {
             src_label: 0,
             dst_label: 0,
             properties: vec![
-                StoragePropertyDef::new("weight".to_string(), crate::core::types::DataType::Double),
-                StoragePropertyDef::new("name".to_string(), crate::core::types::DataType::String),
+                StoragePropertyDef::new("weight".to_string(), graphdb_core::types::DataType::Double),
+                StoragePropertyDef::new("name".to_string(), graphdb_core::types::DataType::String),
             ],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -748,7 +748,7 @@ mod tests {
         assert_eq!(loaded.added.len(), 1);
         assert_eq!(loaded.added[0].src_internal, 0);
         let (dst, _) = TimeTravelEdgeStore::decode_edge_endpoint(loaded.added[0].neighbor);
-        assert_eq!(dst, crate::core::types::VertexId::from_int64(2));
+        assert_eq!(dst, graphdb_core::types::VertexId::from_int64(2));
 
         // Corrupted payload must fail CRC verification.
         let mut corrupted = std::fs::read(&path).unwrap();
@@ -805,12 +805,12 @@ mod tests {
 
         assert!(merged.has_property_index());
         let index = merged.property_index().unwrap();
-        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         let key = codec.encode(&Value::Double(9.0)).unwrap();
         let hits = index.lookup(
             "weight",
             &key,
-            &crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
+            &graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].src_internal, 5);

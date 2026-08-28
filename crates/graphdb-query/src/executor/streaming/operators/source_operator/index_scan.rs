@@ -1,9 +1,9 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::core::error::QueryError;
-use crate::core::types::MAX_TIMESTAMP;
-use crate::core::wal::EntityRef;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::MAX_TIMESTAMP;
+use graphdb_core::wal::EntityRef;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::state::GlobalState;
@@ -330,11 +330,11 @@ pub(crate) fn resolve_edge_type_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::VertexId;
-    use crate::core::types::EdgeTypeInfo;
-    use crate::core::Edge;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::types::EdgeTypeInfo;
+    use graphdb_core::Edge;
 
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::source_operator::{
         OperatorConfig, PhysicalOperatorId,

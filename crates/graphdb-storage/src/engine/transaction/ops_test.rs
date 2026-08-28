@@ -5,8 +5,8 @@ mod tests {
 
     use parking_lot::RwLock;
 
-    use crate::core::types::{LabelId, VertexId};
-    use crate::core::Value;
+    use graphdb_core::types::{LabelId, VertexId};
+    use graphdb_core::Value;
     use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::engine::data_store::EdgeTableKey;
     use crate::types::StoragePropertyDef;
@@ -23,8 +23,8 @@ mod tests {
             label_id: label,
             label_name: name.to_string(),
             properties: vec![
-                StoragePropertyDef::new("name".to_string(), crate::core::DataType::String),
-                StoragePropertyDef::new("age".to_string(), crate::core::DataType::BigInt),
+                StoragePropertyDef::new("name".to_string(), graphdb_core::DataType::String),
+                StoragePropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
             ],
             primary_key_index: 0,
             schema_version: 1,
@@ -45,7 +45,7 @@ mod tests {
             dst_label,
             properties: vec![StoragePropertyDef::new(
                 "since".to_string(),
-                crate::core::DataType::Int,
+                graphdb_core::DataType::Int,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -526,7 +526,7 @@ mod tests {
             table
                 .add_property(crate::types::StoragePropertyDef::new(
                     "name".to_string(),
-                    crate::core::DataType::String,
+                    graphdb_core::DataType::String,
                 ))
                 .unwrap();
         }
@@ -575,7 +575,7 @@ mod tests {
             table
                 .add_property(StoragePropertyDef::new(
                     "email".to_string(),
-                    crate::core::DataType::String,
+                    graphdb_core::DataType::String,
                 ))
                 .unwrap();
         }

@@ -2,10 +2,10 @@
 //!
 //! Query planning for statements that involve the GROUP BY clause
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::Expression;
-use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::AggregateFunction;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::AggregateFunction;
 use crate::parser::ast::{GroupingType, Stmt};
 use crate::planning::plan::core::nodes::{
     AggregateNode, FilterNode, ProjectNode, ScanVerticesNode,
@@ -422,7 +422,7 @@ impl GroupByPlanner {
             };
             let expr_id = expr_ctx.register_expression(ExpressionMeta::new(expression));
             let ctx_expr = ContextualExpression::new(expr_id, expr_ctx.clone());
-            yield_columns.push(crate::core::YieldColumn {
+            yield_columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: property.clone(),
                 is_matched: false,

@@ -2,7 +2,7 @@
 //!
 //! Provides transport layer independent sync system management operations.
 
-use crate::sync::SyncManager;
+use graphdb_sync::SyncManager;
 use std::sync::Arc;
 
 /// Sync Management API – Core Layer
@@ -37,7 +37,7 @@ impl SyncApi {
     }
 
     /// Get durable outbox delivery statistics.
-    pub fn outbox_stats(&self) -> crate::sync::OutboxStats {
+    pub fn outbox_stats(&self) -> graphdb_sync::OutboxStats {
         self.sync_manager.outbox_stats()
     }
 
@@ -50,13 +50,13 @@ impl SyncApi {
 
     /// Get vector coordinator
     #[cfg(feature = "vector")]
-    pub fn vector_coordinator(&self) -> Option<&Arc<crate::sync::VectorSyncCoordinator>> {
+    pub fn vector_coordinator(&self) -> Option<&Arc<graphdb_sync::VectorSyncCoordinator>> {
         self.sync_manager.vector_coordinator()
     }
 
     /// Get sync coordinator
     #[cfg(feature = "fulltext-search")]
-    pub fn sync_coordinator(&self) -> &Arc<crate::sync::SyncCoordinator> {
+    pub fn sync_coordinator(&self) -> &Arc<graphdb_sync::SyncCoordinator> {
         self.sync_manager.sync_coordinator()
     }
 }

@@ -5,7 +5,7 @@
 //! at runtime is prohibited — all Variable references are resolved through
 //! the layout.
 
-use crate::core::Value;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
@@ -135,7 +135,7 @@ impl ExpressionContext for ValueRowContext {
 
     fn execute_exists(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
     ) -> Result<bool, ExpressionError> {
         self.subquery_executor
             .as_ref()
@@ -147,7 +147,7 @@ impl ExpressionContext for ValueRowContext {
 
     fn contains_subquery(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
         value: &Value,
     ) -> Result<Value, ExpressionError> {
         if value.is_null() {
@@ -266,7 +266,7 @@ impl ExpressionContext for BorrowedRowContext<'_> {
 
     fn execute_exists(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
     ) -> Result<bool, ExpressionError> {
         self.subquery_executor
             .as_ref()
@@ -278,7 +278,7 @@ impl ExpressionContext for BorrowedRowContext<'_> {
 
     fn contains_subquery(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
         value: &Value,
     ) -> Result<Value, ExpressionError> {
         if value.is_null() {
@@ -388,7 +388,7 @@ impl ExpressionContext for SplitRowContext<'_> {
 
     fn execute_exists(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
     ) -> Result<bool, ExpressionError> {
         let mut row = self.left.to_vec();
         row.extend_from_slice(self.right);
@@ -402,7 +402,7 @@ impl ExpressionContext for SplitRowContext<'_> {
 
     fn contains_subquery(
         &mut self,
-        body: &crate::core::types::expr::SubqueryBody,
+        body: &graphdb_core::types::expr::SubqueryBody,
         value: &Value,
     ) -> Result<Value, ExpressionError> {
         if value.is_null() {

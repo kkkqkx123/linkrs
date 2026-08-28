@@ -1,7 +1,7 @@
 //! Utility functions for converting streaming results to standard formats.
 
 use super::chunk::DataChunk;
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 use crate::data_set::DataSet;
 use crate::executor::base::ExecutionResult;
 
@@ -71,7 +71,7 @@ pub fn chunks_to_execution_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::streaming::chunk::DataChunk;
 
     fn create_test_chunk(rows: Vec<Vec<Value>>) -> DataChunk {

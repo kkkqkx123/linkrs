@@ -101,8 +101,8 @@ impl SlowQueryLogConfig {
     }
 
     /// Convert to SlowQueryConfig
-    pub fn to_slow_query_config(&self) -> crate::core::stats::SlowQueryConfig {
-        crate::core::stats::SlowQueryConfig {
+    pub fn to_slow_query_config(&self) -> graphdb_core::stats::SlowQueryConfig {
+        graphdb_core::stats::SlowQueryConfig {
             enabled: self.enabled,
             threshold_ms: self.threshold_ms,
             log_file_path: self.log_file_path.clone(),

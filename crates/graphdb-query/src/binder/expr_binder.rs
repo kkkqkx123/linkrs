@@ -7,9 +7,9 @@
 //! `ExpressionAnalysisContext`. It is a pure function from `Expression` →
 //! `DataType`, designed to be called from `Binder::bind_inner_expr()`.
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::DataType;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use graphdb_core::DataType;
 use crate::binder::scope::BinderScope;
 
 /// Stateless expression type deduction.
@@ -190,7 +190,7 @@ impl<'a> ExpressionBinder<'a> {
             common = if common == DataType::Unknown {
                 item_type
             } else {
-                crate::core::type_system::TypeUtils::get_common_type(&common, &item_type)
+                graphdb_core::type_system::TypeUtils::get_common_type(&common, &item_type)
             };
             if common == DataType::Empty {
                 return DataType::Unknown;
@@ -208,7 +208,7 @@ impl<'a> ExpressionBinder<'a> {
             common = if common == DataType::Unknown {
                 value_type
             } else {
-                crate::core::type_system::TypeUtils::get_common_type(&common, &value_type)
+                graphdb_core::type_system::TypeUtils::get_common_type(&common, &value_type)
             };
             if common == DataType::Empty {
                 return DataType::Unknown;

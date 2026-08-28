@@ -2,7 +2,7 @@
 //!
 //! Provide definitions for the planning nodes related to edge type management.
 
-use crate::core::types::PropertyDef;
+use graphdb_core::types::PropertyDef;
 use crate::define_plan_node;
 
 define_plan_node! {

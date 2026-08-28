@@ -5,8 +5,8 @@
 
 use super::super::{Csr, CsrBase, EdgeSchema, LabelId, Nbr, VertexId};
 use super::segment::CsrSegment;
-use crate::core::types::{EdgeId, Timestamp};
-use crate::core::StorageResult;
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::StorageResult;
 use crate::edge::PropertyTable;
 use std::collections::HashMap;
 
@@ -217,8 +217,8 @@ impl SnapshotBuilder {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use crate::core::types::Timestamp;
-    use crate::core::Value;
+    use graphdb_core::types::Timestamp;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use std::collections::HashMap;
 
@@ -230,7 +230,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

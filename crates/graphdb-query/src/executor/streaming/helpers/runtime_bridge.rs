@@ -6,7 +6,7 @@
 //! runtime-aware helper instead of a bare executor block-on.
 
 #[cfg(feature = "vector")]
-use crate::core::error::QueryError;
+use graphdb_core::error::QueryError;
 
 /// Drive `future` to completion on the calling thread, mapping both the
 /// bridging failure and the operation failure into a labeled query error.
@@ -18,7 +18,7 @@ where
     E: Send + std::fmt::Display,
 {
     let label = format!("{label} failed");
-    crate::sync::runtime::block_on_ambient(future)
+    graphdb_sync::runtime::block_on_ambient(future)
         .map_err(|error| QueryError::execution(format!("{label}: {error}")))?
         .map_err(|error| QueryError::execution(format!("{label}: {error}")))
 }

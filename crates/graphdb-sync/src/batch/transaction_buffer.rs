@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 
 use super::trait_def::BatchBuffer;
-use crate::core::types::TransactionId;
+use graphdb_core::types::TransactionId;
 use crate::batch::error::BatchResult;
 use crate::types::{IndexOpKey, IndexOperation};
 

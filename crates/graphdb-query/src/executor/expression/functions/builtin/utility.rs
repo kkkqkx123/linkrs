@@ -1,8 +1,8 @@
 //! Implementation of practical functions
 
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::ExpressionError;
 use serde_json::Value as JsonValue;
 
@@ -248,7 +248,7 @@ fn execute_json_build_array(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_object_keys(args: &[Value]) -> Result<Value, ExpressionError> {
-    use crate::core::value::list::List;
+    use graphdb_core::value::list::List;
 
     if args.is_empty() || args[0].is_null() {
         return Ok(Value::Null(NullType::Null));
@@ -446,7 +446,7 @@ fn execute_least(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_gen_random_uuid(_args: &[Value]) -> Result<Value, ExpressionError> {
-    use crate::core::value::uuid::UuidValue;
+    use graphdb_core::value::uuid::UuidValue;
     Ok(Value::Uuid(UuidValue::new_v4()))
 }
 

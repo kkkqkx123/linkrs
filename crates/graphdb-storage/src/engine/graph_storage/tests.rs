@@ -1,13 +1,13 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::core::types::{
+    use graphdb_core::types::{
         AutoCompactConfig, EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef,
         SpaceInfo, Timestamp, UserInfo, VertexId,
     };
-    use crate::core::vertex_edge_path::Tag;
-    use crate::core::DataType;
-    use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
+    use graphdb_core::vertex_edge_path::Tag;
+    use graphdb_core::DataType;
+    use graphdb_core::{Edge, EdgeDirection, RoleType, Value, Vertex};
     use crate::{
         GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
         StorageAdmin, StorageAuthOps, StorageCommitOps, StorageOperationContext,
@@ -55,7 +55,7 @@ mod tests {
     }
 
     fn setup_person_tag(storage: &mut GraphStorage) -> u32 {
-        let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
             PropertyDef::new("name".to_string(), DataType::String),
             PropertyDef::new("age".to_string(), DataType::BigInt),
         ]);
@@ -123,8 +123,8 @@ mod tests {
 
     #[test]
     fn vertex_column_stats_snapshot_matches_inserted_range() {
-        use crate::core::vertex_edge_path::{Tag, Vertex};
-        use crate::core::Value;
+        use graphdb_core::vertex_edge_path::{Tag, Vertex};
+        use graphdb_core::Value;
         use crate::stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
         use std::sync::Arc;
 
@@ -135,7 +135,7 @@ mod tests {
         // Insert 200 vertices with ages 1..=200.  The snapshot should
         // capture the true global min/max regardless of any sample window.
         let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
-            crate::core::types::TransactionId::from(1),
+            graphdb_core::types::TransactionId::from(1),
             10,
             false,
         ));
@@ -160,7 +160,7 @@ mod tests {
         }
         drop(writer);
         storage
-            .commit_staged_writes(crate::core::types::TransactionId::from(1), &[])
+            .commit_staged_writes(graphdb_core::types::TransactionId::from(1), &[])
             .expect("commit");
 
         // Read the snapshot via the trait.
@@ -184,8 +184,8 @@ mod tests {
 
     #[test]
     fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
-        use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
-        use crate::core::Value;
+        use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
+        use graphdb_core::Value;
         use crate::stats_reader::ColumnStatsReader;
 
         let mut storage = create_test_storage();
@@ -197,7 +197,7 @@ mod tests {
         // not populated until flush/compaction, so the snapshot should
         // gracefully return None rather than panicking.
         let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
-            crate::core::types::TransactionId::from(1),
+            graphdb_core::types::TransactionId::from(1),
             10,
             false,
         ));
@@ -259,7 +259,7 @@ mod tests {
             .unwrap();
         drop(writer);
         storage
-            .commit_staged_writes(crate::core::types::TransactionId::from(1), &[])
+            .commit_staged_writes(graphdb_core::types::TransactionId::from(1), &[])
             .expect("commit");
 
         // The edge columnar store is not populated until flush, so the
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
-        use crate::core::types::TransactionId;
+        use graphdb_core::types::TransactionId;
         use std::sync::{Arc, Barrier};
 
         let mut storage = create_test_storage();
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
-        use crate::core::types::TransactionId;
+        use graphdb_core::types::TransactionId;
 
         let mut storage = create_test_storage();
         setup_space(&mut storage);
@@ -496,7 +496,7 @@ mod tests {
         storage.create_space(&mut alpha).unwrap();
         storage.create_space(&mut beta).unwrap();
 
-        let tag = crate::core::types::TagInfo::new("Person".to_string())
+        let tag = graphdb_core::types::TagInfo::new("Person".to_string())
             .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]);
         let alpha_tag_id = storage.create_tag("alpha", &tag).unwrap();
         let beta_tag_id = storage.create_tag("beta", &tag).unwrap();
@@ -659,7 +659,7 @@ mod tests {
                 .save_to_disk()
                 .expect("Failed to persist base schema");
 
-            let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
                 PropertyDef::new("name".to_string(), DataType::String),
                 PropertyDef::new("age".to_string(), DataType::BigInt),
             ]);
@@ -914,7 +914,7 @@ mod tests {
 
         let vertex = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -961,7 +961,7 @@ mod tests {
 
         let vertex = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -980,7 +980,7 @@ mod tests {
 
         let updated = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("AliceUpdated")),
@@ -1025,7 +1025,7 @@ mod tests {
 
         let vertex = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -1043,7 +1043,7 @@ mod tests {
         let mut bound = storage.bind_auto_commit_context().unwrap();
         let updated = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -1658,7 +1658,7 @@ mod tests {
 
         let vertex = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("Alice"))]
                     .into_iter()
@@ -1685,7 +1685,7 @@ mod tests {
         for i in 1..=5 {
             let vertex = Vertex::new(
                 VertexId::from_int64(i),
-                vec![crate::core::vertex_edge_path::Tag::new(
+                vec![graphdb_core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
                     vec![
                         ("name".to_string(), Value::string(format!("Person{}", i))),
@@ -1715,7 +1715,7 @@ mod tests {
 
         let vertex = Vertex::new(
             VertexId::from_int64(101),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -1743,7 +1743,7 @@ mod tests {
             .map(|i| {
                 Vertex::new(
                     VertexId::from_int64(i),
-                    vec![crate::core::vertex_edge_path::Tag::new(
+                    vec![graphdb_core::vertex_edge_path::Tag::new(
                         "Person".to_string(),
                         vec![("name".to_string(), Value::string(format!("Person{}", i)))]
                             .into_iter()
@@ -1768,7 +1768,7 @@ mod tests {
         let vertices = vec![
             Vertex::new(
                 VertexId::from_int64(1),
-                vec![crate::core::vertex_edge_path::Tag::new(
+                vec![graphdb_core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
@@ -1777,7 +1777,7 @@ mod tests {
             ),
             Vertex::new(
                 VertexId::from_int64(1),
-                vec![crate::core::vertex_edge_path::Tag::new(
+                vec![graphdb_core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Duplicate"))]
                         .into_iter()
@@ -1800,7 +1800,7 @@ mod tests {
     fn insert_test_vertex(storage: &mut GraphStorage, id: i64, name: &str) {
         let vertex = Vertex::new(
             VertexId::from_int64(id),
-            vec![crate::core::vertex_edge_path::Tag::new(
+            vec![graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string(name))]
                     .into_iter()
@@ -1817,7 +1817,7 @@ mod tests {
         setup_person_tag(&mut storage);
 
         let edge_type =
-            crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
+            graphdb_core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
                 PropertyDef::new("weight".to_string(), DataType::BigInt),
             ]);
         storage
@@ -2307,7 +2307,7 @@ mod tests {
         let mut space = SpaceInfo::new("str_space".to_string()).with_vid_type(DataType::String);
         storage.create_space(&mut space).unwrap();
 
-        let tag = crate::core::types::TagInfo::new("Node".to_string())
+        let tag = graphdb_core::types::TagInfo::new("Node".to_string())
             .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]);
         storage.create_tag("str_space", &tag).unwrap();
 
@@ -2826,7 +2826,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<usize, crate::core::StorageError>(
+                Ok::<usize, graphdb_core::StorageError>(
                     tables.values().map(|t| t.total_count()).sum::<usize>(),
                 )
             })
@@ -2840,7 +2840,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<usize, crate::core::StorageError>(
+                Ok::<usize, graphdb_core::StorageError>(
                     tables.values().map(|t| t.total_count()).sum::<usize>(),
                 )
             })
@@ -2933,7 +2933,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<(usize, usize), crate::core::StorageError>(
+                Ok::<(usize, usize), graphdb_core::StorageError>(
                     tables
                         .values()
                         .map(|t| t.id_hole_stats(u64::MAX))
@@ -2953,7 +2953,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<(usize, usize), crate::core::StorageError>(
+                Ok::<(usize, usize), graphdb_core::StorageError>(
                     tables
                         .values()
                         .map(|t| t.id_hole_stats(u64::MAX))
@@ -2991,7 +2991,7 @@ mod tests {
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
         let edge_type =
-            crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
+            graphdb_core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
                 PropertyDef::new("weight".to_string(), DataType::BigInt),
             ]);
         storage.create_edge_type("test_space", &edge_type).unwrap();
@@ -3096,7 +3096,7 @@ mod tests {
         let mut storage = create_test_storage();
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
-        let edge_type = crate::core::types::EdgeTypeInfo::new("KNOWS".to_string())
+        let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string())
             .with_src_tag("Person".to_string())
             .with_dst_tag("Person".to_string())
             .with_properties(vec![
@@ -3192,7 +3192,7 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
-        let edge_type = crate::core::types::EdgeTypeInfo::new("KNOWS".to_string())
+        let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string())
             .with_src_tag("Person".to_string())
             .with_dst_tag("Person".to_string())
             .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
@@ -3355,7 +3355,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<Timestamp, crate::core::StorageError>(
+                Ok::<Timestamp, graphdb_core::StorageError>(
                     tables
                         .get(&label)
                         .map(|t| t.min_active_snapshot_ts())
@@ -3377,7 +3377,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<Timestamp, crate::core::StorageError>(
+                Ok::<Timestamp, graphdb_core::StorageError>(
                     tables
                         .get(&label)
                         .map(|t| t.min_active_snapshot_ts())
@@ -3397,7 +3397,7 @@ mod tests {
             .ctx
             .data_store()
             .with_vertex_tables(|tables| {
-                Ok::<Timestamp, crate::core::StorageError>(
+                Ok::<Timestamp, graphdb_core::StorageError>(
                     tables
                         .get(&label)
                         .map(|t| t.min_active_snapshot_ts())
@@ -3498,7 +3498,7 @@ mod tests {
 
         // Run a compact maintenance pass via the public admin API.
         storage
-            .compact(&crate::core::types::CompactConfig {
+            .compact(&graphdb_core::types::CompactConfig {
                 enable_structure_compaction: true,
                 ..Default::default()
             })
@@ -3534,7 +3534,7 @@ mod tests {
     // ==================== SERIAL Columns ====================
 
     fn setup_serial_person_tag(storage: &mut GraphStorage) -> u32 {
-        let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
             PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
             PropertyDef::new("name".to_string(), DataType::String),
         ]);
@@ -3642,7 +3642,7 @@ mod tests {
         setup_space(&mut storage);
         setup_serial_person_tag(&mut storage);
 
-        let city = crate::core::types::TagInfo::new("City".to_string()).with_properties(vec![
+        let city = graphdb_core::types::TagInfo::new("City".to_string()).with_properties(vec![
             PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
             PropertyDef::new("name".to_string(), DataType::String),
         ]);
@@ -3655,7 +3655,7 @@ mod tests {
         storage.create_space(&mut second_space).unwrap();
 
         let second_person =
-            crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
                 PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
                 PropertyDef::new("name".to_string(), DataType::String),
             ]);
@@ -3712,7 +3712,7 @@ mod tests {
         setup_person_tag(&mut storage);
 
         let edge_type =
-            crate::core::types::EdgeTypeInfo::new("KNOWS".to_string()).with_properties(vec![
+            graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string()).with_properties(vec![
                 PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
             ]);
         storage
@@ -3753,7 +3753,7 @@ mod tests {
         let mut storage = create_test_storage();
         setup_space(&mut storage);
 
-        let with_default = crate::core::types::TagInfo::new("BadDefault".to_string())
+        let with_default = graphdb_core::types::TagInfo::new("BadDefault".to_string())
             .with_properties(vec![PropertyDef::new("id".to_string(), DataType::BigInt)
                 .with_serial(true)
                 .with_default(Some(Value::BigInt(1)))]);
@@ -3762,7 +3762,7 @@ mod tests {
             .expect_err("SERIAL with DEFAULT must be rejected");
         assert!(error.to_string().contains("DEFAULT"));
 
-        let two_serials = crate::core::types::TagInfo::new("BadMultiple".to_string())
+        let two_serials = graphdb_core::types::TagInfo::new("BadMultiple".to_string())
             .with_properties(vec![
                 PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
                 PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),

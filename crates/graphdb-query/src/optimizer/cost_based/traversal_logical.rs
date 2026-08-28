@@ -106,12 +106,12 @@ mod tests {
     }
 
     fn filter_over(node: LogicalNodeEnum) -> LogicalNodeEnum {
-        use crate::core::types::expr::ExpressionId;
+        use graphdb_core::types::expr::ExpressionId;
 
-        let condition = crate::core::types::expr::ContextualExpression::new(
+        let condition = graphdb_core::types::expr::ContextualExpression::new(
             ExpressionId(0),
             std::sync::Arc::new(
-                crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
             ),
         );
         LogicalNodeEnum::Filter(LogicalFilterNode {

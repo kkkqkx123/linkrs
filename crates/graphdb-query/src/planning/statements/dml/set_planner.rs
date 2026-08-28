@@ -2,8 +2,8 @@
 //!
 //! Query planning for processing SET statements (set properties on vertices/edges)
 
-use crate::core::types::{ContextualExpression, ExpressionMeta};
-use crate::core::Expression;
+use graphdb_core::types::{ContextualExpression, ExpressionMeta};
+use graphdb_core::Expression;
 use crate::parser::ast::{SetStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,

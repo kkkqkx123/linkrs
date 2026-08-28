@@ -3,11 +3,11 @@
 //! Provide functions for manipulating vertices and edges, including id, tags, labels, properties, type, src, dst, and rank.
 //! Also includes graph traversal functions: neighbors, degree, shortest_path.
 
-use crate::core::types::VertexId;
-use crate::core::value::list::List;
-use crate::core::value::NullType;
-use crate::core::vertex_edge_path::Vertex;
-use crate::core::Value;
+use graphdb_core::types::VertexId;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::vertex_edge_path::Vertex;
+use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::ExpressionError;
 
@@ -518,7 +518,7 @@ fn execute_out_edges_with_storage(
             "The out_edges function takes 1 argument",
         ));
     }
-    use crate::core::types::EdgeDirection;
+    use graphdb_core::types::EdgeDirection;
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
     let edges = reader
@@ -543,7 +543,7 @@ fn execute_in_edges_with_storage(
             "The in_edges function takes 1 argument",
         ));
     }
-    use crate::core::types::EdgeDirection;
+    use graphdb_core::types::EdgeDirection;
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
     let edges = reader
@@ -887,7 +887,7 @@ fn execute_pagerank_with_storage(
     for vid in &vertex_ids {
         let reader = storage.storage.read();
         let edges = reader
-            .get_node_edges(&storage.space, vid, crate::core::types::EdgeDirection::Out)
+            .get_node_edges(&storage.space, vid, graphdb_core::types::EdgeDirection::Out)
             .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
         drop(reader);
 
@@ -950,8 +950,8 @@ fn execute_pagerank_with_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
-    use crate::core::vertex_edge_path::{Edge, Tag};
+    use graphdb_core::types::VertexId;
+    use graphdb_core::vertex_edge_path::{Edge, Tag};
     use std::collections::HashMap;
 
     fn create_test_vertex() -> Vertex {

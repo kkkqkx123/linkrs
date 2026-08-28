@@ -19,9 +19,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::ContextualExpression;
-use crate::core::Expression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
@@ -601,10 +601,10 @@ fn merge_requirement(passed: &mut Vec<PropertyRequirement>, req: &PropertyRequir
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::operators::BinaryOperator;
-    use crate::core::{Value, YieldColumn};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::{Value, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::{
         GetNeighborsNode, GetVerticesNode, ScanVerticesNode,
     };

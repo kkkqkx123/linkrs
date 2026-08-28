@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::Value;
+use graphdb_core::Value;
 
 use super::*;
 

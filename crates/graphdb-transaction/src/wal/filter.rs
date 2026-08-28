@@ -2,8 +2,8 @@
 //!
 //! Provides filtering of WAL intents for specific index rebuild operations.
 
-use crate::core::types::CommitLsn;
-use crate::core::wal::OutboxIntent;
+use graphdb_core::types::CommitLsn;
+use graphdb_core::wal::OutboxIntent;
 
 use super::commit::CommittedWalTransaction;
 
@@ -58,8 +58,8 @@ pub fn filter_intents_for_indexes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{IndexGeneration, TransactionId};
-    use crate::core::wal::IndexMutation;
+    use graphdb_core::types::{IndexGeneration, TransactionId};
+    use graphdb_core::wal::IndexMutation;
 
     #[test]
     fn test_filter_intents_by_lsn_range() {
@@ -152,8 +152,8 @@ mod tests {
     }
 
     fn create_test_intent(txn_id: TransactionId, lsn: u64, sequence: u32) -> OutboxIntent {
-        use crate::core::types::{IdempotencyKey, OrderingKey, TargetId, VertexId};
-        use crate::core::wal::EntityRef;
+        use graphdb_core::types::{IdempotencyKey, OrderingKey, TargetId, VertexId};
+        use graphdb_core::wal::EntityRef;
 
         OutboxIntent {
             wire_version: 1,
@@ -165,7 +165,7 @@ mod tests {
                 index_id: 1,
                 index_generation: IndexGeneration::new(1),
                 entity_ref: EntityRef::Vertex(VertexId::from_int64(lsn as i64)),
-                operation: crate::core::wal::IndexOperation::Upsert,
+                operation: graphdb_core::wal::IndexOperation::Upsert,
                 document_or_vector: vec![1, 2, 3],
                 idempotency_key: IdempotencyKey::new(format!("{}-{}", lsn, sequence)).unwrap(),
                 ordering_key: OrderingKey::new(format!("index-1-vertex-{}", lsn)).unwrap(),

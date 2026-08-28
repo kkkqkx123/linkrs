@@ -1,7 +1,7 @@
 //! Binary serialization helpers for `EntityRef` values.
 
-use crate::core::types::storage_ids::VertexId;
-use crate::core::wal::EntityRef;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::wal::EntityRef;
 
 pub(crate) fn write_entity_ref<W: std::io::Write>(
     writer: &mut W,

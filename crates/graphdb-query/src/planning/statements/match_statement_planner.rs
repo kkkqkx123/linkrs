@@ -9,7 +9,7 @@
 //!   - LIMIT/SKIP – Pagination options
 //!   - Selection of intelligent scanning strategies (index scanning, attribute scanning, full table scanning)
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::binder::validation::CypherClauseKind;
 use crate::binder::validation::ValidationInfo;
 use crate::binder::BoundStatement;

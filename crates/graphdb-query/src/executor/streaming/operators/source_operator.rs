@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
-use crate::core::Value;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -68,7 +68,7 @@ pub enum SourceOperatorKind {
     /// (i.e. once per execution) so volatile expressions such as `now()`
     /// are resolved at execution time.
     StandaloneValues {
-        values: Vec<Vec<crate::core::types::expr::ContextualExpression>>,
+        values: Vec<Vec<graphdb_core::types::expr::ContextualExpression>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
@@ -489,7 +489,7 @@ impl SourceOperator {
                                     .slot_id(name)
                                     .and_then(|slot| row.get(slot).cloned())
                                     .unwrap_or_else(|| {
-                                        Value::Null(crate::core::value::NullType::Null)
+                                        Value::Null(graphdb_core::value::NullType::Null)
                                     })
                             })
                             .collect();
@@ -564,7 +564,7 @@ impl SourceOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
@@ -755,10 +755,10 @@ mod tests {
 
     #[test]
     fn get_edges_projected_filters_edge_properties() {
-        use crate::core::Edge;
+        use graphdb_core::Edge;
         let mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
-        let src = crate::core::types::storage_ids::VertexId::from_int64(1);
-        let dst = crate::core::types::storage_ids::VertexId::from_int64(2);
+        let src = graphdb_core::types::storage_ids::VertexId::from_int64(1);
+        let dst = graphdb_core::types::storage_ids::VertexId::from_int64(2);
         mock.set_edges(vec![Edge {
             src,
             dst,
@@ -899,8 +899,8 @@ mod tests {
 
     #[test]
     fn storage_backed_source_reset_reopens_and_repulls() {
-        use crate::core::types::storage_ids::VertexId;
-        use crate::core::Edge;
+        use graphdb_core::types::storage_ids::VertexId;
+        use graphdb_core::Edge;
         use crate::storage::MockStorage;
 
         let mock = MockStorage::new().expect("MockStorage should be created");

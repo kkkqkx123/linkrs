@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::SerializableExpression;
-use crate::core::YieldColumn;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::SerializableExpression;
+use graphdb_core::YieldColumn;
 use crate::define_plan_node_with_deps;
 use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
 
@@ -112,9 +112,9 @@ impl ProjectNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::ExpressionMeta;
-    use crate::core::types::ContextualExpression;
-    use crate::core::Expression;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use std::sync::Arc;
     use ExpressionAnalysisContext;
 

@@ -23,7 +23,7 @@ pub mod query_manager;
 // Re-export DataSet for convenience
 pub use data_set::DataSet;
 // Re-export error types from core module
-pub use crate::core::{DBResult, QueryError};
+pub use graphdb_core::{DBResult, QueryError};
 // Re-export execution result from executor module
 pub use executor::base::ExecutionResult;
 // Re-export QueryPipelineManager
@@ -35,10 +35,6 @@ pub use query_manager::{QueryInfo, QueryManager, QueryStats, QueryStatus};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;
 
-pub use graphdb_core::core;
-pub use graphdb_core::utils;
-pub use graphdb_search::search;
-pub use graphdb_sync::sync;
 
 pub mod storage {
     pub use graphdb_storage::*;

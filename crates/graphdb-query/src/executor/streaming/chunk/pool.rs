@@ -1,8 +1,8 @@
 //! Pool of recycled row/column buffers for DataChunk construction.
 
 use super::typed::{TypedColumn, TypedKind};
-use crate::core::value::decimal128::Decimal128Value;
-use crate::core::Value;
+use graphdb_core::value::decimal128::Decimal128Value;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 const ROW_POOL_MAX_SIZE: usize = 8;

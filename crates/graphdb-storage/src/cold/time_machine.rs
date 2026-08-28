@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::core::types::{LabelId, Timestamp};
-use crate::core::StorageResult;
+use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::StorageResult;
 
 use super::ColdSnapshot;
 
@@ -176,7 +176,7 @@ fn collect_lkcs_into(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
@@ -189,7 +189,7 @@ mod tests {
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -254,7 +254,7 @@ mod tests {
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

@@ -23,8 +23,8 @@
 //! values for constant folding or index selection, so parameterization does
 //! not degrade plan quality — the same rationale that excludes read queries.
 
-use crate::core::types::expr::{ContextualExpression, Expression};
-use crate::core::Value;
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::Value;
 use crate::parser::ast::Stmt;
 
 mod delete;
@@ -121,14 +121,14 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
             // statement falls back instead of producing a broken template.
             if matches!(
                 op,
-                crate::core::types::operators::BinaryOperator::In
-                    | crate::core::types::operators::BinaryOperator::NotIn
-                    | crate::core::types::operators::BinaryOperator::Subscript
-                    | crate::core::types::operators::BinaryOperator::Attribute
-                    | crate::core::types::operators::BinaryOperator::JsonGet
-                    | crate::core::types::operators::BinaryOperator::JsonGetText
-                    | crate::core::types::operators::BinaryOperator::JsonPathGet
-                    | crate::core::types::operators::BinaryOperator::JsonPathGetText
+                graphdb_core::types::operators::BinaryOperator::In
+                    | graphdb_core::types::operators::BinaryOperator::NotIn
+                    | graphdb_core::types::operators::BinaryOperator::Subscript
+                    | graphdb_core::types::operators::BinaryOperator::Attribute
+                    | graphdb_core::types::operators::BinaryOperator::JsonGet
+                    | graphdb_core::types::operators::BinaryOperator::JsonGetText
+                    | graphdb_core::types::operators::BinaryOperator::JsonPathGet
+                    | graphdb_core::types::operators::BinaryOperator::JsonPathGetText
             ) {
                 return None;
             }
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn skips_non_roundtrippable_binary_operators() {
-        use crate::core::types::operators::BinaryOperator;
+        use graphdb_core::types::operators::BinaryOperator;
         let cases = [
             BinaryOperator::In,
             BinaryOperator::NotIn,

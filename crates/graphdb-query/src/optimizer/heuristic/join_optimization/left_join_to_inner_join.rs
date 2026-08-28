@@ -23,9 +23,9 @@
 //! The filter condition contains a non-NULL constraint on the right table column.
 //! The filter condition can be safely pushed down.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::operators::BinaryOperator;
-use crate::core::Expression;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
@@ -67,13 +67,13 @@ impl LeftJoinToInnerJoinRule {
                 if *op == BinaryOperator::NotEqual {
                     if let (
                         Expression::Variable(var_name),
-                        Expression::Literal(crate::core::Value::Null(_)),
+                        Expression::Literal(graphdb_core::Value::Null(_)),
                     ) = (left.as_ref(), right.as_ref())
                     {
                         return right_col_names.contains(var_name);
                     }
                     if let (
-                        Expression::Literal(crate::core::Value::Null(_)),
+                        Expression::Literal(graphdb_core::Value::Null(_)),
                         Expression::Variable(var_name),
                     ) = (left.as_ref(), right.as_ref())
                     {
@@ -136,7 +136,7 @@ impl LeftJoinToInnerJoinRule {
                 if *op == BinaryOperator::NotEqual {
                     if let (
                         Expression::Variable(var_name),
-                        Expression::Literal(crate::core::Value::Null(_)),
+                        Expression::Literal(graphdb_core::Value::Null(_)),
                     ) = (left.as_ref(), right.as_ref())
                     {
                         if right_col_names.contains(var_name) {
@@ -144,7 +144,7 @@ impl LeftJoinToInnerJoinRule {
                         }
                     }
                     if let (
-                        Expression::Literal(crate::core::Value::Null(_)),
+                        Expression::Literal(graphdb_core::Value::Null(_)),
                         Expression::Variable(var_name),
                     ) = (left.as_ref(), right.as_ref())
                     {
@@ -188,7 +188,7 @@ impl LeftJoinToInnerJoinRule {
 
             if let Some(rem_expr) = remaining {
                 let ctx = filter_condition.context().clone();
-                let meta = crate::core::types::expr::ExpressionMeta::new(rem_expr);
+                let meta = graphdb_core::types::expr::ExpressionMeta::new(rem_expr);
                 let id = ctx.register_expression(meta);
                 let new_ctx_expr = ContextualExpression::new(id, ctx);
 

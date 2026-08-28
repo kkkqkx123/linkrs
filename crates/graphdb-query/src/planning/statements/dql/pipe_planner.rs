@@ -127,7 +127,7 @@ fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
     let is_true_filter = filter
         .condition()
         .as_literal()
-        .is_some_and(|value| matches!(value, crate::core::Value::Bool(true)));
+        .is_some_and(|value| matches!(value, graphdb_core::Value::Bool(true)));
     if !is_true_filter {
         return PlanNodeEnum::Project(project);
     }

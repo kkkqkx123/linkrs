@@ -3,7 +3,7 @@
 //! This module provides the foundation for recording schema modifications,
 //! enabling version history tracking and compatibility analysis.
 
-use crate::core::{DataType, Value};
+use graphdb_core::{DataType, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

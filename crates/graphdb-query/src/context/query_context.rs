@@ -32,10 +32,10 @@
 
 use std::sync::Arc;
 
-use crate::core::types::{CharsetInfo, SpaceInfo, Timestamp};
+use graphdb_core::types::{CharsetInfo, SpaceInfo, Timestamp};
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::transaction_scope::CancelReason;
-use crate::utils::{Arena, IdGenerator};
+use graphdb_core::{Arena, IdGenerator};
 
 use super::QueryRequestContext;
 
@@ -79,7 +79,7 @@ pub struct QueryContext {
     /// running inside an explicit transaction. `None` = auto-commit
     /// statement-level snapshot semantics. Execution-time knob: the runtime
     /// and operators can consult it instead of only the storage layer.
-    isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     /// Optional arena allocator for temporary allocations during query execution
     arena: Option<Arena>,
 }
@@ -92,7 +92,7 @@ pub(super) struct ContextParams {
     pub space_info: Option<SpaceInfo>,
     pub charset_info: Option<Box<CharsetInfo>>,
     pub snapshot_ts: Option<Timestamp>,
-    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     pub arena: Option<Arena>,
 }
 
@@ -188,7 +188,7 @@ impl QueryContext {
 
     /// The transaction isolation level for this execution, when running
     /// inside an explicit transaction.
-    pub fn isolation_level(&self) -> Option<crate::core::types::TransactionIsolationLevel> {
+    pub fn isolation_level(&self) -> Option<graphdb_core::types::TransactionIsolationLevel> {
         self.isolation_level
     }
 
@@ -247,7 +247,7 @@ impl QueryContext {
     }
 
     /// Obtain parameters
-    pub fn parameters(&self) -> &std::collections::HashMap<String, crate::core::Value> {
+    pub fn parameters(&self) -> &std::collections::HashMap<String, graphdb_core::Value> {
         &self.rctx.parameters
     }
 

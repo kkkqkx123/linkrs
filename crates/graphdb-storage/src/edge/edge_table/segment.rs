@@ -11,8 +11,8 @@ use parking_lot::RwLock;
 use super::super::{Csr, CsrBase, EdgeId};
 use super::page_state::SegmentLockState;
 use super::residency::SegmentResidency;
-use crate::core::types::Timestamp;
-use crate::core::{StorageError, StorageResult};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 
 /// Deletion information for a CSR segment.
 ///
@@ -594,7 +594,7 @@ impl std::fmt::Debug for CsrSegment {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use crate::core::Value;
+    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
@@ -605,7 +605,7 @@ mod tests {
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
                 "weight".to_string(),
-                crate::core::types::DataType::Double,
+                graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,

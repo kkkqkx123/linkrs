@@ -4,7 +4,7 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-use crate::core::Value;
+use graphdb_core::Value;
 
 /// A session-variable operation recorded while an explicit transaction is
 /// active. The overlay guarantees that ROLLBACK (and ROLLBACK TO SAVEPOINT)

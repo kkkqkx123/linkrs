@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::types::Timestamp;
-use crate::core::types::{TableId, TableTracker};
-use crate::core::wal::types::{
+use graphdb_core::types::Timestamp;
+use graphdb_core::types::{TableId, TableTracker};
+use graphdb_core::wal::types::{
     Lsn, TransactionId, WalError, WalFileHeader, WalResult, WAL_FILE_HEADER_SIZE,
 };
 

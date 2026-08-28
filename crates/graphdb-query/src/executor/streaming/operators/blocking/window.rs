@@ -1,6 +1,6 @@
-use crate::core::types::expr::Expression;
-use crate::core::value::NullType;
-use crate::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::executor::{SortDirection, ValueRowContext};
 use crate::executor::streaming::helpers::compare_values;
