@@ -105,7 +105,7 @@ pub struct QueryBindings {
     /// Shared cross-query policy for the typed columnar chunk layout.
     ///
     /// When set, the per-query columnar hit/miss counts are merged back into
-    /// the policy when the query finishes (columnar auto-detection, phase 2).
+    /// the policy when the query finishes (columnar auto-detection).
     /// Injected by the pipeline from the optimizer engine.
     pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
     #[cfg(feature = "fulltext-search")]

@@ -1757,6 +1757,253 @@ impl SyncManager {
         crate::SqliteOutbox::verify_snapshot(snapshot).map_err(SyncError::PersistenceError)
     }
 
+    pub fn requeue_dead_letter(&self, event_id: i64) -> Result<bool, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        self.execute_sync(|| async {
+            outbox
+                .requeue_dead_letter(event_id)
+                .await
+                .map_err(SyncError::PersistenceError)
+        })
+    }
+
+    pub fn requeue_dead_letters_batch(
+        &self,
+        target: Option<&graphdb_core::types::TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+    ) -> Result<usize, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let outbox = outbox.clone();
+        let target = target.cloned();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            let target = target.clone();
+            async move {
+                outbox
+                    .requeue_dead_letters_batch(
+                        target.as_ref(),
+                        index_id,
+                        generation,
+                        limit,
+                    )
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn list_dead_letters(
+        &self,
+        target: Option<&graphdb_core::types::TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::DeadLetterRow>, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let outbox = outbox.clone();
+        let target = target.cloned();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            let target = target.clone();
+            async move {
+                outbox
+                    .list_dead_letters(target.as_ref(), index_id, generation, limit, offset)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn list_degraded_ranges(
+        &self,
+        target: Option<&graphdb_core::types::TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+    ) -> Result<Vec<crate::DegradedRangeRow>, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let outbox = outbox.clone();
+        let target = target.cloned();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            let target = target.clone();
+            async move {
+                outbox
+                    .list_degraded_ranges(target.as_ref(), index_id, generation)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn clear_degraded_range(
+        &self,
+        target: &graphdb_core::types::TargetId,
+        index_id: u64,
+        generation: u64,
+        start_lsn: graphdb_core::types::CommitLsn,
+        end_lsn: graphdb_core::types::CommitLsn,
+    ) -> Result<bool, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let outbox = outbox.clone();
+        let target = target.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            let target = target.clone();
+            async move {
+                outbox
+                    .clear_degraded_range(&target, index_id, generation, start_lsn, end_lsn)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn retention_lsn(&self) -> Result<graphdb_core::types::CommitLsn, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        self.execute_sync(|| async {
+            outbox
+                .retention_lsn()
+                .await
+                .map_err(SyncError::PersistenceError)
+        })
+    }
+
+    pub fn update_retention_lsn(
+        &self,
+        retention_lsn: graphdb_core::types::CommitLsn,
+    ) -> Result<(), SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let outbox = outbox.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            async move {
+                outbox
+                    .update_retention_lsn(retention_lsn)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn prune_applied_events(
+        &self,
+        retention_lsn: graphdb_core::types::CommitLsn,
+    ) -> Result<u64, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Ok(0);
+        };
+        let outbox = outbox.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            async move {
+                outbox
+                    .prune_applied_events(retention_lsn)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn archive_dead_letters(
+        &self,
+        retention_lsn: graphdb_core::types::CommitLsn,
+    ) -> Result<u64, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Ok(0);
+        };
+        let outbox = outbox.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            async move {
+                outbox
+                    .archive_dead_letters(retention_lsn)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    pub fn prune_degraded_ranges(&self, max_age_ms: u64) -> Result<u64, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Ok(0);
+        };
+        let outbox = outbox.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            async move {
+                outbox
+                    .prune_degraded_ranges(max_age_ms)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            }
+        })
+    }
+
+    /// Run one retention cycle: prune applied, archive dead letters, update retention watermark.
+    pub fn run_retention_once(&self, grace_lsn_distance: u64, max_age_ms: u64) -> Result<(u64, u64, u64), SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Ok((0, 0, 0));
+        };
+        let outbox = outbox.clone();
+        self.execute_sync(move || {
+            let outbox = outbox.clone();
+            async move {
+                let safe = outbox
+                    .compute_safe_retention_lsn(grace_lsn_distance)
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                let pruned = outbox
+                    .prune_applied_events(safe)
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                let archived = outbox
+                    .archive_dead_letters(safe)
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                outbox
+                    .update_retention_lsn(safe)
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                let _ = outbox
+                    .prune_degraded_ranges(max_age_ms)
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                Ok((pruned, archived, safe.get()))
+            }
+        })
+    }
+
     fn execute_sync<F, Fut, T>(&self, f: F) -> Result<T, SyncError>
     where
         F: FnOnce() -> Fut + Send,

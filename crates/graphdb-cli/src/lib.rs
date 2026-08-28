@@ -6,6 +6,7 @@ pub mod completion;
 pub mod config;
 pub mod input;
 pub mod io;
+pub mod outbox;
 pub mod output;
 pub mod session;
 pub mod transaction;

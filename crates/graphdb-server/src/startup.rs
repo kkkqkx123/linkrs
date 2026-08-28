@@ -277,6 +277,38 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         manager.start().await.map_err(|error| {
             graphdb_core::DBError::storage(format!("Failed to start sync manager: {}", error))
         })?;
+        // Retention loop (hourly by default, driven by OutboxRetentionConfig).
+        #[cfg(feature = "vector")]
+        {
+            let retention = config.vector.retention.clone();
+            if retention.enabled {
+                let interval_secs = retention.prune_interval_secs;
+                let grace = retention.grace_lsn_distance;
+                info!(
+                    "Outbox retention enabled interval={}s grace={}",
+                    interval_secs, grace
+                );
+                let mgr = manager.clone();
+                tokio::spawn(async move {
+                    let interval = std::time::Duration::from_secs(interval_secs.max(60));
+                    loop {
+                        tokio::time::sleep(interval).await;
+                        match mgr.run_retention_once(grace, 30 * 86_400_000) {
+                            Ok((pruned, archived, lsn)) if pruned + archived > 0 => {
+                                info!(
+                                    "Outbox retention pruned {} archived {} retention_lsn={}",
+                                    pruned, archived, lsn
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::warn!("Outbox retention cycle failed: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+        }
     }
 
     let storage = if let Some(ref sync_manager) = sync_manager {
@@ -425,6 +457,19 @@ fn attach_vector_coordinator(
             handle,
         ),
     );
+    {
+        use graphdb_config::VectorCollectionGranularity;
+        let granularity = match _config.vector_config().collection.granularity {
+            VectorCollectionGranularity::Space => {
+                graphdb_sync::vector_sync::CollectionGranularity::Space
+            }
+            VectorCollectionGranularity::Field => {
+                graphdb_sync::vector_sync::CollectionGranularity::Field
+            }
+        };
+        vector_coordinator.set_granularity(granularity);
+        info!("Vector collection granularity: {:?}", granularity);
+    }
     info!("Vector index sync enabled");
     let mut manager = sync_manager.with_vector_coordinator(vector_coordinator);
     // Backend-aware delivery policy: batch / lease / retries / concurrency

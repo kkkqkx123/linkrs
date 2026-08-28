@@ -331,6 +331,75 @@ pub struct LocalVectorConfig {
     pub quantization: Option<QuantizationSettings>,
 }
 
+/// MVCC settings for vector search (default off).
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct VectorMvccConfig {
+    #[serde(default)]
+    pub ssi_read_set: bool,
+}
+
+impl Default for VectorMvccConfig {
+    fn default() -> Self {
+        Self { ssi_read_set: false }
+    }
+}
+
+/// Collection granularity for vector indexes.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorCollectionGranularity {
+    #[default]
+    Space,
+    Field,
+}
+
+/// Collection settings for vector indexes.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+pub struct VectorCollectionConfig {
+    #[serde(default)]
+    pub granularity: VectorCollectionGranularity,
+}
+
+/// Outbox retention settings.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct OutboxRetentionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_retention_interval")]
+    pub prune_interval_secs: u64,
+    #[serde(default = "default_retention_grace")]
+    pub grace_lsn_distance: u64,
+    #[serde(default = "default_retention_age_ms")]
+    pub max_applied_age_ms: u64,
+    #[serde(default = "default_retention_archive_rows")]
+    pub max_archive_rows: u64,
+}
+
+fn default_retention_interval() -> u64 {
+    3600
+}
+fn default_retention_grace() -> u64 {
+    10_000
+}
+fn default_retention_age_ms() -> u64 {
+    86_400_000
+}
+fn default_retention_archive_rows() -> u64 {
+    100_000
+}
+
+impl Default for OutboxRetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            prune_interval_secs: default_retention_interval(),
+            grace_lsn_distance: default_retention_grace(),
+            max_applied_age_ms: default_retention_age_ms(),
+            max_archive_rows: default_retention_archive_rows(),
+        }
+    }
+}
+
 /// Vector search configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VectorConfig {
@@ -343,6 +412,12 @@ pub struct VectorConfig {
     #[cfg(feature = "vector-qdrant")]
     #[serde(default)]
     pub qdrant: VectorClientConfig,
+    #[serde(default)]
+    pub mvcc: VectorMvccConfig,
+    #[serde(default)]
+    pub collection: VectorCollectionConfig,
+    #[serde(default)]
+    pub retention: OutboxRetentionConfig,
 }
 
 fn default_true() -> bool {
@@ -357,6 +432,9 @@ impl Default for VectorConfig {
             local: LocalVectorConfig::default(),
             #[cfg(feature = "vector-qdrant")]
             qdrant: VectorClientConfig::disabled(),
+            mvcc: VectorMvccConfig::default(),
+            collection: VectorCollectionConfig::default(),
+            retention: OutboxRetentionConfig::default(),
         }
     }
 }

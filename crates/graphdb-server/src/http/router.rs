@@ -162,6 +162,13 @@ pub fn create_router<
         // Sync Management Routes
         .route("/sync/status", get(sync::status))
         .route("/sync/outbox/retry", post(sync::retry_outbox))
+        .route("/sync/outbox/diagnostics", get(sync::diagnostics))
+        .route("/sync/outbox/dead_letters", get(sync::dead_letters))
+        .route("/sync/outbox/requeue", post(sync::requeue))
+        .route("/sync/outbox/degraded_ranges", get(sync::degraded_ranges))
+        .route("/sync/outbox/degraded/clear", post(sync::degraded_clear))
+        .route("/sync/outbox/retention/run", post(sync::retention_run))
+        .route("/sync/outbox/retention/status", get(sync::retention_status))
         // Schema Routes
         .route(
             "/schema/spaces",

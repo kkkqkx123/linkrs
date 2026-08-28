@@ -54,8 +54,8 @@ pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
 pub use sqlite_outbox::{
-    ClaimedEvent, IndexSyncDiagnostics, OutboxSnapshot, SqliteOutbox, SyncDiagnostics,
-    TargetSyncDiagnostics,
+    ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
+    SqliteOutbox, SyncDiagnostics, TargetSyncDiagnostics,
 };
 pub use types::{IndexOpKey, IndexOperation};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};

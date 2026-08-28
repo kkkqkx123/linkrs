@@ -7,6 +7,7 @@ use graphdb_core::wal::{IndexMutation, OutboxIntent};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
+/// Never update version in dev phase
 const OUTBOX_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +36,7 @@ pub struct OutboxSnapshot {
 }
 
 /// Point-in-time operational state of the durable outbox.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SyncDiagnostics {
     pub materialized_lsn: CommitLsn,
     pub targets: Vec<TargetSyncDiagnostics>,
@@ -48,7 +49,7 @@ pub struct SyncDiagnostics {
 }
 
 /// Delivery health for one synchronization target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TargetSyncDiagnostics {
     pub target: String,
     pub applied_lsn: CommitLsn,
@@ -62,7 +63,7 @@ pub struct TargetSyncDiagnostics {
 }
 
 /// Generation and frontier health for one secondary index target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexSyncDiagnostics {
     pub target: String,
     pub index_id: u64,
@@ -72,6 +73,31 @@ pub struct IndexSyncDiagnostics {
     pub applied_lsn: CommitLsn,
     pub frontier_lag: u64,
     pub degraded: bool,
+}
+
+/// One dead-letter entry joined with its event metadata.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeadLetterRow {
+    pub event_id: i64,
+    pub target: String,
+    pub index_id: u64,
+    pub generation: u64,
+    pub commit_lsn: CommitLsn,
+    pub retry_count: u64,
+    pub failed_at_ms: u64,
+    pub error: String,
+}
+
+/// One degraded range entry.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DegradedRangeRow {
+    pub target: String,
+    pub index_id: u64,
+    pub generation: u64,
+    pub start_lsn: CommitLsn,
+    pub end_lsn: CommitLsn,
+    pub reason: String,
+    pub created_at_ms: u64,
 }
 
 impl SqliteOutbox {
@@ -367,15 +393,51 @@ impl SqliteOutbox {
         .map_err(|error| error.to_string())?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS degraded_ranges (\
-             target TEXT NOT NULL,\
-             index_id INTEGER NOT NULL,\
-             generation INTEGER NOT NULL,\
-             start_lsn INTEGER NOT NULL,\
-             end_lsn INTEGER NOT NULL,\
-             reason TEXT NOT NULL,\
-             created_at_ms INTEGER NOT NULL,\
-             PRIMARY KEY(target, index_id, generation, start_lsn, end_lsn)\
-             )",
+              target TEXT NOT NULL,\
+              index_id INTEGER NOT NULL,\
+              generation INTEGER NOT NULL,\
+              start_lsn INTEGER NOT NULL,\
+              end_lsn INTEGER NOT NULL,\
+              reason TEXT NOT NULL,\
+              created_at_ms INTEGER NOT NULL,\
+              PRIMARY KEY(target, index_id, generation, start_lsn, end_lsn)\
+              )",
+        )
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        // Retention: add retention_lsn to projection_state, archive table, index.
+        let has_retention_lsn: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projection_state') WHERE name = 'retention_lsn')",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        if has_retention_lsn == 0 {
+            sqlx::query(
+                "ALTER TABLE projection_state ADD COLUMN retention_lsn INTEGER NOT NULL DEFAULT 0",
+            )
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS dead_letters_archive (\
+              event_id INTEGER PRIMARY KEY,\
+              target TEXT NOT NULL,\
+              index_id INTEGER NOT NULL,\
+              generation INTEGER NOT NULL,\
+              commit_lsn INTEGER NOT NULL,\
+              failed_at_ms INTEGER NOT NULL,\
+              error TEXT NOT NULL,\
+              archived_at_ms INTEGER NOT NULL\
+              )",
+        )
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS events_retention_idx ON events(status, commit_lsn)",
         )
         .execute(&mut *connection)
         .await
@@ -1033,6 +1095,170 @@ impl SqliteOutbox {
         finish_transaction(&mut connection, result).await
     }
 
+    /// Batch requeue dead letters filtered by target/index/generation.
+    /// Returns number of events requeued.
+    pub async fn requeue_dead_letters_batch(
+        &self,
+        target: Option<&TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+    ) -> Result<usize, String> {
+        let limit = limit.clamp(1, 1000) as i64;
+        // Fetch candidate event_ids first, then requeue one by one to reuse transaction fencing.
+        let mut query = String::from(
+            "SELECT e.id FROM events e JOIN dead_letters d ON d.event_id = e.id WHERE e.status = 'dead_letter'",
+        );
+        if target.is_some() {
+            query.push_str(" AND e.target = ?");
+        }
+        if index_id.is_some() {
+            query.push_str(" AND e.index_id = ?");
+        }
+        if generation.is_some() {
+            query.push_str(" AND e.generation = ?");
+        }
+        query.push_str(" ORDER BY e.commit_lsn, e.intent_sequence LIMIT ?");
+        let mut q = sqlx::query_scalar::<_, i64>(&query);
+        if let Some(t) = target {
+            q = q.bind(t.as_str());
+        }
+        if let Some(id) = index_id {
+            q = q.bind(to_sql_i64(id, "index ID")?);
+        }
+        if let Some(gen) = generation {
+            q = q.bind(to_sql_i64(gen, "index generation")?);
+        }
+        q = q.bind(limit);
+        let ids: Vec<i64> = q.fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let mut requeued = 0usize;
+        for id in ids {
+            if self.requeue_dead_letter(id).await? {
+                requeued += 1;
+            }
+        }
+        Ok(requeued)
+    }
+
+    pub async fn list_dead_letters(
+        &self,
+        target: Option<&TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<DeadLetterRow>, String> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let offset = offset as i64;
+        let mut query = String::from(
+            "SELECT e.id, e.target, e.index_id, e.generation, e.commit_lsn, e.retry_count, d.failed_at_ms, d.error \
+             FROM events e JOIN dead_letters d ON d.event_id = e.id WHERE e.status = 'dead_letter'",
+        );
+        if target.is_some() {
+            query.push_str(" AND e.target = ?");
+        }
+        if index_id.is_some() {
+            query.push_str(" AND e.index_id = ?");
+        }
+        if generation.is_some() {
+            query.push_str(" AND e.generation = ?");
+        }
+        query.push_str(" ORDER BY e.commit_lsn, e.intent_sequence LIMIT ? OFFSET ?");
+        let mut q = sqlx::query(&query);
+        if let Some(t) = target {
+            q = q.bind(t.as_str());
+        }
+        if let Some(id) = index_id {
+            q = q.bind(to_sql_i64(id, "index ID")?);
+        }
+        if let Some(gen) = generation {
+            q = q.bind(to_sql_i64(gen, "index generation")?);
+        }
+        q = q.bind(limit).bind(offset);
+        let rows = q.fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(DeadLetterRow {
+                event_id: row.get("id"),
+                target: row.get("target"),
+                index_id: from_sql_i64(row.get("index_id"), "index ID")?,
+                generation: from_sql_i64(row.get("generation"), "index generation")?,
+                commit_lsn: CommitLsn::new(from_sql_i64(row.get("commit_lsn"), "commit LSN")?),
+                retry_count: from_sql_i64(row.get("retry_count"), "retry count")?,
+                failed_at_ms: from_sql_i64(row.get("failed_at_ms"), "failure time")?,
+                error: row.get("error"),
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn list_degraded_ranges(
+        &self,
+        target: Option<&TargetId>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+    ) -> Result<Vec<DegradedRangeRow>, String> {
+        let mut query = String::from(
+            "SELECT target, index_id, generation, start_lsn, end_lsn, reason, created_at_ms FROM degraded_ranges WHERE 1=1",
+        );
+        if target.is_some() {
+            query.push_str(" AND target = ?");
+        }
+        if index_id.is_some() {
+            query.push_str(" AND index_id = ?");
+        }
+        if generation.is_some() {
+            query.push_str(" AND generation = ?");
+        }
+        query.push_str(" ORDER BY created_at_ms DESC");
+        let mut q = sqlx::query(&query);
+        if let Some(t) = target {
+            q = q.bind(t.as_str());
+        }
+        if let Some(id) = index_id {
+            q = q.bind(to_sql_i64(id, "index ID")?);
+        }
+        if let Some(gen) = generation {
+            q = q.bind(to_sql_i64(gen, "index generation")?);
+        }
+        let rows = q.fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(DegradedRangeRow {
+                target: row.get("target"),
+                index_id: from_sql_i64(row.get("index_id"), "index ID")?,
+                generation: from_sql_i64(row.get("generation"), "index generation")?,
+                start_lsn: CommitLsn::new(from_sql_i64(row.get("start_lsn"), "start LSN")?),
+                end_lsn: CommitLsn::new(from_sql_i64(row.get("end_lsn"), "end LSN")?),
+                reason: row.get("reason"),
+                created_at_ms: from_sql_i64(row.get("created_at_ms"), "created time")?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn clear_degraded_range(
+        &self,
+        target: &TargetId,
+        index_id: u64,
+        generation: u64,
+        start_lsn: CommitLsn,
+        end_lsn: CommitLsn,
+    ) -> Result<bool, String> {
+        let result = sqlx::query(
+            "DELETE FROM degraded_ranges WHERE target = ? AND index_id = ? AND generation = ? AND start_lsn = ? AND end_lsn = ?",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .bind(to_sql_i64(generation, "index generation")?)
+        .bind(to_sql_i64(start_lsn.get(), "start LSN")?)
+        .bind(to_sql_i64(end_lsn.get(), "end LSN")?)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn delivery_targets(&self) -> Result<Vec<TargetId>, String> {
         let rows = sqlx::query_scalar::<_, String>(
             "SELECT DISTINCT target FROM events WHERE status IN ('pending', 'retry', 'leased') \
@@ -1109,6 +1335,93 @@ impl SqliteOutbox {
         .await
         .map_err(|error| error.to_string())?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn retention_lsn(&self) -> Result<CommitLsn, String> {
+        let value: i64 = sqlx::query_scalar(
+            "SELECT retention_lsn FROM projection_state WHERE singleton = 1",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(CommitLsn::new(from_sql_i64(value, "retention LSN")?))
+    }
+
+    pub async fn update_retention_lsn(&self, retention_lsn: CommitLsn) -> Result<(), String> {
+        sqlx::query("UPDATE projection_state SET retention_lsn = MAX(retention_lsn, ?) WHERE singleton = 1")
+            .bind(to_sql_i64(retention_lsn.get(), "retention LSN")?)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Archive dead letters older than retention_lsn into dead_letters_archive and remove from events.
+    pub async fn archive_dead_letters(&self, retention_lsn: CommitLsn) -> Result<u64, String> {
+        let retention = to_sql_i64(retention_lsn.get(), "retention LSN")?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as u64;
+        // Insert into archive
+        let _archived = sqlx::query(
+            "INSERT OR IGNORE INTO dead_letters_archive(event_id, target, index_id, generation, commit_lsn, failed_at_ms, error, archived_at_ms) \
+             SELECT e.id, e.target, e.index_id, e.generation, e.commit_lsn, d.failed_at_ms, d.error, ? \
+             FROM events e JOIN dead_letters d ON d.event_id = e.id WHERE e.status = 'dead_letter' AND e.commit_lsn <= ?",
+        )
+        .bind(to_sql_i64(now_ms, "archived time")?)
+        .bind(retention)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        // Delete archived events (cascade via foreign key not set, so delete dead_letters first)
+        sqlx::query(
+            "DELETE FROM dead_letters WHERE event_id IN (SELECT id FROM events WHERE status = 'dead_letter' AND commit_lsn <= ?)",
+        )
+        .bind(retention)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let deleted = sqlx::query("DELETE FROM events WHERE status = 'dead_letter' AND commit_lsn <= ?")
+            .bind(retention)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(deleted.rows_affected())
+    }
+
+    /// Prune degraded ranges older than max age.
+    pub async fn prune_degraded_ranges(&self, max_age_ms: u64) -> Result<u64, String> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as u64;
+        let cutoff = now_ms.saturating_sub(max_age_ms);
+        let result = sqlx::query("DELETE FROM degraded_ranges WHERE created_at_ms < ?")
+            .bind(to_sql_i64(cutoff, "cutoff time")?)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected())
+    }
+
+    /// Compute a safe retention LSN based on min applied frontier.
+    /// Safe = min(target frontiers, index frontiers) - grace, at least 0.
+    pub async fn compute_safe_retention_lsn(&self, grace_lsn_distance: u64) -> Result<CommitLsn, String> {
+        let diag = self.diagnostics().await?;
+        let mut min_lsn = diag.materialized_lsn;
+        for t in &diag.targets {
+            if t.applied_lsn < min_lsn {
+                min_lsn = t.applied_lsn;
+            }
+        }
+        for idx in &diag.indexes {
+            if idx.applied_lsn < min_lsn {
+                min_lsn = idx.applied_lsn;
+            }
+        }
+        let safe = min_lsn.get().saturating_sub(grace_lsn_distance);
+        Ok(CommitLsn::new(safe))
     }
 
     pub async fn retry_count(&self, event_id: i64) -> Result<u64, String> {

@@ -181,6 +181,48 @@ pub struct VectorIndexLocation {
 
 const VECTOR_INDEX_PREFIX: &str = "space";
 
+/// Collection granularity mirrors `graphdb_config::VectorCollectionGranularity`
+/// but is re-declared here to avoid a hard dependency on `graphdb-config`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CollectionGranularity {
+    Space,
+    Field,
+}
+
+impl Default for CollectionGranularity {
+    fn default() -> Self {
+        Self::Space
+    }
+}
+
+/// Naming strategy derived from granularity.
+pub trait CollectionNaming: Send + Sync + std::fmt::Debug {
+    fn collection_name(&self, loc: &VectorIndexLocation) -> String;
+    fn group_id(&self, loc: &VectorIndexLocation) -> Option<String>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpaceGranularityNaming;
+impl CollectionNaming for SpaceGranularityNaming {
+    fn collection_name(&self, loc: &VectorIndexLocation) -> String {
+        format!("{}_{}", VECTOR_INDEX_PREFIX, loc.space_id)
+    }
+    fn group_id(&self, loc: &VectorIndexLocation) -> Option<String> {
+        Some(format!("{}_{}", loc.tag_name, loc.field_name))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FieldGranularityNaming;
+impl CollectionNaming for FieldGranularityNaming {
+    fn collection_name(&self, loc: &VectorIndexLocation) -> String {
+        format!("{}_{}_{}_{}", VECTOR_INDEX_PREFIX, loc.space_id, loc.tag_name, loc.field_name)
+    }
+    fn group_id(&self, _loc: &VectorIndexLocation) -> Option<String> {
+        None
+    }
+}
+
 impl VectorIndexLocation {
     pub fn new(space_id: u64, tag_name: impl Into<String>, field_name: impl Into<String>) -> Self {
         Self {
@@ -192,26 +234,36 @@ impl VectorIndexLocation {
 
     /// Generate collection name from this index location.
     ///
-    /// **ARCHITECTURAL NOTE**: This uses space-level collection granularity.
-    /// All vector indexes within the same space share a single physical collection,
-    /// with logical isolation via the `group_id` field in the payload.
-    ///
-    /// **Implications**:
-    /// - Different (tag, field) combinations in the same space cannot have different
-    ///   vector dimensions or distance metrics.
-    /// - Deletion by vertex_id removes all vectors for that vertex across all
-    ///   (tag, field) combinations in the space.
-    /// - This is a deliberate design choice for resource efficiency. If finer
-    ///   isolation is needed, change this to use (space_id, tag_name, field_name)
-    ///   as the collection name.
+    /// Default is space-level granularity for backward compatibility.
+    /// For granularity-aware naming, use `to_collection_name_with` or
+    /// `VectorSyncCoordinator::collection_name_for`.
     pub fn to_collection_name(&self) -> String {
-        format!("{}_{}", VECTOR_INDEX_PREFIX, self.space_id)
+        self.to_collection_name_with(CollectionGranularity::Space)
+    }
+
+    pub fn to_collection_name_with(&self, granularity: CollectionGranularity) -> String {
+        match granularity {
+            CollectionGranularity::Space => format!("{}_{}", VECTOR_INDEX_PREFIX, self.space_id),
+            CollectionGranularity::Field => format!(
+                "{}_{}_{}_{}",
+                VECTOR_INDEX_PREFIX, self.space_id, self.tag_name, self.field_name
+            ),
+        }
     }
 
     /// Generate group ID for logical isolation within a space-level collection.
     /// This is used as a filter condition in vector searches.
+    /// Returns `Some(group)` for space granularity, `None` for field granularity.
     pub fn group_id(&self) -> String {
-        format!("{}_{}", self.tag_name, self.field_name)
+        self.group_id_with(CollectionGranularity::Space)
+            .unwrap_or_default()
+    }
+
+    pub fn group_id_with(&self, granularity: CollectionGranularity) -> Option<String> {
+        match granularity {
+            CollectionGranularity::Space => Some(format!("{}_{}", self.tag_name, self.field_name)),
+            CollectionGranularity::Field => None,
+        }
     }
 }
 
@@ -257,6 +309,9 @@ pub struct VectorSyncCoordinator {
     /// `SyncManager::configure_outbox` when both outbox and coordinator are
     /// present. Absent in coordinator-only (query-crate) instantiations.
     outbox: parking_lot::RwLock<Option<std::sync::Arc<crate::SqliteOutbox>>>,
+    /// Collection granularity. Space-level is default for backward
+    /// compatibility; Field-level gives physical isolation per (tag,field).
+    granularity: parking_lot::RwLock<CollectionGranularity>,
 }
 
 impl std::fmt::Debug for VectorSyncCoordinator {
@@ -264,7 +319,8 @@ impl std::fmt::Debug for VectorSyncCoordinator {
         let mut debug = f.debug_struct("VectorSyncCoordinator");
         debug
             .field("backend", &self.backend)
-            .field("logical_index_count", &self.logical_indexes.len());
+            .field("logical_index_count", &self.logical_indexes.len())
+            .field("granularity", &*self.granularity.read());
         #[cfg(feature = "embedding")]
         debug.field("embedding_service", &self.embedding_service.is_some());
         debug.finish()
@@ -319,7 +375,27 @@ impl VectorSyncCoordinator {
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
             outbox: parking_lot::RwLock::new(None),
+            granularity: parking_lot::RwLock::new(CollectionGranularity::default()),
         }
+    }
+
+    pub fn granularity(&self) -> CollectionGranularity {
+        *self.granularity.read()
+    }
+
+    pub fn set_granularity(&self, granularity: CollectionGranularity) {
+        *self.granularity.write() = granularity;
+    }
+
+    /// Resolve collection name respecting the configured granularity.
+    pub fn collection_name_for(&self, loc: &VectorIndexLocation) -> String {
+        loc.to_collection_name_with(self.granularity())
+    }
+
+    /// Resolve group_id respecting granularity. `None` means field-level
+    /// physical isolation, no group filter needed.
+    pub fn group_id_for(&self, loc: &VectorIndexLocation) -> Option<String> {
+        loc.group_id_with(self.granularity())
     }
 
     /// Convenience constructor without embedding service.
@@ -377,8 +453,8 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<String> {
         validate_metric_for_backend(&self.backend, distance)?;
 
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = self.collection_name_for(&loc);
 
         if self.is_disabled_engine() {
             let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
@@ -414,17 +490,20 @@ impl VectorSyncCoordinator {
                     reason: e.to_string(),
                 })?;
 
-            // Create payload index for group_id filtering (best-effort, log on failure)
-            if let Err(e) = self
-                .backend
-                .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to create payload index for group_id in collection '{}': {}",
-                    collection_name,
-                    e
-                );
+            // Space granularity needs group_id payload index; field granularity
+            // uses physical isolation and skips the group_id index.
+            if self.granularity() == CollectionGranularity::Space {
+                if let Err(e) = self
+                    .backend
+                    .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to create payload index for group_id in collection '{}': {}",
+                        collection_name,
+                        e
+                    );
+                }
             }
         } else {
             if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
@@ -462,13 +541,22 @@ impl VectorSyncCoordinator {
         field_name: &str,
     ) -> VectorCoordinatorResult<()> {
         let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = logical_key.to_collection_name();
+        let collection_name = self.collection_name_for(&logical_key);
         self.logical_indexes.remove(&logical_key);
 
-        // The local engine owns its collection files, so once no logical
-        // index references the collection anymore the physical directory can
-        // be reclaimed. Remote collections keep their own lifecycle.
-        if self.backend.is_local() && self.backend.index_exists(&collection_name) {
+        // Field granularity: each logical index owns its physical collection.
+        // Space granularity: share collection via group_id filter.
+        if self.granularity() == CollectionGranularity::Field {
+            if self.backend.index_exists(&collection_name) {
+                if let Err(error) = self.backend.delete_collection(&collection_name).await {
+                    tracing::warn!(
+                        "Failed to reclaim vector collection '{}' (field granularity): {}",
+                        collection_name,
+                        error
+                    );
+                }
+            }
+        } else if self.backend.is_local() && self.backend.index_exists(&collection_name) {
             let remaining_siblings = self
                 .logical_indexes
                 .iter()
@@ -560,7 +648,7 @@ impl VectorSyncCoordinator {
                 };
                 let mut ops: Vec<vector_search::engine::TxnOp> = Vec::with_capacity(contexts.len());
                 for ctx in contexts {
-                    let collection = ctx.location.to_collection_name();
+                    let collection = self.collection_name_for(&ctx.location);
                     let point_id = ctx.data.id;
                     match ctx.change_type {
                         VectorChangeType::Insert => {
@@ -572,11 +660,13 @@ impl VectorSyncCoordinator {
                                     serde_json::to_value(&v).ok().map(|json| (k, json))
                                 })
                                 .collect();
-                            json_payload.insert(
-                                "group_id".to_string(),
-                                serde_json::to_value(ctx.location.group_id())
-                                    .unwrap_or(serde_json::Value::Null),
-                            );
+                            if let Some(gid) = self.group_id_for(&ctx.location) {
+                                json_payload.insert(
+                                    "group_id".to_string(),
+                                    serde_json::to_value(gid)
+                                        .unwrap_or(serde_json::Value::Null),
+                                );
+                            }
                             let point = VectorPoint::new(point_id, ctx.data.vector)
                                 .with_payload(json_payload);
                             ops.push(vector_search::engine::TxnOp::Upsert { collection, point });
@@ -607,7 +697,7 @@ impl VectorSyncCoordinator {
         let mut delete_by_collection: HashMap<String, Vec<String>> = HashMap::new();
 
         for ctx in contexts {
-            let collection_name = ctx.location.to_collection_name();
+            let collection_name = self.collection_name_for(&ctx.location);
             let point_id = ctx.data.id.to_string();
 
             match ctx.change_type {
@@ -620,11 +710,13 @@ impl VectorSyncCoordinator {
                         .filter_map(|(k, v)| serde_json::to_value(&v).ok().map(|json| (k, json)))
                         .collect();
 
-                    json_payload.insert(
-                        "group_id".to_string(),
-                        serde_json::to_value(ctx.location.group_id())
-                            .unwrap_or(serde_json::Value::Null),
-                    );
+                    if let Some(gid) = self.group_id_for(&ctx.location) {
+                        json_payload.insert(
+                            "group_id".to_string(),
+                            serde_json::to_value(gid)
+                                .unwrap_or(serde_json::Value::Null),
+                        );
+                    }
 
                     let point = VectorPoint::new(point_id, vector).with_payload(json_payload);
 
@@ -810,9 +902,9 @@ impl VectorSyncCoordinator {
                 }
             }
         }
-        let collection_name =
-            VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name)
-                .to_collection_name();
+        let loc =
+            VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name);
+        let collection_name = self.collection_name_for(&loc);
 
         let mut query = SearchQuery::new(options.query_vector, options.limit);
 
@@ -820,10 +912,12 @@ impl VectorSyncCoordinator {
             query = query.with_score_threshold(threshold);
         }
 
-        // Inject group_id filter to scope search to the correct (tag, field) group
-        let group_id = format!("{}_{}", options.tag_name, options.field_name);
+        // Inject group_id filter only for space granularity (logical isolation).
+        // Field granularity uses physical isolation, no group filter needed.
         let mut filter = options.filter.unwrap_or_default();
-        filter = filter.must(FilterCondition::match_value("group_id", group_id));
+        if let Some(gid) = self.group_id_for(&loc) {
+            filter = filter.must(FilterCondition::match_value("group_id", gid));
+        }
         query = query.with_filter(filter);
 
         let results = self.search(&collection_name, query).await?;
@@ -842,14 +936,13 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-
-        let filter = VectorFilter::new().must(FilterCondition::match_value(
-            "group_id",
-            format!("{}_{}", tag_name, field_name),
-        ));
-        let query = SearchQuery::new(query_vector, limit).with_filter(filter);
+        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = self.collection_name_for(&loc);
+        let mut query = SearchQuery::new(query_vector, limit);
+        if let Some(gid) = self.group_id_for(&loc) {
+            let filter = VectorFilter::new().must(FilterCondition::match_value("group_id", gid));
+            query = query.with_filter(filter);
+        }
         self.search(&collection_name, query).await
     }
 
@@ -866,16 +959,13 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-
-        let filter = VectorFilter::new().must(FilterCondition::match_value(
-            "group_id",
-            format!("{}_{}", tag_name, field_name),
-        ));
-        let query = SearchQuery::new(query_vector, limit)
-            .with_score_threshold(threshold)
-            .with_filter(filter);
+        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = self.collection_name_for(&loc);
+        let mut query = SearchQuery::new(query_vector, limit).with_score_threshold(threshold);
+        if let Some(gid) = self.group_id_for(&loc) {
+            let filter = VectorFilter::new().must(FilterCondition::match_value("group_id", gid));
+            query = query.with_filter(filter);
+        }
         self.search(&collection_name, query).await
     }
 
@@ -892,12 +982,13 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-
-        let group_id = format!("{}_{}", tag_name, field_name);
-        let filter = filter.must(FilterCondition::match_value("group_id", group_id));
-        let query = SearchQuery::new(query_vector, limit).with_filter(filter);
+        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = self.collection_name_for(&loc);
+        let mut enriched = filter;
+        if let Some(gid) = self.group_id_for(&loc) {
+            enriched = enriched.must(FilterCondition::match_value("group_id", gid));
+        }
+        let query = SearchQuery::new(query_vector, limit).with_filter(enriched);
         self.search(&collection_name, query).await
     }
 
@@ -1000,8 +1091,8 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<String> {
         validate_metric_for_backend(&self.backend, config.distance)?;
 
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = self.collection_name_for(&loc);
 
         if !self.backend.index_exists(&collection_name) {
             self.backend
@@ -1013,17 +1104,18 @@ impl VectorSyncCoordinator {
                     reason: e.to_string(),
                 })?;
 
-            // Create payload index for group_id filtering (best-effort, log on failure)
-            if let Err(e) = self
-                .backend
-                .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to create payload index for group_id in collection '{}': {}",
-                    collection_name,
-                    e
-                );
+            if self.granularity() == CollectionGranularity::Space {
+                if let Err(e) = self
+                    .backend
+                    .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to create payload index for group_id in collection '{}': {}",
+                        collection_name,
+                        e
+                    );
+                }
             }
         } else {
             if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {

@@ -413,12 +413,60 @@ let results = manager.search("my_index", query).await.unwrap();
 
 **注意**：实际性能取决于硬件配置和参数设置。
 
+## 隔离级别与一致性（Phase 3 治理）
+
+> 图与向量的可见性模型不同，本文显式约定差异并提供可选增强路径，详见 `docs/plan/vector_sync_phase3_detailed.md §2` 与 `docs/sync/architecture.md §查询链路`。
+
+### 图 vs 向量：默认行为
+
+| 维度 | 图存储（`GraphStorage + WAL + MVCC`） | 向量存储（`Local / Qdrant` via Outbox） |
+|------|---------------------------------------|------------------------------------------|
+| 提交可见性 | `commit_lsn` 立即可见（`commit_write_timestamp`） | 异步派生，最终一致，`frontier_lag = materialized_lsn - applied_lsn` 可观测 |
+| 读己之写 | 同一事务内立即可见（`staged_wal`） | 需 `ReadYourWrites{ timeout_ms, minimum_lsn }` 显式等待 `index_frontier >= commit_lsn`（`crates/graphdb-sync/src/sqlite_outbox.rs:1167 wait_for_minimum_lsn`），`Qdrant` 典型 `2000ms`、`Local` 典型 `500ms` |
+| 可重复读 | `REPEATABLE READ` 由 MVCC 快照保证 | 不生效：搜索不携带 `read_timestamp`，不纳入 `SSI` 读集 |
+| 序列化 | `SERIALIZABLE` 经 `crates/graphdb-transaction/src/certify.rs:100 Certifier` 的 `write_set + SSI` 校验 | 默认不参与；可选开关见下 |
+| 故障时 | 图提交阻塞于 WAL `fsync` | 向量滞后或 `degraded`，`has_degraded_range_through` 时 `RYW` 搜索报错而非脏读 |
+
+**含义**：同一事务/会话内 `INSERT` 后立即 `SEARCH`，在 `Eventual` 下可能滞后；在 `ReadYourWrites` 下会阻塞至 `frontier` 追上或超时（`VectorError::Timeout`），若该 LSN 区间已被标记 `degraded`（`SqliteOutbox::skip_event_degraded`）则抛错。
+
+### 可选增强：向量读集的 SSI 校验（默认关闭）
+
+- 配置：`[vector.mvcc] ssi_read_set = false`（`crates/graphdb-config/src/lib.rs:VectorConfig`），默认关闭以保持单节点轻量定位。
+- 开启条件：`ssi_read_set=true` 且事务隔离级别为 `SERIALIZABLE` 时，`VectorSyncCoordinator::search_with_options` 会将本次 `SearchOptions` 触达的 `group_id`（`(space,tag,field)` 粗粒度，`HasId` 时才登记点 ID）登记到 `TransactionContext.vector_read_set`，纳入 `TransactionManager::certify` 的可选分支（`crates/graphdb-transaction/src/certify.rs:387 publish` 的 final review）。
+- 代价：`O(触达 group 数)` 的登记与一次 `HashMap` 查找；默认关闭时零开销。
+- 建议：仅在强序列化场景且可接受误 abort 率时开启；`group` 粗粒度登记避免 full scan 过粗导致的误判。
+
+### 调用示例
+
+```rust
+use graphdb_sync::vector_sync::{SearchOptions, SearchConsistency};
+use graphdb_core::types::CommitLsn;
+
+// 会话内读己之写：等待本事务的 commit_lsn
+let opts = SearchOptions::new(space_id, "Person", "embedding", query_vec, 10)
+    .with_consistency(SearchConsistency::ReadYourWrites { timeout_ms: 2000 })
+    .with_minimum_lsn(CommitLsn::new(session_commit_lsn));
+let results = coordinator.search_with_options(opts).await?;
+
+// 仅等待已物化的全部提交（不指定 LSN 时取 materialized_lsn）
+let opts = SearchOptions::new(space_id, "Person", "embedding", query_vec, 10)
+    .with_consistency(SearchConsistency::ReadYourWrites { timeout_ms: 500 });
+```
+
+### 集合粒度选型（Phase 3.2）
+
+- `space` 粒度（默认）：`collection = space_{id}`，多 `(tag,field)` 以 `group_id="{tag}_{field}"` 逻辑隔离；FD/内存最省，但同 `space` 异构 `dimension/metric` 受限（`CollectionConfigConflict`）。
+- `field` 粒度（可选）：`collection = {space}_{tag}_{field}`，物理隔离，支持异构配置；FD 与 `compaction` 线性增长，单 `space` field>16 时建议保持 `space` 粒度或分 `space`。
+- 配置：`[vector.collection] granularity = "space" | "field"`，由 `startup::attach_vector_coordinator` 注入 `CollectionNaming` 策略；在线迁移复用 `generation_state.Publishing` 切换（`docs/plan/vector_sync_phase3_detailed.md §3`）。
+
 ## 相关资源
 
 ### 内部资源
 - [Cargo.toml](../../Cargo.toml) - 项目依赖
 - [src/vector/mod.rs](../../src/vector/mod.rs) - 向量模块入口
 - [crates/vector-client/](../../crates/vector-client/) - 向量客户端 crate
+- [同步架构](../sync/architecture.md) - 图 WAL 单真源与 Outbox 投递
+- [Phase 3 细化方案](../plan/vector_sync_phase3_detailed.md) - 治理四子项完整设计
 
 ### 外部资源
 - [Qdrant 官方文档](https://qdrant.tech/documentation/)
