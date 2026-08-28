@@ -15,13 +15,13 @@ pub mod executor_stats;
 pub mod memory_budget;
 pub mod traits;
 
-pub use execution_context::ExecutionContext;
+pub use execution_context::{ExecutionContext, SearchContext};
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_stats::ExecutorStats;
 pub use memory_budget::{
     MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, Spillable,
 };
-pub use traits::{SearchProvider, SearchProviderType};
+pub use traits::{IndexInfo, SearchProvider, SearchProviderType};
 #[cfg(feature = "fulltext")]
 pub use traits::FulltextProvider;
 #[cfg(feature = "vector")]

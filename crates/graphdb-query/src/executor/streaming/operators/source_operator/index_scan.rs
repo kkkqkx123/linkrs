@@ -399,10 +399,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ))
     }
 

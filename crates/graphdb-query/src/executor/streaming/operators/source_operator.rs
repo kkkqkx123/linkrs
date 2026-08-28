@@ -678,10 +678,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(0),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
         let mut source = source(SourceOperatorKind::ScanVertices {
@@ -730,10 +727,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
         source.inject_context(base.runtime.as_ref(), config_for(&base));
@@ -786,10 +780,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
         source.inject_context(base.runtime.as_ref(), config_for(&base));
@@ -855,10 +846,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
         let mut source = source(SourceOperatorKind::Start);
@@ -916,10 +904,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             Some(storage.clone()),
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
         let mut source = source(SourceOperatorKind::GetEdges {

@@ -385,10 +385,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         engine.set_runtime(runtime.clone());
 

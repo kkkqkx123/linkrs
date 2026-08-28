@@ -213,10 +213,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         let released = Arc::new(AtomicBool::new(false));
         let released_for_cleanup = released.clone();

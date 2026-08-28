@@ -296,7 +296,7 @@ impl PhysicalPlanMaterializer {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "fulltext")]
-                    let ft_mgr = runtime.fulltext_manager.clone();
+                    let ft_mgr = runtime.search.fulltext_manager.clone();
                     let op = FulltextOperator::from_spec(
                         ft_spec,
                         storage,
@@ -310,7 +310,7 @@ impl PhysicalPlanMaterializer {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "vector")]
-                    let coord = runtime.vector_coordinator.clone();
+                    let coord = runtime.search.vector_coordinator.clone();
                     let op = VectorOperator::from_spec(
                         vector_spec,
                         storage,
@@ -494,10 +494,7 @@ impl PhysicalPlanMaterializer {
             },
             bindings.memory_budget.clone(),
             bindings.storage.clone(),
-            #[cfg(feature = "fulltext")]
-            bindings.fulltext_manager.clone(),
-            #[cfg(feature = "vector")]
-            bindings.vector_coordinator.clone(),
+            bindings.search.clone(),
         );
 
         // M2: inject transaction scope.
@@ -712,10 +709,7 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
-            #[cfg(feature = "fulltext")]
-            fulltext_manager: None,
-            #[cfg(feature = "vector")]
-            vector_coordinator: None,
+            search: crate::executor::base::SearchContext::default(),
         }
     }
 

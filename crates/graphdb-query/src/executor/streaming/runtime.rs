@@ -693,10 +693,7 @@ pub struct ExecutionRuntime {
     /// Moved here from OperatorSpec so that the physical plan tree is
     /// truly immutable and cacheable without sharing storage handles.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-    #[cfg(feature = "fulltext")]
-    pub fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
-    #[cfg(feature = "vector")]
-    pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
+    pub search: crate::executor::base::SearchContext,
     /// Per-partition operator state arenas.
     ///
     /// Indexed by `partition_id` so parallel workers do not contend on a
@@ -743,12 +740,7 @@ impl ExecutionRuntime {
         query_id: QueryIdentity,
         memory_budget: MemoryBudget,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        #[cfg(feature = "fulltext")] fulltext_manager: Option<
-            Arc<graphdb_fulltext::manager::FulltextIndexManager>,
-        >,
-        #[cfg(feature = "vector")] vector_coordinator: Option<
-            Arc<graphdb_sync::VectorSyncCoordinator>,
-        >,
+        search: crate::executor::base::SearchContext,
     ) -> Self {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
@@ -767,10 +759,7 @@ impl ExecutionRuntime {
             max_buffered_chunks: AtomicUsize::new(10),
             spill_manager: Arc::new(parking_lot::Mutex::new(None)),
             storage,
-            #[cfg(feature = "fulltext")]
-            fulltext_manager,
-            #[cfg(feature = "vector")]
-            vector_coordinator,
+            search,
             state_arenas: vec![Mutex::new(StateArenaSet::new())],
             parameter_values: None,
             session_variable_values: None,
@@ -787,10 +776,7 @@ impl ExecutionRuntime {
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         )
     }
 
@@ -813,7 +799,7 @@ impl ExecutionRuntime {
         &mut self,
         manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     ) {
-        self.fulltext_manager = manager;
+        self.search.fulltext_manager = manager;
     }
 
     #[cfg(feature = "vector")]
@@ -821,7 +807,7 @@ impl ExecutionRuntime {
         &mut self,
         coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
     ) {
-        self.vector_coordinator = coordinator;
+        self.search.vector_coordinator = coordinator;
     }
 
     /// Attach a QueryManager so that KILL QUERY and finish tracking work.

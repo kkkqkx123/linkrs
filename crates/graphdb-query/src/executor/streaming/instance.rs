@@ -108,10 +108,7 @@ pub struct QueryBindings {
     /// the policy when the query finishes (columnar auto-detection).
     /// Injected by the pipeline from the optimizer engine.
     pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
-    #[cfg(feature = "fulltext")]
-    pub fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
-    #[cfg(feature = "vector")]
-    pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
+    pub search: crate::executor::base::SearchContext,
 }
 
 impl std::fmt::Debug for QueryBindings {
@@ -152,10 +149,7 @@ impl QueryBindings {
             arena: context.arena.clone(),
             feedback_history: context.feedback_history.clone(),
             columnar_policy: context.columnar_policy.clone(),
-            #[cfg(feature = "fulltext")]
-            fulltext_manager: context.fulltext_manager.clone(),
-            #[cfg(feature = "vector")]
-            vector_coordinator: context.vector_coordinator.clone(),
+            search: context.search.clone(),
         }
     }
 

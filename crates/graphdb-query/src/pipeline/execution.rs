@@ -328,11 +328,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         #[cfg(feature = "fulltext")]
         {
-            context.fulltext_manager = self.fulltext_manager.clone();
+            context.search.fulltext_manager = self.fulltext_manager.clone();
         }
         #[cfg(feature = "vector")]
         {
-            context.vector_coordinator = self.vector_coordinator.clone();
+            context.search.vector_coordinator = self.vector_coordinator.clone();
         }
         // Populate unified search providers for discovery
         {
@@ -350,7 +350,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::executor::base::traits::VectorProvider::new(coordinator.clone()),
                 ));
             }
-            context.search_providers = providers;
+            context.search.search_providers = providers;
         }
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());

@@ -1,59 +1,27 @@
 //! Vector Synchronization Coordinator
 //!
-//! Coordinates vector index updates with graph data changes.
+//! Coordinates vector index updates with graph data changes.  Wraps a
+//! [`VectorIndexManager`](crate::VectorIndexManager) for index lifecycle and
+//! search, and adds synchronization concerns: change batching, outbox
+//! integration, embedding, and disabled-engine accounting.
 
 use std::collections::HashMap;
-
-#[cfg(feature = "embedding")]
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::backend::VectorBackend;
-use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
+use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
+use crate::VectorIndexManager;
 use graphdb_core::Value;
 
 #[cfg(feature = "embedding")]
 use graphdb_embedding::EmbeddingService;
 pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
-use vector_search::{
-    types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,
-    PayloadSchemaType, VectorFilter,
-};
+use vector_search::{CollectionConfig, IndexMetadata, VectorFilter};
 
-/// Validate a distance metric at the index-creation entry points.
-///
-/// Only metrics every backend supports are accepted here so requests fail
-/// fast with one consistent error instead of deep inside a specific engine
-/// or on the remote server.
-fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
-    validate_distance_metric(distance).map_err(|e| {
-        VectorCoordinatorError::Vector(VectorError::ConfigError(e))
-    })
-}
-
-fn validate_metric_for_backend(
-    backend: &VectorBackend,
-    distance: DistanceMetric,
-) -> VectorCoordinatorResult<()> {
-    validate_metric(distance)?;
-    let _ = backend;
-    Ok(())
-}
-
-/// Runtime state of the vector engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VectorEngineState {
-    /// Engine is disabled: user-facing vector operations fail with
-    /// [`VectorCoordinatorError::EngineDisabled`]; delivery-plane batches are
-    /// skipped and counted. Logical index metadata is still tracked for
-    /// schema correctness.
-    Disabled,
-    /// Engine is active; mutations and searches execute against the backend.
-    Active,
-}
+// ── Types (kept here for backward compatibility) ──────────────────────────
 
 /// Vector point data for synchronization
 #[derive(Debug, Clone)]
@@ -82,13 +50,6 @@ impl From<crate::types::ChangeType> for VectorChangeType {
 }
 
 /// Consistency level for vector search.
-///
-/// - `Eventual` (default): may lag behind the latest committed graph write
-///   (`frontier_lag` observable, no waiting).
-/// - `ReadYourWrites`: the calling session's last `commit_lsn` is waited on
-///   until the vector `index_frontier >= commit_lsn` or the timeout expires.
-///   If the frontier is marked `degraded` through that LSN, the search fails
-///   instead of returning stale data.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SearchConsistency {
     #[default]
@@ -107,9 +68,6 @@ pub struct SearchOptions {
     pub threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
     pub consistency: SearchConsistency,
-    /// When `ReadYourWrites`, the minimum LSN to wait for. `None` means wait
-    /// for the current outbox `materialized_lsn` (i.e. all committed writes so
-    /// far).
     pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
@@ -211,11 +169,6 @@ impl VectorIndexLocation {
         }
     }
 
-    /// Generate collection name from this index location.
-    ///
-    /// Default is space-level granularity for backward compatibility.
-    /// For granularity-aware naming, use `to_collection_name_with` or
-    /// `VectorSyncCoordinator::collection_name_for`.
     pub fn to_collection_name(&self) -> String {
         self.to_collection_name_with(CollectionGranularity::Space)
     }
@@ -230,9 +183,6 @@ impl VectorIndexLocation {
         }
     }
 
-    /// Generate group ID for logical isolation within a space-level collection.
-    /// This is used as a filter condition in vector searches.
-    /// Returns `Some(group)` for space granularity, `None` for field granularity.
     pub fn group_id(&self) -> String {
         self.group_id_with(CollectionGranularity::Space)
             .unwrap_or_default()
@@ -244,6 +194,28 @@ impl VectorIndexLocation {
             CollectionGranularity::Field => None,
         }
     }
+}
+
+/// Parsed vector index location from a collection name.
+#[derive(Debug, Clone)]
+pub struct IndexMetadataWrapper {
+    pub collection_name: String,
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub index_name: Option<String>,
+}
+
+/// Runtime state of the vector engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorEngineState {
+    /// Engine is disabled: user-facing vector operations fail with
+    /// [`VectorCoordinatorError::EngineDisabled`]; delivery-plane batches are
+    /// skipped and counted. Logical index metadata is still tracked for
+    /// schema correctness.
+    Disabled,
+    /// Engine is active; mutations and searches execute against the backend.
+    Active,
 }
 
 /// Vector change context
@@ -270,36 +242,26 @@ impl VectorChangeContext {
     }
 }
 
+// ── VectorSyncCoordinator ─────────────────────────────────────────────────
+
 /// Vector synchronization coordinator
 pub struct VectorSyncCoordinator {
-    backend: VectorBackend,
+    index_manager: Arc<VectorIndexManager>,
     #[cfg(feature = "embedding")]
     embedding_service: Option<Arc<EmbeddingService>>,
-    /// Tracks registered logical indexes by key "space_{space_id}_{tag}_{field}" -> metadata
-    logical_indexes: DashMap<VectorIndexLocation, IndexMetadata>,
     /// Vector change items skipped because the engine is disabled (delivery
     /// plane). Observable accounting for silent degradation.
     disabled_skips: std::sync::atomic::AtomicU64,
     /// Tokio runtime handle for blocking async operations from sync context.
-    /// Using `Handle` instead of `&Runtime` avoids lifetime issues while allowing
-    /// the caller (API layer or tests) to control the runtime lifecycle.
     runtime: tokio::runtime::Handle,
-    /// Optional outbox handle for `ReadYourWrites` consistency waiting. Set by
-    /// `SyncManager::configure_outbox` when both outbox and coordinator are
-    /// present. Absent in coordinator-only (query-crate) instantiations.
+    /// Optional outbox handle for `ReadYourWrites` consistency waiting.
     outbox: parking_lot::RwLock<Option<std::sync::Arc<crate::SqliteOutbox>>>,
-    /// Collection granularity. Space-level is default for backward
-    /// compatibility; Field-level gives physical isolation per (tag,field).
-    granularity: parking_lot::RwLock<CollectionGranularity>,
 }
 
 impl std::fmt::Debug for VectorSyncCoordinator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("VectorSyncCoordinator");
-        debug
-            .field("backend", &self.backend)
-            .field("logical_index_count", &self.logical_indexes.len())
-            .field("granularity", &*self.granularity.read());
+        debug.field("index_manager", &self.index_manager);
         #[cfg(feature = "embedding")]
         debug.field("embedding_service", &self.embedding_service.is_some());
         debug.finish()
@@ -308,79 +270,42 @@ impl std::fmt::Debug for VectorSyncCoordinator {
 
 impl VectorSyncCoordinator {
     pub fn is_disabled_engine(&self) -> bool {
-        self.backend.is_disabled()
+        self.index_manager.is_disabled_engine()
     }
 
     /// Returns the runtime state of the underlying vector engine.
-    ///
-    /// - `Disabled`: engine is not available; user-facing vector operations
-    ///   fail with [`VectorCoordinatorError::EngineDisabled`], while
-    ///   delivery-plane batches are skipped and accounted (see
-    ///   [`Self::disabled_skip_count`]). Index metadata is still tracked
-    ///   logically so that queries referencing vector indexes do not produce
-    ///   schema errors.
-    /// - `Active`: engine is operational; mutations and searches execute normally.
-    pub fn engine_state(&self) -> VectorEngineState {
+    pub fn engine_state(&self) -> crate::VectorEngineState {
         if self.is_disabled_engine() {
-            VectorEngineState::Disabled
+            crate::VectorEngineState::Disabled
         } else {
-            VectorEngineState::Active
+            crate::VectorEngineState::Active
         }
     }
 
     /// Total number of vector change items skipped because the engine was
-    /// disabled. Non-zero values mean vector data currently diverges from
-    /// graph data.
+    /// disabled.
     pub fn disabled_skip_count(&self) -> u64 {
         self.disabled_skips
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Create a new vector sync coordinator with an explicit runtime handle.
-    ///
-    /// The caller is responsible for ensuring the runtime outlives the coordinator.
-    /// In async contexts, use `Handle::current()` or `Runtime::handle()`.
-    /// In sync contexts (e.g. tests), create a runtime and pass its handle.
     pub fn new(
         backend: VectorBackend,
         #[cfg(feature = "embedding")] embedding_service: Option<Arc<EmbeddingService>>,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
-            backend,
+            index_manager: Arc::new(VectorIndexManager::new(backend)),
             #[cfg(feature = "embedding")]
             embedding_service,
-            logical_indexes: DashMap::new(),
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
             outbox: parking_lot::RwLock::new(None),
-            granularity: parking_lot::RwLock::new(CollectionGranularity::default()),
         }
     }
 
-    pub fn granularity(&self) -> CollectionGranularity {
-        *self.granularity.read()
-    }
-
-    pub fn set_granularity(&self, granularity: CollectionGranularity) {
-        *self.granularity.write() = granularity;
-    }
-
-    /// Resolve collection name respecting the configured granularity.
-    pub fn collection_name_for(&self, loc: &VectorIndexLocation) -> String {
-        loc.to_collection_name_with(self.granularity())
-    }
-
-    /// Resolve group_id respecting granularity. `None` means field-level
-    /// physical isolation, no group filter needed.
-    pub fn group_id_for(&self, loc: &VectorIndexLocation) -> Option<String> {
-        loc.group_id_with(self.granularity())
-    }
-
     /// Convenience constructor without embedding service.
-    ///
-    /// Avoids the `#[cfg]` feature-unification pitfall where callers in other
-    /// crates see a different function signature than the one compiled here.
     pub fn new_without_embedding(backend: VectorBackend, runtime: tokio::runtime::Handle) -> Self {
         #[cfg(feature = "embedding")]
         {
@@ -392,18 +317,41 @@ impl VectorSyncCoordinator {
         }
     }
 
-    /// Get the runtime handle for blocking async operations
+    /// Get a reference to the underlying index manager.
+    pub fn index_manager(&self) -> &Arc<VectorIndexManager> {
+        &self.index_manager
+    }
+
+    /// Get the runtime handle for blocking async operations.
     pub fn runtime(&self) -> &tokio::runtime::Handle {
         &self.runtime
     }
 
-    /// Get the vector backend
+    /// Get the vector backend.
     pub fn backend(&self) -> &VectorBackend {
-        &self.backend
+        self.index_manager.backend()
     }
 
     pub fn set_outbox(&self, outbox: std::sync::Arc<crate::SqliteOutbox>) {
         *self.outbox.write() = Some(outbox);
+    }
+
+    pub fn granularity(&self) -> CollectionGranularity {
+        self.index_manager.granularity()
+    }
+
+    pub fn set_granularity(&self, granularity: CollectionGranularity) {
+        self.index_manager.set_granularity(granularity);
+    }
+
+    /// Resolve collection name respecting the configured granularity.
+    pub fn collection_name_for(&self, loc: &VectorIndexLocation) -> String {
+        self.index_manager.collection_name_for(loc)
+    }
+
+    /// Resolve group_id respecting granularity.
+    pub fn group_id_for(&self, loc: &VectorIndexLocation) -> Option<String> {
+        self.index_manager.group_id_for(loc)
     }
 
     fn vector_index_id(space_id: u64, tag_name: &str) -> u64 {
@@ -415,13 +363,14 @@ impl VectorSyncCoordinator {
         hash & (i64::MAX as u64)
     }
 
-    /// Get the embedding service
+    /// Get the embedding service.
     #[cfg(feature = "embedding")]
     pub fn embedding_service(&self) -> Option<&Arc<EmbeddingService>> {
         self.embedding_service.as_ref()
     }
 
-    /// Create a vector index (logical index in shared collection)
+    // ── Index lifecycle (delegated) ───────────────────────────────────
+
     pub async fn create_vector_index(
         &self,
         space_id: u64,
@@ -430,195 +379,84 @@ impl VectorSyncCoordinator {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> VectorCoordinatorResult<String> {
-        validate_metric_for_backend(&self.backend, distance)?;
-
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-
-        if self.is_disabled_engine() {
-            let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-            let meta = IndexMetadata::new(
-                collection_name.clone(),
-                CollectionConfig::new(vector_size, distance),
-            );
-            self.logical_indexes.insert(logical_key, meta);
-            info!(
-                "Logical vector index created in disabled mode: space={} tag={} field={} in collection {}",
-                space_id, tag_name, field_name, collection_name
-            );
-            return Ok(collection_name);
-        }
-
-        // Index-tier fields are only meaningful for the remote qdrant backend;
-        // the local engine controls its tiers through [vector.local.ivf].
-        let config = if self.backend.is_local() {
-            CollectionConfig::new(vector_size, distance)
-        } else {
-            let hnsw_config = vector_search::HnswConfig::new(16, 100).with_payload_m(16);
-            CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
-        };
-
-        // Only create the physical collection if it doesn't exist yet
-        if !self.backend.index_exists(&collection_name) {
-            self.backend
-                .create_index(&collection_name, &config)
-                .await
-                .map_err(|e| VectorCoordinatorError::IndexCreationFailed {
-                    tag_name: tag_name.to_string(),
-                    field_name: field_name.to_string(),
-                    reason: e.to_string(),
-                })?;
-
-            // Space granularity needs group_id payload index; field granularity
-            // uses physical isolation and skips the group_id index.
-            if self.granularity() == CollectionGranularity::Space {
-                if let Err(e) = self
-                    .backend
-                    .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to create payload index for group_id in collection '{}': {}",
-                        collection_name,
-                        e
-                    );
-                }
-            }
-        } else {
-            if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
-                let existing = &existing_meta.config;
-                // Core dimensions/metrics must match; hnsw/quantization/index_type
-                // differences also trigger a conflict so a caller cannot silently
-                // shadow an existing collection with altered knobs (e.g. scalar
-                // quantization enabled on second CREATE with same space).
-                if existing.vector_size != vector_size
-                    || existing.distance != distance
-                    || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config)
-                        != format!("{:?}", config.hnsw_config)
-                    || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config)
-                        != format!("{:?}", config.ivf_config)
-                {
-                    return Err(VectorCoordinatorError::CollectionConfigConflict {
-                        collection_name: collection_name.clone(),
-                        existing_size: existing.vector_size,
-                        existing_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            existing.distance,
-                            existing.index_type,
-                            existing.hnsw_config,
-                            existing.quantization_config
-                        ),
-                        requested_size: vector_size,
-                        requested_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            distance,
-                            config.index_type,
-                            config.hnsw_config,
-                            config.quantization_config
-                        ),
-                    });
-                }
-            }
-        }
-
-        // Register logical index with the actual config used
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let meta = IndexMetadata::new(collection_name.clone(), config);
-        self.logical_indexes.insert(logical_key, meta);
-
-        info!(
-            "Logical vector index created: space={} tag={} field={} in collection {}",
-            space_id, tag_name, field_name, collection_name
-        );
-        Ok(collection_name)
+        self.index_manager
+            .create_vector_index(space_id, tag_name, field_name, vector_size, distance)
+            .await
     }
 
-    /// Drop a vector index (remove logical index, physical collection remains)
     pub async fn drop_vector_index(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
     ) -> VectorCoordinatorResult<()> {
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&logical_key);
-        self.logical_indexes.remove(&logical_key);
-
-        // Field granularity: each logical index owns its physical collection.
-        // Space granularity: share collection via group_id filter.
-        if self.granularity() == CollectionGranularity::Field {
-            if self.backend.index_exists(&collection_name) {
-                if let Err(error) = self.backend.delete_collection(&collection_name).await {
-                    tracing::warn!(
-                        "Failed to reclaim vector collection '{}' (field granularity): {}",
-                        collection_name,
-                        error
-                    );
-                }
-            }
-        } else if self.backend.is_local() && self.backend.index_exists(&collection_name) {
-            let remaining_siblings = self
-                .logical_indexes
-                .iter()
-                .filter(|entry| entry.value().name == collection_name)
-                .count();
-            if remaining_siblings == 0 {
-                if let Err(error) = self.backend.delete_collection(&collection_name).await {
-                    tracing::warn!(
-                        "Failed to reclaim vector collection '{}': {}",
-                        collection_name,
-                        error
-                    );
-                }
-            } else if let Err(error) = self
-                .backend
-                .delete_by_filter(
-                    &collection_name,
-                    VectorFilter::new().must(FilterCondition::match_value(
-                        "group_id",
-                        format!("{tag_name}_{field_name}"),
-                    )),
-                )
-                .await
-            {
-                tracing::warn!(
-                    "Failed to purge dropped vector group '{tag_name}_{field_name}' from collection '{}': {}",
-                    collection_name,
-                    error
-                );
-            }
-        }
-
-        info!(
-            "Logical vector index dropped: space={} tag={} field={}",
-            space_id, tag_name, field_name
-        );
-        Ok(())
+        self.index_manager
+            .drop_vector_index(space_id, tag_name, field_name)
+            .await
     }
 
-    /// Handle batch vector changes
-    ///
-    /// Delivery-plane semantics: when the engine is disabled the batch is
-    /// *skipped and accounted* — logged with a warning, counted in
-    /// Delivery-plane handling for a disabled engine. For the local engine this
-    /// state is unreachable (Local never reports disabled); if it occurs it is
-    /// treated as a hard error. For the Qdrant backend the event is **not**
-    /// acknowledged – the outbox entry is retained and retried after the engine
-    /// recovers, preserving self-healing. The skip is still observable via
-    /// [`Self::disabled_skip_count`] and via metrics.
+    pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
+        self.index_manager.index_exists(space_id, tag_name, field_name)
+    }
+
+    pub fn set_index_name(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        index_name: &str,
+    ) {
+        self.index_manager
+            .set_index_name(space_id, tag_name, field_name, index_name);
+    }
+
+    pub fn index_info(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<IndexMetadata> {
+        self.index_manager.index_info(space_id, tag_name, field_name)
+    }
+
+    pub fn list_indexes(&self) -> Vec<IndexMetadataWrapper> {
+        self.index_manager.list_indexes()
+    }
+
+    pub fn register_logical_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        collection_name: String,
+        config: CollectionConfig,
+        user_index_name: Option<String>,
+    ) {
+        self.index_manager
+            .register_logical_index(space_id, tag_name, field_name, collection_name, config, user_index_name);
+    }
+
+    pub async fn create_index_with_config(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        config: CollectionConfig,
+    ) -> VectorCoordinatorResult<String> {
+        self.index_manager
+            .create_index_with_config(space_id, tag_name, field_name, config)
+            .await
+    }
+
+    // ── Sync: change batch handling ───────────────────────────────────
+
     pub async fn on_vector_change_batch(
         &self,
-        contexts: Vec<VectorChangeContext>,
+        contexts: Vec<crate::VectorChangeContext>,
     ) -> VectorCoordinatorResult<()> {
         if self.is_disabled_engine() {
             self.disabled_skips
                 .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            // Qdrant disabled: preserve the outbox entry for retry after recovery
-            // instead of silently discarding it. Returning EngineDisabled makes
-            // `SyncManager::retry_outbox_sync` route the event to `retry()` rather
-            // than `acknowledge()` or `dead_letter()`.
             tracing::warn!(
                 count = contexts.len(),
                 total_skipped = self
@@ -631,19 +469,9 @@ impl VectorSyncCoordinator {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
 
-        // Local WAL group-commit alignment: batch per collection into one
-        // `apply_txn(txn_id, ops)` so the vector WAL is fsync'ed once per
-        // collection per graph commit burst, instead of once per point. This
-        // reduces double `fsync` jitter between the graph WAL and the vector
-        // WAL when the same `commit_lsn` fans out to multiple (tag,field) groups.
-        // Qdrant keeps its existing per-collection streaming path.
-        if self.backend.is_local() {
-            if let Some(local) = self.backend.as_local() {
+        if self.backend().is_local() {
+            if let Some(local) = self.backend().as_local() {
                 let txn_id = {
-                    // Deterministic per-batch id: low bits are timestamp, high
-                    // bits mix the batch size so two concurrent batches at the
-                    // same ms do not collide. Idempotent replay on the same
-                    // `txn_id` is safe (`CollectionStore::apply_txn` deduplicates).
                     let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
                     now.wrapping_mul(0x9e3779b97f4a7c15)
                         .wrapping_add(contexts.len() as u64)
@@ -682,10 +510,6 @@ impl VectorSyncCoordinator {
                     }
                 }
                 if !ops.is_empty() {
-                    // `apply_txn` groups by collection internally and performs
-                    // one WAL `apply_txn` per collection in lexicographic order,
-                    // reusing the per-collection fsync barrier rather than
-                    // issuing one fsync per point.
                     local.apply_txn(txn_id, ops).map_err(|e| {
                         VectorCoordinatorError::Vector(crate::vector_error::VectorError::from(e))
                     })?;
@@ -695,58 +519,15 @@ impl VectorSyncCoordinator {
             }
         }
 
-        let mut upsert_by_collection: HashMap<String, Vec<VectorPoint>> = HashMap::new();
-        let mut delete_by_collection: HashMap<String, Vec<String>> = HashMap::new();
+        let (upsert_by_collection, delete_by_collection) =
+            self.index_manager.prepare_change_batch(contexts);
 
-        for ctx in contexts {
-            let collection_name = self.collection_name_for(&ctx.location);
-            let point_id = ctx.data.id.to_string();
-
-            match ctx.change_type {
-                VectorChangeType::Insert => {
-                    let vector = ctx.data.vector;
-                    let mut json_payload: HashMap<String, serde_json::Value> = ctx
-                        .data
-                        .payload
-                        .into_iter()
-                        .filter_map(|(k, v)| serde_json::to_value(&v).ok().map(|json| (k, json)))
-                        .collect();
-
-                    if let Some(gid) = self.group_id_for(&ctx.location) {
-                        json_payload.insert(
-                            "group_id".to_string(),
-                            serde_json::to_value(gid)
-                                .unwrap_or(serde_json::Value::Null),
-                        );
-                    }
-
-                    let point = VectorPoint::new(point_id, vector).with_payload(json_payload);
-
-                    upsert_by_collection
-                        .entry(collection_name)
-                        .or_default()
-                        .push(point);
-                }
-                VectorChangeType::Delete => {
-                    delete_by_collection
-                        .entry(collection_name)
-                        .or_default()
-                        .push(point_id);
-                }
-            }
-        }
-
-        // Qdrant path: per-collection concurrent upsert. The plan calls for
-        // `claim 4` concurrency at the outbox layer (handled in
-        // `SyncManager::retry_outbox_sync`) plus per-collection `upsert_batch`
-        // concurrency here. Box the futures so upsert and delete branches share
-        // one trait-object type.
         use std::future::Future;
         use std::pin::Pin;
         let mut all_futs: Vec<Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send>>> =
             Vec::new();
         for (collection_name, points) in upsert_by_collection {
-            let backend = self.backend.clone();
+            let backend = self.backend().clone();
             all_futs.push(Box::pin(async move {
                 let points_count = points.len();
                 if points_count == 1 {
@@ -764,7 +545,7 @@ impl VectorSyncCoordinator {
             }));
         }
         for (collection_name, point_ids) in delete_by_collection {
-            let backend = self.backend.clone();
+            let backend = self.backend().clone();
             all_futs.push(Box::pin(async move {
                 let point_ids_count = point_ids.len();
                 if point_ids_count == 1 {
@@ -787,24 +568,16 @@ impl VectorSyncCoordinator {
         Ok(())
     }
 
-    /// Search for similar vectors
+    // ── Search (delegated with RYW consistency) ───────────────────────
+
     pub async fn search(
         &self,
         collection: &str,
         query: SearchQuery,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let results = self.backend.search(collection, query).await?;
-        Ok(results)
+        self.index_manager.search(collection, query).await
     }
 
-    /// Streaming search: yields results one by one.
-    ///
-    /// Uses the backend's streaming implementation (local: buffered iter,
-    /// remote: gRPC streaming when available). Callers can consume the
-    /// stream without materializing the full result set.
     pub async fn search_stream(
         &self,
         collection: &str,
@@ -814,14 +587,9 @@ impl VectorSyncCoordinator {
             Box<dyn futures::Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>,
         >,
     > {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let stream = self.backend.search_stream(collection, query).await?;
-        Ok(stream)
+        self.index_manager.search_stream(collection, query).await
     }
 
-    /// Streaming scroll: yields points one by one via paginated scroll.
     pub async fn scroll_stream(
         &self,
         collection: &str,
@@ -831,17 +599,12 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<
         std::pin::Pin<Box<dyn futures::Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let stream = self
-            .backend
+        self.index_manager
             .scroll_stream(collection, batch_size, with_payload, with_vector)
-            .await?;
-        Ok(stream)
+            .await
     }
 
-    /// Search with options
+    /// Search with options (handles RYW consistency before delegating).
     pub async fn search_with_options(
         &self,
         options: SearchOptions,
@@ -849,12 +612,7 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
-        // Read-your-writes consistency: wait for the vector frontier to catch
-        // up to the caller's commit LSN (or current materialized LSN when not
-        // supplied). Degraded frontiers fail the search instead of serving
-        // stale data.
         if let SearchConsistency::ReadYourWrites { timeout_ms } = &options.consistency {
-            // Clone the outbox handle without holding the lock across an await.
             let outbox_opt = {
                 let guard = self.outbox.read();
                 guard.clone()
@@ -863,7 +621,6 @@ impl VectorSyncCoordinator {
                 let minimum_lsn = if let Some(lsn) = options.minimum_lsn {
                     lsn
                 } else {
-                    // Wait for all committed writes that have been materialized.
                     match outbox.materialized_lsn().await {
                         Ok(lsn) => lsn,
                         Err(e) => {
@@ -904,29 +661,9 @@ impl VectorSyncCoordinator {
                 }
             }
         }
-        let loc =
-            VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name);
-        let collection_name = self.collection_name_for(&loc);
-
-        let mut query = SearchQuery::new(options.query_vector, options.limit);
-
-        if let Some(threshold) = options.threshold {
-            query = query.with_score_threshold(threshold);
-        }
-
-        // Inject group_id filter only for space granularity (logical isolation).
-        // Field granularity uses physical isolation, no group filter needed.
-        let mut filter = options.filter.unwrap_or_default();
-        if let Some(gid) = self.group_id_for(&loc) {
-            filter = filter.must(FilterCondition::match_value("group_id", gid));
-        }
-        query = query.with_filter(filter);
-
-        let results = self.search(&collection_name, query).await?;
-        Ok(results)
+        self.index_manager.search_with_options(options).await
     }
 
-    /// Search with space_id and tag/field names
     pub async fn search_by_location(
         &self,
         space_id: u64,
@@ -935,20 +672,11 @@ impl VectorSyncCoordinator {
         query_vector: Vec<f32>,
         limit: usize,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-        let mut query = SearchQuery::new(query_vector, limit);
-        if let Some(gid) = self.group_id_for(&loc) {
-            let filter = VectorFilter::new().must(FilterCondition::match_value("group_id", gid));
-            query = query.with_filter(filter);
-        }
-        self.search(&collection_name, query).await
+        self.index_manager
+            .search_by_location(space_id, tag_name, field_name, query_vector, limit)
+            .await
     }
 
-    /// Search with threshold
     pub async fn search_with_threshold(
         &self,
         space_id: u64,
@@ -958,20 +686,11 @@ impl VectorSyncCoordinator {
         limit: usize,
         threshold: f32,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-        let mut query = SearchQuery::new(query_vector, limit).with_score_threshold(threshold);
-        if let Some(gid) = self.group_id_for(&loc) {
-            let filter = VectorFilter::new().must(FilterCondition::match_value("group_id", gid));
-            query = query.with_filter(filter);
-        }
-        self.search(&collection_name, query).await
+        self.index_manager
+            .search_with_threshold(space_id, tag_name, field_name, query_vector, limit, threshold)
+            .await
     }
 
-    /// Search with filter
     pub async fn search_with_filter(
         &self,
         space_id: u64,
@@ -981,20 +700,24 @@ impl VectorSyncCoordinator {
         limit: usize,
         filter: VectorFilter,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-        let mut enriched = filter;
-        if let Some(gid) = self.group_id_for(&loc) {
-            enriched = enriched.must(FilterCondition::match_value("group_id", gid));
-        }
-        let query = SearchQuery::new(query_vector, limit).with_filter(enriched);
-        self.search(&collection_name, query).await
+        self.index_manager
+            .search_with_filter(space_id, tag_name, field_name, query_vector, limit, filter)
+            .await
     }
 
-    /// Embed text to vector
+    pub async fn search_with_threshold_and_filter(
+        &self,
+        options: SearchOptions,
+        threshold: f32,
+        filter: VectorFilter,
+    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
+        self.index_manager
+            .search_with_threshold_and_filter(options, threshold, filter)
+            .await
+    }
+
+    // ── Embedding ─────────────────────────────────────────────────────
+
     #[cfg(feature = "embedding")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
         if let Some(embedding) = &self.embedding_service {
@@ -1009,181 +732,4 @@ impl VectorSyncCoordinator {
             ))
         }
     }
-
-    /// Check if index exists (logical index)
-    pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        self.logical_indexes.contains_key(&logical_key)
-    }
-
-    /// Attach a statement-level logical index name to an existing
-    /// `(space_id, tag, field)` index.
-    ///
-    /// SQL `CREATE VECTOR INDEX <name>` resolves to a physical location; the
-    /// name is recorded here so later statements (SEARCH / LOOKUP / DROP) can
-    /// resolve `<name>` back to its location during planning.
-    /// Best-effort: a missing logical index leaves the map untouched.
-    pub fn set_index_name(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        index_name: &str,
-    ) {
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        if let Some(mut meta) = self.logical_indexes.get_mut(&logical_key) {
-            meta.index_name = Some(index_name.to_string());
-        }
-    }
-
-    /// Get logical index metadata for a tag/field combination
-    pub fn index_info(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-    ) -> Option<IndexMetadata> {
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        self.logical_indexes.get(&logical_key).map(|v| v.clone())
-    }
-
-    /// List all indexes (logical indexes)
-    pub fn list_indexes(&self) -> Vec<crate::vector_sync::IndexMetadataWrapper> {
-        self.logical_indexes
-            .iter()
-            .map(|pair| {
-                let location = pair.key();
-                crate::vector_sync::IndexMetadataWrapper {
-                    collection_name: pair.value().name.clone(),
-                    space_id: location.space_id,
-                    tag_name: location.tag_name.clone(),
-                    field_name: location.field_name.clone(),
-                    index_name: pair.value().index_name.clone(),
-                }
-            })
-            .collect()
-    }
-
-    /// Register a logical index (for disabled-engine mode or external registration)
-    pub fn register_logical_index(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        collection_name: String,
-        config: CollectionConfig,
-        user_index_name: Option<String>,
-    ) {
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let meta = if let Some(idx_name) = user_index_name {
-            IndexMetadata::with_index_name(collection_name, config, idx_name)
-        } else {
-            IndexMetadata::new(collection_name, config)
-        };
-        self.logical_indexes.insert(logical_key, meta);
-    }
-
-    /// Create vector index with config (logical index in shared collection)
-    pub async fn create_index_with_config(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        config: CollectionConfig,
-    ) -> VectorCoordinatorResult<String> {
-        validate_metric_for_backend(&self.backend, config.distance)?;
-
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-
-        if !self.backend.index_exists(&collection_name) {
-            self.backend
-                .create_index(&collection_name, &config)
-                .await
-                .map_err(|e| VectorCoordinatorError::IndexCreationFailed {
-                    tag_name: tag_name.to_string(),
-                    field_name: field_name.to_string(),
-                    reason: e.to_string(),
-                })?;
-
-            if self.granularity() == CollectionGranularity::Space {
-                if let Err(e) = self
-                    .backend
-                    .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to create payload index for group_id in collection '{}': {}",
-                        collection_name,
-                        e
-                    );
-                }
-            }
-        } else {
-            if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
-                let existing = &existing_meta.config;
-                if existing.vector_size != config.vector_size
-                    || existing.distance != config.distance
-                    || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config)
-                        != format!("{:?}", config.hnsw_config)
-                    || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config)
-                        != format!("{:?}", config.ivf_config)
-                {
-                    return Err(VectorCoordinatorError::CollectionConfigConflict {
-                        collection_name: collection_name.clone(),
-                        existing_size: existing.vector_size,
-                        existing_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            existing.distance,
-                            existing.index_type,
-                            existing.hnsw_config,
-                            existing.quantization_config
-                        ),
-                        requested_size: config.vector_size,
-                        requested_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            config.distance,
-                            config.index_type,
-                            config.hnsw_config,
-                            config.quantization_config
-                        ),
-                    });
-                }
-            }
-        }
-
-        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let meta = IndexMetadata::new(collection_name.clone(), config);
-        self.logical_indexes.insert(logical_key, meta);
-
-        info!(
-            "Logical vector index created with config: space={} tag={} field={} in collection {}",
-            space_id, tag_name, field_name, collection_name
-        );
-        Ok(collection_name)
-    }
-
-    /// Search with threshold and filter
-    pub async fn search_with_threshold_and_filter(
-        &self,
-        mut options: SearchOptions,
-        threshold: f32,
-        filter: VectorFilter,
-    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        options.threshold = Some(threshold);
-        options.filter = Some(filter);
-        self.search_with_options(options).await
-    }
-}
-
-/// Parsed vector index location from a collection name.
-#[derive(Debug, Clone)]
-pub struct IndexMetadataWrapper {
-    pub collection_name: String,
-    pub space_id: u64,
-    pub tag_name: String,
-    pub field_name: String,
-    pub index_name: Option<String>,
 }

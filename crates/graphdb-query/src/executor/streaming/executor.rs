@@ -1282,10 +1282,7 @@ mod tests {
             },
             runtime_budget,
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
 
         let sm = Arc::new(SpillManager::new(SpillConfig::default(), 999).unwrap());
@@ -1366,10 +1363,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         if spill_budget_bytes.is_some() {
             let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4243).unwrap());
@@ -1475,10 +1469,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         if spill_budget_bytes.is_some() {
             let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4242).unwrap());
@@ -1603,10 +1594,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         if spill_budget_bytes.is_some() {
             let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4244).unwrap());
@@ -1715,10 +1703,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext")]
-            None,
-            #[cfg(feature = "vector")]
-            None,
+            crate::executor::base::SearchContext::default(),
         ));
         if spill_budget_bytes.is_some() {
             let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4245).unwrap());

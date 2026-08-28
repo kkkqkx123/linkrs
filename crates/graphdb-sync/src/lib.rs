@@ -17,6 +17,8 @@ pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
 #[cfg(feature = "vector")]
+pub mod vector_index_manager;
+#[cfg(feature = "vector")]
 pub mod vector_sync;
 
 #[cfg(feature = "vector")]
@@ -65,6 +67,8 @@ pub use vector_sync::{
     VectorChangeContext, VectorChangeType, VectorEngineState, VectorIndexLocation, VectorPointData,
     VectorSyncCoordinator,
 };
+#[cfg(feature = "vector")]
+pub use vector_index_manager::VectorIndexManager;
 
 #[cfg(feature = "vector")]
 pub use backend::VectorBackend;
