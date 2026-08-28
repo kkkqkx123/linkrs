@@ -18,7 +18,7 @@ const METADATA_FILE_NAME: &str = "fulltext_metadata.json";
 
 #[derive(Debug)]
 pub struct FulltextIndexManager {
-    engines: DashMap<IndexKey, Arc<TantivySearchEngine>>,
+    engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>,
     metadata: DashMap<IndexKey, IndexMetadata>,
     base_path: PathBuf,
     #[cfg(feature = "fulltext-search")]
@@ -109,7 +109,7 @@ impl FulltextIndexManager {
     fn try_restore_bm25_index(
         &self,
         path: &std::path::Path,
-    ) -> Option<(IndexKey, Arc<TantivySearchEngine>, IndexMetadata)> {
+    ) -> Option<(IndexKey, Arc<dyn FulltextSearchEngine>, IndexMetadata)> {
         let dir_name = path.file_name()?.to_string_lossy();
         let (space_id, tag_name, field_name) = self.parse_index_id(&dir_name)?;
 
@@ -119,7 +119,7 @@ impl FulltextIndexManager {
         )
         .ok()?;
 
-        let engine = Arc::new(engine);
+        let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
         let key = IndexKey::new(space_id, &tag_name, &field_name);
         let metadata = IndexMetadata {
             index_id: dir_name.to_string(),
@@ -162,7 +162,8 @@ impl FulltextIndexManager {
             self.config.tantivy.clone(),
         )?;
 
-        self.engines.insert(key.clone(), Arc::new(engine));
+        self.engines
+            .insert(key.clone(), Arc::new(engine) as Arc<dyn FulltextSearchEngine>);
         self.metadata.insert(key, metadata.clone());
 
         Ok(())
@@ -339,7 +340,7 @@ impl FulltextIndexManager {
                 &storage_path.join(&index_id),
                 self.config.tantivy.clone(),
             )?;
-            let engine = Arc::new(engine);
+            let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
 
             let metadata = IndexMetadata {
                 index_id: index_id.clone(),
@@ -377,7 +378,7 @@ impl FulltextIndexManager {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Option<Arc<TantivySearchEngine>> {
+    ) -> Option<Arc<dyn FulltextSearchEngine>> {
         let key = IndexKey::new(space_id, tag_name, field_name);
         self.engines.get(&key).map(|e| Arc::clone(&*e))
     }
@@ -394,7 +395,7 @@ impl FulltextIndexManager {
         let sm = stats_manager.as_ref()?;
         let index_name = format!("{}_{}_{}", space_id, tag_name, field_name);
         Some(Arc::new(MetricsSearchEngine::new(
-            Arc::clone(&*engine) as Arc<dyn FulltextSearchEngine>,
+            Arc::clone(&*engine),
             Arc::clone(sm),
             space_id,
             index_name,

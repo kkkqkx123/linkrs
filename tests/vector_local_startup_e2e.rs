@@ -13,6 +13,7 @@ use std::sync::Arc;
 use graphdb::config::{Config, VectorEngineKind};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig};
 use graphdb::sync::vector_sync::{DistanceMetric, PointId, SearchOptions, VectorPoint};
+use graphdb_api::api_core::vector_api::VectorWriteMode;
 use graphdb_server::GraphService;
 
 fn point(id: i64, vector: Vec<f32>, group_id: &str) -> VectorPoint {
@@ -52,19 +53,23 @@ async fn local_vector_engine_startup_e2e() {
         .expect("create_index should succeed");
     assert_eq!(collection, "space_1");
 
-    vector_api
-        .insert_vector_batch(
-            1,
-            "item",
-            "vec",
-            vec![
-                point(1, vec![1.0, 0.0, 0.0], "item_vec"),
-                point(2, vec![0.0, 1.0, 0.0], "item_vec"),
-                point(3, vec![0.0, 0.0, 1.0], "item_vec"),
-            ],
-        )
-        .await
-        .expect("insert_vector_batch should succeed");
+    #[allow(deprecated)]
+    {
+        vector_api
+            .insert_vector_batch_with_mode(
+                1,
+                "item",
+                "vec",
+                vec![
+                    point(1, vec![1.0, 0.0, 0.0], "item_vec"),
+                    point(2, vec![0.0, 1.0, 0.0], "item_vec"),
+                    point(3, vec![0.0, 0.0, 1.0], "item_vec"),
+                ],
+                VectorWriteMode::Direct,
+            )
+            .await
+            .expect("insert_vector_batch should succeed");
+    }
 
     let results = vector_api
         .search_with_options(SearchOptions::new(1, "item", "vec", vec![1.0, 0.0, 0.0], 2))
@@ -87,10 +92,13 @@ async fn local_vector_engine_startup_e2e() {
         .expect("count should succeed");
     assert_eq!(count, 3);
 
-    vector_api
-        .delete_vector(1, "item", "vec", "2")
-        .await
-        .expect("delete_vector should succeed");
+    #[allow(deprecated)]
+    {
+        vector_api
+            .delete_vector_with_mode(1, "item", "vec", "2", VectorWriteMode::Direct)
+            .await
+            .expect("delete_vector should succeed");
+    }
     let count_after_delete = vector_api
         .count(1, "item", "vec")
         .await
@@ -132,23 +140,30 @@ async fn local_vector_engine_restart_consistency_e2e() {
             .create_index(1, "item", "vec", 2, DistanceMetric::Cosine)
             .await
             .expect("create_index should succeed");
-        vector_api
-            .insert_vector_batch(
-                1,
-                "item",
-                "vec",
-                vec![
-                    point(1, vec![1.0, 0.0], "item_vec"),
-                    point(2, vec![0.0, 1.0], "item_vec"),
-                    point(3, vec![1.0, 1.0], "item_vec"),
-                ],
-            )
-            .await
-            .expect("insert_vector_batch should succeed");
-        vector_api
-            .delete_vector(1, "item", "vec", "3")
-            .await
-            .expect("delete_vector should succeed");
+        #[allow(deprecated)]
+        {
+            vector_api
+                .insert_vector_batch_with_mode(
+                    1,
+                    "item",
+                    "vec",
+                    vec![
+                        point(1, vec![1.0, 0.0], "item_vec"),
+                        point(2, vec![0.0, 1.0], "item_vec"),
+                        point(3, vec![1.0, 1.0], "item_vec"),
+                    ],
+                    VectorWriteMode::Direct,
+                )
+                .await
+                .expect("insert_vector_batch should succeed");
+        }
+        #[allow(deprecated)]
+        {
+            vector_api
+                .delete_vector_with_mode(1, "item", "vec", "3", VectorWriteMode::Direct)
+                .await
+                .expect("delete_vector should succeed");
+        }
         // Drop the whole service (engine included); the directory stays.
     }
 

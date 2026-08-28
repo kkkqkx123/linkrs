@@ -10,13 +10,13 @@ use super::config::BatchConfig;
 use super::error::{BatchError, BatchResult};
 use super::trait_def::BatchProcessor;
 use crate::types::{ChangeType, IndexOperation};
-use graphdb_fulltext::tantivy_index::TantivySearchEngine;
+use graphdb_fulltext::engine::FulltextSearchEngine;
 
 pub struct FulltextBatchProcessor {
     space_id: u64,
     tag_name: String,
     field_name: String,
-    engine: Arc<TantivySearchEngine>,
+    engine: Arc<dyn FulltextSearchEngine>,
     config: BatchConfig,
     buffer: Arc<OpBatchBuffer>,
     background_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -41,7 +41,7 @@ impl FulltextBatchProcessor {
         space_id: u64,
         tag_name: String,
         field_name: String,
-        engine: Arc<TantivySearchEngine>,
+        engine: Arc<dyn FulltextSearchEngine>,
         config: BatchConfig,
     ) -> Self {
         Self {
@@ -60,7 +60,7 @@ impl FulltextBatchProcessor {
         space_id: u64,
         tag_name: String,
         field_name: String,
-        engine: Arc<TantivySearchEngine>,
+        engine: Arc<dyn FulltextSearchEngine>,
     ) -> Self {
         Self {
             space_id,
@@ -145,7 +145,7 @@ impl FulltextBatchProcessor {
         Ok(())
     }
 
-    pub fn engine(&self) -> &Arc<TantivySearchEngine> {
+    pub fn engine(&self) -> &Arc<dyn FulltextSearchEngine> {
         &self.engine
     }
 

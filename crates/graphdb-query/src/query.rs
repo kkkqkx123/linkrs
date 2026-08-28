@@ -31,6 +31,6 @@ pub use pipeline::QueryPipelineManager;
 // Re-export context types from context module
 pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
 // Re-export QueryManager
-pub use query_manager::{QueryInfo, QueryManager, QueryStats, QueryStatus};
+pub use query_manager::{QueryInfo, QueryManager, QueryStatus};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;

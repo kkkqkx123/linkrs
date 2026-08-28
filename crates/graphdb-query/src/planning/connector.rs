@@ -1,6 +1,6 @@
 //! Connector module
 //!
-//! Provide the functionality to connect the planned nodes, including inner joins, left joins, and the ability to add inputs.
+//! Provide the functionality to connect the planned nodes, including inner joins, left joins, and cross joins.
 
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::PlannerError;
@@ -88,24 +88,6 @@ impl SegmentsConnector {
             tail: left.tail.or(right.tail),
             logical_root: None,
         })
-    }
-
-    /// Add the input.
-    ///
-    /// Using one plan as input for another plan
-    ///
-    /// Deprecated: this helper only relabels the root/tail of the two plans
-    /// without structurally connecting them.  Use
-    /// [`SubPlan::connect_upstream`] instead, which attaches the upstream
-    /// root as the downstream root's input so the plan is structurally
-    /// closed.
-    #[deprecated(note = "use SubPlan::connect_upstream instead")]
-    pub fn add_input(input_plan: SubPlan, dependent_plan: SubPlan, _is_left: bool) -> SubPlan {
-        SubPlan {
-            root: dependent_plan.root,
-            tail: input_plan.tail,
-            logical_root: None,
-        }
     }
 
     /// Create a cross-link

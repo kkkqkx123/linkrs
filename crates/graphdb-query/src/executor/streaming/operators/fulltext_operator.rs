@@ -252,12 +252,9 @@ impl FulltextOperator {
                                     "created",
                                 ))
                             } else {
-                                Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "create_fulltext_index",
-                                    Some(index_name.as_str()),
-                                    "no-manager",
-                                ))
+                                return Err(QueryError::execution(
+                                    "CREATE FULLTEXT INDEX cannot execute: no fulltext manager is configured",
+                                ));
                             }
                         }
                         Drop {
@@ -293,12 +290,9 @@ impl FulltextOperator {
                                     "dropped",
                                 ))
                             } else {
-                                Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "drop_fulltext_index",
-                                    Some(index_name.as_str()),
-                                    "no-manager",
-                                ))
+                                return Err(QueryError::execution(
+                                    "DROP FULLTEXT INDEX cannot execute: no fulltext manager is configured",
+                                ));
                             }
                         }
                         Describe { index_name } => {
@@ -344,12 +338,9 @@ impl FulltextOperator {
                                     ))
                                 }
                             } else {
-                                Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "describe_fulltext_index",
-                                    Some(index_name.as_str()),
-                                    "no-manager",
-                                ))
+                                return Err(QueryError::execution(
+                                    "DESCRIBE FULLTEXT INDEX cannot execute: no fulltext manager is configured",
+                                ));
                             }
                         }
                         Show {
@@ -407,12 +398,9 @@ impl FulltextOperator {
                                     Arc::clone(&self.output_layout),
                                 ))
                             } else {
-                                Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "show_fulltext_indexes",
-                                    None,
-                                    "no-manager",
-                                ))
+                                return Err(QueryError::execution(
+                                    "SHOW FULLTEXT INDEXES cannot execute: no fulltext manager is configured",
+                                ));
                             }
                         }
                         Alter { .. } => {

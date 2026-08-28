@@ -48,10 +48,14 @@ pub struct VectorSearchResult {
 /// - `Transactional`: stage the mutation through `SyncManager` into the durable
 ///   outbox (`WAL + SQLite`) so it participates in the graph transaction's
 ///   commit/abort and benefits from `read-your-writes` consistency.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub enum VectorWriteMode {
     /// Non-transactional direct write. Bypasses WAL/Outbox.
-    #[default]
+    ///
+    /// Prefer `Transactional` for data consistency. `Direct` is retained only
+    /// for bulk loading or when the caller explicitly accepts eventual
+    /// consistency; it bypasses the transactional outbox and `warn!`s on use.
+    #[deprecated(note = "Prefer Transactional for data consistency")]
     Direct,
     /// Transactional write through the durable outbox.
     Transactional {
@@ -252,30 +256,8 @@ impl VectorApi {
             .collect()
     }
 
-    /// Insert a vector point (Direct, non-transactional).
-    ///
-    /// This is the legacy bypass: the point is written straight to the backend
-    /// and does not participate in graph transaction commit/rollback. Use
-    /// [`Self::insert_vector_with_mode`] with `Transactional` for transactional
-    /// semantics.
-    pub async fn insert_vector(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        point: VectorPoint,
-    ) -> CoreResult<()> {
-        self.insert_vector_with_mode(
-            space_id,
-            tag_name,
-            field_name,
-            point,
-            VectorWriteMode::Direct,
-        )
-        .await
-    }
-
     /// Insert a vector point with explicit write mode.
+    #[allow(deprecated)]
     pub async fn insert_vector_with_mode(
         &self,
         space_id: u64,
@@ -340,25 +322,8 @@ impl VectorApi {
         }
     }
 
-    /// Insert vector points in batch (Direct, non-transactional).
-    pub async fn insert_vector_batch(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        points: Vec<VectorPoint>,
-    ) -> CoreResult<()> {
-        self.insert_vector_batch_with_mode(
-            space_id,
-            tag_name,
-            field_name,
-            points,
-            VectorWriteMode::Direct,
-        )
-        .await
-    }
-
     /// Insert vector points in batch with explicit write mode.
+    #[allow(deprecated)]
     pub async fn insert_vector_batch_with_mode(
         &self,
         space_id: u64,
@@ -419,19 +384,8 @@ impl VectorApi {
         }
     }
 
-    /// Delete a vector point (Direct, non-transactional).
-    pub async fn delete_vector(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        point_id: &str,
-    ) -> CoreResult<()> {
-        self.delete_vector_with_mode(space_id, tag_name, field_name, point_id, VectorWriteMode::Direct)
-            .await
-    }
-
     /// Delete a vector point with explicit write mode.
+    #[allow(deprecated)]
     pub async fn delete_vector_with_mode(
         &self,
         space_id: u64,
@@ -488,19 +442,8 @@ impl VectorApi {
         }
     }
 
-    /// Delete vector points in batch (Direct, non-transactional).
-    pub async fn delete_vector_batch(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        point_ids: Vec<&str>,
-    ) -> CoreResult<()> {
-        self.delete_vector_batch_with_mode(space_id, tag_name, field_name, point_ids, VectorWriteMode::Direct)
-            .await
-    }
-
     /// Delete vector points in batch with explicit write mode.
+    #[allow(deprecated)]
     pub async fn delete_vector_batch_with_mode(
         &self,
         space_id: u64,

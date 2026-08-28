@@ -85,10 +85,7 @@ impl Session {
         info.join("\n")
     }
 
-    #[deprecated(note = "Use variable_store directly")]
-    pub fn variables(&self) -> &std::collections::HashMap<String, String> {
-        self.variable_store.user_variables()
-    }
+
 }
 
 pub struct SessionManager {
@@ -121,10 +118,7 @@ impl SessionManager {
         })
     }
 
-    /// Create a new SessionManager (legacy method, defaults to HTTP)
-    pub fn new(host: &str, port: u16) -> Self {
-        Self::new_http(host, port).expect("Failed to create HTTP client")
-    }
+
 
     /// Connect to the database
     pub async fn connect(&mut self, username: &str, password: &str) -> Result<()> {

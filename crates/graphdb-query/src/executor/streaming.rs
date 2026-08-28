@@ -12,7 +12,6 @@
 
 pub mod chunk;
 pub mod context;
-pub mod coordinator;
 pub mod engine;
 pub mod executor;
 

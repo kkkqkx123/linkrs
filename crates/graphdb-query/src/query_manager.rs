@@ -84,17 +84,6 @@ impl QueryInfo {
     }
 }
 
-/// Legacy query statistics (for backward compatibility)
-#[derive(Debug, Clone, Default)]
-pub struct QueryStats {
-    pub total_queries: u64,
-    pub running_queries: u64,
-    pub finished_queries: u64,
-    pub failed_queries: u64,
-    pub killed_queries: u64,
-    pub avg_duration_ms: i64,
-}
-
 /// Query Manager
 #[derive(Debug)]
 pub struct QueryManager {
@@ -209,50 +198,6 @@ impl QueryManager {
             .filter(|q| q.value().status == QueryStatus::Running)
             .map(|v| v.value().clone())
             .collect()
-    }
-
-    /// Obtain query statistics
-    pub fn get_stats(&self) -> QueryStats {
-        let queries: Vec<_> = self.queries.iter().map(|v| v.value().clone()).collect();
-        let total = queries.len() as u64;
-        let running = queries
-            .iter()
-            .filter(|q| q.status == QueryStatus::Running)
-            .count() as u64;
-        let finished = queries
-            .iter()
-            .filter(|q| q.status == QueryStatus::Finished)
-            .count() as u64;
-        let failed = queries
-            .iter()
-            .filter(|q| q.status == QueryStatus::Failed)
-            .count() as u64;
-        let killed = queries
-            .iter()
-            .filter(|q| q.status == QueryStatus::Killed)
-            .count() as u64;
-
-        let total_duration: i64 = queries.iter().filter_map(|q| q.duration_ms).sum();
-
-        let avg_duration = if total > 0 {
-            total_duration / total as i64
-        } else {
-            0
-        };
-
-        QueryStats {
-            total_queries: total,
-            running_queries: running,
-            finished_queries: finished,
-            failed_queries: failed,
-            killed_queries: killed,
-            avg_duration_ms: avg_duration,
-        }
-    }
-
-    /// Retrieve query statistics (returns data of the Result type, compatible with older code)
-    pub fn get_query_stats(&self) -> ManagerResult<QueryStats> {
-        Ok(self.get_stats())
     }
 
     /// Clean up the completed queries (retaining only the last N of them).

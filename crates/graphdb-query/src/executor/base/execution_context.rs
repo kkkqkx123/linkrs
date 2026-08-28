@@ -14,9 +14,9 @@ use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::Arena;
 use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
-use graphdb_fulltext::manager::FulltextIndexManager;
+use graphdb_fulltext::engine::FulltextSearchEngine;
 #[cfg(feature = "fulltext-search")]
-use graphdb_fulltext::tantivy_index::TantivySearchEngine;
+use graphdb_fulltext::manager::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::VectorSyncCoordinator;
 
@@ -26,7 +26,7 @@ pub struct ExecutionContext {
     pub variables: Arc<RwLock<HashMap<String, graphdb_core::Value>>>,
     pub expression_context: Arc<ExpressionAnalysisContext>,
     #[cfg(feature = "fulltext-search")]
-    pub search_engine: Option<Arc<TantivySearchEngine>>,
+    pub search_engine: Option<Arc<dyn FulltextSearchEngine>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
     #[cfg(feature = "vector")]
@@ -163,7 +163,7 @@ impl ExecutionContext {
     #[cfg(feature = "fulltext-search")]
     pub fn with_search_engine(
         expression_context: Arc<ExpressionAnalysisContext>,
-        search_engine: Arc<TantivySearchEngine>,
+        search_engine: Arc<dyn FulltextSearchEngine>,
     ) -> Self {
         Self {
             results: Arc::new(RwLock::new(HashMap::new())),
@@ -261,7 +261,7 @@ impl ExecutionContext {
     }
 
     #[cfg(feature = "fulltext-search")]
-    pub fn search_engine(&self) -> Option<&Arc<TantivySearchEngine>> {
+    pub fn search_engine(&self) -> Option<&Arc<dyn FulltextSearchEngine>> {
         self.search_engine.as_ref()
     }
 

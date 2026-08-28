@@ -266,6 +266,9 @@ mod tests {
             session_id: 7,
             parameters: HashMap::from([("p".to_string(), serde_json::json!(42))]),
             session_variables: HashMap::new(),
+            consistency: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         let back: QueryRequest = serde_json::from_str(&json).unwrap();
