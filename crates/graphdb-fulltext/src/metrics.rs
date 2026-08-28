@@ -2,13 +2,18 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::ConsistencyState;
+use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
-use crate::tantivy_index::TantivySearchEngine;
 use graphdb_core::stats::StatsManager;
 
+/// Wrapper around any [`FulltextSearchEngine`] that records latency and
+/// success/failure metrics into a [`StatsManager`].
+///
+/// This decorator is backend-agnostic: it works with Tantivy, Elasticsearch,
+/// or any future engine that implements the trait.
 pub struct MetricsSearchEngine {
-    inner: Arc<TantivySearchEngine>,
+    inner: Arc<dyn FulltextSearchEngine>,
     stats_manager: Arc<StatsManager>,
     space_id: u64,
     index_name: String,
@@ -16,7 +21,7 @@ pub struct MetricsSearchEngine {
 
 impl MetricsSearchEngine {
     pub fn new(
-        inner: Arc<TantivySearchEngine>,
+        inner: Arc<dyn FulltextSearchEngine>,
         stats_manager: Arc<StatsManager>,
         space_id: u64,
         index_name: String,
@@ -34,11 +39,11 @@ impl MetricsSearchEngine {
     }
 
     pub fn name(&self) -> &str {
-        "tantivy"
+        self.inner.name()
     }
 
     pub fn version(&self) -> &str {
-        "0.26.0"
+        self.inner.version()
     }
 
     pub async fn index(&self, doc_id: &str, content: &str) -> Result<(), SearchError> {

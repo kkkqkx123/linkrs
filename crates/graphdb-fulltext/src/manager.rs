@@ -7,6 +7,7 @@ use crate::ConsistencyState;
 use crate::error::SearchError;
 use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
+use crate::engine::FulltextSearchEngine;
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
@@ -393,7 +394,7 @@ impl FulltextIndexManager {
         let sm = stats_manager.as_ref()?;
         let index_name = format!("{}_{}_{}", space_id, tag_name, field_name);
         Some(Arc::new(MetricsSearchEngine::new(
-            Arc::clone(&*engine),
+            Arc::clone(&*engine) as Arc<dyn FulltextSearchEngine>,
             Arc::clone(sm),
             space_id,
             index_name,

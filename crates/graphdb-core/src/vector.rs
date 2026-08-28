@@ -1,11 +1,35 @@
-//! Transport-independent vector payload types.
+//! Transport-independent vector payload types shared across crates.
 //!
-//! These types are shared between the vector-search engine, the wire DTOs
-//! and the query layer. They define only data shapes — no storage or
-//! execution semantics live here, keeping the dependency direction
-//! `vector-search / graphdb-wire → graphdb-core` one-way.
+//! # Type categories
+//!
+//! This module contains two logically distinct groups of types:
+//!
+//! ## Core shared types (`PointId`, `Payload`, `PayloadValue`, `PayloadSchemaType`)
+//! True foundational types used by the wire layer (`graphdb-wire`), the storage
+//! engine, and the query layer. These must remain in `graphdb-core` because
+//! `graphdb-wire` depends on `graphdb-core` but cannot depend on `vector-search`
+//! (it would drag in heavy transitive deps like rayon/memmap2 into a lightweight
+//! wire crate).
+//!
+//! ## Vector filter DSL types (`VectorFilter`, `FilterCondition`, `ConditionType`, etc.)
+//! Query-filter types that conceptually belong to `vector-search`. They remain
+//! in core due to the dependency DAG (`graphdb-core` → `vector-search` is not
+//! allowed; `graphdb-wire` needs `VectorFilter`/`PayloadSelector` for wire DTOs).
+//! The canonical implementations and evaluation logic live in
+//! `vector-search::filter`. These types are re-exported by `vector-search::types`
+//! so downstream crates can import them from either path.
+//!
+//! # Future improvement
+//! A dedicated `graphdb-vector-types` crate could break this coupling. The new
+//! crate would sit at the same level as `graphdb-core` in the DAG, and both
+//! `graphdb-core` and `vector-search` would depend on it. See
+//! `docs/plan/fulltext_vector_architecture_refactor.md` for details.
 
 use std::collections::HashMap;
+
+// ---------------------------------------------------------------------------
+// Core shared types
+// ---------------------------------------------------------------------------
 
 /// Payload attached to a vector point: a JSON object keyed by field name.
 pub type Payload = HashMap<String, serde_json::Value>;
@@ -53,6 +77,41 @@ impl std::fmt::Display for PointId {
         }
     }
 }
+
+/// Declared schema of an indexed payload field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PayloadSchemaType {
+    Keyword,
+    Integer,
+    Float,
+    Text,
+    Bool,
+    Geo,
+    Datetime,
+}
+
+impl PayloadSchemaType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Keyword => "keyword",
+            Self::Integer => "integer",
+            Self::Float => "float",
+            Self::Text => "text",
+            Self::Bool => "bool",
+            Self::Geo => "geo",
+            Self::Datetime => "datetime",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vector filter DSL types
+//
+// These are logically part of `vector-search` but live in core due to the
+// dependency DAG constraint. The filter evaluation logic is in
+// `vector-search::filter`. Downstream crates may import these from either
+// `graphdb_core::vector` or `vector_search::types`.
+// ---------------------------------------------------------------------------
 
 /// Geographic point (`lat`, `lon` in degrees).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -140,32 +199,6 @@ impl ValuesCountCondition {
 impl Default for ValuesCountCondition {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Declared schema of an indexed payload field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PayloadSchemaType {
-    Keyword,
-    Integer,
-    Float,
-    Text,
-    Bool,
-    Geo,
-    Datetime,
-}
-
-impl PayloadSchemaType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Keyword => "keyword",
-            Self::Integer => "integer",
-            Self::Float => "float",
-            Self::Text => "text",
-            Self::Bool => "bool",
-            Self::Geo => "geo",
-            Self::Datetime => "datetime",
-        }
     }
 }
 

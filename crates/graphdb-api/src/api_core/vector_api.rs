@@ -42,13 +42,18 @@ pub struct VectorSearchResult {
 /// - `Direct`: bypass the transactional outbox and write straight to the
 ///   backend (`VectorBackend::upsert`). Fast but not transactional: a graph
 ///   transaction that rolls back will not roll back the vector point.
+///   **Warning**: Prefer `Transactional` for data consistency. Use `Direct`
+///   only for bulk loading or when the caller explicitly accepts eventual
+///   consistency with graph data.
 /// - `Transactional`: stage the mutation through `SyncManager` into the durable
 ///   outbox (`WAL + SQLite`) so it participates in the graph transaction's
 ///   commit/abort and benefits from `read-your-writes` consistency.
 #[derive(Debug, Clone, Default)]
 pub enum VectorWriteMode {
+    /// Non-transactional direct write. Bypasses WAL/Outbox.
     #[default]
     Direct,
+    /// Transactional write through the durable outbox.
     Transactional {
         txn_id: graphdb_core::types::TransactionId,
         space_id: u64,
@@ -281,6 +286,10 @@ impl VectorApi {
     ) -> CoreResult<()> {
         match mode {
             VectorWriteMode::Direct => {
+                tracing::warn!(
+                    "Vector Direct write: point {} in {}.{}.{} bypasses transactional outbox",
+                    point.id, space_id, tag_name, field_name
+                );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
                 self.backend
@@ -360,6 +369,10 @@ impl VectorApi {
     ) -> CoreResult<()> {
         match mode {
             VectorWriteMode::Direct => {
+                tracing::warn!(
+                    "Vector Direct batch write: {} points in {}.{}.{} bypasses transactional outbox",
+                    points.len(), space_id, tag_name, field_name
+                );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
                 self.backend
@@ -429,6 +442,10 @@ impl VectorApi {
     ) -> CoreResult<()> {
         match mode {
             VectorWriteMode::Direct => {
+                tracing::warn!(
+                    "Vector Direct delete: point {} in {}.{}.{} bypasses transactional outbox",
+                    point_id, space_id, tag_name, field_name
+                );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
                 self.backend
@@ -494,6 +511,10 @@ impl VectorApi {
     ) -> CoreResult<()> {
         match mode {
             VectorWriteMode::Direct => {
+                tracing::warn!(
+                    "Vector Direct batch delete: {} points in {}.{}.{} bypasses transactional outbox",
+                    point_ids.len(), space_id, tag_name, field_name
+                );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
                 self.backend

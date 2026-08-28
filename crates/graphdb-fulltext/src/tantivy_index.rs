@@ -347,3 +347,70 @@ impl TantivySearchEngine {
         Ok(())
     }
 }
+
+#[async_trait::async_trait]
+impl crate::engine::FulltextSearchEngine for TantivySearchEngine {
+    fn name(&self) -> &str {
+        "tantivy"
+    }
+
+    fn version(&self) -> &str {
+        "0.26.0"
+    }
+
+    async fn index(&self, doc_id: &str, content: &str) -> Result<(), SearchError> {
+        self.index(doc_id, content).await
+    }
+
+    async fn index_batch(&self, docs: Vec<(String, String)>) -> Result<(), SearchError> {
+        self.index_batch(docs).await
+    }
+
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, SearchError> {
+        self.search(query, limit).await
+    }
+
+    async fn delete(&self, doc_id: &str) -> Result<(), SearchError> {
+        self.delete(doc_id).await
+    }
+
+    async fn delete_batch(&self, doc_ids: Vec<&str>) -> Result<(), SearchError> {
+        self.delete_batch(doc_ids).await
+    }
+
+    async fn commit(&self) -> Result<(), SearchError> {
+        self.commit().await
+    }
+
+    async fn commit_with_payload(&self, payload: String) -> Result<(), SearchError> {
+        self.commit_with_payload(payload).await
+    }
+
+    fn commit_payload(&self) -> Result<Option<String>, SearchError> {
+        self.commit_payload()
+    }
+
+    async fn stats(&self) -> Result<IndexStats, SearchError> {
+        self.stats().await
+    }
+
+    fn consistency_state(&self) -> ConsistencyState {
+        self.consistency_state()
+    }
+
+    fn mark_inconsistent(&self) {
+        self.mark_inconsistent();
+    }
+
+    fn mark_consistent(&self) {
+        self.mark_consistent();
+    }
+
+    async fn clear(&self) -> Result<(), SearchError> {
+        self.clear().await
+    }
+
+    async fn close(&self) -> Result<(), SearchError> {
+        self.close().await
+    }
+}
