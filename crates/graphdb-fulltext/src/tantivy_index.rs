@@ -23,7 +23,9 @@ use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
 use graphdb_core::Value;
 
-pub use graphdb_config::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
+use graphdb_config::fulltext::TantivyConfig;
+#[cfg(feature = "jieba")]
+use graphdb_config::fulltext::TokenizerKind;
 
 fn build_schema(config: &TantivyConfig) -> (Schema, Field, Field) {
     let tokenizer_name = config.tokenizer.name();

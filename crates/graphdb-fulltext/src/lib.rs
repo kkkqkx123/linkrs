@@ -1,4 +1,3 @@
-pub mod config;
 pub mod engine;
 pub mod error;
 #[cfg(feature = "jieba")]
@@ -17,9 +16,11 @@ pub mod warmup;
 #[cfg(test)]
 mod isolation_test;
 
-pub use crate::config::{Bm25Params, TantivyConfig, TokenizerKind};
-pub use config::{FulltextConfig, SyncConfig, SyncFailurePolicy};
-pub use engine::{ConsistencyState, EngineType};
+pub use engine::ConsistencyState;
+pub use graphdb_config::fulltext::{
+    Bm25Params, FulltextConfig, FulltextEngineType as EngineType, SyncConfig, SyncFailurePolicy,
+    TantivyConfig, TokenizerKind,
+};
 pub use error::{Result, SearchError};
 #[cfg(feature = "fulltext-search")]
 pub use manager::FulltextIndexManager;

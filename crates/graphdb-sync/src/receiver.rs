@@ -22,7 +22,7 @@ pub struct LateArrivalResult {
 
 #[cfg(feature = "fulltext-search")]
 pub struct FulltextReceiver {
-    engine: Arc<graphdb_search::tantivy_index::TantivySearchEngine>,
+    engine: Arc<graphdb_fulltext::tantivy_index::TantivySearchEngine>,
     receipts: Arc<RwLock<HashSet<String>>>,
     applied_lsn: Arc<RwLock<CommitLsn>>,
     apply_lock: Mutex<()>,
@@ -39,7 +39,7 @@ struct FulltextCommitState {
 
 #[cfg(feature = "fulltext-search")]
 impl FulltextReceiver {
-    pub fn new(engine: Arc<graphdb_search::tantivy_index::TantivySearchEngine>) -> Self {
+    pub fn new(engine: Arc<graphdb_fulltext::tantivy_index::TantivySearchEngine>) -> Self {
         let state = engine
             .commit_payload()
             .ok()

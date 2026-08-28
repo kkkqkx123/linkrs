@@ -109,7 +109,7 @@ pub struct QueryBindings {
     /// Injected by the pipeline from the optimizer engine.
     pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
     #[cfg(feature = "fulltext-search")]
-    pub fulltext_manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
+    pub fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
 }

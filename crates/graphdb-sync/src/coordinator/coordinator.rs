@@ -9,9 +9,9 @@ use tracing::{debug, warn};
 use super::types::{ChangeContext, ChangeData, ChangeType};
 use crate::batch::{BatchConfig, BatchProcessor, FulltextBatchProcessor, TransactionBatchBuffer};
 use graphdb_core::stats::StatsManager;
-use graphdb_search::engine::ConsistencyState;
-use graphdb_search::manager::FulltextIndexManager;
-use graphdb_search::SyncFailurePolicy;
+use graphdb_fulltext::engine::ConsistencyState;
+use graphdb_fulltext::manager::FulltextIndexManager;
+use graphdb_fulltext::SyncFailurePolicy;
 
 use crate::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use crate::retry::{default_local_retry_config, with_retry};

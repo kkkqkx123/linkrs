@@ -9,7 +9,7 @@
 //! Test cases: TC-FT-SYNC-001 ~ TC-FT-SYNC-010
 
 use super::common::FulltextTestContext;
-use graphdb_search::EngineType;
+use graphdb_fulltext::EngineType;
 use graphdb_sync::batch::BatchConfig;
 use graphdb_sync::coordinator::{ChangeType, SyncCoordinator};
 use graphdb_sync::manager::SyncManager;

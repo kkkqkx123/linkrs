@@ -45,6 +45,8 @@ pub use types::{
 
 pub use types::graph_schema::EdgeDirection;
 
+pub use types::index::{ConsistencyState, IndexStats, SearchStats};
+
 pub use types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 
 pub use types::DataSet;

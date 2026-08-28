@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use graphdb_search::SyncFailurePolicy;
+use graphdb_fulltext::SyncFailurePolicy;
 
 /// Batch processing configuration
 #[derive(Debug, Clone)]

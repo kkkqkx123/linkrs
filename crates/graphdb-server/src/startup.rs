@@ -177,14 +177,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         let sync_manager = if config.fulltext.enabled {
             #[cfg(feature = "fulltext-search")]
             {
-                use graphdb_search::manager::FulltextIndexManager;
+                use graphdb_fulltext::manager::FulltextIndexManager;
 
                 let manager = Arc::new(
                     FulltextIndexManager::new(config.fulltext.clone())
                         .expect("Failed to create FulltextIndexManager"),
                 );
 
-                use graphdb_search::{SyncConfig, SyncFailurePolicy};
+                use graphdb_fulltext::{SyncConfig, SyncFailurePolicy};
 
                 let sync_config = SyncConfig {
                     queue_size: 10000,

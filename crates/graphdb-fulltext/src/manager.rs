@@ -3,9 +3,9 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::FulltextConfig;
-use crate::engine::{ConsistencyState, EngineType};
+use crate::engine::ConsistencyState;
 use crate::error::SearchError;
+use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};

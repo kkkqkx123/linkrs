@@ -32,7 +32,7 @@ A **lightweight single-node graph database** implemented in Rust, focusing on lo
 crates/
 ├── graphdb-core          # Core types, errors, data structures
 ├── graphdb-config        # Configuration management
-├── graphdb-search        # Full-text search (tantivy/BM25)
+├── graphdb-fulltext        # Full-text search (tantivy/BM25)
 ├── graphdb-sync          # Synchronization primitives
 ├── graphdb-transaction   # Transaction management (MVCC)
 ├── graphdb-migration     # Schema/data migration

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::SyncError;
-use graphdb_search::error::SearchError;
+use graphdb_fulltext::error::SearchError;
 
 #[derive(Error, Debug, Clone)]
 pub enum FulltextError {

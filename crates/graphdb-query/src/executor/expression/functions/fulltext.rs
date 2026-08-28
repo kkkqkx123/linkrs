@@ -9,7 +9,7 @@
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use graphdb_core::Value;
-use graphdb_search::FulltextSearchEntry;
+use graphdb_fulltext::FulltextSearchEntry;
 use std::collections::HashMap;
 
 /// Full-text search function enumeration

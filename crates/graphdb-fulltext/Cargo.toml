@@ -1,5 +1,5 @@
 [package]
-name = "graphdb-search"
+name = "graphdb-fulltext"
 version.workspace = true
 edition.workspace = true
 

@@ -10,7 +10,7 @@ graphdb-storage = { path = "../graphdb-storage" }
 graphdb-query = { path = "../graphdb-query" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
-graphdb-search = { path = "../graphdb-search" }
+graphdb-fulltext = { path = "../graphdb-fulltext" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -35,7 +35,7 @@ vector-qdrant = [
     "graphdb-query/vector-qdrant",
 ]
 fulltext-search = [
-    "graphdb-search/fulltext-search",
+    "graphdb-fulltext/fulltext-search",
     "graphdb-sync/fulltext-search",
     "graphdb-query/fulltext-search",
 ]

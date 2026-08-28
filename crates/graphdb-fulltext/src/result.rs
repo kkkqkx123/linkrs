@@ -1,6 +1,7 @@
-use chrono::{DateTime, Utc};
 use graphdb_core::Value;
 use std::collections::HashMap;
+
+pub use graphdb_core::{IndexStats, SearchStats};
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -28,25 +29,6 @@ impl SearchResult {
     pub fn with_matched_fields(mut self, fields: Vec<String>) -> Self {
         self.matched_fields = fields;
         self
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexStats {
-    pub doc_count: usize,
-    pub index_size: usize,
-    pub last_updated: Option<DateTime<Utc>>,
-    pub engine_info: Option<serde_json::Value>,
-}
-
-impl IndexStats {
-    pub fn new(doc_count: usize, index_size: usize) -> Self {
-        Self {
-            doc_count,
-            index_size,
-            last_updated: Some(Utc::now()),
-            engine_info: None,
-        }
     }
 }
 
@@ -137,28 +119,6 @@ impl HighlightResult {
             field,
             fragments,
             matched_positions: Vec::new(),
-        }
-    }
-}
-
-/// Search statistics
-#[derive(Debug, Clone)]
-pub struct SearchStats {
-    pub total_results: usize,
-    pub returned_results: usize,
-    pub search_time_ms: u64,
-    pub cache_hit: bool,
-    pub index_used: String,
-}
-
-impl SearchStats {
-    pub fn new(index_used: String) -> Self {
-        Self {
-            total_results: 0,
-            returned_results: 0,
-            search_time_ms: 0,
-            cache_hit: false,
-            index_used,
         }
     }
 }

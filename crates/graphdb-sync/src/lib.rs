@@ -38,7 +38,7 @@ pub use coordinator::{
     SyncCoordinatorError,
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-pub use graphdb_search::SyncConfig;
+pub use graphdb_fulltext::SyncConfig;
 pub use manager::{
     EdgeProps, EdgeRef, OutboxBackpressureConfig, OutboxConsumerConfig, SyncError, SyncManager,
 };

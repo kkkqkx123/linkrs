@@ -16,7 +16,7 @@ use graphdb_core::types::expr::Expression;
 #[cfg(feature = "fulltext-search")]
 use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::manager::FulltextIndexManager;
+use graphdb_fulltext::manager::FulltextIndexManager;
 
 #[cfg(feature = "fulltext-search")]
 use crate::executor::streaming::chunk::{ColumnInfo, Schema};

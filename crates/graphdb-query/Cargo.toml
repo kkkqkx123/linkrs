@@ -7,7 +7,7 @@ edition.workspace = true
 graphdb-core = { path = "../graphdb-core" }
 graphdb-storage = { path = "../graphdb-storage" }
 graphdb-migration = { path = "../graphdb-migration" }
-graphdb-search = { path = "../graphdb-search" }
+graphdb-fulltext = { path = "../graphdb-fulltext" }
 graphdb-sync = { path = "../graphdb-sync" }
 serde.workspace = true
 serde_json.workspace = true
@@ -32,7 +32,7 @@ vector-search = { path = "../vector-search", optional = true }
 [features]
 vector = ["dep:vector-search", "graphdb-sync/vector"]
 vector-qdrant = ["vector", "graphdb-sync/vector-qdrant"]
-fulltext-search = ["graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext-search = ["graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
 
 [dev-dependencies]
 graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }

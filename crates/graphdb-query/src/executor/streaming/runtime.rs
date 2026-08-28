@@ -694,7 +694,7 @@ pub struct ExecutionRuntime {
     /// truly immutable and cacheable without sharing storage handles.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     #[cfg(feature = "fulltext-search")]
-    pub fulltext_manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
+    pub fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
     /// Per-partition operator state arenas.
@@ -744,7 +744,7 @@ impl ExecutionRuntime {
         memory_budget: MemoryBudget,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<
-            Arc<graphdb_search::manager::FulltextIndexManager>,
+            Arc<graphdb_fulltext::manager::FulltextIndexManager>,
         >,
         #[cfg(feature = "vector")] vector_coordinator: Option<
             Arc<graphdb_sync::VectorSyncCoordinator>,
@@ -811,7 +811,7 @@ impl ExecutionRuntime {
     #[cfg(feature = "fulltext-search")]
     pub fn set_fulltext_manager(
         &mut self,
-        manager: Option<Arc<graphdb_search::manager::FulltextIndexManager>>,
+        manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     ) {
         self.fulltext_manager = manager;
     }

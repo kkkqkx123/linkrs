@@ -13,7 +13,7 @@ use graphdb_core::stats::{OutboxState, StatsManager};
 use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::SyncConfig;
+use graphdb_fulltext::SyncConfig;
 #[cfg(feature = "vector")]
 use std::collections::HashMap;
 use std::path::Path;
@@ -27,7 +27,7 @@ use crate::vector_sync::VectorSyncCoordinator;
 
 #[cfg(feature = "fulltext-search")]
 struct FulltextFieldApply<'a> {
-    manager: Arc<graphdb_search::manager::FulltextIndexManager>,
+    manager: Arc<graphdb_fulltext::manager::FulltextIndexManager>,
     mutation: &'a graphdb_core::wal::IndexMutation,
     commit_lsn: CommitLsn,
     space_id: u64,
@@ -2004,7 +2004,7 @@ impl SyncManager {
     }
 
     #[cfg(feature = "fulltext-search")]
-    pub fn fulltext_manager(&self) -> Arc<graphdb_search::manager::FulltextIndexManager> {
+    pub fn fulltext_manager(&self) -> Arc<graphdb_fulltext::manager::FulltextIndexManager> {
         self.sync_coordinator
             .as_ref()
             .expect("SyncCoordinator not available without fulltext-search feature")
@@ -2526,12 +2526,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_changes_use_only_the_fulltext_target() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let config = graphdb_search::FulltextConfig {
+        let config = graphdb_fulltext::FulltextConfig {
             index_path: directory.path().to_path_buf(),
             ..Default::default()
         };
         let fulltext_manager = Arc::new(
-            graphdb_search::FulltextIndexManager::new(config)
+            graphdb_fulltext::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
         );
         fulltext_manager
@@ -2572,12 +2572,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_outbox_claim_apply_and_restart_receipt_are_end_to_end() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let config = graphdb_search::FulltextConfig {
+        let config = graphdb_fulltext::FulltextConfig {
             index_path: directory.path().join("indexes"),
             ..Default::default()
         };
         let fulltext_manager = Arc::new(
-            graphdb_search::FulltextIndexManager::new(config)
+            graphdb_fulltext::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
         );
         fulltext_manager

@@ -12,14 +12,14 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use graphdb_search::{Bm25Params, EngineType, FulltextConfig, FulltextIndexManager};
+use graphdb_fulltext::{Bm25Params, EngineType, FulltextConfig, FulltextIndexManager};
 
 fn create_manager_with_path(path: &std::path::Path) -> Arc<FulltextIndexManager> {
     let config = FulltextConfig {
         enabled: true,
         index_path: path.to_path_buf(),
         default_engine: EngineType::Bm25,
-        sync: graphdb_search::SyncConfig::default(),
+        sync: graphdb_fulltext::SyncConfig::default(),
         tantivy: Default::default(),
         cache_size: 100,
         max_result_cache: 1000,
@@ -339,8 +339,8 @@ async fn test_custom_bm25_params_persistence() {
         enabled: true,
         index_path: temp_dir.path().to_path_buf(),
         default_engine: EngineType::Bm25,
-        sync: graphdb_search::SyncConfig::default(),
-        tantivy: graphdb_search::TantivyConfig {
+        sync: graphdb_fulltext::SyncConfig::default(),
+        tantivy: graphdb_fulltext::TantivyConfig {
             bm25_params: Bm25Params { k1: 2.5, b: 0.4 },
             ..Default::default()
         },

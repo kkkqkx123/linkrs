@@ -15,11 +15,11 @@ vector-qdrant = ["vector", "embedding", "dep:vector-client", "graphdb-config/vec
 # top of `vector-qdrant`; enabling both compiles in HTTP + gRPC.
 vector-http = ["vector-qdrant", "vector-client/qdrant-http"]
 vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
-fulltext-search = ["graphdb-search/fulltext-search"]
+fulltext-search = ["graphdb-fulltext/fulltext-search"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
-graphdb-search = { path = "../graphdb-search" }
+graphdb-fulltext = { path = "../graphdb-fulltext" }
 graphdb-config = { path = "../graphdb-config" }
 graphdb-embedding = { path = "../graphdb-embedding", optional = true }
 serde.workspace = true

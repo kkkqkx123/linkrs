@@ -1,4 +1,4 @@
-use crate::engine::EngineType;
+use graphdb_config::fulltext::FulltextEngineType as EngineType;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

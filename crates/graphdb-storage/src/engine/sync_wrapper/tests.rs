@@ -42,8 +42,8 @@ fn does_not_buffer_sync_events_when_edge_insert_fails() {
 #[test]
 #[cfg(feature = "fulltext-search")]
 fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
-    use graphdb_search::config::FulltextConfig;
-    use graphdb_search::FulltextIndexManager;
+    use graphdb_config::fulltext::FulltextConfig;
+    use graphdb_fulltext::FulltextIndexManager;
     use graphdb_sync::batch::BatchConfig;
     use graphdb_sync::coordinator::SyncCoordinator;
 

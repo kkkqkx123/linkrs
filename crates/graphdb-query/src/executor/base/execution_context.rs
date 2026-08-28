@@ -14,9 +14,9 @@ use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::Arena;
 use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::manager::FulltextIndexManager;
+use graphdb_fulltext::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::tantivy_index::TantivySearchEngine;
+use graphdb_fulltext::tantivy_index::TantivySearchEngine;
 #[cfg(feature = "vector")]
 use graphdb_sync::VectorSyncCoordinator;
 

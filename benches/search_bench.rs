@@ -15,9 +15,9 @@ fn create_benchmark_group<'a>(
 
 #[cfg(feature = "fulltext-search")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
-    use graphdb_search::config::FulltextConfig;
-    use graphdb_search::manager::FulltextIndexManager;
-    use graphdb_search::EngineType;
+    use graphdb_config::fulltext::FulltextConfig;
+    use graphdb_fulltext::manager::FulltextIndexManager;
+    use graphdb_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -85,9 +85,9 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 
 #[cfg(feature = "fulltext-search")]
 fn bench_fulltext_search(c: &mut Criterion) {
-    use graphdb_search::config::FulltextConfig;
-    use graphdb_search::manager::FulltextIndexManager;
-    use graphdb_search::EngineType;
+    use graphdb_config::fulltext::FulltextConfig;
+    use graphdb_fulltext::manager::FulltextIndexManager;
+    use graphdb_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 

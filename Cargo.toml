@@ -5,7 +5,7 @@ members = [
     "crates/graphdb-core",
     "crates/graphdb-config",
     "crates/graphdb-metrics",
-    "crates/graphdb-search",
+    "crates/graphdb-fulltext",
     "crates/graphdb-sync",
     "crates/graphdb-transaction",
     "crates/graphdb-storage",
@@ -162,7 +162,7 @@ required-features = ["server"]
 [dependencies]
 graphdb-core = { path = "crates/graphdb-core" }
 graphdb-config = { path = "crates/graphdb-config" }
-graphdb-search = { path = "crates/graphdb-search" }
+graphdb-fulltext = { path = "crates/graphdb-fulltext" }
 graphdb-sync = { path = "crates/graphdb-sync" }
 graphdb-transaction = { path = "crates/graphdb-transaction" }
 graphdb-storage = { path = "crates/graphdb-storage" }
@@ -188,8 +188,8 @@ winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoap
 [features]
 default = ["server", "vector"]
 server = ["graphdb-config/server"]
-fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
-jieba = ["graphdb-search/jieba"]
+fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
+jieba = ["graphdb-fulltext/jieba"]
 vector = ["graphdb-api/vector", "graphdb-server/vector", "graphdb-config/vector", "graphdb-sync/vector", "graphdb-query/vector"]
 embedding = ["vector", "graphdb-sync/embedding", "dep:graphdb-embedding"]
 vector-qdrant = ["vector", "embedding", "dep:vector-client", "graphdb-api/vector-qdrant", "graphdb-server/vector-qdrant", "graphdb-config/vector-qdrant", "graphdb-sync/vector-qdrant", "graphdb-query/vector-qdrant"]

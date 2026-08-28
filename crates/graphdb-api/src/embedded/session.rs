@@ -13,7 +13,7 @@ use graphdb_query::executor::expression::functions::{CustomFunction, FunctionReg
 use graphdb_query::parser::ast::Stmt;
 use graphdb_query::parser::{Parser, ParserResult};
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::FulltextIndexManager;
+use graphdb_fulltext::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::SearchOptions;
 use graphdb_sync::SyncManager;

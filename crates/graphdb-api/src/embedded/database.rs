@@ -8,11 +8,11 @@ use crate::embedded::session::{GraphDatabaseInner, Session};
 use crate::storage::{GraphStorage, StorageClient};
 use graphdb_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use graphdb_core::{StatsManager, Value};
-use graphdb_search::FulltextConfig;
+use graphdb_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::FulltextIndexManager;
+use graphdb_fulltext::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::SyncFailurePolicy;
+use graphdb_fulltext::SyncFailurePolicy;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 #[cfg(feature = "fulltext-search")]

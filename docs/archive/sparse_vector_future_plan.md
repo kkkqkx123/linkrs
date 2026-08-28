@@ -31,7 +31,7 @@
 
 ### 4.1 与BM25的区分
 
-* `tantivy` BM25：词频倒排+`tf-idf`评分，面向关键词检索，无向量语义；已用于 `graphdb-search`
+* `tantivy` BM25：词频倒排+`tf-idf`评分，面向关键词检索，无向量语义；已用于 `graphdb-fulltext`
 * 稀疏向量 `ref/pgvector/src/sparsevec.h:12` `SparseVector{dim,nnz,indices[],values[]}` + `sparsevec.c:939` `inner_product`：学习稀疏（SPLADE）每维为词表权重，`dot`检索，`dim`可达1B（`pgvector README:253` `sparsevec up to 1,000 non-zero`），`qdrant_features.md:245` `sparse_vectors_config` 独立于稠密
 
 两者倒排结构可复用，但评分与训练来源不同，不可等价。

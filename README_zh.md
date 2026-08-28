@@ -32,7 +32,7 @@
 crates/
 ├── graphdb-core          # 核心类型、错误、数据结构
 ├── graphdb-config        # 配置管理
-├── graphdb-search        # 全文搜索 (tantivy/BM25)
+├── graphdb-fulltext        # 全文搜索 (tantivy/BM25)
 ├── graphdb-sync          # 同步原语
 ├── graphdb-transaction   # 事务管理 (MVCC)
 ├── graphdb-migration     # 模式/数据迁移

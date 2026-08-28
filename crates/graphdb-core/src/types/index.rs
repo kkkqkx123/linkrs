@@ -471,3 +471,57 @@ impl FulltextIndexOptions {
         Self::new(FulltextEngineType::Bm25)
     }
 }
+
+// ============================================================================
+// Index Consistency & Statistics Types
+// ============================================================================
+
+/// Consistency state of an index, applicable to any index type (fulltext, vector, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ConsistencyState {
+    Consistent,
+    Inconsistent,
+    Rebuilding,
+}
+
+/// Generic index statistics
+#[derive(Debug, Clone)]
+pub struct IndexStats {
+    pub doc_count: usize,
+    pub index_size: usize,
+    pub last_updated: Option<chrono::DateTime<chrono::Utc>>,
+    pub engine_info: Option<serde_json::Value>,
+}
+
+impl IndexStats {
+    pub fn new(doc_count: usize, index_size: usize) -> Self {
+        Self {
+            doc_count,
+            index_size,
+            last_updated: Some(chrono::Utc::now()),
+            engine_info: None,
+        }
+    }
+}
+
+/// Generic search operation statistics
+#[derive(Debug, Clone)]
+pub struct SearchStats {
+    pub total_results: usize,
+    pub returned_results: usize,
+    pub search_time_ms: u64,
+    pub cache_hit: bool,
+    pub index_used: String,
+}
+
+impl SearchStats {
+    pub fn new(index_used: String) -> Self {
+        Self {
+            total_results: 0,
+            returned_results: 0,
+            search_time_ms: 0,
+            cache_hit: false,
+            index_used,
+        }
+    }
+}

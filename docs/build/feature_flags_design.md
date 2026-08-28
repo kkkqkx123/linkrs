@@ -23,10 +23,10 @@ default = ["server"]
 server = ["graphdb-api/server", "graphdb-config/server"]
 
 # Full-text search support
-fulltext-search = ["graphdb-api/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext-search = ["graphdb-api/fulltext-search", "graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
 
 # Optional Chinese tokenizer support for full-text search
-jieba = ["graphdb-search/jieba"]
+jieba = ["graphdb-fulltext/jieba"]
 
 # Vector search support
 qdrant = [
@@ -62,14 +62,14 @@ default (server)
 
 fulltext-search
 ├── graphdb-api/fulltext-search
-│   ├── graphdb-search/fulltext-search
+│   ├── graphdb-fulltext/fulltext-search
 │   ├── graphdb-sync/fulltext-search
 │   └── graphdb-query/fulltext-search
-├── graphdb-search/fulltext-search
+├── graphdb-fulltext/fulltext-search
 └── graphdb-sync/fulltext-search
 
 jieba
-└── graphdb-search/jieba
+└── graphdb-fulltext/jieba
 
 qdrant
 ├── graphdb-api/qdrant

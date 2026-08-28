@@ -17,7 +17,7 @@ use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::StatsManager;
 #[cfg(feature = "fulltext-search")]
-use graphdb_search::manager::FulltextIndexManager;
+use graphdb_fulltext::manager::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
 use graphdb_sync::SyncManager;

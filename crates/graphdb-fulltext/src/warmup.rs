@@ -67,8 +67,7 @@ impl IndexWarmer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::FulltextConfig;
-    use crate::engine::EngineType;
+    use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
     #[cfg(feature = "fulltext-search")]
     use crate::manager::FulltextIndexManager;
     use tempfile::TempDir;

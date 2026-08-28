@@ -20,7 +20,7 @@ graphdb-query = { path = "../graphdb-query" }
 graphdb-wire = { path = "../graphdb-wire" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
-graphdb-search = { path = "../graphdb-search" }
+graphdb-fulltext = { path = "../graphdb-fulltext" }
 graphdb-api = { path = "../graphdb-api" }
 
 serde.workspace = true
@@ -78,7 +78,7 @@ vector-qdrant = [
     "graphdb-api/vector-qdrant",
 ]
 fulltext-search = [
-    "graphdb-search/fulltext-search",
+    "graphdb-fulltext/fulltext-search",
     "graphdb-sync/fulltext-search",
     "graphdb-query/fulltext-search",
 ]

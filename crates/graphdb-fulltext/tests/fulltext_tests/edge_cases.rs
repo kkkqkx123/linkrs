@@ -11,7 +11,7 @@
 //! Test cases: TC-FT-EDGE-001 ~ TC-FT-EDGE-015
 
 use super::common::{assert_search_result_count, FulltextTestContext};
-use graphdb_search::EngineType;
+use graphdb_fulltext::EngineType;
 
 /// TC-FT-EDGE-001: Search on Non-Existent Index
 #[tokio::test]
@@ -24,7 +24,7 @@ async fn test_search_non_existent_index() {
     assert!(
         matches!(
             result.unwrap_err(),
-            graphdb_search::SearchError::IndexNotFound(_)
+            graphdb_fulltext::SearchError::IndexNotFound(_)
         ),
         "Should return IndexNotFound error"
     );
