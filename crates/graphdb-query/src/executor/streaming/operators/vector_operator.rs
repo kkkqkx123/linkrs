@@ -54,6 +54,8 @@ pub enum VectorOperatorKind {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time.
+        query_text: Option<String>,
         top_k: u32,
         tag_name: String,
         field_name: String,
@@ -71,6 +73,8 @@ pub enum VectorOperatorKind {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time.
+        query_text: Option<String>,
         top_k: u32,
         tag_name: String,
         field_name: String,
@@ -85,6 +89,8 @@ pub enum VectorOperatorKind {
         pattern: String,
         field: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time.
+        query_text: Option<String>,
         threshold: Option<f32>,
         tag_name: String,
         field_name: String,
@@ -133,6 +139,7 @@ impl VectorOperator {
                 space_id,
                 index_name,
                 query_vector,
+                query_text,
                 top_k,
                 tag_name,
                 field_name,
@@ -147,6 +154,7 @@ impl VectorOperator {
                 space_id: *space_id,
                 index_name: index_name.clone(),
                 query_vector: query_vector.clone(),
+                query_text: query_text.clone(),
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
@@ -163,6 +171,7 @@ impl VectorOperator {
                 space_id,
                 index_name,
                 query_vector,
+                query_text,
                 top_k,
                 tag_name,
                 field_name,
@@ -174,6 +183,7 @@ impl VectorOperator {
                 space_id: *space_id,
                 index_name: index_name.clone(),
                 query_vector: query_vector.clone(),
+                query_text: query_text.clone(),
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
@@ -187,6 +197,7 @@ impl VectorOperator {
                 pattern,
                 field,
                 query_vector,
+                query_text,
                 threshold,
                 tag_name,
                 field_name,
@@ -199,6 +210,7 @@ impl VectorOperator {
                 pattern: pattern.clone(),
                 field: field.clone(),
                 query_vector: query_vector.clone(),
+                query_text: query_text.clone(),
                 threshold: *threshold,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
@@ -486,6 +498,7 @@ impl VectorOperator {
                 tag_name,
                 field_name,
                 query_vector,
+                query_text,
                 top_k,
                 threshold,
                 filter,
@@ -499,13 +512,36 @@ impl VectorOperator {
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
+                        // Resolve TEXT query to a vector at execution time via
+                        // the embedding service (deferred embed pattern).
+                        let resolved_vector = if let Some(text) = query_text {
+                            #[cfg(feature = "embedding")]
+                            {
+                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "TEXT vector embed",
+                                    coordinator.embed_text(text),
+                                ).map_err(
+                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
+                                )?;
+                                embedded
+                            }
+                            #[cfg(not(feature = "embedding"))]
+                            {
+                                let _ = text;
+                                return Err(QueryError::execution(
+                                    "TEXT vector query requires the 'embedding' feature to be enabled",
+                                ));
+                            }
+                        } else {
+                            query_vector.clone()
+                        };
                         // Fetch enough candidates so skipping `offset` rows
                         // still leaves up to `top_k` results.
                         let mut options = graphdb_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
-                            query_vector.clone(),
+                            resolved_vector,
                             (*top_k as usize).saturating_add(*offset),
                         );
                         // A zero threshold is vacuous for similarity scores;
@@ -566,6 +602,7 @@ impl VectorOperator {
                         &tag_name,
                         &field_name,
                         &query_vector,
+                        query_text.as_deref(),
                         &top_k,
                         &threshold,
                         &filter,
@@ -581,6 +618,7 @@ impl VectorOperator {
                 tag_name,
                 field_name,
                 query_vector,
+                query_text,
                 top_k,
                 consistency_timeout_ms,
                 minimum_lsn,
@@ -599,11 +637,33 @@ impl VectorOperator {
                                 "LOOKUP VECTOR cannot execute: index location (tag/field) is not resolved",
                             ));
                         }
+                        // Resolve TEXT query to a vector at execution time.
+                        let resolved_vector = if let Some(text) = query_text {
+                            #[cfg(feature = "embedding")]
+                            {
+                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "TEXT vector embed",
+                                    coordinator.embed_text(text),
+                                ).map_err(
+                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
+                                )?;
+                                embedded
+                            }
+                            #[cfg(not(feature = "embedding"))]
+                            {
+                                let _ = text;
+                                return Err(QueryError::execution(
+                                    "TEXT vector query requires the 'embedding' feature to be enabled",
+                                ));
+                            }
+                        } else {
+                            query_vector.clone()
+                        };
                         let mut options = graphdb_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
-                            query_vector.clone(),
+                            resolved_vector,
                             *top_k as usize,
                         );
                         if let Some(timeout) = consistency_timeout_ms {
@@ -646,7 +706,7 @@ impl VectorOperator {
 
                 #[cfg(not(feature = "vector"))]
                 {
-                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
+                    let _ = (&space_id, &tag_name, &field_name, &query_vector, query_text.as_deref(), &top_k);
                     Err(QueryError::feature_disabled("vector", "VECTOR LOOKUP"))
                 }
             }
@@ -656,6 +716,7 @@ impl VectorOperator {
                 tag_name,
                 field_name,
                 query_vector,
+                query_text,
                 threshold,
                 consistency_timeout_ms,
                 minimum_lsn,
@@ -666,6 +727,28 @@ impl VectorOperator {
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
+                        // Resolve TEXT query to a vector at execution time.
+                        let resolved_vector = if let Some(text) = query_text {
+                            #[cfg(feature = "embedding")]
+                            {
+                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "TEXT vector embed",
+                                    coordinator.embed_text(text),
+                                ).map_err(
+                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
+                                )?;
+                                embedded
+                            }
+                            #[cfg(not(feature = "embedding"))]
+                            {
+                                let _ = text;
+                                return Err(QueryError::execution(
+                                    "TEXT vector query requires the 'embedding' feature to be enabled",
+                                ));
+                            }
+                        } else {
+                            query_vector.clone()
+                        };
                         let thr = threshold.unwrap_or(0.5);
                         // VectorMatch currently uses threshold-only search; propagate
                         // RYW consistency via a full SearchOptions when timeout is set.
@@ -674,7 +757,7 @@ impl VectorOperator {
                                 *space_id,
                                 tag_name.clone(),
                                 field_name.clone(),
-                                query_vector.clone(),
+                                resolved_vector.clone(),
                                 DEFAULT_MATCH_TOP_K,
                             )
                             .with_threshold(thr);
@@ -697,7 +780,7 @@ impl VectorOperator {
                                     *space_id,
                                     tag_name,
                                     field_name,
-                                    query_vector.clone(),
+                                    resolved_vector,
                                     DEFAULT_MATCH_TOP_K,
                                     thr,
                                 ),
@@ -733,6 +816,7 @@ impl VectorOperator {
                         &tag_name,
                         &field_name,
                         &query_vector,
+                        query_text.as_deref(),
                         &threshold,
                         input,
                     );

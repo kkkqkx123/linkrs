@@ -939,6 +939,10 @@ pub enum VectorSpec {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time
+        /// via the embedding service. `None` for Vector/Parameter queries
+        /// where the vector is already resolved.
+        query_text: Option<String>,
         top_k: u32,
         tag_name: String,
         field_name: String,
@@ -959,6 +963,8 @@ pub enum VectorSpec {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time.
+        query_text: Option<String>,
         top_k: u32,
         tag_name: String,
         field_name: String,
@@ -970,6 +976,8 @@ pub enum VectorSpec {
         pattern: String,
         field: String,
         query_vector: Vec<f32>,
+        /// Raw text for TEXT queries; resolved to a vector at execution time.
+        query_text: Option<String>,
         threshold: Option<f32>,
         tag_name: String,
         field_name: String,

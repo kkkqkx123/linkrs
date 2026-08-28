@@ -32,6 +32,7 @@ vector-search = { path = "../vector-search", optional = true }
 [features]
 vector = ["dep:vector-search", "graphdb-sync/vector"]
 vector-qdrant = ["vector", "graphdb-sync/vector-qdrant"]
+embedding = ["graphdb-sync/embedding"]
 fulltext = ["graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
 
 [dev-dependencies]
