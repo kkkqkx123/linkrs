@@ -85,7 +85,6 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
             let nbr = Nbr::new(
                 immutable_nbr.neighbor,
                 edge_id,
-                immutable_nbr.prop_offset,
                 immutable_nbr.timestamp,
             );
             merged_entries.push((src_u32, nbr));
@@ -377,7 +376,6 @@ fn merge_adaptive_impl(
             let nbr = Nbr::new(
                 immutable_nbr.neighbor,
                 edge_id,
-                immutable_nbr.prop_offset,
                 immutable_nbr.timestamp,
             );
             merged_entries.push((src_u32, nbr));
@@ -614,7 +612,6 @@ fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr)>) {
         let nbr = Nbr::new(
             immutable_nbr.neighbor,
             edge_id,
-            immutable_nbr.prop_offset,
             immutable_nbr.timestamp,
         );
         entries.push((src_u32, nbr));

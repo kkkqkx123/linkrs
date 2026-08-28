@@ -864,7 +864,7 @@ fn scan_mutable(args: ScanArgs) {
         // projection. Filtering happens before offset/limit accounting.
         let mut properties = decode_edge_properties(
             args.store,
-            nbr.prop_offset,
+            nbr.edge_id,
             args.projection,
             args.predicate_columns,
         );
@@ -949,14 +949,13 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
         let nbr = Nbr::new(
             edge.neighbor,
             edge.edge_id,
-            edge.prop_offset,
             edge.timestamp,
         );
 
         // Same decode-once / pre-filter discipline as the mutable scan.
         let mut properties = decode_edge_properties(
             args.store,
-            nbr.prop_offset,
+            nbr.edge_id,
             args.projection,
             args.predicate_columns,
         );
@@ -1086,16 +1085,13 @@ fn decode_endpoint(key: VertexId) -> (VertexId, i64) {
 /// required by pushed scan predicates.
 fn decode_edge_properties(
     store: &TimeTravelEdgeStore,
-    prop_offset: u32,
+    edge_id: EdgeId,
     projection: &Option<Vec<String>>,
     predicate_columns: &[String],
 ) -> Vec<(String, Value)> {
-    if prop_offset == 0 {
-        return Vec::new();
-    }
     store
         .properties
-        .get(prop_offset, None)
+        .get_by_edge_id(edge_id, None)
         .map(|props| {
             props
                 .into_iter()

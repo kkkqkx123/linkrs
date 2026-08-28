@@ -220,22 +220,15 @@ impl EdgeSchema {
 pub struct Nbr {
     pub neighbor: VertexId,
     pub edge_id: EdgeId,
-    pub prop_offset: u32,
     pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
 }
 
 impl Nbr {
-    pub fn new(
-        neighbor: VertexId,
-        edge_id: EdgeId,
-        prop_offset: u32,
-        create_ts: Timestamp,
-    ) -> Self {
+    pub fn new(neighbor: VertexId, edge_id: EdgeId, create_ts: Timestamp) -> Self {
         Self {
             neighbor,
             edge_id,
-            prop_offset,
             create_ts,
             delete_ts: Timestamp::MAX,
         }
@@ -244,14 +237,12 @@ impl Nbr {
     pub fn with_delete_ts(
         neighbor: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         create_ts: Timestamp,
         delete_ts: Timestamp,
     ) -> Self {
         Self {
             neighbor,
             edge_id,
-            prop_offset,
             create_ts,
             delete_ts,
         }
@@ -266,25 +257,18 @@ impl Nbr {
 pub struct ImmutableNbr {
     pub neighbor: VertexId,
     pub edge_id: EdgeId,
-    pub prop_offset: u32,
     pub timestamp: Timestamp,
 }
 
 impl ImmutableNbr {
-    pub fn new(neighbor: VertexId, edge_id: EdgeId, prop_offset: u32) -> Self {
-        Self::with_timestamp(neighbor, edge_id, prop_offset, 0)
+    pub fn new(neighbor: VertexId, edge_id: EdgeId) -> Self {
+        Self::with_timestamp(neighbor, edge_id, 0)
     }
 
-    pub fn with_timestamp(
-        neighbor: VertexId,
-        edge_id: EdgeId,
-        prop_offset: u32,
-        timestamp: Timestamp,
-    ) -> Self {
+    pub fn with_timestamp(neighbor: VertexId, edge_id: EdgeId, timestamp: Timestamp) -> Self {
         Self {
             neighbor,
             edge_id,
-            prop_offset,
             timestamp,
         }
     }

@@ -34,7 +34,6 @@ pub struct ColdIndexEntry {
     pub src_internal: u32,
     pub dst_internal: u32,
     pub rank: i64,
-    pub prop_offset: u32,
 }
 
 /// Ordered property index over a ColdSnapshot's edge rows.
@@ -42,7 +41,7 @@ pub struct ColdIndexEntry {
 /// For each indexed property name the entries are sorted by the
 /// OrderedCodec-encoded value, so equality and range lookups use the same
 /// encoded bounds as the hot per-table edge property index. Entries point at
-/// (src_internal, dst_internal, rank, prop_offset); the property payload
+/// (src_internal, dst_internal, rank, edge_id); the property payload
 /// itself stays in the snapshot's property table.
 #[derive(Debug, Clone, Default)]
 pub struct ColdPropertyIndex {
@@ -68,7 +67,7 @@ impl ColdPropertyIndex {
             for nbr in exported.out_csr.edges_of(src_u32) {
                 let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
                 let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
-                let Some(props) = exported.properties.read_properties(nbr.prop_offset) else {
+                let Some(props) = exported.properties.read_properties_by_edge_id(nbr.edge_id) else {
                     continue;
                 };
                 for (name, value) in props {
@@ -80,7 +79,6 @@ impl ColdPropertyIndex {
                                     src_internal: src_u32,
                                     dst_internal,
                                     rank,
-                                    prop_offset: nbr.prop_offset,
                                 },
                             ));
                         }
@@ -173,7 +171,6 @@ impl ColdPropertyIndex {
                 buf.extend_from_slice(&entry.src_internal.to_le_bytes());
                 buf.extend_from_slice(&entry.dst_internal.to_le_bytes());
                 buf.extend_from_slice(&entry.rank.to_le_bytes());
-                buf.extend_from_slice(&entry.prop_offset.to_le_bytes());
             }
         }
         buf
@@ -226,14 +223,12 @@ impl ColdPropertyIndex {
                 let src_internal = read_u32(&mut pos)?;
                 let dst_internal = read_u32(&mut pos)?;
                 let rank = read_u64(&mut pos)? as i64;
-                let prop_offset = read_u32(&mut pos)?;
                 list.push((
                     key,
                     ColdIndexEntry {
                         src_internal,
                         dst_internal,
                         rank,
-                        prop_offset,
                     },
                 ));
             }
@@ -277,7 +272,7 @@ impl ColdPropertyIndex {
 /// [N]  Dict entries: [1+len] vertex id bytes each
 /// [8]  Offsets length (u64 LE)
 /// [N]  Offsets (u32 LE, vertex_capacity + 1 entries)
-/// [N]  Edge records: (dict_id u32, edge_id u64, prop_offset u32, ts u64)
+/// [N]  Edge records: (dict_id u32, edge_id u64, ts u64)
 /// ```
 #[derive(Debug, Clone)]
 pub struct ColdSnapshot {
@@ -673,7 +668,7 @@ impl ColdSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
             .collect()
     }
 
@@ -681,14 +676,14 @@ impl ColdSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
             .collect()
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -699,7 +694,7 @@ impl ColdSnapshot {
         self.out_csr.edges_of(src).iter().find_map(|e| {
             let (decoded, _) = TimeTravelEdgeStore::decode_edge_endpoint(e.neighbor);
             if decoded.as_int64() == Some(dst as i64) {
-                Some(Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
+                Some(Nbr::new(e.neighbor, e.edge_id, e.timestamp))
             } else {
                 None
             }
@@ -723,7 +718,7 @@ impl ColdSnapshot {
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
-                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id, nbr.prop_offset, nbr.timestamp),
+                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp),
                     rank,
                     properties: None,
                 });
@@ -759,7 +754,7 @@ impl ColdSnapshot {
         let (_, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
         let properties = self
             .properties
-            .read_properties(nbr.prop_offset)
+            .read_properties_by_edge_id(nbr.edge_id)
             .unwrap_or_default();
         EdgeRecord {
             src_vid,
@@ -986,7 +981,7 @@ fn encode_csr_dict(csr: &Csr) -> Vec<u8> {
     // Build the endpoint dictionary in order of first appearance.
     let mut dict: Vec<VertexId> = Vec::new();
     let mut dict_ids: HashMap<VertexId, u32> = HashMap::new();
-    let mut edges: Vec<(u32, EdgeId, u32, Timestamp)> = Vec::with_capacity(edge_count as usize);
+    let mut edges: Vec<(u32, EdgeId, Timestamp)> = Vec::with_capacity(edge_count as usize);
     for v in 0..capacity {
         for nbr in csr.edges_of(v as u32) {
             let id = match dict_ids.get(&nbr.neighbor) {
@@ -998,7 +993,7 @@ fn encode_csr_dict(csr: &Csr) -> Vec<u8> {
                     id
                 }
             };
-            edges.push((id, nbr.edge_id, nbr.prop_offset, nbr.timestamp));
+            edges.push((id, nbr.edge_id, nbr.timestamp));
         }
     }
 
@@ -1023,10 +1018,9 @@ fn encode_csr_dict(csr: &Csr) -> Vec<u8> {
     for offset in &offsets {
         buf.extend_from_slice(&offset.to_le_bytes());
     }
-    for (dict_id, edge_id, prop_offset, ts) in &edges {
+    for (dict_id, edge_id, ts) in &edges {
         buf.extend_from_slice(&dict_id.to_le_bytes());
         buf.extend_from_slice(&edge_id.as_u64().to_le_bytes());
-        buf.extend_from_slice(&prop_offset.to_le_bytes());
         buf.extend_from_slice(&ts.to_le_bytes());
     }
     buf
@@ -1085,7 +1079,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
         offsets.push(u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
         pos += 4;
     }
-    if pos + edge_count * 20 > data.len() {
+    if pos + edge_count * 16 > data.len() {
         return Err(StorageError::deserialize_error(
             "cold CSR edge records truncated",
         ));
@@ -1101,14 +1095,12 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
             pos += 4;
             let edge_id = EdgeId::new(u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()));
             pos += 8;
-            let prop_offset = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-            pos += 4;
             let ts = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
             pos += 8;
             let neighbor = *dict
                 .get(dict_id as usize)
                 .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
-            entries.push((v as u32, Nbr::new(neighbor, edge_id, prop_offset, ts)));
+            entries.push((v as u32, Nbr::new(neighbor, edge_id, ts)));
         }
     }
     Ok(Csr::from_nbr_entries(&entries, capacity))
@@ -1705,7 +1697,7 @@ mod tests {
         let nbr = loaded.get_out_edges(10)[0];
         let props = loaded
             .properties()
-            .read_properties(nbr.prop_offset)
+            .read_properties_by_edge_id(nbr.edge_id)
             .unwrap();
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].1, Value::string("repeated-pattern-3"));

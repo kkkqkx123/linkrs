@@ -157,11 +157,11 @@ impl ColdDelta {
                         // offset, so compare the values, not the offsets.
                         let base_props = base
                             .properties()
-                            .read_properties(nbr.prop_offset)
+                            .read_properties_by_edge_id(nbr.edge_id)
                             .unwrap_or_default();
                         let latest_props = latest
                             .properties()
-                            .read_properties(latest_nbr.prop_offset)
+                            .read_properties_by_edge_id(latest_nbr.edge_id)
                             .unwrap_or_default();
                         if base_props != latest_props {
                             delta.property_updates.push(DeltaPropertyUpdate {
@@ -186,7 +186,7 @@ impl ColdDelta {
                 }
                 let properties = latest
                     .properties()
-                    .read_properties(nbr.prop_offset)
+                    .read_properties_by_edge_id(nbr.edge_id)
                     .unwrap_or_default();
                 delta.added.push(DeltaAddedEdge {
                     src_internal: src_u32,
@@ -447,10 +447,11 @@ impl ColdSnapshot {
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let nbr = Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp);
+                let nbr = Nbr::new(e.neighbor, e.edge_id, e.timestamp);
                 if let Some(update) = updates.get(&key) {
-                    // In-place versioned update: the property offset is stable.
-                    properties.update(nbr.prop_offset, &update.properties, delta.delta_ts)?;
+                    if let Some(offset) = properties.get_offset_by_edge_id(nbr.edge_id) {
+                        properties.update(offset, &update.properties, delta.delta_ts)?;
+                    }
                 }
                 out_entries.push((src_u32, nbr));
             }
@@ -458,14 +459,12 @@ impl ColdSnapshot {
 
         // Added edges: properties go into the merged table, offsets remapped.
         for edge in &delta.added {
-            let prop_offset = if edge.properties.is_empty() {
-                0
-            } else {
-                properties.insert(&edge.properties, edge.timestamp)?
+            if !edge.properties.is_empty() {
+                properties.insert_with_edge_id(edge.edge_id, &edge.properties, edge.timestamp)?;
             };
             out_entries.push((
                 edge.src_internal,
-                Nbr::new(edge.neighbor, edge.edge_id, prop_offset, edge.timestamp),
+                Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp),
             ));
         }
 
@@ -482,7 +481,7 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::new(dst_key, nbr.edge_id, nbr.prop_offset, nbr.create_ts),
+                    Nbr::new(dst_key, nbr.edge_id, nbr.create_ts),
                 ));
             }
         }
@@ -716,7 +715,7 @@ mod tests {
             .expect("0->1 must survive update");
         let props = merged
             .properties()
-            .read_properties(nbr.prop_offset)
+            .read_properties_by_edge_id(nbr.edge_id)
             .unwrap();
         assert!(props.contains(&("weight".to_string(), Value::Double(1.5))));
         // 0->2 removed

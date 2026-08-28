@@ -344,7 +344,6 @@ impl TimeTravelEdgeStore {
                         return Some(Nbr::new(
                             edge.neighbor,
                             edge_id,
-                            edge.prop_offset,
                             edge.timestamp,
                         ));
                     }
@@ -413,7 +412,6 @@ impl TimeTravelEdgeStore {
                         edges.push(Nbr::new(
                             edge.neighbor,
                             edge_id,
-                            edge.prop_offset,
                             edge.timestamp,
                         ));
                     }
@@ -482,17 +480,13 @@ impl TimeTravelEdgeStore {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
             rank,
-            properties: self.properties_for_offset(nbr.prop_offset, query_ts),
+            properties: self.properties_for_edge_id(nbr.edge_id, query_ts),
         }
     }
 
-    fn properties_for_offset(&self, prop_offset: u32, query_ts: Timestamp) -> Vec<(String, Value)> {
-        if prop_offset == 0 {
-            return Vec::new();
-        }
-
+    fn properties_for_edge_id(&self, edge_id: EdgeId, query_ts: Timestamp) -> Vec<(String, Value)> {
         self.properties
-            .get(prop_offset, Some(query_ts))
+            .get_by_edge_id(edge_id, Some(query_ts))
             .map(|props| {
                 props
                     .into_iter()
@@ -578,39 +572,33 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        let prop_offset = if !converted_values.is_empty() {
-            self.properties.insert(&converted_values, ts)?
-        } else {
-            0
-        };
+        let edge_id = self.next_edge_id.fetch_add();
 
         if self.has_edge(src, dst, rank, ts) {
-            if prop_offset > 0 {
-                self.properties.delete(prop_offset);
-            }
+            self.properties.delete_by_edge_id(edge_id);
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {}@{}",
                 src, dst, rank
             )));
         }
 
+        if !converted_values.is_empty() {
+            self.properties.insert_with_edge_id(edge_id, &converted_values, ts)?;
+        }
+
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-
-        let edge_id = self.next_edge_id.fetch_add();
         if let Err(e) = self
             .out_csr
-            .insert_edge(src, dst_key, edge_id, prop_offset, ts)
+            .insert_edge(src, dst_key, edge_id, ts)
         {
-            if prop_offset > 0 {
-                self.properties.delete(prop_offset);
-            }
+            self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
         if let Err(e) = self
             .in_csr
-            .insert_edge(dst, src_key, edge_id, prop_offset, ts)
+            .insert_edge(dst, src_key, edge_id, ts)
         {
             // Roll back the out-direction insertion physically so no
             // tombstone residue remains; fall back to logical deletion if
@@ -618,9 +606,7 @@ impl TimeTravelEdgeStore {
             if !self.out_csr.remove_edge(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
-            if prop_offset > 0 {
-                self.properties.delete(prop_offset);
-            }
+            self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
@@ -675,9 +661,7 @@ impl TimeTravelEdgeStore {
 
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
-            if nbr.prop_offset > 0 {
-                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
-            }
+            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
@@ -697,9 +681,7 @@ impl TimeTravelEdgeStore {
             self.snapshot_dirty = true;
             // Mark the property record deleted so it can be reclaimed by
             // compact_properties (it filters via mvcc.is_tombstoned).
-            if nbr.prop_offset > 0 {
-                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
-            }
+            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
@@ -750,9 +732,7 @@ impl TimeTravelEdgeStore {
             }
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
-            if nbr.prop_offset > 0 {
-                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
-            }
+            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -780,9 +760,7 @@ impl TimeTravelEdgeStore {
             // regains its original properties after the undo.
             let dst_key = Self::edge_endpoint_key(dst, rank);
             if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
-                if nbr.prop_offset > 0 {
-                    self.properties.revert_deletion(nbr.prop_offset);
-                }
+                self.properties.revert_deletion_by_edge_id(nbr.edge_id);
             }
             return Ok(true);
         }
@@ -803,12 +781,10 @@ impl TimeTravelEdgeStore {
         self.mvcc.remove_deletion(nbr.edge_id);
         // The cached current snapshot still excludes this edge; rebuild lazily.
         self.snapshot_dirty = true;
-        if nbr.prop_offset > 0 {
-            self.properties.revert_deletion(nbr.prop_offset);
-        }
+        self.properties.revert_deletion_by_edge_id(nbr.edge_id);
         // Re-index the restored properties when the property index is active
         // (the delete path removed them).
-        let restored = self.properties_for_offset(nbr.prop_offset, ts);
+        let restored = self.properties_for_edge_id(nbr.edge_id, ts);
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in restored {
                 let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
@@ -835,7 +811,6 @@ impl TimeTravelEdgeStore {
                     return Some(Nbr::new(
                         edge.neighbor,
                         edge_id,
-                        edge.prop_offset,
                         edge.timestamp,
                     ));
                 }
@@ -858,7 +833,7 @@ impl TimeTravelEdgeStore {
             dst_key,
             ts,
         )?;
-        let properties = self.properties_for_offset(nbr.prop_offset, ts);
+        let properties = self.properties_for_edge_id(nbr.edge_id, ts);
 
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
@@ -875,20 +850,11 @@ impl TimeTravelEdgeStore {
 
         let nbrs = self.merged_out_nbrs(src, ts);
 
-        // Optimization: prefetch all properties first to improve cache locality
-        let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
-        if !prop_offsets.is_empty() {
-            self.properties.prefetch_batch(&prop_offsets);
-        }
-
         nbrs.into_iter()
             .map(|nbr| {
                 let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
-                // Try fast path first, fall back to regular get if not fixed-size
-                let properties = self
-                    .properties
-                    .get_fast(nbr.prop_offset, Some(ts))
-                    .or_else(|| self.properties.get(nbr.prop_offset, Some(ts)))
+                let properties = self.properties
+                    .get_by_edge_id(nbr.edge_id, Some(ts))
                     .map(|props| {
                         props
                             .into_iter()
@@ -931,20 +897,11 @@ impl TimeTravelEdgeStore {
 
         let nbrs = self.merged_in_nbrs(dst, ts);
 
-        // Optimization: prefetch all properties first to improve cache locality
-        let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
-        if !prop_offsets.is_empty() {
-            self.properties.prefetch_batch(&prop_offsets);
-        }
-
         nbrs.into_iter()
             .map(|nbr| {
                 let (src_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
-                // Try fast path first, fall back to regular get if not fixed-size
-                let properties = self
-                    .properties
-                    .get_fast(nbr.prop_offset, Some(ts))
-                    .or_else(|| self.properties.get(nbr.prop_offset, Some(ts)))
+                let properties = self.properties
+                    .get_by_edge_id(nbr.edge_id, Some(ts))
                     .map(|props| {
                         props
                             .into_iter()
@@ -1203,8 +1160,10 @@ impl TimeTravelEdgeStore {
             dst_key,
             ts,
         ) {
-            self.properties
-                .set_property(nbr.prop_offset, prop_name, Some(value.clone()), ts)?;
+            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
+                self.properties
+                    .set_property(offset, prop_name, Some(value.clone()), ts)?;
+            }
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -1229,12 +1188,14 @@ impl TimeTravelEdgeStore {
             dst_key,
             params.ts,
         ) {
-            self.properties.set_property_by_id(
-                nbr.prop_offset,
-                PropertyId(params.prop_id),
-                Some(params.value.clone()),
-                params.ts,
-            )?;
+            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
+                self.properties.set_property_by_id(
+                    offset,
+                    PropertyId(params.prop_id),
+                    Some(params.value.clone()),
+                    params.ts,
+                )?;
+            }
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(
@@ -1245,10 +1206,10 @@ impl TimeTravelEdgeStore {
                 src_key,
                 params.ts,
             ) {
-                if nbr.prop_offset != ie_nbr.prop_offset {
+                if nbr.edge_id != ie_nbr.edge_id {
                     return Err(StorageError::data_corruption(format!(
-                        "property offset mismatch: out_csr={}, in_csr={} at edge ({}, {})",
-                        nbr.prop_offset, ie_nbr.prop_offset, params.src, params.dst
+                        "edge_id mismatch: out_csr={}, in_csr={} at edge ({}, {})",
+                        nbr.edge_id.0, ie_nbr.edge_id.0, params.src, params.dst
                     )));
                 }
             }
@@ -1489,7 +1450,6 @@ impl TimeTravelEdgeStore {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,
-                        edge.prop_offset,
                         edge.timestamp,
                     ));
                 }
@@ -1528,7 +1488,6 @@ impl TimeTravelEdgeStore {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,
-                        edge.prop_offset,
                         edge.timestamp,
                     ));
                 }
@@ -1792,7 +1751,6 @@ impl<'a> EdgeTableScanIterator<'a> {
                             Nbr::new(
                                 edge.neighbor,
                                 edge.edge_id,
-                                edge.prop_offset,
                                 edge.timestamp,
                             ),
                             ts,

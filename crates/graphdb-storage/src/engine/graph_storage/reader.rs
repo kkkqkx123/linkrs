@@ -1661,7 +1661,6 @@ fn cold_index_entry_to_edge(
     let nbr = Nbr::new(
         TimeTravelEdgeStore::edge_endpoint_key(entry.dst_internal, entry.rank),
         EdgeId(0),
-        entry.prop_offset,
         snapshot.snapshot_ts(),
     );
     let record = snapshot.nbr_to_edge_record(&nbr, src_vid, dst_vid);

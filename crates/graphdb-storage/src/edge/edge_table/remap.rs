@@ -90,7 +90,6 @@ fn remap_variant(
             *src,
             nbr.neighbor,
             nbr.edge_id,
-            nbr.prop_offset,
             nbr.create_ts,
         )?;
         if nbr.delete_ts != Timestamp::MAX {
@@ -116,7 +115,7 @@ fn remap_segment_csr(
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             (
                 src_u32,
-                Nbr::new(nbr.neighbor, nbr.edge_id, nbr.prop_offset, nbr.timestamp),
+                Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp),
             )
         })
         .collect();
@@ -249,7 +248,7 @@ pub(crate) fn remap_immutable_csr(
             let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
             (
                 new_src,
-                Nbr::new(new_neighbor, nbr.edge_id, nbr.prop_offset, nbr.timestamp),
+                Nbr::new(new_neighbor, nbr.edge_id, nbr.timestamp),
             )
         })
         .collect();

@@ -41,7 +41,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::persistence::{read_u32_le, read_u64_le};
+use crate::persistence::read_u64_le;
 use graphdb_core::{StorageError, StorageResult};
 
 use super::{
@@ -111,9 +111,8 @@ impl SingleMutableCsr {
             Nbr::with_delete_ts(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                0,
                 INVALID_TIMESTAMP,
-                0
+                0,
             );
             vertex_cap
         ];
@@ -139,11 +138,11 @@ impl SingleMutableCsr {
 
         let additional = new_vertex_capacity - self.vertex_capacity();
         self.nbr_list.extend(std::iter::repeat_n(
-            Nbr::new(
+            Nbr::with_delete_ts(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                0,
                 INVALID_TIMESTAMP,
+                0,
             ),
             additional,
         ));
@@ -162,7 +161,6 @@ impl SingleMutableCsr {
         src: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
         let src_idx = src as usize;
@@ -184,7 +182,6 @@ impl SingleMutableCsr {
         let was_empty = nbr.delete_ts < Timestamp::MAX;
         nbr.neighbor = dst;
         nbr.edge_id = edge_id;
-        nbr.prop_offset = prop_offset;
         nbr.create_ts = ts;
         nbr.delete_ts = Timestamp::MAX;
 
@@ -335,11 +332,11 @@ impl SingleMutableCsr {
 
     pub fn clear(&mut self) {
         for nbr in &mut self.nbr_list {
-            *nbr = Nbr::new(
+            *nbr = Nbr::with_delete_ts(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                0,
                 INVALID_TIMESTAMP,
+                0,
             );
         }
         self.edge_count.store(0, Ordering::Relaxed);
@@ -359,7 +356,6 @@ impl SingleMutableCsr {
         for nbr in &self.nbr_list {
             write_vertex_id(&mut result, nbr.neighbor);
             result.extend_from_slice(&nbr.edge_id.to_le_bytes());
-            result.extend_from_slice(&nbr.prop_offset.to_le_bytes());
             result.extend_from_slice(&nbr.create_ts.to_le_bytes());
             result.extend_from_slice(&nbr.delete_ts.to_le_bytes());
         }
@@ -386,14 +382,12 @@ impl SingleMutableCsr {
         while offset < data.len() {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
-            let prop_offset = read_u32_le(data, &mut offset)?;
             let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             nbr_list.push(Nbr::with_delete_ts(
                 neighbor,
                 EdgeId(raw_edge_id),
-                prop_offset,
                 create_ts,
                 delete_ts,
             ));
@@ -498,10 +492,9 @@ impl MutableCsrTrait for SingleMutableCsr {
         src: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        SingleMutableCsr::insert_edge(self, src, dst, edge_id, prop_offset, ts)
+        SingleMutableCsr::insert_edge(self, src, dst, edge_id, ts)
     }
 
     fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -545,12 +538,12 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 100)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 100)
             .unwrap();
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1, 99)
+            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99)
             .is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 1, 101)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 1);
@@ -561,11 +554,11 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 0, 100)
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 0, 100)
+        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100)
             .unwrap();
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 0, 100)
+        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 100)
             .unwrap();
 
         let data = csr1.dump();

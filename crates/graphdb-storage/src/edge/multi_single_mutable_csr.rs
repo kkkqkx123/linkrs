@@ -76,9 +76,8 @@ impl MultiSingleMutableCsr {
                 Nbr::with_delete_ts(
                     VertexId::from_int64(0),
                     INVALID_EDGE_ID,
-                    0,
                     INVALID_TIMESTAMP,
-                    0
+                    0,
                 );
                 vertex_cap * edges_per
             ],
@@ -104,7 +103,6 @@ impl MultiSingleMutableCsr {
         self.edges.fill(Nbr::with_delete_ts(
             VertexId::from_int64(0),
             INVALID_EDGE_ID,
-            0,
             INVALID_TIMESTAMP,
             0,
         ));
@@ -122,7 +120,6 @@ impl MultiSingleMutableCsr {
             Nbr::with_delete_ts(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                0,
                 INVALID_TIMESTAMP,
                 0,
             ),
@@ -186,7 +183,6 @@ impl CsrBase for MultiSingleMutableCsr {
         for nbr in &self.edges {
             data.extend(nbr.neighbor.as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
-            data.extend(nbr.prop_offset.to_le_bytes());
             data.extend(nbr.create_ts.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
@@ -235,14 +231,12 @@ impl CsrBase for MultiSingleMutableCsr {
             offset += len;
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
-            let prop_offset = read_u32_le(data, &mut offset)?;
             let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.edges.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
                 edge_id,
-                prop_offset,
                 create_ts,
                 delete_ts,
             });
@@ -266,7 +260,6 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
@@ -280,7 +273,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         if let Some(slot) = self.get_slot_for_dst(src_vid, dst) {
             // Update existing edge if timestamp is newer
             if ts > self.edges[slot].create_ts {
-                self.edges[slot] = Nbr::new(dst, edge_id, prop_offset, ts);
+                self.edges[slot] = Nbr::new(dst, edge_id, ts);
                 return Ok(());
             }
             return Err(StorageError::edge_already_exists(format!(
@@ -291,7 +284,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
 
         // Try to insert in empty slot
         if let Some(slot) = self.find_empty_slot(src_vid) {
-            self.edges[slot] = Nbr::new(dst, edge_id, prop_offset, ts);
+            self.edges[slot] = Nbr::new(dst, edge_id, ts);
             self.counts[src_vid as usize] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
@@ -515,11 +508,11 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert multiple edges for same vertex
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 8, 1)
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 3);
@@ -536,13 +529,13 @@ mod tests {
     fn test_multi_single_capacity_exceeded() {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 2);
 
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
         // Third insertion should fail due to capacity
         assert!(csr
-            .insert_edge(0, VertexId::from_int64(3), EdgeId(102), 8, 1)
+            .insert_edge(0, VertexId::from_int64(3), EdgeId(102), 1)
             .is_err());
 
         assert_eq!(csr.edge_count(), 2);
@@ -552,9 +545,9 @@ mod tests {
     fn test_multi_single_delete_and_revert() {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
 
         // Delete first edge
@@ -575,13 +568,13 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(5, 3);
 
         // Insert edges across multiple vertices
-        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1)
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1)
             .unwrap();
-        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1)
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1)
             .unwrap();
-        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1)
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1)
             .unwrap();
 
         // Collect via iterator
@@ -604,11 +597,11 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert edges at different timestamps
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 8, 30)
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 30)
             .unwrap();
 
         // Query at different timestamps
@@ -630,11 +623,11 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert edges
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 5)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 5)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 10)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 10)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 8, 15)
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 15)
             .unwrap();
 
         // Delete some edges
@@ -659,13 +652,12 @@ mod tests {
 
         // Add to each vertex (with limited capacity)
         for src in 0..5 {
-            csr.insert_edge(src, VertexId::from_int64(100), EdgeId(src as u64 * 2), 0, 1)
+            csr.insert_edge(src, VertexId::from_int64(100), EdgeId(src as u64 * 2), 1)
                 .unwrap();
             csr.insert_edge(
                 src,
                 VertexId::from_int64(101),
                 EdgeId(src as u64 * 2 + 1),
-                4,
                 1,
             )
             .unwrap();
@@ -675,8 +667,7 @@ mod tests {
                     src,
                     VertexId::from_int64(102),
                     EdgeId(src as u64 * 2 + 2),
-                    8,
-                    1
+                    1,
                 )
                 .is_err());
         }

@@ -32,7 +32,6 @@ pub trait MutableCsrTrait: CsrBase {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()>;
 

@@ -111,7 +111,6 @@ impl LabeledMutableCsr {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         label: LabelId,
         ts: Timestamp,
     ) -> StorageResult<()> {
@@ -142,12 +141,12 @@ impl LabeledMutableCsr {
             }
 
             // Append to end of label range
-            self.nbr_list.push(Nbr::new(dst, edge_id, prop_offset, ts));
+            self.nbr_list.push(Nbr::new(dst, edge_id, ts));
             ranges[idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
-            self.nbr_list.push(Nbr::new(dst, edge_id, prop_offset, ts));
+            self.nbr_list.push(Nbr::new(dst, edge_id, ts));
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -181,7 +180,6 @@ impl CsrBase for LabeledMutableCsr {
         for nbr in &self.nbr_list {
             data.extend(nbr.neighbor.as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
-            data.extend(nbr.prop_offset.to_le_bytes());
             data.extend(nbr.create_ts.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
@@ -231,14 +229,12 @@ impl CsrBase for LabeledMutableCsr {
             offset += len;
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
-            let prop_offset = read_u32_le(data, &mut offset)?;
             let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.nbr_list.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
                 edge_id,
-                prop_offset,
                 create_ts,
                 delete_ts,
             });
@@ -280,12 +276,11 @@ impl MutableCsrTrait for LabeledMutableCsr {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
         // For labeled CSR, we need the label information.
         // Since we don't have it in the basic interface, we treat all edges as label 0.
-        self.insert_edge_with_label(src_vid, dst, edge_id, prop_offset, 0, ts)
+        self.insert_edge_with_label(src_vid, dst, edge_id, 0, ts)
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -573,9 +568,9 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges with implicit label 0
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 2);
@@ -593,9 +588,9 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20)
             .unwrap();
 
         // Query at different timestamps
@@ -616,13 +611,13 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(5, 100);
 
         // Insert multiple edges across vertices
-        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1)
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1)
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1)
             .unwrap();
-        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1)
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1)
             .unwrap();
-        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1)
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1)
             .unwrap();
 
         // Iterate and collect
@@ -648,7 +643,6 @@ mod tests {
                     src,
                     VertexId::from_int64(100 + dst as i64),
                     EdgeId(edge_id),
-                    0,
                     1,
                 )
                 .unwrap();

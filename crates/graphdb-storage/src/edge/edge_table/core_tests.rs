@@ -1129,7 +1129,8 @@ fn test_delete_marks_properties_deleted() {
         .unwrap();
 
     let dst_key = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
-    let prop_offset = table.out_csr.get_edge(0, dst_key, 100).unwrap().prop_offset;
+    let edge_id = table.out_csr.get_edge(0, dst_key, 100).unwrap().edge_id;
+    let prop_offset = table.properties.get_offset_by_edge_id(edge_id).unwrap();
     assert!(!table.properties.is_deleted(prop_offset));
 
     // Hot-path delete must mark the property record deleted immediately.
@@ -1137,7 +1138,7 @@ fn test_delete_marks_properties_deleted() {
     assert!(table.properties.is_deleted(prop_offset));
 
     // Time travel before the deletion still sees the original properties.
-    let props = table.properties.get(prop_offset, Some(150)).unwrap();
+    let props = table.properties.get_by_edge_id(edge_id, Some(150)).unwrap();
     let weight = props.iter().find(|(k, _)| k == "weight").unwrap().1.clone();
     assert_eq!(weight, Some(Value::Double(1.5)));
 }
@@ -1152,7 +1153,8 @@ fn test_revert_delete_restores_properties() {
         .unwrap();
 
     let dst_key = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
-    let prop_offset = table.out_csr.get_edge(0, dst_key, 100).unwrap().prop_offset;
+    let edge_id = table.out_csr.get_edge(0, dst_key, 100).unwrap().edge_id;
+    let prop_offset = table.properties.get_offset_by_edge_id(edge_id).unwrap();
 
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     assert!(table.properties.is_deleted(prop_offset));

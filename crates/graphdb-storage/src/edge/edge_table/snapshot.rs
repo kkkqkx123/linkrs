@@ -59,7 +59,6 @@ impl ExportedEdgeSnapshot {
                 Nbr::new(
                     edge.neighbor,
                     edge.edge_id,
-                    edge.prop_offset,
                     edge.timestamp,
                 )
             })
@@ -77,7 +76,6 @@ impl ExportedEdgeSnapshot {
                 Nbr::new(
                     edge.neighbor,
                     edge.edge_id,
-                    edge.prop_offset,
                     edge.timestamp,
                 )
             })
@@ -90,7 +88,6 @@ impl ExportedEdgeSnapshot {
             Nbr::new(
                 edge.neighbor,
                 edge.edge_id,
-                edge.prop_offset,
                 edge.timestamp,
             )
         })
@@ -172,7 +169,6 @@ impl SnapshotBuilder {
             let nbr = Nbr::new(
                 immutable_nbr.neighbor,
                 edge_id,
-                immutable_nbr.prop_offset,
                 immutable_nbr.timestamp,
             );
             self.edge_map.insert((src_u32, edge_id), (src_u32, nbr));

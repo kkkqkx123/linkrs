@@ -366,6 +366,13 @@ impl PropertyTable {
             }
         }
 
+        // ── edge_prop_map (edge_id → prop_offset) ──
+        result.extend_from_slice(&(self.edge_prop_map.len() as u32).to_le_bytes());
+        for (&edge_id, &offset) in &self.edge_prop_map {
+            result.extend_from_slice(&edge_id.as_u64().to_le_bytes());
+            result.extend_from_slice(&offset.to_le_bytes());
+        }
+
         let checksum = crc32fast::hash(&result[checksum_pos + 4..]);
         result[checksum_pos..checksum_pos + 4].copy_from_slice(&checksum.to_le_bytes());
 
@@ -704,6 +711,27 @@ impl PropertyTable {
         } else {
             // Fresh file with no zone-map section: rebuild from row records.
             self.rebuild_zone_maps();
+        }
+
+        // ── edge_prop_map (edge_id → prop_offset) ──
+        self.edge_prop_map.clear();
+        if offset + 4 <= data.len() {
+            if let Ok(map_len) = read_u32_le(data, &mut offset) {
+                for _ in 0..map_len as usize {
+                    if offset + 12 > data.len() {
+                        break;
+                    }
+                    let edge_id = EdgeId(u64::from_le_bytes(
+                        data[offset..offset + 8].try_into().unwrap(),
+                    ));
+                    offset += 8;
+                    let prop_offset = u32::from_le_bytes(
+                        data[offset..offset + 4].try_into().unwrap(),
+                    );
+                    offset += 4;
+                    self.edge_prop_map.insert(edge_id, prop_offset);
+                }
+            }
         }
 
         Ok(())

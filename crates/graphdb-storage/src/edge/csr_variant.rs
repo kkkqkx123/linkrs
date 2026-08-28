@@ -41,7 +41,7 @@ use super::{
 /// # Examples
 ///
 /// ```ignore
-/// let result = dispatch!(self, insert_edge(vid, dst, id, offset, ts) -> false);
+/// let result = dispatch!(self, insert_edge(vid, dst, id, ts) -> false);
 /// let result = dispatch!(self, edges_of(vid, ts) -> Vec::new());
 /// ```
 macro_rules! dispatch {
@@ -345,14 +345,13 @@ impl MutableCsrTrait for CsrVariant {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
         match self {
-            CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
-            CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
-            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
-            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
+            CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::None { .. } => Err(StorageError::invalid_operation(
                 "no edges stored for this edge type".to_string(),
             )),
@@ -529,7 +528,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -539,7 +538,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -554,7 +553,7 @@ mod tests {
         )
         .unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -564,7 +563,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -581,7 +580,7 @@ mod tests {
 
         // None variant should reject all insertions
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
         assert_eq!(csr.edge_count(), 0);
 
@@ -626,7 +625,7 @@ mod tests {
         // After loading, should be None variant
         assert_eq!(csr2.edge_count(), 0);
         assert!(csr2
-            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
     }
 
@@ -634,7 +633,7 @@ mod tests {
     fn test_clone() {
         let mut csr1 =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
 
         let csr2 = csr1.clone();
@@ -649,7 +648,7 @@ mod tests {
 
         assert_eq!(csr2.edge_count(), 0);
         assert!(csr2
-            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
     }
 }

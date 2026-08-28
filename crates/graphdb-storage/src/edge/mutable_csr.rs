@@ -51,7 +51,6 @@ fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
 fn write_nbr(out: &mut Vec<u8>, nbr: &Nbr) {
     write_vertex_id(out, nbr.neighbor);
     out.extend_from_slice(&nbr.edge_id.to_le_bytes());
-    out.extend_from_slice(&nbr.prop_offset.to_le_bytes());
     out.extend_from_slice(&nbr.create_ts.to_le_bytes());
     out.extend_from_slice(&nbr.delete_ts.to_le_bytes());
 }
@@ -59,13 +58,11 @@ fn write_nbr(out: &mut Vec<u8>, nbr: &Nbr) {
 fn read_nbr(data: &[u8], offset: &mut usize) -> StorageResult<Nbr> {
     let neighbor = read_vertex_id(data, offset)?;
     let raw_edge_id = read_u64_le(data, offset)?;
-    let prop_offset = read_u32_le(data, offset)?;
     let create_ts = read_u64_le(data, offset)?;
     let delete_ts = read_u64_le(data, offset)?;
     Ok(Nbr::with_delete_ts(
         neighbor,
         EdgeId(raw_edge_id),
-        prop_offset,
         create_ts,
         delete_ts,
     ))
@@ -202,7 +199,7 @@ impl MutableCsr {
         let block_offset = self.nbr_list.len();
         self.nbr_list.resize(
             block_offset + DEFAULT_VERTEX_DEGREE,
-            Nbr::new(VertexId::from_int64(0), EdgeId(0), 0, INVALID_TIMESTAMP),
+            Nbr::new(VertexId::from_int64(0), EdgeId(0), INVALID_TIMESTAMP),
         );
         self.adj_offsets[src_idx] = block_offset as u32;
         self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
@@ -233,7 +230,6 @@ impl MutableCsr {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
         let src_idx = src_vid as usize;
@@ -276,13 +272,13 @@ impl MutableCsr {
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
             && degree < self.primary_capacities[src_idx] as usize
         {
-            self.nbr_list[base + degree] = Nbr::new(dst, edge_id, prop_offset, ts);
+            self.nbr_list[base + degree] = Nbr::new(dst, edge_id, ts);
             self.degrees[src_idx] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
 
-        self.append_overflow(src_vid, Nbr::new(dst, edge_id, prop_offset, ts));
+        self.append_overflow(src_vid, Nbr::new(dst, edge_id, ts));
         self.edge_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -913,7 +909,7 @@ impl MutableCsr {
             if remaining > 0 {
                 new_nbr_list.resize(
                     new_nbr_list.len() + remaining,
-                    Nbr::new(VertexId::from_int64(0), EdgeId(0), 0, INVALID_TIMESTAMP),
+                    Nbr::new(VertexId::from_int64(0), EdgeId(0), INVALID_TIMESTAMP),
                 );
             }
         }
@@ -1262,10 +1258,9 @@ impl MutableCsrTrait for MutableCsr {
         src_vid: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        prop_offset: u32,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        MutableCsr::insert_edge(self, src_vid, dst, edge_id, prop_offset, ts)
+        MutableCsr::insert_edge(self, src_vid, dst, edge_id, ts)
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -1317,15 +1312,15 @@ mod tests {
     fn test_basic_insert_and_query() {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 0, 1)
+        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
 
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(103), 0, 1)
+            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(103), 1)
             .is_err());
 
         assert_eq!(csr.edge_count(), 3);
@@ -1335,9 +1330,9 @@ mod tests {
     fn test_delete_edge() {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
 
         assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
@@ -1348,7 +1343,7 @@ mod tests {
     #[test]
     fn test_double_delete_conflict() {
         let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 10)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
             .unwrap();
 
         // First delete succeeds.
@@ -1372,11 +1367,11 @@ mod tests {
     fn test_dump_and_load() {
         let mut csr1 = MutableCsr::with_capacity(10, 100);
 
-        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 0, 1)
+        csr1.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
 
         let data = csr1.dump();
@@ -1392,9 +1387,9 @@ mod tests {
     fn test_resize() {
         let mut csr = MutableCsr::with_capacity(2, 10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(100u32, VertexId::from_int64(1), EdgeId(101), 0, 1)
+        csr.insert_edge(100u32, VertexId::from_int64(1), EdgeId(101), 1)
             .unwrap();
 
         assert!(csr.vertex_capacity() >= 101);
@@ -1404,11 +1399,11 @@ mod tests {
     fn test_iterator() {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 0, 1)
+        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
 
         let edges: Vec<_> = csr.iter(1).collect();
@@ -1419,15 +1414,15 @@ mod tests {
     fn test_overflow_insert() {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 5);
@@ -1436,7 +1431,7 @@ mod tests {
         assert_eq!(edges.len(), 5);
 
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(5), EdgeId(105), 0, 1)
+            .insert_edge(0u32, VertexId::from_int64(5), EdgeId(105), 1)
             .is_err());
 
         assert!(csr.delete_edge(0u32, EdgeId(104), 2).unwrap());
@@ -1448,7 +1443,7 @@ mod tests {
 
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr1.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr1.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         let data = csr1.dump();
@@ -1472,7 +1467,7 @@ mod tests {
 
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         csr.delete_edge(0u32, EdgeId(3), 5).unwrap();
@@ -1495,7 +1490,7 @@ mod tests {
 
         for i in 1..=3 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
         csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
 
@@ -1519,7 +1514,7 @@ mod tests {
 
         for i in 1..=3 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
         csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
 
@@ -1538,10 +1533,10 @@ mod tests {
         // allocation (OOM on ~800k+ edge partitions under background freeze).
         let mut csr = MutableCsr::with_capacity(4, 100);
         for i in 1..=6i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 0, 1)
+            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
                 .unwrap();
         }
-        csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 0, 1)
+        csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 1)
             .unwrap();
 
         let removed = csr.compact_with_ts(3, 1.0);
@@ -1561,7 +1556,7 @@ mod tests {
     fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
         let mut csr = MutableCsr::with_capacity(4, 100);
         for i in 1..=3i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 0, 1)
+            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
                 .unwrap();
         }
         let removed = csr.compact_with_ts(3, 0.0);
@@ -1576,7 +1571,7 @@ mod tests {
 
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         let all_edges: Vec<_> = csr.iter(1).collect();
@@ -1587,7 +1582,7 @@ mod tests {
     fn test_supernode_overflow_uses_fixed_chunks_without_recopying() {
         let mut csr = MutableCsr::with_overflow_chunk_edges(1, 4, 32);
         for i in 0..4_096u64 {
-            csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i + 1), 0, 1)
+            csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i + 1), 1)
                 .unwrap();
         }
 
@@ -1603,12 +1598,12 @@ mod tests {
         assert_eq!(csr.total_edge_capacity, 0);
 
         // A single edge allocates exactly one primary block
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
         assert_eq!(csr.total_edge_capacity, 4);
 
         // Sparse high vertex ids allocate blocks only for themselves
-        csr.insert_edge(10_000u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(10_000u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
         assert_eq!(csr.vertex_capacity(), 12_502);
         assert_eq!(csr.total_edge_capacity, 8);
@@ -1633,7 +1628,7 @@ mod tests {
         // Insert edges to trigger overflow
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         // After overflow, ratio should be > 1.0
@@ -1647,7 +1642,7 @@ mod tests {
 
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         let wasted = csr.wasted_bytes_estimate();
@@ -1665,7 +1660,7 @@ mod tests {
 
         for i in 1..=6 {
             let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
         }
 
         let ratio_before = csr.fragmentation_ratio();
@@ -1690,15 +1685,15 @@ mod tests {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
         // Insert multiple edges for vertex 0
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
             .unwrap();
 
         // Test iter_edges_of yields same neighbors as edges_of without allocation
@@ -1717,11 +1712,11 @@ mod tests {
     fn test_vertex_edges_iter_respects_timestamp() {
         let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 2)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 2)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 0, 3)
+        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 3)
             .unwrap();
 
         // Delete the second edge at ts=2

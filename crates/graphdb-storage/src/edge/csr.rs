@@ -183,13 +183,11 @@ impl Csr {
         let src_list: Vec<_> = entries.iter().map(|(src, _)| *src).collect();
         let dst_list: Vec<_> = entries.iter().map(|(_, nbr)| nbr.neighbor).collect();
         let edge_ids: Vec<_> = entries.iter().map(|(_, nbr)| nbr.edge_id).collect();
-        let prop_offsets: Vec<_> = entries.iter().map(|(_, nbr)| nbr.prop_offset).collect();
         let timestamps: Vec<_> = entries.iter().map(|(_, nbr)| nbr.create_ts).collect();
         self.batch_put_edges_with_timestamps(
             &src_list,
             &dst_list,
             &edge_ids,
-            &prop_offsets,
             &timestamps,
         );
     }
@@ -213,7 +211,6 @@ impl Csr {
         src_list: &[u32],
         dst_list: &[VertexId],
         edge_ids: &[EdgeId],
-        prop_offsets: &[u32],
         timestamps: &[Timestamp],
     ) {
         if src_list.is_empty() {
@@ -246,7 +243,7 @@ impl Csr {
         self.edges.clear();
         self.edges.resize(
             src_list.len(),
-            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0), 0),
+            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)),
         );
         let mut current_pos = self.offsets.clone();
         for i in 0..src_list.len() {
@@ -257,7 +254,6 @@ impl Csr {
                     self.edges[pos] = ImmutableNbr::with_timestamp(
                         dst_list[i],
                         edge_ids[i],
-                        prop_offsets[i],
                         timestamps[i],
                     );
                     current_pos[src] += 1;
@@ -289,7 +285,6 @@ impl Csr {
         for edge in &self.edges {
             write_vertex_id(&mut result, edge.neighbor);
             result.extend_from_slice(&edge.edge_id.to_le_bytes());
-            result.extend_from_slice(&edge.prop_offset.to_le_bytes());
             result.extend_from_slice(&edge.timestamp.to_le_bytes());
         }
 
@@ -320,13 +315,11 @@ impl Csr {
         for _ in 0..edges_len {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
-            let prop_offset = read_u32_le(data, &mut offset)?;
             let timestamp = read_u64_le(data, &mut offset)?;
 
             edges.push(ImmutableNbr::with_timestamp(
                 neighbor,
                 EdgeId(raw_edge_id),
-                prop_offset,
                 timestamp,
             ));
         }
@@ -445,7 +438,6 @@ mod tests {
             &[0u32, 0, 1, 2],
             &[1, 2, 3, 0].map(|v| VertexId::from_int64(v as i64)),
             &[EdgeId(0), EdgeId(1), EdgeId(2), EdgeId(3)],
-            &[0, 1, 2, 3],
             &[100, 100, 100, 100],
         );
 
@@ -468,7 +460,6 @@ mod tests {
             &[0u32, 1, 2],
             &[1, 2, 3].map(VertexId::from_int64),
             &[EdgeId(0), EdgeId(1), EdgeId(2)],
-            &[0, 0, 0],
             &[100, 100, 100],
         );
 
@@ -484,7 +475,6 @@ mod tests {
             &[0u32, 0, 1, 2],
             &[1, 2, 3, 0].map(|v| VertexId::from_int64(v as i64)),
             &[EdgeId(0), EdgeId(1), EdgeId(2), EdgeId(3)],
-            &[0, 1, 2, 3],
             &[100, 100, 100, 100],
         );
 
@@ -508,7 +498,6 @@ mod tests {
             &[0u32, 0],
             &[1, 2].map(VertexId::from_int64),
             &[EdgeId(100), EdgeId(101)],
-            &[0, 1],
             &[100, 100],
         );
 

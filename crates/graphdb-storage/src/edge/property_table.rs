@@ -55,6 +55,7 @@ use crate::naming::NameIndexer;
 use crate::persistence::{read_header, read_u32_le, read_u64_le, section, write_header};
 use crate::types::PropertyId;
 use crate::vertex::column_store::ColumnStore;
+use graphdb_core::types::EdgeId;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{
     data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
@@ -341,6 +342,11 @@ pub struct PropertyTable {
     /// Maps (property_name → encoded_value → set of offsets).
     value_index: PropertyValueIndex,
 
+    /// Edge ID to property offset mapping.
+    /// Enables topology-properties separation: CSR entries store only
+    /// neighbor + edge_id, and properties are looked up by edge_id.
+    edge_prop_map: HashMap<EdgeId, u32>,
+
     /// O(1) sum of live record payload bytes, maintained incrementally on
     /// insert/update/delete so `used_memory_size` does not scan all records.
     used_data_bytes: usize,
@@ -391,6 +397,7 @@ impl Clone for PropertyTable {
             tombstones_manager: self.tombstones_manager.clone(),
             column_byte_offsets: self.column_byte_offsets.clone(),
             value_index: self.value_index.clone(),
+            edge_prop_map: self.edge_prop_map.clone(),
             used_data_bytes: self.used_data_bytes,
             version_chain_cap: self.version_chain_cap,
             retention_horizon: self.retention_horizon,
@@ -412,6 +419,7 @@ impl PropertyTable {
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
+            edge_prop_map: HashMap::new(),
             used_data_bytes: 0,
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
             retention_horizon: Timestamp::MAX,
@@ -431,6 +439,7 @@ impl PropertyTable {
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
+            edge_prop_map: HashMap::with_capacity(capacity),
             used_data_bytes: 0,
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
             retention_horizon: Timestamp::MAX,
@@ -589,6 +598,71 @@ impl PropertyTable {
         self.value_index.index_record(&indexed, offset);
 
         Ok(offset)
+    }
+
+    /// Insert properties for an edge, mapping edge_id to the property offset.
+    ///
+    /// This is the primary entry point for topology-properties separation:
+    /// the CSR stores only (neighbor, edge_id), and properties are looked up
+    /// by edge_id via [`Self::get_offset_by_edge_id`].
+    pub fn insert_with_edge_id(
+        &mut self,
+        edge_id: EdgeId,
+        values: &[(String, Value)],
+        create_ts: Timestamp,
+    ) -> StorageResult<u32> {
+        let offset = self.insert(values, create_ts)?;
+        if offset != 0 {
+            self.edge_prop_map.insert(edge_id, offset);
+        }
+        Ok(offset)
+    }
+
+    /// Get the property offset for an edge by its edge_id.
+    ///
+    /// Returns `None` if the edge has no properties or is not mapped.
+    pub fn get_offset_by_edge_id(&self, edge_id: EdgeId) -> Option<u32> {
+        self.edge_prop_map.get(&edge_id).copied()
+    }
+
+    /// Get properties for an edge by edge_id.
+    ///
+    /// Combines edge_id → prop_offset lookup with property retrieval.
+    pub fn get_by_edge_id(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Option<Timestamp>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
+        let offset = *self.edge_prop_map.get(&edge_id)?;
+        self.get(offset, query_ts)
+    }
+
+    /// Get properties for an edge by edge_id, returning only non-null values.
+    pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
+        let offset = *self.edge_prop_map.get(&edge_id)?;
+        self.read_properties(offset)
+    }
+
+    /// Mark properties as deleted by edge_id.
+    pub fn mark_deleted_by_edge_id(&mut self, edge_id: EdgeId, ts: Timestamp) -> StorageResult<()> {
+        if let Some(&offset) = self.edge_prop_map.get(&edge_id) {
+            self.mark_deleted(offset, ts)?;
+        }
+        Ok(())
+    }
+
+    /// Delete properties by edge_id (physical removal).
+    pub fn delete_by_edge_id(&mut self, edge_id: EdgeId) {
+        if let Some(offset) = self.edge_prop_map.remove(&edge_id) {
+            self.delete(offset);
+        }
+    }
+
+    /// Revert property deletion by edge_id.
+    pub fn revert_deletion_by_edge_id(&mut self, edge_id: EdgeId) {
+        if let Some(&offset) = self.edge_prop_map.get(&edge_id) {
+            self.revert_deletion(offset);
+        }
     }
 
     /// Update one or more properties of a row in place, creating a new
@@ -814,6 +888,9 @@ impl PropertyTable {
         total += std::mem::size_of::<Self>();
         total += self.value_index.entry_count()
             * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
+        // Edge-to-property offset mapping.
+        total += self.edge_prop_map.capacity()
+            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
         // Columnar store + zone maps.
         total += self.column_store.memory_size();
         total += self
