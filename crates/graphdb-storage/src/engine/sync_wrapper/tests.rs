@@ -62,13 +62,18 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         )
         .expect("tag should be created");
 
-    // Create fulltext manager and coordinator to enable intent generation
+    // Create fulltext manager and create index before wrapping in coordinator
     let fulltext_config = FulltextConfig {
         index_path: work_dir.join("fulltext"),
         ..Default::default()
     };
     let fulltext_manager =
         Arc::new(FulltextIndexManager::new(fulltext_config).expect("fulltext manager should open"));
+    graphdb_sync::runtime::block_on_ambient(
+        fulltext_manager.create_index(1, "Person", "name", None),
+    )
+    .expect("fulltext index should be created");
+
     let sync_coordinator = Arc::new(SyncCoordinator::new(
         fulltext_manager,
         BatchConfig::default(),

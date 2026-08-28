@@ -1884,8 +1884,8 @@ mod tests {
     }
 
     #[cfg(feature = "fulltext-search")]
-    #[test]
-    fn fulltext_changes_use_only_the_fulltext_target() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fulltext_changes_use_only_the_fulltext_target() {
         let directory = TempDir::new().expect("temporary index directory should be created");
         let config = graphdb_search::FulltextConfig {
             index_path: directory.path().to_path_buf(),
@@ -1895,6 +1895,10 @@ mod tests {
             graphdb_search::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
         );
+        fulltext_manager
+            .create_index(1, "Node", "text", None)
+            .await
+            .expect("fulltext index should be created");
         let coordinator = Arc::new(crate::SyncCoordinator::new(
             fulltext_manager,
             crate::BatchConfig::default(),
