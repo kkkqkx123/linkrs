@@ -153,7 +153,7 @@ pub async fn dead_letters<
     let target = params
         .target
         .as_deref()
-        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(|e| HttpError::bad_request(e)))
+        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(HttpError::bad_request))
         .transpose()?;
     let rows = sync_api
         .list_dead_letters(
@@ -208,7 +208,7 @@ pub async fn requeue<
     let target = payload
         .target
         .as_deref()
-        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(|e| HttpError::bad_request(e)))
+        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(HttpError::bad_request))
         .transpose()?;
     let requeued = sync_api
         .requeue_dead_letters_batch(
@@ -248,7 +248,7 @@ pub async fn degraded_ranges<
     let target = params
         .target
         .as_deref()
-        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(|e| HttpError::bad_request(e)))
+        .map(|s| graphdb_core::types::TargetId::new(s.to_string()).map_err(HttpError::bad_request))
         .transpose()?;
     let rows = sync_api
         .list_degraded_ranges(target.as_ref(), params.index_id, params.generation)

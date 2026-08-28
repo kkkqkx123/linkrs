@@ -284,16 +284,17 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
             if retention.enabled {
                 let interval_secs = retention.prune_interval_secs;
                 let grace = retention.grace_lsn_distance;
+                let max_age = retention.max_applied_age_ms;
                 info!(
-                    "Outbox retention enabled interval={}s grace={}",
-                    interval_secs, grace
+                    "Outbox retention enabled interval={}s grace={} max_age_ms={}",
+                    interval_secs, grace, max_age
                 );
                 let mgr = manager.clone();
                 tokio::spawn(async move {
                     let interval = std::time::Duration::from_secs(interval_secs.max(60));
                     loop {
                         tokio::time::sleep(interval).await;
-                        match mgr.run_retention_once(grace, 30 * 86_400_000) {
+                        match mgr.run_retention_once(grace, max_age) {
                             Ok((pruned, archived, lsn)) if pruned + archived > 0 => {
                                 info!(
                                     "Outbox retention pruned {} archived {} retention_lsn={}",

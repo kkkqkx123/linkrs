@@ -32,6 +32,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Common execution context shared by all query/command execution paths.
+///
+/// Groups the per-statement parameters that flow through the execution
+/// pipeline, eliminating repetitive argument lists and reducing the risk
+/// of parameter-ordering mistakes.
+pub struct QueryExecutionContext<'a> {
+    /// The raw statement text.
+    pub stmt: &'a str,
+    /// Pre-parsed AST (available for command statements from the
+    /// classification pass; `None` for regular statements).
+    pub parsed_ast: Option<Arc<Ast>>,
+    /// Target space id (0 when no space is selected).
+    pub space_id: i64,
+    /// Client-supplied query parameters (`@name` references).
+    pub parameters: Option<HashMap<String, graphdb_core::Value>>,
+    /// Client-supplied session variables (`$name` references).
+    pub session_variables: Option<HashMap<String, graphdb_core::Value>>,
+}
+
+/// Consistency parameters for queries that require explicit consistency
+/// guarantees.
+pub struct ConsistencyParams {
+    /// Desired consistency level.
+    pub consistency: graphdb_api::api_core::types::ConsistencyLevel,
+    /// Minimum LSN the server must have applied before executing the query.
+    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+}
+
 pub struct GraphService<S: StorageClient + Clone + 'static> {
     session_manager: Arc<GraphSessionManager>,
     query_api: Arc<RwLock<QueryApi<S>>>,
@@ -440,45 +468,36 @@ impl<
 
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
 
-        // Cleanup expired transactions before processing any statement.
-        // This prevents stale transactions from blocking new write operations.
         if let Some(ref txn_manager) = self.transaction_manager {
             txn_manager.cleanup_expired_transactions();
         }
 
-        // Unified classification entry: transaction / session commands are
-        // dispatched through the parser (single AST entry point), replacing
-        // the legacy text-prefix dispatch. `LET $name = expr` is a session
-        // command (evaluated through the query engine, stored on the
-        // session); the six transaction commands perform the TransactionManager
-        // side effect, execute the state-machine plan, and apply session
-        // post-processing.
         match Self::parse_command(stmt) {
             Err(parse_error) => return Err(parse_error),
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 let stmt_ast = parsed_ast.stmt();
+                let context = QueryExecutionContext {
+                    stmt,
+                    parsed_ast: Some(parsed_ast.clone()),
+                    space_id,
+                    parameters,
+                    session_variables,
+                };
                 match stmt_ast {
                     Stmt::AssignVariable(assign) => {
                         return self.execute_variable_assignment(
                             &session,
                             parsed_ast.clone(),
                             assign,
-                            stmt,
-                            space_id,
-                            parameters,
-                            session_variables,
+                            context,
                         );
                     }
                     _ => {
                         return self.execute_transaction_command(
                             &session,
-                            stmt,
                             stmt_ast,
-                            parsed_ast.clone(),
-                            space_id,
-                            parameters,
-                            session_variables,
+                            &context,
                         );
                     }
                 }
@@ -486,15 +505,14 @@ impl<
             Ok(None) => {}
         }
 
-        // Perform a regular query using core layer QueryApi
-        let mut result = self.execute_query_with_permission(
-            session_id,
+        let context = QueryExecutionContext {
             stmt,
-            None,
+            parsed_ast: None,
             space_id,
             parameters,
             session_variables,
-        );
+        };
+        let mut result = self.execute_query_with_permission(session_id, &context);
 
         // Handle SpaceSwitched result from USE statement
         // The core QueryApi carries the engine SpaceSwitched variant through
@@ -549,37 +567,39 @@ impl<
             txn_manager.cleanup_expired_transactions();
         }
 
+        let consistency_params = ConsistencyParams {
+            consistency,
+            minimum_lsn,
+        };
+
         match Self::parse_command(stmt) {
             Err(parse_error) => return Err(parse_error),
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 let stmt_ast = parsed_ast.stmt();
+                let context = QueryExecutionContext {
+                    stmt,
+                    parsed_ast: Some(parsed_ast.clone()),
+                    space_id,
+                    parameters,
+                    session_variables,
+                };
                 match stmt_ast {
                     Stmt::AssignVariable(assign) => {
-                        return self
-                            .execute_variable_assignment_with_consistency(
-                                &session,
-                                parsed_ast.clone(),
-                                assign,
-                                stmt,
-                                space_id,
-                                parameters,
-                                session_variables,
-                                consistency,
-                                minimum_lsn,
-                            );
+                        return self.execute_variable_assignment_with_consistency(
+                            &session,
+                            parsed_ast.clone(),
+                            assign,
+                            &context,
+                            &consistency_params,
+                        );
                     }
                     _ => {
                         return self.execute_transaction_command_with_consistency(
                             &session,
-                            stmt,
                             stmt_ast,
-                            parsed_ast.clone(),
-                            space_id,
-                            parameters,
-                            session_variables,
-                            consistency,
-                            minimum_lsn,
+                            &context,
+                            &consistency_params,
                         );
                     }
                 }
@@ -587,15 +607,17 @@ impl<
             Ok(None) => {}
         }
 
-        let mut result = self.execute_query_with_permission_and_consistency(
-            session_id,
+        let context = QueryExecutionContext {
             stmt,
-            None,
+            parsed_ast: None,
             space_id,
             parameters,
             session_variables,
-            consistency,
-            minimum_lsn,
+        };
+        let mut result = self.execute_query_with_permission_and_consistency(
+            session_id,
+            &context,
+            &consistency_params,
         );
 
         if stmt.trim().to_uppercase().starts_with("USE ") {
@@ -781,24 +803,11 @@ impl<
     /// the transaction id semantics, ③ plan execution through the
     /// query API (the `TxnOperator` validates the session controller and
     /// produces a structured result), ④ API-layer session post-processing.
-    /// Execute a transaction / session command through the unified
-    /// AST → plan → operator → state machine pipeline.
-    ///
-    /// Flow per command: ① API-layer TransactionManager side effect (the
-    /// parameters are read from the AST), ② QueryRequest construction with
-    /// the transaction id semantics, ③ plan execution through the
-    /// query API (the `TxnOperator` validates the session controller and
-    /// produces a structured result), ④ API-layer session post-processing.
-    #[allow(clippy::too_many_arguments)]
     fn execute_transaction_command(
         &self,
         session: &Arc<ClientSession>,
-        stmt_text: &str,
         stmt: &Stmt,
-        parsed_ast: Arc<Ast>,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        context: &QueryExecutionContext<'_>,
     ) -> Result<QueryResult, String> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
@@ -812,7 +821,6 @@ impl<
                     return Err("Session already has an active transaction".to_string());
                 }
 
-                // ① TM side effect: begin with the AST access mode.
                 let mut options = session.transaction_options();
                 if let Some(read_only) = begin_stmt.read_only {
                     options.read_only = read_only;
@@ -822,10 +830,6 @@ impl<
                 {
                     Ok(txn_id) => txn_id,
                     Err(e) => {
-                        // If the error is a write conflict, try cleaning up
-                        // expired transactions and retry once. This handles
-                        // the case where a stale transaction is blocking new
-                        // write transactions.
                         if matches!(
                             e.kind(),
                             graphdb_transaction::TransactionErrorKind::WriteTransactionConflict
@@ -848,9 +852,6 @@ impl<
                     }
                 };
 
-                // ② session binding + ③ plan execution (the controller
-                // begins tracking the fresh transaction; the operator emits
-                // the structured BEGIN result).
                 session.bind_transaction(txn_id);
                 session.set_auto_commit(false);
                 info!(
@@ -863,19 +864,9 @@ impl<
                     },
                     txn_id
                 );
-                let result = self.run_transaction_command_plan(
-                    session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
-                    Some(txn_id),
-                    parameters,
-                    session_variables,
-                );
+                let result =
+                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_err() {
-                    // The plan failed unexpectedly (state-machine
-                    // divergence is a bug); clean up the fresh binding so
-                    // the session does not carry a stale transaction.
                     let _ = txn_manager.abort_transaction(txn_id);
                     session.unbind_transaction();
                     session.set_auto_commit(true);
@@ -889,33 +880,19 @@ impl<
                     .current_transaction()
                     .ok_or("No active transaction to commit")?;
 
-                // ① TM side effect: commit first so the request can carry
-                // the (now finished) transaction id for state tracking.
                 txn_manager
                     .commit_transaction(txn_id)
                     .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
-                // ② session unbind + ④ session post-processing (variable
-                // overlay merge) + ③ plan execution.
                 session.unbind_transaction();
                 session.set_auto_commit(true);
                 session.commit_variables();
                 info!("Session {} committed transaction {}", session.id(), txn_id);
-                self.run_transaction_command_plan(
-                    session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
-                    Some(txn_id),
-                    parameters,
-                    session_variables,
-                )
+                self.run_transaction_command_plan(session.id(), context, Some(txn_id))
             }
 
             Stmt::RollbackTransaction(rollback_stmt) => {
                 if let Some(savepoint_name) = &rollback_stmt.savepoint_name {
-                    // ROLLBACK TO SAVEPOINT: partial rollback; the
-                    // transaction stays active.
                     let txn_id = session
                         .current_transaction()
                         .ok_or("No active transaction to rollback")?;
@@ -936,17 +913,8 @@ impl<
                         txn_id,
                         savepoint_name
                     );
-                    self.run_transaction_command_plan(
-                        session.id(),
-                        stmt_text,
-                        parsed_ast,
-                        space_id,
-                        Some(txn_id),
-                        parameters,
-                        session_variables,
-                    )
+                    self.run_transaction_command_plan(session.id(), context, Some(txn_id))
                 } else {
-                    // Full transaction rollback.
                     let txn_id = session
                         .current_transaction()
                         .ok_or("No active transaction to rollback")?;
@@ -961,15 +929,7 @@ impl<
                         session.id(),
                         txn_id
                     );
-                    self.run_transaction_command_plan(
-                        session.id(),
-                        stmt_text,
-                        parsed_ast,
-                        space_id,
-                        Some(txn_id),
-                        parameters,
-                        session_variables,
-                    )
+                    self.run_transaction_command_plan(session.id(), context, Some(txn_id))
                 }
             }
 
@@ -987,15 +947,8 @@ impl<
                     txn_id,
                     savepoint_id
                 );
-                let result = self.run_transaction_command_plan(
-                    session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
-                    Some(txn_id),
-                    parameters,
-                    session_variables,
-                );
+                let result =
+                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_ok() {
                     session.push_variable_savepoint(&savepoint_stmt.name);
                 }
@@ -1006,10 +959,10 @@ impl<
                 let txn_id = session
                     .current_transaction()
                     .ok_or("No active transaction, cannot release savepoint")?;
-                let context = txn_manager
+                let txn_context = txn_manager
                     .get_context(txn_id)
                     .map_err(|e| format!("Failed to get transaction context: {}", e))?;
-                let savepoint_info = context
+                let savepoint_info = txn_context
                     .find_savepoint_by_name(&release_stmt.name)
                     .ok_or_else(|| format!("Savepoint '{}' does not exist", release_stmt.name))?;
                 txn_manager
@@ -1021,15 +974,8 @@ impl<
                     release_stmt.name,
                     txn_id
                 );
-                let result = self.run_transaction_command_plan(
-                    session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
-                    Some(txn_id),
-                    parameters,
-                    session_variables,
-                );
+                let result =
+                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_ok() {
                     session.release_variable_savepoint(&release_stmt.name);
                 }
@@ -1049,16 +995,11 @@ impl<
     /// through `create_execution` (preserving timestamps and the read-only
     /// mode); finished transactions (COMMIT / ROLLBACK already
     /// performed the TM side effect) bind an auto-commit context.
-    #[allow(clippy::too_many_arguments)]
     fn run_transaction_command_plan(
         &self,
         session_id: i64,
-        stmt: &str,
-        parsed_ast: Arc<Ast>,
-        space_id: i64,
+        context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1068,24 +1009,18 @@ impl<
         session.charge();
         let username = session.user();
 
-        // Permission check: transaction commands now go through the unified
-        // permission path (previously bypassed by the prefix dispatch).
         if !self.permission_manager.is_admin(&username)
-            && !stmt.trim().to_uppercase().starts_with("USE ")
+            && !context.stmt.trim().to_uppercase().starts_with("USE ")
         {
-            let permission = self.extract_permission_from_statement(stmt);
+            let permission = self.extract_permission_from_statement(context.stmt);
             if let Err(e) = self
                 .permission_manager
-                .check_permission(&username, space_id, permission)
+                .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
         }
 
-        // Resolve the immutable execution binding: an active transaction
-        // binds through `create_execution`; a finished transaction (the TM
-        // side effect already ran for COMMIT / ROLLBACK) binds an
-        // auto-commit context — the command plan performs no data access.
         let execution = transaction_id.and_then(|id| {
             let manager = self.transaction_manager.as_ref()?;
             if manager.is_transaction_active(id) {
@@ -1095,15 +1030,7 @@ impl<
             }
         });
 
-        self.run_query_plan(
-            &session,
-            stmt,
-            Some(parsed_ast.clone()),
-            transaction_id,
-            execution,
-            parameters,
-            session_variables,
-        )
+        self.run_query_plan(&session, context, transaction_id, execution)
     }
 
     /// Execute a `LET $name = expr` session-variable assignment.
@@ -1115,24 +1042,19 @@ impl<
     /// is recorded on the variable overlay so ROLLBACK / ROLLBACK TO
     /// SAVEPOINT restore the previous value. Client-supplied parameters and
     /// session variables are passed through to the evaluation.
-    #[allow(clippy::too_many_arguments)]
     fn execute_variable_assignment(
         &self,
         session: &Arc<ClientSession>,
         parsed_ast: Arc<Ast>,
         assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
-        stmt: &str,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        context: QueryExecutionContext<'_>,
     ) -> Result<QueryResult, String> {
         let result = self.execute_query_with_permission(
             session.id(),
-            stmt,
-            Some(parsed_ast),
-            space_id,
-            parameters,
-            session_variables,
+            &QueryExecutionContext {
+                parsed_ast: Some(parsed_ast),
+                ..context
+            },
         )?;
         let value = {
             // Contract: the LET plan evaluates to exactly one row with
@@ -1163,11 +1085,7 @@ impl<
     fn execute_query_with_permission(
         &self,
         session_id: i64,
-        stmt: &str,
-        parsed_ast: Option<Arc<Ast>>,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        context: &QueryExecutionContext<'_>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1177,24 +1095,19 @@ impl<
         session.charge();
         let username = session.user();
 
-        // Permission check: The admin has all permissions, so no check is required.
-        // USE is a session-level operation that does not access data — skip permission
-        // check so any authenticated user can switch to a space. LET assigns a
-        // session variable without touching data, so it is exempt the same way.
-        let stmt_upper = stmt.trim().to_uppercase();
+        let stmt_upper = context.stmt.trim().to_uppercase();
         let session_only_statement =
             stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if !self.permission_manager.is_admin(&username) && !session_only_statement {
-            let permission = self.extract_permission_from_statement(stmt);
+            let permission = self.extract_permission_from_statement(context.stmt);
             if let Err(e) = self
                 .permission_manager
-                .check_permission(&username, space_id, permission)
+                .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
         }
 
-        // Resolve the immutable operation context for this query.
         let mut statement_guard = None;
         let execution = if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
@@ -1224,15 +1137,7 @@ impl<
             None
         };
 
-        let mut result = self.run_query_plan(
-            &session,
-            stmt,
-            parsed_ast,
-            None,
-            execution,
-            parameters,
-            session_variables,
-        );
+        let mut result = self.run_query_plan(&session, context, None, execution);
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
@@ -1276,28 +1181,19 @@ impl<
     /// transaction commands whose TM side effect already happened); `execution`
     /// is an explicit transaction binding created by the caller (optionally
     /// after `begin_statement`); `None` binds an auto-commit context.
-    /// `parsed_ast` is the classification-pass AST for command statements;
-    /// the engine reuses it instead of re-parsing the text.
-    #[allow(clippy::too_many_arguments)]
+    /// `context.parsed_ast` is the classification-pass AST for command
+    /// statements; the engine reuses it instead of re-parsing the text.
     fn run_query_plan(
         &self,
         session: &Arc<ClientSession>,
-        stmt: &str,
-        parsed_ast: Option<Arc<Ast>>,
+        context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
         execution: Option<graphdb_transaction::types::TransactionExecution>,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<QueryResult, String> {
-        // Session variables are injected through the dedicated
-        // session_variables channel (captured once per statement), fully
-        // decoupled from query parameters. Client-supplied session variables
-        // override only the keys they name; all other keys keep the session
-        // snapshot values (set via `LET $name = expr`).
-        let merged_session_variables = match session_variables {
-            Some(client_variables) => {
+        let merged_session_variables = match context.session_variables {
+            Some(ref client_variables) => {
                 let mut merged = session.variables_snapshot();
-                merged.extend(client_variables);
+                merged.extend(client_variables.clone());
                 Some(merged)
             }
             None => Some(session.variables_snapshot()),
@@ -1308,18 +1204,18 @@ impl<
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: transaction_id.or_else(|| session.current_transaction()),
-            parameters,
+            parameters: context.parameters.clone(),
             session_variables: merged_session_variables,
             query_id: None,
-            parsed_statement: parsed_ast,
+            parsed_statement: context.parsed_ast.clone(),
             consistency: Default::default(),
             minimum_lsn: None,
         };
 
         let mut query_api = self.query_api.write();
-        let result = if let Some(execution) = execution.as_ref() {
+        if let Some(execution) = execution.as_ref() {
             query_api
-                .execute_with_execution(stmt, query_request, execution)
+                .execute_with_execution(context.stmt, query_request, execution)
                 .map_err(|e| e.to_string())
         } else {
             let execution_storage = self
@@ -1327,29 +1223,23 @@ impl<
                 .bind_auto_commit_context()
                 .map_err(|error| error.to_string())?;
             query_api
-                .execute_with_operation_storage(stmt, query_request, execution_storage)
+                .execute_with_operation_storage(context.stmt, query_request, execution_storage)
                 .map_err(|e| e.to_string())
-        };
-
-        result
+        }
     }
 
     fn run_query_plan_with_consistency(
         &self,
         session: &Arc<ClientSession>,
-        stmt: &str,
-        parsed_ast: Option<Arc<Ast>>,
+        context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
         execution: Option<graphdb_transaction::types::TransactionExecution>,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
-        consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+        consistency: &ConsistencyParams,
     ) -> Result<QueryResult, String> {
-        let merged_session_variables = match session_variables {
-            Some(client_variables) => {
+        let merged_session_variables = match context.session_variables {
+            Some(ref client_variables) => {
                 let mut merged = session.variables_snapshot();
-                merged.extend(client_variables);
+                merged.extend(client_variables.clone());
                 Some(merged)
             }
             None => Some(session.variables_snapshot()),
@@ -1360,18 +1250,18 @@ impl<
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: transaction_id.or_else(|| session.current_transaction()),
-            parameters,
+            parameters: context.parameters.clone(),
             session_variables: merged_session_variables,
             query_id: None,
-            parsed_statement: parsed_ast,
-            consistency,
-            minimum_lsn,
+            parsed_statement: context.parsed_ast.clone(),
+            consistency: consistency.consistency.clone(),
+            minimum_lsn: consistency.minimum_lsn,
         };
 
         let mut query_api = self.query_api.write();
-        let result = if let Some(execution) = execution.as_ref() {
+        if let Some(execution) = execution.as_ref() {
             query_api
-                .execute_with_execution(stmt, query_request, execution)
+                .execute_with_execution(context.stmt, query_request, execution)
                 .map_err(|e| e.to_string())
         } else {
             let execution_storage = self
@@ -1379,11 +1269,9 @@ impl<
                 .bind_auto_commit_context()
                 .map_err(|error| error.to_string())?;
             query_api
-                .execute_with_operation_storage(stmt, query_request, execution_storage)
+                .execute_with_operation_storage(context.stmt, query_request, execution_storage)
                 .map_err(|e| e.to_string())
-        };
-
-        result
+        }
     }
 
     fn execute_variable_assignment_with_consistency(
@@ -1391,22 +1279,19 @@ impl<
         session: &Arc<ClientSession>,
         parsed_ast: Arc<Ast>,
         assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
-        stmt: &str,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
-        consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+        context: &QueryExecutionContext<'_>,
+        consistency: &ConsistencyParams,
     ) -> Result<QueryResult, String> {
         let result = self.execute_query_with_permission_and_consistency(
             session.id(),
-            stmt,
-            Some(parsed_ast),
-            space_id,
-            parameters,
-            session_variables,
+            &QueryExecutionContext {
+                stmt: context.stmt,
+                parsed_ast: Some(parsed_ast),
+                space_id: context.space_id,
+                parameters: context.parameters.clone(),
+                session_variables: context.session_variables.clone(),
+            },
             consistency,
-            minimum_lsn,
         )?;
         let value = {
             if result.columns().len() != 1 {
@@ -1434,14 +1319,9 @@ impl<
     fn execute_transaction_command_with_consistency(
         &self,
         session: &Arc<ClientSession>,
-        stmt_text: &str,
         stmt: &Stmt,
-        parsed_ast: Arc<Ast>,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
-        consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+        context: &QueryExecutionContext<'_>,
+        consistency: &ConsistencyParams,
     ) -> Result<QueryResult, String> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
@@ -1488,14 +1368,9 @@ impl<
                 session.set_auto_commit(false);
                 let result = self.run_transaction_command_plan_with_consistency(
                     session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
+                    context,
                     Some(txn_id),
-                    parameters,
-                    session_variables,
                     consistency,
-                    minimum_lsn,
                 );
                 if result.is_err() {
                     let _ = txn_manager.abort_transaction(txn_id);
@@ -1517,14 +1392,9 @@ impl<
                 session.commit_variables();
                 self.run_transaction_command_plan_with_consistency(
                     session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
+                    context,
                     Some(txn_id),
-                    parameters,
-                    session_variables,
                     consistency,
-                    minimum_lsn,
                 )
             }
             Stmt::RollbackTransaction(rollback_stmt) => {
@@ -1544,14 +1414,9 @@ impl<
                     session.rollback_variables_to(savepoint_name);
                     self.run_transaction_command_plan_with_consistency(
                         session.id(),
-                        stmt_text,
-                        parsed_ast,
-                        space_id,
+                        context,
                         Some(txn_id),
-                        parameters,
-                        session_variables,
                         consistency,
-                        minimum_lsn,
                     )
                 } else {
                     let txn_id = session
@@ -1565,14 +1430,9 @@ impl<
                     session.rollback_variables();
                     self.run_transaction_command_plan_with_consistency(
                         session.id(),
-                        stmt_text,
-                        parsed_ast,
-                        space_id,
+                        context,
                         Some(txn_id),
-                        parameters,
-                        session_variables,
                         consistency,
-                        minimum_lsn,
                     )
                 }
             }
@@ -1585,14 +1445,9 @@ impl<
                     .map_err(|e| format!("Failed to create savepoint: {}", e))?;
                 let result = self.run_transaction_command_plan_with_consistency(
                     session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
+                    context,
                     Some(txn_id),
-                    parameters,
-                    session_variables,
-                    consistency.clone(),
-                    minimum_lsn,
+                    consistency,
                 );
                 if result.is_ok() {
                     session.push_variable_savepoint(&savepoint_stmt.name);
@@ -1604,10 +1459,10 @@ impl<
                 let txn_id = session
                     .current_transaction()
                     .ok_or("No active transaction, cannot release savepoint")?;
-                let context = txn_manager
+                let txn_context = txn_manager
                     .get_context(txn_id)
                     .map_err(|e| format!("Failed to get transaction context: {}", e))?;
-                let savepoint_info = context
+                let savepoint_info = txn_context
                     .find_savepoint_by_name(&release_stmt.name)
                     .ok_or_else(|| format!("Savepoint '{}' does not exist", release_stmt.name))?;
                 txn_manager
@@ -1615,14 +1470,9 @@ impl<
                     .map_err(|e| format!("Failed to release savepoint: {}", e))?;
                 let result = self.run_transaction_command_plan_with_consistency(
                     session.id(),
-                    stmt_text,
-                    parsed_ast,
-                    space_id,
+                    context,
                     Some(txn_id),
-                    parameters,
-                    session_variables,
                     consistency,
-                    minimum_lsn,
                 );
                 if result.is_ok() {
                     session.release_variable_savepoint(&release_stmt.name);
@@ -1636,14 +1486,9 @@ impl<
     fn run_transaction_command_plan_with_consistency(
         &self,
         session_id: i64,
-        stmt: &str,
-        parsed_ast: Arc<Ast>,
-        space_id: i64,
+        context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
-        consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+        consistency: &ConsistencyParams,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1654,12 +1499,12 @@ impl<
         let username = session.user();
 
         if !self.permission_manager.is_admin(&username)
-            && !stmt.trim().to_uppercase().starts_with("USE ")
+            && !context.stmt.trim().to_uppercase().starts_with("USE ")
         {
-            let permission = self.extract_permission_from_statement(stmt);
+            let permission = self.extract_permission_from_statement(context.stmt);
             if let Err(e) = self
                 .permission_manager
-                .check_permission(&username, space_id, permission)
+                .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1674,29 +1519,14 @@ impl<
             }
         });
 
-        self.run_query_plan_with_consistency(
-            &session,
-            stmt,
-            Some(parsed_ast.clone()),
-            transaction_id,
-            execution,
-            parameters,
-            session_variables,
-            consistency,
-            minimum_lsn,
-        )
+        self.run_query_plan_with_consistency(&session, context, transaction_id, execution, consistency)
     }
 
     fn execute_query_with_permission_and_consistency(
         &self,
         session_id: i64,
-        stmt: &str,
-        parsed_ast: Option<Arc<Ast>>,
-        space_id: i64,
-        parameters: Option<HashMap<String, graphdb_core::Value>>,
-        session_variables: Option<HashMap<String, graphdb_core::Value>>,
-        consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+        context: &QueryExecutionContext<'_>,
+        consistency: &ConsistencyParams,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -1706,14 +1536,14 @@ impl<
         session.charge();
         let username = session.user();
 
-        let stmt_upper = stmt.trim().to_uppercase();
+        let stmt_upper = context.stmt.trim().to_uppercase();
         let session_only_statement =
             stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if !self.permission_manager.is_admin(&username) && !session_only_statement {
-            let permission = self.extract_permission_from_statement(stmt);
+            let permission = self.extract_permission_from_statement(context.stmt);
             if let Err(e) = self
                 .permission_manager
-                .check_permission(&username, space_id, permission)
+                .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1750,14 +1580,10 @@ impl<
 
         let mut result = self.run_query_plan_with_consistency(
             &session,
-            stmt,
-            parsed_ast,
+            context,
             None,
             execution,
-            parameters,
-            session_variables,
             consistency,
-            minimum_lsn,
         );
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {

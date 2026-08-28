@@ -15,16 +15,11 @@ use std::sync::Arc;
 /// - `ReadYourWrites` – wait until the secondary index frontier has caught up
 ///   to the caller's `commit_lsn` or the timeout expires. Degraded frontiers
 ///   fail the read instead of returning stale data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ConsistencyLevel {
+    #[default]
     Eventual,
     ReadYourWrites { timeout_ms: u64 },
-}
-
-impl Default for ConsistencyLevel {
-    fn default() -> Self {
-        Self::Eventual
-    }
 }
 
 /// Query request

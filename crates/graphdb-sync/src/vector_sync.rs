@@ -100,16 +100,11 @@ impl From<crate::types::ChangeType> for VectorChangeType {
 ///   until the vector `index_frontier >= commit_lsn` or the timeout expires.
 ///   If the frontier is marked `degraded` through that LSN, the search fails
 ///   instead of returning stale data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SearchConsistency {
+    #[default]
     Eventual,
     ReadYourWrites { timeout_ms: u64 },
-}
-
-impl Default for SearchConsistency {
-    fn default() -> Self {
-        Self::Eventual
-    }
 }
 
 /// Search options for vector search
@@ -183,16 +178,11 @@ const VECTOR_INDEX_PREFIX: &str = "space";
 
 /// Collection granularity mirrors `graphdb_config::VectorCollectionGranularity`
 /// but is re-declared here to avoid a hard dependency on `graphdb-config`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CollectionGranularity {
+    #[default]
     Space,
     Field,
-}
-
-impl Default for CollectionGranularity {
-    fn default() -> Self {
-        Self::Space
-    }
 }
 
 /// Naming strategy derived from granularity.

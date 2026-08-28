@@ -615,21 +615,10 @@ impl SyncManager {
     pub fn outbox_pending(&self) -> usize {
         let staged = self.staged_pending_len();
         if let Some(outbox) = self.sqlite_outbox.clone() {
-            // Best-effort synchronous fetch; failures fall back to staged only.
-            let durable = std::thread::Builder::new()
-                .name("outbox-pending".to_string())
-                .spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .ok()?;
-                    rt.block_on(async move { outbox.stats().await.ok() })
-                })
-                .ok()
-                .and_then(|h| h.join().ok())
-                .flatten()
-                .map(|s| s.pending)
-                .unwrap_or(0);
+            let durable = crate::runtime::block_on_ambient(async move {
+                outbox.stats().await.ok().map(|s| s.pending).unwrap_or(0)
+            })
+            .unwrap_or(0);
             staged + durable
         } else {
             staged
@@ -646,30 +635,18 @@ impl SyncManager {
     }
 
     pub fn outbox_stats(&self) -> crate::OutboxStats {
-        if let Some(outbox) = &self.sqlite_outbox {
-            let outbox = outbox.clone();
-            let stats = std::thread::Builder::new()
-                .name("outbox-stats".to_string())
-                .spawn(move || {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|error| SyncError::Internal(error.to_string()))?;
-                    runtime.block_on(async move {
-                        outbox.stats().await.map_err(SyncError::PersistenceError)
-                    })
-                })
-                .ok()
-                .and_then(|handle| handle.join().ok())
-                .and_then(Result::ok);
-            if let Some(stats) = stats {
-                return stats;
-            }
-        }
-
-        crate::OutboxStats {
-            pending: 0,
-            ..Default::default()
+        let Some(outbox) = self.sqlite_outbox.clone() else {
+            return crate::OutboxStats {
+                pending: 0,
+                ..Default::default()
+            };
+        };
+        match crate::runtime::block_on_ambient(async move { outbox.stats().await }) {
+            Ok(Ok(stats)) => stats,
+            _ => crate::OutboxStats {
+                pending: 0,
+                ..Default::default()
+            },
         }
     }
 
@@ -863,7 +840,7 @@ impl SyncManager {
                     // worker respects the global commit_lsn order via the
                     // `NOT EXISTS (ordering_key)` fence plus `ORDER BY`.
                     let per_worker_batch =
-                        (consumer.batch_size + max_concurrency - 1) / max_concurrency;
+                        consumer.batch_size.div_ceil(max_concurrency);
                     let outbox_for_workers = outbox.clone();
                     let target_for_workers = target.clone();
                     let consumer_for_workers = consumer.clone();

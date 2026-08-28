@@ -57,8 +57,9 @@ pub struct VectorSearchResult {
 /// - `Transactional`: stage the mutation through `SyncManager` into the durable
 ///   outbox (`WAL + SQLite`) so it participates in the graph transaction's
 ///   commit/abort and benefits from `read-your-writes` consistency.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum VectorWriteMode {
+    #[default]
     Direct,
     Transactional {
         txn_id: graphdb_core::types::TransactionId,
@@ -66,12 +67,6 @@ pub enum VectorWriteMode {
         tag: String,
         field: String,
     },
-}
-
-impl Default for VectorWriteMode {
-    fn default() -> Self {
-        Self::Direct
-    }
 }
 
 /// Vector Index API – Core Layer
@@ -464,7 +459,7 @@ impl VectorApi {
                         "Transactional vector deletes require a configured SyncManager".to_string(),
                     ));
                 };
-                let vertex_id = graphdb_core::Value::string(point_id.to_string());
+                let vertex_id = graphdb_core::Value::string(point_id);
                 // Stage a Delete mutation so it flows through the outbox and
                 // participates in the graph transaction's commit/abort. Properties
                 // are empty; manager's delete fan-out will cover all indexed fields.
@@ -530,7 +525,7 @@ impl VectorApi {
                     ));
                 };
                 for point_id in point_ids {
-                    let vertex_id = graphdb_core::Value::string(point_id.to_string());
+                    let vertex_id = graphdb_core::Value::string(point_id);
                     manager
                         .on_vertex_change_with_txn(
                             txn_id,

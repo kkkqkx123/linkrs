@@ -53,28 +53,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// Re-export commonly used types for backward compatibility
-pub use database::DatabaseConfig;
-pub use log::LogConfig;
-pub use monitoring::{MonitoringConfig, SlowQueryLogConfig};
-pub use optimizer::{OptimizerConfig, OptimizerRulesConfig};
-pub use parallel::ParallelConfig;
-pub use storage::{CompressionAlgorithm, QueryResourceConfig, StorageConfig, StorageEngine};
-pub use transaction::TransactionConfig;
-
-#[cfg(feature = "server")]
-pub use auth::AuthConfig;
-#[cfg(feature = "server")]
-pub use bootstrap::BootstrapConfig;
-#[cfg(feature = "server")]
-pub use connection_pool::ConnectionPoolConfig;
-#[cfg(feature = "server")]
-pub use grpc::GrpcConfig;
-#[cfg(feature = "server")]
-pub use http::HttpServerConfig;
-#[cfg(feature = "server")]
-pub use security::{AuditConfig, PasswordPolicyConfig, SecurityConfig, SslConfig};
-
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorClientConfig;
 
@@ -332,16 +310,10 @@ pub struct LocalVectorConfig {
 }
 
 /// MVCC settings for vector search (default off).
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
 pub struct VectorMvccConfig {
     #[serde(default)]
     pub ssi_read_set: bool,
-}
-
-impl Default for VectorMvccConfig {
-    fn default() -> Self {
-        Self { ssi_read_set: false }
-    }
 }
 
 /// Collection granularity for vector indexes.
