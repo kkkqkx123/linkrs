@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::engine::ConsistencyState;
+use crate::ConsistencyState;
 use crate::error::SearchError;
 use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};

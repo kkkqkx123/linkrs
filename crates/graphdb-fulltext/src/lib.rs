@@ -1,4 +1,3 @@
-pub mod engine;
 pub mod error;
 #[cfg(feature = "jieba")]
 pub mod jieba_tokenizer;
@@ -16,12 +15,12 @@ pub mod warmup;
 #[cfg(test)]
 mod isolation_test;
 
-pub use engine::ConsistencyState;
 pub use graphdb_config::fulltext::{
     Bm25Params, FulltextConfig, FulltextEngineType as EngineType, SyncConfig, SyncFailurePolicy,
     TantivyConfig, TokenizerKind,
 };
 pub use error::{Result, SearchError};
+pub use graphdb_core::ConsistencyState;
 #[cfg(feature = "fulltext-search")]
 pub use manager::FulltextIndexManager;
 pub use metadata::{IndexKey, IndexMetadata, IndexStatus};
