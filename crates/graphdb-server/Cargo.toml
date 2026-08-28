@@ -77,10 +77,10 @@ vector-qdrant = [
     "graphdb-query/vector-qdrant",
     "graphdb-api/vector-qdrant",
 ]
-fulltext-search = [
-    "graphdb-fulltext/fulltext-search",
-    "graphdb-sync/fulltext-search",
-    "graphdb-query/fulltext-search",
+fulltext = [
+    "graphdb-fulltext/fulltext",
+    "graphdb-sync/fulltext",
+    "graphdb-query/fulltext",
 ]
 
 [dev-dependencies]

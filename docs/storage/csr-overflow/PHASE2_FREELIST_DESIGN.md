@@ -228,7 +228,7 @@ pub fn merge_adjacent_blocks(
 
 ```toml
 [features]
-default = ["server", "fulltext-search", "c-api"]
+default = ["server", "fulltext", "c-api"]
 csr-freelist = []  # ✨ 新增：可选的空闲块重用
 ```
 

@@ -59,7 +59,7 @@ fn test_index_operation_types() {
 }
 
 /// TC-223: Fulltext error types
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[test]
 fn test_fulltext_error_types() {
     use graphdb::sync::coordinator::FulltextError;
@@ -99,7 +99,7 @@ fn test_vector_error_types() {
 }
 
 /// TC-226: Coordinator error types
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[test]
 fn test_coordinator_error_types() {
     use graphdb::sync::coordinator::{CoordinatorError, FulltextError};
@@ -142,7 +142,7 @@ fn test_dead_letter_entry() {
 }
 
 /// TC-228: ChangeType conversion
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[test]
 fn test_change_type_conversion() {
     use graphdb::sync::coordinator::ChangeType;

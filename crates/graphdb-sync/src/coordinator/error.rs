@@ -125,7 +125,7 @@ impl From<SearchError> for FulltextError {
                 FulltextError::EngineUnavailable("engine unavailable".to_string())
             }
             SearchError::IndexCorrupted(msg) => FulltextError::IndexCorrupted(msg),
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             SearchError::TantivyError(e) => FulltextError::Internal(e.to_string()),
             SearchError::IoError(e) => FulltextError::Internal(e.to_string()),
             SearchError::SerializationError(msg) => {

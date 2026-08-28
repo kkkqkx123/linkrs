@@ -2,7 +2,7 @@
 
 ## 背景
 
-graphdb 支持两个全文检索引擎后端：`Inversearch`（`crates/inversearch`）和 `BM25`（vendored `crates/tantivy`），通过 `fulltext-search` feature 同时启用。之前存在一个冗余的 `crates/bm25` 适配层，已删除，但残留了 `src/search/` 中的空模块声明导致编译失败。
+graphdb 支持两个全文检索引擎后端：`Inversearch`（`crates/inversearch`）和 `BM25`（vendored `crates/tantivy`），通过 `fulltext` feature 同时启用。之前存在一个冗余的 `crates/bm25` 适配层，已删除，但残留了 `src/search/` 中的空模块声明导致编译失败。
 
 本文档分析两个引擎的集成方案，以及是否应将全文检索统一为一个 crate 引用。
 
@@ -44,7 +44,7 @@ graphdb
 
 **优点：**
 - 职责清晰，两个引擎完全隔离
-- 编译隔离：`fulltext-search` feature 可分别开关
+- 编译隔离：`fulltext` feature 可分别开关
 - 每个引擎可使用自己的 tokenizer 体系
 - EngineType 用户选择，运行时无争议
 

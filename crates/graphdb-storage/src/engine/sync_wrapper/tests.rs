@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::SyncWrapper;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::{
     GraphStorage, StorageCommitOps, StorageOperationContextOps, StoragePersistenceOps,
     StorageReader, StorageSchemaOps,
 };
 use crate::{MockStorage, StorageWriter};
 use graphdb_core::types::VertexId;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo};
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_core::vertex_edge_path::Tag;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_core::DataType;
 use graphdb_core::Edge;
 use graphdb_sync::SyncManager;
@@ -40,7 +40,7 @@ fn does_not_buffer_sync_events_when_edge_insert_fails() {
 }
 
 #[test]
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     use graphdb_config::fulltext::FulltextConfig;
     use graphdb_fulltext::FulltextIndexManager;

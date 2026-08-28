@@ -678,7 +678,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(0),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -730,7 +730,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -786,7 +786,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -855,7 +855,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -916,7 +916,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             Some(storage.clone()),
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,

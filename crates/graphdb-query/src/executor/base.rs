@@ -7,11 +7,13 @@
 //! - execution_result.rs  - Execution result type
 //! - execution_context.rs - Execution context
 //! - memory_budget.rs     - Memory budget and tracking
+//! - traits.rs            - Search provider trait
 
 pub mod execution_context;
 pub mod execution_result;
 pub mod executor_stats;
 pub mod memory_budget;
+pub mod traits;
 
 pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
@@ -19,5 +21,10 @@ pub use executor_stats::ExecutorStats;
 pub use memory_budget::{
     MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, Spillable,
 };
+pub use traits::{SearchProvider, SearchProviderType};
+#[cfg(feature = "fulltext")]
+pub use traits::FulltextProvider;
+#[cfg(feature = "vector")]
+pub use traits::VectorProvider;
 
 pub use graphdb_core::types::EdgeDirection;

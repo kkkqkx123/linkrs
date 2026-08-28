@@ -201,7 +201,7 @@ PostgreSQL 式"无 undo"（CLOG + 可见性过滤）：linkrs 的版本链（`co
 | `crates/graphdb-storage/src/storage/edge/mutable_csr.rs` `compact_with_ts` | `valid / (1.0 - reserve_ratio)` 在 ratio=1.0 时除零 → `inf as u32` 饱和到 `u32::MAX`，逐顶点容量爆炸（~205TB 分配，进程 OOM） | 对 `reserve_ratio ≥ 1.0` 守卫为"无预留"（`new_cap = valid`）；新增 2 个回归测试 |
 
 验证：`cargo test -p graphdb-storage --lib`（717 个）全绿；`cargo clippy -p graphdb-storage --all-targets`、
-`cargo check -p graphdb --features server,fulltext-search,c_api,grpc,qdrant` 通过。
+`cargo check -p graphdb --features server,fulltext,c_api,grpc,qdrant` 通过。
 
 ---
 

@@ -35,10 +35,10 @@ vector-qdrant = [
     "graphdb-sync/vector-qdrant",
     "graphdb-query/vector-qdrant",
 ]
-fulltext-search = [
-    "graphdb-fulltext/fulltext-search",
-    "graphdb-sync/fulltext-search",
-    "graphdb-query/fulltext-search",
+fulltext = [
+    "graphdb-fulltext/fulltext",
+    "graphdb-sync/fulltext",
+    "graphdb-query/fulltext",
 ]
 c_api = []
 embedded = []

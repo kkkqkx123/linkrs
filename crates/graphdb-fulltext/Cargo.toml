@@ -21,9 +21,9 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 
 [features]
-fulltext-search = ["dep:tantivy"]
+fulltext = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
 
 [dev-dependencies]
 tempfile.workspace = true
-graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search"] }
+graphdb-sync = { path = "../graphdb-sync", features = ["fulltext"] }

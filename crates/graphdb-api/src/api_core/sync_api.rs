@@ -55,7 +55,7 @@ impl SyncApi {
     }
 
     /// Get sync coordinator
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn sync_coordinator(&self) -> &Arc<graphdb_sync::SyncCoordinator> {
         self.sync_manager.sync_coordinator()
     }

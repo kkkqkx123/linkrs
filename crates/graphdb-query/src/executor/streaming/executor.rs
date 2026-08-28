@@ -1282,7 +1282,7 @@ mod tests {
             },
             runtime_budget,
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -1366,7 +1366,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -1475,7 +1475,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -1603,7 +1603,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -1715,7 +1715,7 @@ mod tests {
             },
             runtime_budget.clone(),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,

@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::FulltextManageCommand;
@@ -13,15 +13,15 @@ use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_core::Value;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::manager::FulltextIndexManager;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::executor::streaming::chunk::{ColumnInfo, Schema};
 
-#[cfg(not(feature = "fulltext-search"))]
+#[cfg(not(feature = "fulltext"))]
 fn fulltext_command_info(cmd: &FulltextManageCommand) -> (&'static str, Option<&str>) {
     use crate::executor::streaming::operators::spec::FulltextManageCommand::*;
     match cmd {
@@ -33,7 +33,7 @@ fn fulltext_command_info(cmd: &FulltextManageCommand) -> (&'static str, Option<&
     }
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 fn make_manage_result(
     output_layout: Arc<SlotLayout>,
     action: &str,
@@ -55,7 +55,7 @@ pub enum FulltextOperatorKind {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: FulltextManageCommand,
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     FulltextSearch {
@@ -66,7 +66,7 @@ pub enum FulltextOperatorKind {
         search_query: String,
         tag_name: String,
         field_name: String,
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     FulltextLookup {
@@ -77,7 +77,7 @@ pub enum FulltextOperatorKind {
         search_query: String,
         tag_name: String,
         field_name: String,
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     MatchFulltext {
@@ -87,7 +87,7 @@ pub enum FulltextOperatorKind {
         match_field: Option<String>,
         tag_name: String,
         field_name: String,
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
 }
@@ -110,7 +110,7 @@ impl FulltextOperator {
     pub fn from_spec(
         spec: &super::spec::FulltextSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        #[cfg(feature = "fulltext-search")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        #[cfg(feature = "fulltext")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
         let kind = match spec {
@@ -121,7 +121,7 @@ impl FulltextOperator {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 command: command.clone(),
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
             super::spec::FulltextSpec::FulltextSearch {
@@ -139,7 +139,7 @@ impl FulltextOperator {
                 search_query: search_query.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
             super::spec::FulltextSpec::FulltextLookup {
@@ -157,7 +157,7 @@ impl FulltextOperator {
                 search_query: search_query.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
             super::spec::FulltextSpec::MatchFulltext {
@@ -173,7 +173,7 @@ impl FulltextOperator {
                 match_field: match_field.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
         };
@@ -220,10 +220,10 @@ impl FulltextOperator {
                 storage: _storage,
                 space_name: _space_name,
                 command,
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager,
             } => {
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 {
                     use crate::executor::streaming::operators::spec::FulltextManageCommand::*;
                     let result = match command {
@@ -413,11 +413,11 @@ impl FulltextOperator {
                     Ok(result)
                 }
 
-                #[cfg(not(feature = "fulltext-search"))]
+                #[cfg(not(feature = "fulltext"))]
                 {
                     let (operation, _) = fulltext_command_info(command);
                     Err(QueryError::feature_disabled(
-                        "fulltext-search",
+                        "fulltext",
                         &operation.to_uppercase(),
                     ))
                 }
@@ -428,11 +428,11 @@ impl FulltextOperator {
                 space_id,
                 tag_name,
                 field_name,
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
                         let search_results =
@@ -459,11 +459,11 @@ impl FulltextOperator {
                     ))
                 }
 
-                #[cfg(not(feature = "fulltext-search"))]
+                #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
                     Err(QueryError::feature_disabled(
-                        "fulltext-search",
+                        "fulltext",
                         "FULLTEXT SEARCH",
                     ))
                 }
@@ -474,11 +474,11 @@ impl FulltextOperator {
                 space_id,
                 tag_name,
                 field_name,
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
                         let search_results =
@@ -506,11 +506,11 @@ impl FulltextOperator {
                     ))
                 }
 
-                #[cfg(not(feature = "fulltext-search"))]
+                #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
                     Err(QueryError::feature_disabled(
-                        "fulltext-search",
+                        "fulltext",
                         "FULLTEXT LOOKUP",
                     ))
                 }
@@ -520,11 +520,11 @@ impl FulltextOperator {
                 match_expr,
                 tag_name,
                 field_name,
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(feature = "fulltext-search")]
+                #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
                         let expr_str = format!("{:?}", match_expr);
@@ -554,11 +554,11 @@ impl FulltextOperator {
                     ))
                 }
 
-                #[cfg(not(feature = "fulltext-search"))]
+                #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&match_expr, &tag_name, &field_name, input);
                     Err(QueryError::feature_disabled(
-                        "fulltext-search",
+                        "fulltext",
                         "FULLTEXT MATCH",
                     ))
                 }

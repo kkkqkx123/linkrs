@@ -61,7 +61,7 @@ git -C crates/tantivy merge --no-edit upstream/main
 如果合并成功，再执行根仓库验证：
 
 ```bash
-cargo check --workspace --features server,fulltext-search,grpc,qdrant
+cargo check --workspace --features server,fulltext,grpc,qdrant
 ```
 
 然后把功能分支推到 fork 远程。推送时使用本地代理，避免网络波动：

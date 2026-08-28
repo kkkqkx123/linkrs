@@ -188,7 +188,7 @@ winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoap
 [features]
 default = ["server", "vector"]
 server = ["graphdb-config/server"]
-fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext = ["graphdb-api/fulltext", "graphdb-server/fulltext", "graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
 jieba = ["graphdb-fulltext/jieba"]
 vector = ["graphdb-api/vector", "graphdb-server/vector", "graphdb-config/vector", "graphdb-sync/vector", "graphdb-query/vector"]
 embedding = ["vector", "graphdb-sync/embedding", "dep:graphdb-embedding"]

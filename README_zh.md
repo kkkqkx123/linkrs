@@ -85,7 +85,7 @@ cargo run --release -- serve -c /path/to/config.toml
 | 特性 | 说明 |
 |------|------|
 | `server` (默认) | HTTP/管理服务端 |
-| `fulltext-search` | 全文搜索引擎 |
+| `fulltext` | 全文搜索引擎 |
 | `jieba` | 中文分词 |
 | `qdrant` | 通过 Qdrant 进行向量搜索 |
 | `grpc` | gRPC 服务端 |
@@ -93,7 +93,7 @@ cargo run --release -- serve -c /path/to/config.toml
 | `embedded` | 嵌入式数据库模式 |
 
 ```shell
-cargo build --release --features "server,fulltext-search,grpc,c_api"
+cargo build --release --features "server,fulltext,grpc,c_api"
 ```
 
 ### 快速检查

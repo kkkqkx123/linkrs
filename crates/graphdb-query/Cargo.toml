@@ -32,7 +32,7 @@ vector-search = { path = "../vector-search", optional = true }
 [features]
 vector = ["dep:vector-search", "graphdb-sync/vector"]
 vector-qdrant = ["vector", "graphdb-sync/vector-qdrant"]
-fulltext-search = ["graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext = ["graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
 
 [dev-dependencies]
 graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }

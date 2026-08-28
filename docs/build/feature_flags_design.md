@@ -23,7 +23,7 @@ default = ["server"]
 server = ["graphdb-api/server", "graphdb-config/server"]
 
 # Full-text search support
-fulltext-search = ["graphdb-api/fulltext-search", "graphdb-fulltext/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext = ["graphdb-api/fulltext", "graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
 
 # Optional Chinese tokenizer support for full-text search
 jieba = ["graphdb-fulltext/jieba"]
@@ -60,13 +60,13 @@ default (server)
     │   └── async-trait
     └── graphdb-config/server
 
-fulltext-search
-├── graphdb-api/fulltext-search
-│   ├── graphdb-fulltext/fulltext-search
-│   ├── graphdb-sync/fulltext-search
-│   └── graphdb-query/fulltext-search
-├── graphdb-fulltext/fulltext-search
-└── graphdb-sync/fulltext-search
+fulltext
+├── graphdb-api/fulltext
+│   ├── graphdb-fulltext/fulltext
+│   ├── graphdb-sync/fulltext
+│   └── graphdb-query/fulltext
+├── graphdb-fulltext/fulltext
+└── graphdb-sync/fulltext
 
 jieba
 └── graphdb-fulltext/jieba
@@ -106,12 +106,12 @@ cargo build --release --features server
 - ✅ Web 管理界面后端
 - ✅ 用户认证与权限管理
 - ✅ 批处理接口
-- ⚠️ 全文搜索（BM25 + Inverted Index，需额外启用 `fulltext-search` feature）
+- ⚠️ 全文搜索（BM25 + Inverted Index，需额外启用 `fulltext` feature）
 - ✅ 可选的向量搜索集成（启用 `qdrant` 时）
 - ❌ C API（不包含）
 
 **说明**：默认构建（`default = ["server"]`）不包含全文搜索，如需全文检索请使用
-`cargo build --release --features fulltext-search`。
+`cargo build --release --features fulltext`。
 
 **适用场景**：
 - 部署为独立服务
@@ -286,7 +286,7 @@ fn test_c_api_database_open_close() {
 | `default` | cdylib + rlib | graphdb-server | HTTP 服务器 |
 | `embedded` | cdylib + rlib | 无 | Embedded Rust API |
 | `server` | cdylib + rlib | graphdb-server | HTTP 服务器 |
-| `server,fulltext-search` | cdylib + rlib | graphdb-server | HTTP 服务器 + 全文搜索 |
+| `server,fulltext` | cdylib + rlib | graphdb-server | HTTP 服务器 + 全文搜索 |
 | `server,qdrant` | cdylib + rlib | graphdb-server | HTTP 服务器 + 向量检索 |
 | `embedded,server,qdrant` | cdylib + rlib | graphdb-server | Embedded + Server + 向量检索 |
 | `server,grpc` | cdylib + rlib | graphdb-server | HTTP 服务器 + gRPC |

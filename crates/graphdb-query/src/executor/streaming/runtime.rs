@@ -693,7 +693,7 @@ pub struct ExecutionRuntime {
     /// Moved here from OperatorSpec so that the physical plan tree is
     /// truly immutable and cacheable without sharing storage handles.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<graphdb_sync::VectorSyncCoordinator>>,
@@ -743,7 +743,7 @@ impl ExecutionRuntime {
         query_id: QueryIdentity,
         memory_budget: MemoryBudget,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        #[cfg(feature = "fulltext-search")] fulltext_manager: Option<
+        #[cfg(feature = "fulltext")] fulltext_manager: Option<
             Arc<graphdb_fulltext::manager::FulltextIndexManager>,
         >,
         #[cfg(feature = "vector")] vector_coordinator: Option<
@@ -767,7 +767,7 @@ impl ExecutionRuntime {
             max_buffered_chunks: AtomicUsize::new(10),
             spill_manager: Arc::new(parking_lot::Mutex::new(None)),
             storage,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager,
             #[cfg(feature = "vector")]
             vector_coordinator,
@@ -787,7 +787,7 @@ impl ExecutionRuntime {
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -808,7 +808,7 @@ impl ExecutionRuntime {
         self.query_id.lock().query_id = id;
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn set_fulltext_manager(
         &mut self,
         manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,

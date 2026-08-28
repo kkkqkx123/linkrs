@@ -12,7 +12,7 @@ use graphdb_core::{SessionStatistics, StatsManager};
 use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use graphdb_query::parser::ast::Stmt;
 use graphdb_query::parser::{Parser, ParserResult};
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::SearchOptions;
@@ -74,7 +74,7 @@ pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
     pub(crate) schema_api: SchemaApi<S>,
     pub(crate) txn_manager: Arc<TransactionManager>,
     pub(crate) storage: Arc<RwLock<S>>,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) stats_manager: Arc<StatsManager>,

@@ -295,12 +295,12 @@ impl PhysicalPlanMaterializer {
                 OperatorKindSpec::Fulltext(ft_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
-                    #[cfg(feature = "fulltext-search")]
+                    #[cfg(feature = "fulltext")]
                     let ft_mgr = runtime.fulltext_manager.clone();
                     let op = FulltextOperator::from_spec(
                         ft_spec,
                         storage,
-                        #[cfg(feature = "fulltext-search")]
+                        #[cfg(feature = "fulltext")]
                         ft_mgr,
                         output_layout.clone(),
                     );
@@ -494,7 +494,7 @@ impl PhysicalPlanMaterializer {
             },
             bindings.memory_budget.clone(),
             bindings.storage.clone(),
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             bindings.fulltext_manager.clone(),
             #[cfg(feature = "vector")]
             bindings.vector_coordinator.clone(),
@@ -712,7 +712,7 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,

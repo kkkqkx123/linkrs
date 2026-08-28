@@ -175,7 +175,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         use graphdb_sync::SyncManager;
 
         let sync_manager = if config.fulltext.enabled {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             {
                 use graphdb_fulltext::manager::FulltextIndexManager;
 
@@ -211,7 +211,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 
                 Some(Arc::new(sync_manager))
             }
-            #[cfg(not(feature = "fulltext-search"))]
+            #[cfg(not(feature = "fulltext"))]
             {
                 let sync_manager = SyncManager::new_without_fulltext();
 
@@ -380,7 +380,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     info!("Graph service initialized with transaction management");
 
     // Inject StatsManager into FulltextIndexManager to enable search metrics
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     if let Some(sync_api) = graph_service.sync_api() {
         let fulltext_manager = sync_api.sync_manager().fulltext_manager();
         let stats_manager = graph_service.get_stats_manager().clone();

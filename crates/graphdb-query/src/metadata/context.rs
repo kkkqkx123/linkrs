@@ -125,4 +125,29 @@ impl MetadataContext {
                 && index.index_type == super::types::IndexType::Vector
         })
     }
+
+    /// Find a fulltext index by space_id and field name
+    pub fn find_fulltext_index_by_field(
+        &self,
+        space_id: u64,
+        field_name: &str,
+    ) -> Option<&IndexMetadata> {
+        self.index_metadata.values().find(|index| {
+            index.space_id == space_id
+                && index.field_name == field_name
+                && index.index_type == super::types::IndexType::Fulltext
+        })
+    }
+
+    /// Find an index by name and optional type filter
+    pub fn find_index_by_name(
+        &self,
+        index_name: &str,
+        index_type: Option<super::types::IndexType>,
+    ) -> Option<&IndexMetadata> {
+        self.index_metadata.values().find(|index| {
+            index.index_name == index_name
+                && index_type.map_or(true, |t| index.index_type == t)
+        })
+    }
 }

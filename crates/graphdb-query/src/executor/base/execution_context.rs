@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::execution_result::ExecutionResult;
+use super::traits::SearchProvider;
 use super::MemoryBudget;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::executor::expression::functions::OwnedFunctionRef;
@@ -13,9 +14,9 @@ use crate::storage::QueryStorage;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::Arena;
 use graphdb_core::Value;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::engine::FulltextSearchEngine;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::manager::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::VectorSyncCoordinator;
@@ -25,12 +26,14 @@ pub struct ExecutionContext {
     pub results: Arc<RwLock<HashMap<String, ExecutionResult>>>,
     pub variables: Arc<RwLock<HashMap<String, graphdb_core::Value>>>,
     pub expression_context: Arc<ExpressionAnalysisContext>,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub search_engine: Option<Arc<dyn FulltextSearchEngine>>,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
     #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
+    /// Unified search providers for discovery and enumeration
+    pub search_providers: Vec<Arc<dyn SearchProvider>>,
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Snapshot handle pinned by the bound storage, when the storage was
     /// bound to a read/auto-commit operation context (storage boundary).
@@ -96,12 +99,13 @@ impl ExecutionContext {
             results: Arc::new(RwLock::new(HashMap::new())),
             variables: Arc::new(RwLock::new(HashMap::new())),
             expression_context,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             search_engine: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
+            search_providers: Vec::new(),
             storage: None,
             bound_snapshot: None,
             space_name: None,
@@ -132,12 +136,13 @@ impl ExecutionContext {
             results: Arc::new(RwLock::new(HashMap::new())),
             variables: Arc::new(RwLock::new(HashMap::new())),
             expression_context,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             search_engine: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
+            search_providers: Vec::new(),
             storage: None,
             bound_snapshot: None,
             space_name: None,
@@ -160,7 +165,7 @@ impl ExecutionContext {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn with_search_engine(
         expression_context: Arc<ExpressionAnalysisContext>,
         search_engine: Arc<dyn FulltextSearchEngine>,
@@ -173,6 +178,7 @@ impl ExecutionContext {
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
+            search_providers: Vec::new(),
             storage: None,
             bound_snapshot: None,
             space_name: None,
@@ -212,12 +218,13 @@ impl ExecutionContext {
             results: Arc::new(RwLock::new(HashMap::new())),
             variables: Arc::new(RwLock::new(HashMap::new())),
             expression_context,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             search_engine: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
+            search_providers: Vec::new(),
             storage: None,
             bound_snapshot: None,
             space_name: None,
@@ -260,7 +267,7 @@ impl ExecutionContext {
         &self.expression_context
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn search_engine(&self) -> Option<&Arc<dyn FulltextSearchEngine>> {
         self.search_engine.as_ref()
     }
@@ -292,12 +299,13 @@ impl Default for ExecutionContext {
             results: Arc::new(RwLock::new(HashMap::new())),
             variables: Arc::new(RwLock::new(HashMap::new())),
             expression_context: Arc::new(ExpressionAnalysisContext::new()),
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             search_engine: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
+            search_providers: Vec::new(),
             storage: None,
             bound_snapshot: None,
             space_name: None,

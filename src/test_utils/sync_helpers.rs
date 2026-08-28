@@ -2,7 +2,7 @@
 //!
 //! Test utilities for sync module integration tests
 
-#![cfg(feature = "fulltext-search")]
+#![cfg(feature = "fulltext")]
 
 use crate::core::types::TransactionId;
 use crate::core::types::VertexId;

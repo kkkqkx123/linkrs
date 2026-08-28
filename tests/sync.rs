@@ -7,31 +7,31 @@ mod circuit_breaker;
 #[path = "sync/types.rs"]
 mod types;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/batch_processor.rs"]
 mod batch_processor;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/comprehensive.rs"]
 mod comprehensive;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/dlq_recovery.rs"]
 mod dlq_recovery;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/edge.rs"]
 mod edge;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/fault_tolerance.rs"]
 mod fault_tolerance;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/integration.rs"]
 mod integration;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/recovery_e2e.rs"]
 mod recovery_e2e;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/transaction_basic.rs"]
 mod transaction_basic;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[path = "sync/two_pc_protocol.rs"]
 mod two_pc_protocol;
 

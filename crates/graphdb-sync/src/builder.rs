@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::coordinator::SyncCoordinator;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
@@ -8,7 +8,7 @@ use crate::DeadLetterQueue;
 use crate::SyncManager;
 
 pub struct SyncManagerBuilder {
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     sync_coordinator: Option<Arc<SyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
@@ -25,7 +25,7 @@ impl Default for SyncManagerBuilder {
 impl SyncManagerBuilder {
     pub fn new() -> Self {
         Self {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             sync_coordinator: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
@@ -34,7 +34,7 @@ impl SyncManagerBuilder {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn with_sync_coordinator(mut self, coordinator: Arc<SyncCoordinator>) -> Self {
         self.sync_coordinator = Some(coordinator);
         self
@@ -59,7 +59,7 @@ impl SyncManagerBuilder {
     pub fn build(self) -> Result<SyncManager, crate::manager::SyncError> {
         let mut manager = SyncManager::new_without_fulltext();
 
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         if let Some(coordinator) = self.sync_coordinator {
             manager = SyncManager::new(coordinator);
         }
@@ -81,21 +81,21 @@ impl SyncManagerBuilder {
     }
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub struct SyncCoordinatorBuilder {
     fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     config: Option<crate::batch::BatchConfig>,
     stats_manager: Option<Arc<graphdb_core::stats::StatsManager>>,
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 impl Default for SyncCoordinatorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 impl SyncCoordinatorBuilder {
     pub fn new() -> Self {
         Self {

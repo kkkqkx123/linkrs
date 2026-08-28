@@ -3,7 +3,7 @@
 //! Unified synchronization manager using SyncCoordinator.
 
 use crate::checkpoint_manifest::CheckpointManifestManager;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::coordinator::{CoordinatorError, SyncCoordinator};
 use crate::outbox::OutboxPayload;
 use crate::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
@@ -12,7 +12,7 @@ use dashmap::DashMap;
 use graphdb_core::stats::{OutboxState, StatsManager};
 use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use graphdb_core::Value;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::SyncConfig;
 #[cfg(feature = "vector")]
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 struct FulltextFieldApply<'a> {
     manager: Arc<graphdb_fulltext::manager::FulltextIndexManager>,
     mutation: &'a graphdb_core::wal::IndexMutation,
@@ -50,7 +50,7 @@ pub struct IndexCreateRequest {
 pub use vector_search::{CollectionConfig, SearchResult};
 
 pub struct SyncManager {
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     sync_coordinator: Option<Arc<SyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
@@ -118,7 +118,7 @@ impl Default for OutboxBackpressureConfig {
 impl Clone for SyncManager {
     fn clone(&self) -> Self {
         Self {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             sync_coordinator: self.sync_coordinator.clone(),
             #[cfg(feature = "vector")]
             vector_coordinator: self.vector_coordinator.clone(),
@@ -142,7 +142,7 @@ impl Clone for SyncManager {
 impl std::fmt::Debug for SyncManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("SyncManager");
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         d.field("sync_coordinator", &self.sync_coordinator);
         #[cfg(feature = "vector")]
         d.field("vector_coordinator", &self.vector_coordinator);
@@ -152,14 +152,14 @@ impl std::fmt::Debug for SyncManager {
 }
 
 #[cfg_attr(
-    not(any(feature = "fulltext-search", feature = "vector")),
+    not(any(feature = "fulltext", feature = "vector")),
     allow(unused_variables)
 )]
 impl SyncManager {
     #[allow(unused_mut)]
     fn delivery_target_names(&self) -> Vec<&'static str> {
         let mut targets = Vec::new();
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         if self.sync_coordinator.is_some() {
             targets.push("fulltext");
         }
@@ -233,7 +233,7 @@ impl SyncManager {
     }
 
     fn payload_needs_fulltext(&self, payload: &OutboxPayload) -> bool {
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         {
             let Some(coord) = self.sync_coordinator.as_ref() else {
                 return false;
@@ -291,7 +291,7 @@ impl SyncManager {
                     .any(|meta| meta.tag_name == *edge_type),
             }
         }
-        #[cfg(not(feature = "fulltext-search"))]
+        #[cfg(not(feature = "fulltext"))]
         {
             let _ = payload;
             false
@@ -422,7 +422,7 @@ impl SyncManager {
 
     fn new_common() -> Self {
         Self {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             sync_coordinator: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
@@ -442,7 +442,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn new(sync_coordinator: Arc<SyncCoordinator>) -> Self {
         Self {
             sync_coordinator: Some(sync_coordinator),
@@ -463,7 +463,7 @@ impl SyncManager {
         self
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn with_sync_config(
         sync_coordinator: Arc<SyncCoordinator>,
         _sync_config: SyncConfig,
@@ -1052,7 +1052,7 @@ impl SyncManager {
         let payload: OutboxPayload = postcard::from_bytes(&mutation.document_or_vector)
             .map_err(|error| format!("Failed to decode index mutation: {}", error))?;
         match mutation.target.as_str() {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             "fulltext" => {
                 self.apply_fulltext_mutation(mutation, commit_lsn, &payload)
                     .await
@@ -1078,7 +1078,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     async fn apply_fulltext_mutation(
         &self,
         mutation: &graphdb_core::wal::IndexMutation,
@@ -1214,7 +1214,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     async fn apply_fulltext_fields(request: FulltextFieldApply<'_>) -> Result<(), String> {
         for (field_name, value) in request.properties {
             let Some(engine) =
@@ -1991,11 +1991,11 @@ impl SyncManager {
             .map_err(|error| SyncError::Internal(error.to_string()))?
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn sync_coordinator(&self) -> &Arc<SyncCoordinator> {
         self.sync_coordinator
             .as_ref()
-            .expect("SyncCoordinator not available without fulltext-search feature")
+            .expect("SyncCoordinator not available without fulltext feature")
     }
 
     #[cfg(feature = "vector")]
@@ -2003,11 +2003,11 @@ impl SyncManager {
         self.vector_coordinator.as_ref()
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn fulltext_manager(&self) -> Arc<graphdb_fulltext::manager::FulltextIndexManager> {
         self.sync_coordinator
             .as_ref()
-            .expect("SyncCoordinator not available without fulltext-search feature")
+            .expect("SyncCoordinator not available without fulltext feature")
             .fulltext_manager()
             .clone()
     }
@@ -2284,7 +2284,7 @@ fn payload_to_intent(
     })
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 fn edge_entity_id(
     src: impl std::fmt::Display,
     dst: impl std::fmt::Display,
@@ -2390,11 +2390,11 @@ impl<'a> EdgeProps<'a> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[error("Coordinator error: {0}")]
     CoordinatorError(#[from] CoordinatorError),
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[error("Sync coordinator error: {0}")]
     SyncCoordinatorError(#[from] crate::coordinator::SyncCoordinatorError),
 
@@ -2522,7 +2522,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_changes_use_only_the_fulltext_target() {
         let directory = TempDir::new().expect("temporary index directory should be created");
@@ -2568,7 +2568,7 @@ mod tests {
         assert_eq!(intents[0].mutation.target.as_str(), "fulltext");
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_outbox_claim_apply_and_restart_receipt_are_end_to_end() {
         let directory = TempDir::new().expect("temporary index directory should be created");

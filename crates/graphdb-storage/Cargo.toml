@@ -6,7 +6,7 @@ edition.workspace = true
 [features]
 default = []
 test-support = []
-fulltext-search = ["graphdb-sync/fulltext-search", "graphdb-fulltext"]
+fulltext = ["graphdb-sync/fulltext", "graphdb-fulltext"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }

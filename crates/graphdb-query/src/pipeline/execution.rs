@@ -326,13 +326,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             context.bound_snapshot = dyn_storage.read().snapshot_handle();
             context.storage = Some(dyn_storage);
         }
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         {
             context.fulltext_manager = self.fulltext_manager.clone();
         }
         #[cfg(feature = "vector")]
         {
             context.vector_coordinator = self.vector_coordinator.clone();
+        }
+        // Populate unified search providers for discovery
+        {
+            let mut providers: Vec<Arc<dyn crate::executor::base::traits::SearchProvider>> =
+                Vec::new();
+            #[cfg(feature = "fulltext")]
+            if let Some(ref manager) = self.fulltext_manager {
+                providers.push(Arc::new(
+                    crate::executor::base::traits::FulltextProvider::new(manager.clone()),
+                ));
+            }
+            #[cfg(feature = "vector")]
+            if let Some(ref coordinator) = self.vector_coordinator {
+                providers.push(Arc::new(
+                    crate::executor::base::traits::VectorProvider::new(coordinator.clone()),
+                ));
+            }
+            context.search_providers = providers;
         }
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());

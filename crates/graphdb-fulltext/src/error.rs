@@ -29,7 +29,7 @@ pub enum SearchError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[error("Tantivy error: {0}")]
     TantivyError(#[from] tantivy::TantivyError),
 

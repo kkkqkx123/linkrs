@@ -9,13 +9,13 @@ use crate::storage::{GraphStorage, StorageClient};
 use graphdb_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use graphdb_core::{StatsManager, Value};
 use graphdb_fulltext::FulltextConfig;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::SyncFailurePolicy;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_sync::SyncConfig;
 use graphdb_sync::SyncManager;
 use graphdb_transaction::wal::SyncPolicy;
@@ -119,14 +119,14 @@ fn attach_vector_coordinator(
     Ok(sync)
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 type InitManagers = (Option<Arc<FulltextIndexManager>>, Option<Arc<SyncManager>>);
-#[cfg(not(feature = "fulltext-search"))]
+#[cfg(not(feature = "fulltext"))]
 type InitManagers = (Option<Arc<()>>, Option<Arc<SyncManager>>);
 
 /// Full init path when vector is enabled but fulltext is not: create a sync manager
 /// that only hosts the vector coordinator.
-#[cfg(all(feature = "vector", not(feature = "fulltext-search")))]
+#[cfg(all(feature = "vector", not(feature = "fulltext")))]
 fn setup_sync_with_vector_only(
     config: &DatabaseConfig,
     runtime: &tokio::runtime::Handle,
@@ -147,7 +147,7 @@ fn setup_sync_with_vector_only(
 }
 
 /// Full init path when both vector and fulltext are enabled.
-#[cfg(all(feature = "vector", feature = "fulltext-search"))]
+#[cfg(all(feature = "vector", feature = "fulltext"))]
 fn setup_sync_with_vector_only(
     config: &DatabaseConfig,
     runtime: &tokio::runtime::Handle,
@@ -282,9 +282,9 @@ impl GraphDatabase<GraphStorage> {
 
         let fulltext_config = FulltextConfig::default();
 
-        #[cfg_attr(not(feature = "fulltext-search"), allow(unused_variables))]
+        #[cfg_attr(not(feature = "fulltext"), allow(unused_variables))]
         let (fulltext_manager, mut sync_manager): InitManagers = if fulltext_config.enabled {
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             {
                 let manager: Arc<FulltextIndexManager> = Arc::new(
                     FulltextIndexManager::new(fulltext_config.clone())
@@ -312,7 +312,7 @@ impl GraphDatabase<GraphStorage> {
                 let sync = Arc::new(sync);
                 (Some(manager), Some(sync))
             }
-            #[cfg(not(feature = "fulltext-search"))]
+            #[cfg(not(feature = "fulltext"))]
             {
                 #[cfg(feature = "vector")]
                 {
@@ -383,7 +383,7 @@ impl GraphDatabase<GraphStorage> {
             schema_api,
             txn_manager,
             storage,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager,
             sync_manager,
             stats_manager,

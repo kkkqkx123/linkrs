@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use crate::coordinator::CoordinatorError;
 use graphdb_fulltext::SearchError;
 
@@ -15,7 +15,7 @@ pub enum BatchError {
     #[error("Queue is closed")]
     QueueClosed,
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     #[error("Coordinator error: {0}")]
     CoordinatorError(#[from] CoordinatorError),
 

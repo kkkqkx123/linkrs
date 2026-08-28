@@ -545,7 +545,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,
@@ -572,7 +572,7 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,

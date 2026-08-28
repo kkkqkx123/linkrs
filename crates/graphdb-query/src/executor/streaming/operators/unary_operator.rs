@@ -790,7 +790,7 @@ mod tests {
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
             Some(storage),
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             None,
             #[cfg(feature = "vector")]
             None,

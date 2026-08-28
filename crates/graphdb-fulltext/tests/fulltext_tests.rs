@@ -1,4 +1,4 @@
-#![cfg(feature = "fulltext-search")]
+#![cfg(feature = "fulltext")]
 
 #[path = "fulltext_tests/advanced_queries.rs"]
 mod advanced_queries;

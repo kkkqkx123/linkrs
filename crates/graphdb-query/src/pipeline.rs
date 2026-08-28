@@ -16,7 +16,7 @@ use crate::storage::QueryStorage;
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::StatsManager;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::manager::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
@@ -32,7 +32,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) param_handler: ParameterizedQueryHandler,
     pub(crate) schema_manager: Option<Arc<SchemaManager>>,
     pub(crate) index_manager: Option<Arc<dyn IndexMetadataManager>>,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
     #[cfg(feature = "vector")]
     pub(crate) vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
@@ -86,7 +86,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             param_handler,
             schema_manager: None,
             index_manager: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
@@ -223,7 +223,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             param_handler,
             schema_manager: None,
             index_manager: None,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
@@ -259,7 +259,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     pub fn with_fulltext_manager(mut self, fulltext_manager: Arc<FulltextIndexManager>) -> Self {
         self.fulltext_manager = Some(fulltext_manager);
         self

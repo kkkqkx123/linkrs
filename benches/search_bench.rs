@@ -13,7 +13,7 @@ fn create_benchmark_group<'a>(
     group
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
     use graphdb_config::fulltext::FulltextConfig;
     use graphdb_fulltext::manager::FulltextIndexManager;
@@ -70,7 +70,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "fulltext-search"))]
+#[cfg(not(feature = "fulltext"))]
 fn bench_fulltext_index_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("fulltext_index_build");
     group.measurement_time(Duration::from_secs(10));
@@ -83,7 +83,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 fn bench_fulltext_search(c: &mut Criterion) {
     use graphdb_config::fulltext::FulltextConfig;
     use graphdb_fulltext::manager::FulltextIndexManager;
@@ -143,7 +143,7 @@ fn bench_fulltext_search(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "fulltext-search"))]
+#[cfg(not(feature = "fulltext"))]
 fn bench_fulltext_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("fulltext_search");
     group.measurement_time(Duration::from_secs(10));

@@ -542,6 +542,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
 
+        // Fulltext indexes live in the FulltextIndexManager's in-memory registry.
+        // Statement-level names are recorded there at CREATE time so they can be
+        // resolved back to their (space_id, tag, field) location during planning.
+        #[cfg(feature = "fulltext")]
+        if let Some(manager) = &self.fulltext_manager {
+            for ft_meta in manager.list_indexes() {
+                if ft_meta.space_id != space_id || ft_meta.tag_name.is_empty() {
+                    continue;
+                }
+                let index_metadata = IndexMetadata::new(
+                    ft_meta.index_name.clone(),
+                    space_id,
+                    ft_meta.tag_name,
+                    ft_meta.field_name,
+                    IndexType::Fulltext,
+                );
+                metadata.set_index_metadata(ft_meta.index_name, index_metadata);
+            }
+        }
+
         let tag_names: Vec<String> = metadata
             .get_all_tags()
             .map(|t| t.tag_name.clone())

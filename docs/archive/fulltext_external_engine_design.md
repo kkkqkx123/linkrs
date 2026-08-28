@@ -123,7 +123,7 @@ pub async fn create_index(...) -> Result<String, SearchError> {
 
 ```toml
 [features]
-fulltext-search = ["dep:tantivy"]           # 默认 Tantivy
+fulltext = ["dep:tantivy"]           # 默认 Tantivy
 fulltext-elasticsearch = ["dep:reqwest"]     # Elasticsearch 客户端
 fulltext-meilisearch = ["dep:reqwest"]       # Meilisearch 客户端
 ```

@@ -4,7 +4,7 @@ pub mod batch;
 pub mod builder;
 pub mod checkpoint_manifest;
 pub mod circuit_breaker;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub mod coordinator;
 pub mod dead_letter_queue;
 pub mod manager;
@@ -21,7 +21,7 @@ pub mod vector_sync;
 
 #[cfg(feature = "vector")]
 pub use backend::BackendDeliveryPolicy;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub use batch::FulltextBatchProcessor;
 pub use batch::{BatchConfig, BatchError, BatchProcessor, TransactionBatchBuffer};
 pub use checkpoint_manifest::{
@@ -32,7 +32,7 @@ pub use circuit_breaker::{
     with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerStats, CircuitState,
 };
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub use coordinator::{
     ChangeContext, ChangeData, ChangeType, IndexType, RecoveryResult, SyncCoordinator,
     SyncCoordinatorError,
@@ -47,7 +47,7 @@ pub use outbox_recovery::{
     find_latest_snapshot, find_latest_snapshot_at_or_before, live_database_exists, recover_outbox,
     restore_latest_snapshot, restore_snapshot_sync, verify_live_database,
 };
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub use receiver::FulltextReceiver;
 #[cfg(feature = "vector")]
 pub use receiver::VectorReceiver;

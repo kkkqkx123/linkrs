@@ -1,12 +1,12 @@
-#[cfg(any(feature = "fulltext-search", feature = "vector"))]
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use std::collections::HashSet;
-#[cfg(any(feature = "fulltext-search", feature = "vector"))]
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use std::sync::Arc;
-#[cfg(any(feature = "fulltext-search", feature = "vector"))]
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use tokio::sync::{Mutex, RwLock};
 
 use graphdb_core::types::CommitLsn;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb_core::wal::IndexMutation;
 
 pub struct ApplyReceipt {
@@ -20,7 +20,7 @@ pub struct LateArrivalResult {
     pub reason: String,
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub struct FulltextReceiver {
     engine: Arc<dyn graphdb_fulltext::engine::FulltextSearchEngine>,
     receipts: Arc<RwLock<HashSet<String>>>,
@@ -30,14 +30,14 @@ pub struct FulltextReceiver {
 
 // FulltextReceiver keeps JSON because Tantivy commit payloads accept only UTF-8
 // strings; this intentional exception is documented.
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FulltextCommitState {
     applied_lsn: u64,
     receipts: HashSet<String>,
 }
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 impl FulltextReceiver {
     pub fn new(engine: Arc<dyn graphdb_fulltext::engine::FulltextSearchEngine>) -> Self {
         let state = engine

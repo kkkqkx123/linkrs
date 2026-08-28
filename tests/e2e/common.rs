@@ -19,9 +19,9 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb::search::{FulltextConfig, FulltextIndexManager};
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 use graphdb::sync::SyncConfig;
 
 #[cfg(feature = "vector-qdrant")]
@@ -50,7 +50,7 @@ pub struct TestDb {
 }
 
 fn create_sync_manager() -> Arc<SyncManager> {
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     let sync_manager = {
         let fulltext_temp_dir = tempfile::tempdir().expect("Failed to create fulltext temp dir");
         let fulltext_config = FulltextConfig {
@@ -73,7 +73,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
         SyncManager::with_sync_config(sync_coordinator, sync_config)
     };
 
-    #[cfg(not(feature = "fulltext-search"))]
+    #[cfg(not(feature = "fulltext"))]
     let sync_manager = SyncManager::new_without_fulltext();
 
     #[cfg(feature = "vector-qdrant")]

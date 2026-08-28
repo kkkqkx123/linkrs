@@ -312,7 +312,7 @@ mod fulltext {
 
     /// Create fulltext index
     #[test]
-    #[cfg_attr(not(feature = "fulltext-search"), ignore)]
+    #[cfg_attr(not(feature = "fulltext"), ignore)]
     fn test_fulltext_index_creation() {
         let mut db = create_test_db();
         setup_test_space(
@@ -330,7 +330,7 @@ mod fulltext {
 
     /// Basic fulltext search
     #[test]
-    #[cfg_attr(not(feature = "fulltext-search"), ignore)]
+    #[cfg_attr(not(feature = "fulltext"), ignore)]
     fn test_basic_search() {
         let mut db = create_test_db();
         setup_test_space(
@@ -362,7 +362,7 @@ mod fulltext {
 
     /// Boolean query search
     #[test]
-    #[cfg_attr(not(feature = "fulltext-search"), ignore)]
+    #[cfg_attr(not(feature = "fulltext"), ignore)]
     fn test_boolean_search() {
         let mut db = create_test_db();
         setup_test_space(
@@ -394,7 +394,7 @@ mod fulltext {
 
     /// EXPLAIN fulltext search
     #[test]
-    #[cfg_attr(not(feature = "fulltext-search"), ignore)]
+    #[cfg_attr(not(feature = "fulltext"), ignore)]
     fn test_explain_fulltext() {
         let mut db = create_test_db();
         setup_test_space(

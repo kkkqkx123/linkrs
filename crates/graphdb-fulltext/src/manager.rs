@@ -21,9 +21,9 @@ pub struct FulltextIndexManager {
     engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>,
     metadata: DashMap<IndexKey, IndexMetadata>,
     base_path: PathBuf,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     default_engine: EngineType,
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     config: FulltextConfig,
     schema_manager: Option<Arc<SchemaManager>>,
     stats_manager: Mutex<Option<Arc<StatsManager>>>,
@@ -41,9 +41,9 @@ impl FulltextIndexManager {
             engines: DashMap::new(),
             metadata: DashMap::new(),
             base_path,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             default_engine: config.default_engine,
-            #[cfg(feature = "fulltext-search")]
+            #[cfg(feature = "fulltext")]
             config,
             schema_manager: None,
             stats_manager: Mutex::new(None),
@@ -55,7 +55,7 @@ impl FulltextIndexManager {
     }
 
     fn discover_existing_indexes(&self) -> Result<(), SearchError> {
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         if let Ok(loaded) = self.load_metadata_from_file() {
             for metadata in loaded {
                 if self.restore_index_from_metadata(&metadata).is_ok() {
@@ -68,14 +68,14 @@ impl FulltextIndexManager {
             return Ok(());
         }
 
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         return self.discover_indexes_from_disk();
 
-        #[cfg(not(feature = "fulltext-search"))]
+        #[cfg(not(feature = "fulltext"))]
         Ok(())
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn discover_indexes_from_disk(&self) -> Result<(), SearchError> {
         let entries = match std::fs::read_dir(&self.base_path) {
             Ok(entries) => entries,
@@ -105,7 +105,7 @@ impl FulltextIndexManager {
         Ok(())
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn try_restore_bm25_index(
         &self,
         path: &std::path::Path,
@@ -139,7 +139,7 @@ impl FulltextIndexManager {
         Some((key, engine, metadata))
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn parse_index_id(&self, index_id: &str) -> Option<(u64, String, String)> {
         let parts: Vec<&str> = index_id.split('_').collect();
         if parts.len() < 4 || parts[0] != "space" || parts[1] != "ft" {
@@ -153,7 +153,7 @@ impl FulltextIndexManager {
         Some((space_id, tag_name, field_name))
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn restore_index_from_metadata(&self, metadata: &IndexMetadata) -> Result<(), SearchError> {
         let key = IndexKey::new(metadata.space_id, &metadata.tag_name, &metadata.field_name);
 
@@ -169,7 +169,7 @@ impl FulltextIndexManager {
         Ok(())
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn load_metadata_from_file(&self) -> Result<Vec<IndexMetadata>, SearchError> {
         let metadata_path = self.base_path.join(METADATA_FILE_NAME);
 
@@ -251,7 +251,7 @@ impl FulltextIndexManager {
         Ok(())
     }
 
-    #[cfg(feature = "fulltext-search")]
+    #[cfg(feature = "fulltext")]
     fn get_space_storage_path(&self, space_id: u64) -> Result<PathBuf, SearchError> {
         if let Some(ref schema_manager) = self.schema_manager {
             if let Some(space_info) = schema_manager
@@ -321,7 +321,7 @@ impl FulltextIndexManager {
     ) -> Result<String, SearchError> {
         self.validate_space_exists(space_id)?;
         self.validate_tag_exists(space_id, tag_name)?;
-        #[cfg(not(feature = "fulltext-search"))]
+        #[cfg(not(feature = "fulltext"))]
         let _ = &engine_config;
 
         let key = IndexKey::new(space_id, tag_name, field_name);
@@ -331,7 +331,7 @@ impl FulltextIndexManager {
             return Err(SearchError::IndexAlreadyExists(index_id));
         }
 
-        #[cfg(feature = "fulltext-search")]
+        #[cfg(feature = "fulltext")]
         {
             let engine_type = _engine_type.unwrap_or(self.default_engine);
             let storage_path = self.get_space_storage_path(space_id)?;
@@ -367,7 +367,7 @@ impl FulltextIndexManager {
             Ok(index_id)
         }
 
-        #[cfg(not(feature = "fulltext-search"))]
+        #[cfg(not(feature = "fulltext"))]
         {
             Err(SearchError::EngineUnavailable)
         }

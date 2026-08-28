@@ -126,20 +126,20 @@ fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
 ```toml
 # BEFORE
 [features]
-fulltext-search = ["dep:tantivy"]
+fulltext = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
 vector = ["graphdb-sync/vector"]
 
 [dev-dependencies]
-graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search", "vector"] }
+graphdb-sync = { path = "../graphdb-sync", features = ["fulltext", "vector"] }
 
 # AFTER
 [features]
-fulltext-search = ["dep:tantivy"]
+fulltext = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
 
 [dev-dependencies]
-graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search"] }
+graphdb-sync = { path = "../graphdb-sync", features = ["fulltext"] }
 ```
 
 **验证**: `cargo check --workspace`，确认无编译错误
@@ -220,9 +220,9 @@ impl FulltextApi {
 
 ```rust
 // crates/graphdb-api/src/api_core.rs
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub mod fulltext_api;
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub use fulltext_api::FulltextApi;
 ```
 
@@ -299,7 +299,7 @@ pub struct FulltextFieldDef {
 
 ```rust
 // crates/graphdb-wire/src/lib.rs
-#[cfg(feature = "fulltext-search")]
+#[cfg(feature = "fulltext")]
 pub mod fulltext;
 ```
 

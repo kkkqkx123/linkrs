@@ -86,7 +86,7 @@ cargo run --release -- serve -c /path/to/config.toml
 | Feature | Description |
 |---------|-------------|
 | `server` (default) | HTTP/management server |
-| `fulltext-search` | Full-text search engine |
+| `fulltext` | Full-text search engine |
 | `jieba` | Chinese text segmentation |
 | `qdrant` | Vector search via Qdrant |
 | `grpc` | gRPC server |
@@ -94,7 +94,7 @@ cargo run --release -- serve -c /path/to/config.toml
 | `embedded` | Embedded database mode |
 
 ```shell
-cargo build --release --features "server,fulltext-search,grpc,c_api"
+cargo build --release --features "server,fulltext,grpc,c_api"
 ```
 
 ### Quick Checks
