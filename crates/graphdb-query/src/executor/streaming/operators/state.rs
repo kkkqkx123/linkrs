@@ -7,10 +7,10 @@
 
 use std::collections::HashSet;
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::storage::{EdgeCursor, IndexCursor, VertexCursor};
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 use super::super::chunk::DataChunk;
 use super::super::executor::SortDirection;

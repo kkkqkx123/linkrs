@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use super::sort::*;
 use super::*;
-use graphdb_core::value::NullType;
 use crate::executor::base::MemoryBudget;
 use crate::executor::streaming::spill::{RunReader, SpillConfig, SpillManager};
+use graphdb_core::value::NullType;
 
 fn integer_rows(values: &[i64]) -> Vec<Vec<Value>> {
     values.iter().map(|&v| vec![Value::BigInt(v)]).collect()
@@ -265,8 +265,9 @@ fn test_sort_rows_multi_column() {
 #[test]
 fn test_compare_rows_ascending() {
     let col_names = vec!["val".to_string()];
-    let layout =
-        Arc::new(crate::executor::streaming::slot::SlotLayout::from_names(&col_names));
+    let layout = Arc::new(crate::executor::streaming::slot::SlotLayout::from_names(
+        &col_names,
+    ));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Ascending];
 
@@ -290,8 +291,9 @@ fn test_compare_rows_ascending() {
 #[test]
 fn test_compare_rows_descending() {
     let col_names = vec!["val".to_string()];
-    let layout =
-        Arc::new(crate::executor::streaming::slot::SlotLayout::from_names(&col_names));
+    let layout = Arc::new(crate::executor::streaming::slot::SlotLayout::from_names(
+        &col_names,
+    ));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Descending];
 

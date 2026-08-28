@@ -3,12 +3,7 @@
 //! Decorator pattern implementation that wraps any StorageClient to automatically
 //! synchronize storage operations with external index systems (fulltext, vector).
 
-use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_core::types::{EdgeTypeInfo, TagInfo, VertexId};
-use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
-use crate::cursor::{
-    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
-};
+use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::engine::graph_storage::AutoCommitBatchWindow;
 use crate::macros::forward_methods;
 use crate::{
@@ -17,6 +12,9 @@ use crate::{
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
     StorageSyncContextOps,
 };
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::types::{EdgeTypeInfo, TagInfo, VertexId};
+use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -82,9 +80,7 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 }
 
-impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps
-    for SyncWrapper<S>
-{
+impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps for SyncWrapper<S> {
     fn begin_auto_commit_batch(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
         self.inner.begin_auto_commit_batch()
     }
@@ -110,9 +106,7 @@ impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps
     }
 }
 
-impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps
-    for SyncWrapper<S>
-{
+impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for SyncWrapper<S> {
     fn begin_auto_commit_group(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
         self.inner.begin_auto_commit_group()
     }
@@ -562,9 +556,7 @@ macro_rules! forward_auto_commit_methods {
     };
 }
 
-impl<S: StorageClient + 'static> crate::stats_reader::ColumnStatsReader
-    for SyncWrapper<S>
-{
+impl<S: StorageClient + 'static> crate::stats_reader::ColumnStatsReader for SyncWrapper<S> {
     fn vertex_column_stats(
         &self,
         space: &str,
@@ -962,9 +954,7 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
         fn should_checkpoint(&self) -> bool;
     );
 
-    fn create_checkpoint(
-        &self,
-    ) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
+    fn create_checkpoint(&self) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
         if self.enabled {
             let manager = self.sync_manager.as_ref().ok_or_else(|| {
                 StorageError::invalid_operation(

@@ -1,10 +1,8 @@
 use graphdb_api::api_core::{QueryApi, QueryResult, SyncApi};
 
+use crate::auth::{Authenticator, AuthenticatorFactory, PasswordAuthenticator};
 use crate::config::Config;
-use graphdb_core::metadata::SchemaManager;
-use graphdb_core::stats::StatsManager;
-use graphdb_core::types::SpaceSummary;
-use graphdb_core::{MetricType, Permission};
+use crate::permission::PermissionManager;
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::transaction_scope::CancelReason;
@@ -13,18 +11,20 @@ use crate::query::optimizer::PartitioningConfig;
 use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::Stmt;
 use crate::query::parser::{Parser, ParserResult};
-use crate::auth::{Authenticator, AuthenticatorFactory, PasswordAuthenticator};
-use crate::permission::PermissionManager;
 use crate::session::{ClientSession, GraphSessionManager};
 use crate::session::{SessionError, SessionResult};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 #[cfg(feature = "vector")]
+use graphdb_api::api_core::VectorApi;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::SpaceSummary;
+use graphdb_core::{MetricType, Permission};
+#[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_transaction::{TransactionId, TransactionManager};
-#[cfg(feature = "vector")]
-use graphdb_api::api_core::VectorApi;
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -224,7 +224,8 @@ impl<
                     {
                         engine.set_default_hnsw_config(hnsw);
                     }
-                    if let Some(ivf) = graphdb_api::vector_config::local_ivf_config(&config.vector_config().local)
+                    if let Some(ivf) =
+                        graphdb_api::vector_config::local_ivf_config(&config.vector_config().local)
                     {
                         engine.set_default_ivf_config(ivf);
                     }
@@ -568,7 +569,9 @@ impl<
             session_variables: Some(session.variables_snapshot()),
             query_id: Some(query_id as u64),
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.query_api.write();
         let result = if let Some(txn_id) = session.current_transaction() {
@@ -1211,7 +1214,9 @@ impl<
             session_variables: merged_session_variables,
             query_id: None,
             parsed_statement: parsed_ast,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.query_api.write();
         let result = if let Some(execution) = execution.as_ref() {
@@ -1309,10 +1314,7 @@ impl<
     }
 
     /// Obtain detailed information about the specified session.
-    pub async fn get_session_info(
-        &self,
-        session_id: i64,
-    ) -> Option<crate::session::SessionInfo> {
+    pub async fn get_session_info(&self, session_id: i64) -> Option<crate::session::SessionInfo> {
         self.session_manager.get_session_info(session_id).await
     }
 
@@ -1479,7 +1481,9 @@ where
             session_variables: None,
             query_id: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
         let outcomes = self
             .query_api
             .write()
@@ -1587,7 +1591,9 @@ where
             session_variables: None,
             query_id: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
         let outcomes =
             self.query_api
                 .write()

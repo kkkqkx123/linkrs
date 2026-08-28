@@ -1,12 +1,12 @@
 //! The FETCH EDGES query planner
 //! Planning for the execution of the FETCH EDGES query
 
-use graphdb_core::types::expr::expression_utils::extract_string_from_expr;
 use crate::parser::ast::{FetchTarget, Stmt};
 use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::execution_plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_utils::extract_string_from_expr;
 use std::sync::Arc;
 
 /// The FETCH EDGES query planner

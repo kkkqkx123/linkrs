@@ -1,9 +1,9 @@
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::geography::{
     Geography, GeographyValue, LineStringValue, MultiLineStringValue, MultiPointValue, PolygonValue,
 };
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 pub fn execute_st_distance(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {

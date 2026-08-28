@@ -1,11 +1,11 @@
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::wal::EntityRef;
-use graphdb_core::{Edge, Value, Vertex};
 use crate::executor::base::{MemoryBudget, MemoryReservation};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::storage::FlatVertexRecord;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{Edge, Value, Vertex};
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -23,9 +23,9 @@
 //! values for constant folding or index selection, so parameterization does
 //! not degrade plan quality — the same rationale that excludes read queries.
 
+use crate::parser::ast::Stmt;
 use graphdb_core::types::expr::{ContextualExpression, Expression};
 use graphdb_core::Value;
-use crate::parser::ast::Stmt;
 
 mod delete;
 mod insert;

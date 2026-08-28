@@ -13,10 +13,10 @@
 
 use std::sync::Arc;
 
+use crate::optimizer::cost::{CostModelConfig, SelectivityEstimator};
 use graphdb_core::types::expr::visitor_checkers::PropertyContainsChecker;
 use graphdb_core::types::Expression;
 use graphdb_core::Value;
-use crate::optimizer::cost::{CostModelConfig, SelectivityEstimator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeekStrategyType {

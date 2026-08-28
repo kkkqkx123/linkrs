@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use graphdb_core::stats::StatsManager;
 use crate::engine::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
+use graphdb_core::stats::StatsManager;
 
 pub struct MetricsSearchEngine {
     inner: Arc<TantivySearchEngine>,

@@ -32,9 +32,9 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::{CharsetInfo, SpaceInfo, Timestamp};
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::transaction_scope::CancelReason;
+use graphdb_core::types::{CharsetInfo, SpaceInfo, Timestamp};
 use graphdb_core::{Arena, IdGenerator};
 
 use super::QueryRequestContext;

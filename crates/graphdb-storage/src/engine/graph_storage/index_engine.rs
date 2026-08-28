@@ -1,7 +1,7 @@
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageResult, Value};
 use crate::index::types::EdgeIdentity;
 use crate::index::{EdgeIndexOps, VertexIndexOps};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageResult, Value};
 
 use super::context::GraphStorageContext;
 

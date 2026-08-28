@@ -1,7 +1,7 @@
-use graphdb_core::types::{LabelId, Timestamp, VertexId};
-use graphdb_core::Value;
 use crate::edge::EdgeStrategy;
 use crate::types::StoragePropertyDef;
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::Value;
 
 /// Parameters for creating an edge type
 pub struct CreateEdgeTypeParams<'a> {

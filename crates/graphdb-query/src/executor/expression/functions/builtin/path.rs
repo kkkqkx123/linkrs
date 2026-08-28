@@ -2,10 +2,10 @@
 //!
 //! Provide functions for path operations, including nodes and relationships.
 
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 /// Path function enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

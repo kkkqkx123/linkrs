@@ -14,9 +14,7 @@ use graphdb_query::executor::streaming::operators::blocking::{
 use graphdb_query::executor::streaming::operators::join_operator::{
     HashJoinBuildSide, JoinOperator, JoinOperatorKind,
 };
-use graphdb_query::executor::streaming::operators::set_operator::{
-    SetOperator, SetOperatorKind,
-};
+use graphdb_query::executor::streaming::operators::set_operator::{SetOperator, SetOperatorKind};
 use graphdb_query::executor::streaming::operators::source_operator::{
     SourceOperator, SourceOperatorKind,
 };

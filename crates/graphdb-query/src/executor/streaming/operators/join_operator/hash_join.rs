@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -11,6 +8,9 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::spec::BuildSide;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 use super::{build_combined_names, evaluate_join_key, HashJoinBuildSide};
 

@@ -3,13 +3,13 @@
 //! Provide functions for manipulating vertices and edges, including id, tags, labels, properties, type, src, dst, and rank.
 //! Also includes graph traversal functions: neighbors, degree, shortest_path.
 
+use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
+use crate::executor::expression::ExpressionError;
 use graphdb_core::types::VertexId;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::vertex_edge_path::Vertex;
 use graphdb_core::Value;
-use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
-use crate::executor::expression::ExpressionError;
 
 /// Graph function enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

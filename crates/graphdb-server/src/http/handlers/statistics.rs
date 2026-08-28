@@ -7,12 +7,12 @@ use axum::{
 use serde::Deserialize;
 use serde_json;
 
-use graphdb_core::stats::MetricType;
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
     StorageSyncContextOps,
 };
+use graphdb_core::stats::MetricType;
 
 /// Obtaining session statistics
 pub async fn session<

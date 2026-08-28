@@ -2,15 +2,13 @@
 //!
 //! Query planning for statements that handle the RETURN command
 
-use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{OrderDirection, ReturnItem, ReturnStmt, Stmt};
-use crate::planning::plan::core::nodes::{
-    DedupNode, LimitNode, ProjectNode, SortNode, StartNode,
-};
+use crate::planning::plan::core::nodes::{DedupNode, LimitNode, ProjectNode, SortNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// RETURN statement planner

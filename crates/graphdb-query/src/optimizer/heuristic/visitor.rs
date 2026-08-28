@@ -37,9 +37,7 @@ use crate::planning::plan::core::nodes::join::join_node::{
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
-use crate::planning::plan::core::nodes::operation::sort_node::{
-    LimitNode, SortNode, TopNNode,
-};
+use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
 use crate::planning::plan::core::nodes::traversal::traversal_node::{
     AppendVerticesNode, BiExpandNode, BiTraverseNode, ExpandAllNode, ExpandNode, TraverseNode,
 };
@@ -369,13 +367,13 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
     use graphdb_core::Expression;
     use graphdb_core::Value;
-    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
-    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
-    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
 
     use crate::optimizer::heuristic::plan_rewriter::NodeRewriter;

@@ -1,8 +1,8 @@
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageError, StorageResult};
 use crate::index::traits::IndexGcOps;
 use crate::index::types::GcStats;
 use crate::index::IndexDataManagerImpl;
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 
 impl IndexDataManagerImpl {
     pub(crate) fn gc_runtime(
@@ -38,10 +38,10 @@ impl IndexGcOps for IndexDataManagerImpl {
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::types::{Index, IndexConfig, IndexField, IndexType};
-    use graphdb_core::Value;
     use crate::index::traits::{IndexGcOps, VertexIndexOps};
     use crate::index::IndexDataManagerImpl;
+    use graphdb_core::types::{Index, IndexConfig, IndexField, IndexType};
+    use graphdb_core::Value;
 
     #[test]
     fn tombstone_count_zero_for_empty_manager() {

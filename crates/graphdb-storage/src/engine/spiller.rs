@@ -9,13 +9,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::StorageResult;
 use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::cache_manager::CacheManager;
 use crate::engine::data_store::GraphDataStore;
-use crate::engine::resource_budget::{
-    MemoryAccounting, MemoryCategory, MemoryReservation,
-};
+use crate::engine::resource_budget::{MemoryAccounting, MemoryCategory, MemoryReservation};
+use graphdb_core::StorageResult;
 
 /// Metadata for an active spill file.
 #[derive(Debug)]
@@ -227,9 +225,7 @@ mod tests {
     #[test]
     fn test_spiller_debug_info() {
         let accounting = Arc::new(MemoryAccounting::new(
-            crate::engine::resource_budget::MemoryBudget::from_validated(
-                1024, 256, 0.8, 0.95,
-            ),
+            crate::engine::resource_budget::MemoryBudget::from_validated(1024, 256, 0.8, 0.95),
         ));
         let data_store = Arc::new(GraphDataStore::new());
         let cache_manager = Arc::new(CacheManager::new(

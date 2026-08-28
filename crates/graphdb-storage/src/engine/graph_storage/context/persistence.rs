@@ -1,7 +1,7 @@
+use crate::engine::data_store::EdgeTableKey;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::LabelId;
 use graphdb_core::StorageResult;
-use crate::engine::data_store::EdgeTableKey;
 use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;

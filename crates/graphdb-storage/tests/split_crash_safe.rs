@@ -46,12 +46,9 @@ fn split_uses_persisted_manifest_and_survives_restart() {
 
     println!("split test work directory: {}", work_dir.display());
     std::mem::forget(directory);
-    let storage = graphdb_storage::GraphStorage::open_with_persistence(
-        work_dir.clone(),
-        false,
-        None,
-    )
-    .expect("storage should reopen");
+    let storage =
+        graphdb_storage::GraphStorage::open_with_persistence(work_dir.clone(), false, None)
+            .expect("storage should reopen");
     for name in ["Alice", "Mike", "Zoe"] {
         let rows = storage
             .lookup_index("test_space", "person_name_idx", &Value::string(name))

@@ -27,9 +27,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::decision::{JoinAlgorithm, JoinOrderDecision};
+use graphdb_core::types::ContextualExpression;
 
 /// Table information
 #[derive(Debug, Clone)]

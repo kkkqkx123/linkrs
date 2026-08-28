@@ -69,10 +69,8 @@ impl Planner for UserManagementPlanner {
                     new_password: change_stmt.new_password.clone(),
                 };
 
-                let node = crate::planning::plan::core::nodes::ChangePasswordNode::new(
-                    4,
-                    password_info,
-                );
+                let node =
+                    crate::planning::plan::core::nodes::ChangePasswordNode::new(4, password_info);
                 PlanNodeEnum::UserManage(UserManageNode::ChangePassword(node))
             }
             Stmt::Grant(grant_stmt) => {
@@ -98,8 +96,7 @@ impl Planner for UserManagementPlanner {
             }
             Stmt::ShowRoles(show_roles_stmt) => {
                 let space_name = show_roles_stmt.space_name.clone().unwrap_or_default();
-                let node =
-                    crate::planning::plan::core::nodes::ShowRolesNode::new(8, space_name);
+                let node = crate::planning::plan::core::nodes::ShowRolesNode::new(8, space_name);
                 PlanNodeEnum::UserManage(UserManageNode::ShowRoles(node))
             }
             Stmt::DescribeUser(desc_user_stmt) => {

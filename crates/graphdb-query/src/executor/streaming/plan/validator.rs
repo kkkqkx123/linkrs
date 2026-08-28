@@ -288,14 +288,10 @@ impl PhysicalPlanValidator {
                     crate::executor::streaming::operators::spec::ApplySpec::Apply { .. },
                 )
                 | OperatorKindSpec::Apply(
-                    crate::executor::streaming::operators::spec::ApplySpec::PatternApply {
-                        ..
-                    },
+                    crate::executor::streaming::operators::spec::ApplySpec::PatternApply { .. },
                 )
                 | OperatorKindSpec::Apply(
-                    crate::executor::streaming::operators::spec::ApplySpec::RollUpApply {
-                        ..
-                    },
+                    crate::executor::streaming::operators::spec::ApplySpec::RollUpApply { .. },
                 ) => 2,
                 OperatorKindSpec::Exchange(_) => {
                     continue;

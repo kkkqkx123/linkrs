@@ -2,7 +2,6 @@
 //!
 //! This module defines plan nodes for full-text search data access operations.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::fulltext::{
     FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
 };
@@ -11,6 +10,7 @@ use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 /// Full-text search plan node (SEARCH statement)
 #[derive(Debug, Clone)]
@@ -93,9 +93,7 @@ impl PlanNode for FulltextSearchNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextSearch(self)
     }
 }
@@ -177,9 +175,7 @@ impl PlanNode for FulltextLookupNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextLookup(self)
     }
 }
@@ -249,12 +245,8 @@ impl PlanNode for MatchFulltextNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::MatchFulltext(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::MatchFulltext(self)
     }
 }
 

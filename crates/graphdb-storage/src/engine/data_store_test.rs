@@ -2,10 +2,10 @@
 mod tests {
     use std::sync::Arc;
 
-    use graphdb_core::{StorageError, StorageResult};
     use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::engine::data_store::{EdgeTableKey, GraphDataStore};
     use crate::vertex::{ShardedVertexTable, VertexSchema};
+    use graphdb_core::{StorageError, StorageResult};
 
     /// Test-only extension trait for invariant verification.
     trait VerifyInvariants {

@@ -4,9 +4,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::metadata::MetadataContext;
 use crate::parser::ast::vector::{
     CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
@@ -25,6 +22,9 @@ use crate::planning::plan::core::nodes::search::vector::VectorSearchParams;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use vector_search::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter};
 
 /// Vector search planner
@@ -805,12 +805,10 @@ impl VectorSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ast::vector::{VectorIndexConfig, VectorYieldClause, VectorYieldItem};
     use graphdb_core::types::expr::{create_contextual_expression, Expression};
     use graphdb_core::types::span::Span;
     use graphdb_core::value::Value;
-    use crate::parser::ast::vector::{
-        VectorIndexConfig, VectorYieldClause, VectorYieldItem,
-    };
 
     #[test]
     fn test_vector_search_planner_new() {
@@ -834,10 +832,7 @@ mod tests {
             index_name: "idx".to_string(),
             schema_name: "tag".to_string(),
             field_name: "vec".to_string(),
-            config: VectorIndexConfig::new(
-                128,
-                crate::parser::ast::vector::VectorDistance::Cosine,
-            ),
+            config: VectorIndexConfig::new(128, crate::parser::ast::vector::VectorDistance::Cosine),
             if_not_exists: false,
         });
         assert!(planner.match_planner(&create_stmt));

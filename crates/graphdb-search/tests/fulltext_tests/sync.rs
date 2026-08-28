@@ -58,10 +58,7 @@ impl Drop for SyncTestContext {
 }
 
 fn create_test_properties(content: &str) -> Vec<(String, graphdb_core::Value)> {
-    vec![(
-        "content".to_string(),
-        graphdb_core::Value::string(content),
-    )]
+    vec![("content".to_string(), graphdb_core::Value::string(content))]
 }
 
 /// TC-FT-SYNC-001: Vertex Insert Auto-Sync with BM25
@@ -369,8 +366,7 @@ async fn test_sync_multiple_batches() {
         .await
         .expect("Failed to create index");
 
-    let vertex_ids: Vec<graphdb_core::Value> =
-        (1..=10).map(graphdb_core::Value::Int).collect();
+    let vertex_ids: Vec<graphdb_core::Value> = (1..=10).map(graphdb_core::Value::Int).collect();
 
     // First batch
     for (idx, vertex_id) in vertex_ids.iter().take(5).enumerate() {

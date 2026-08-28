@@ -16,7 +16,6 @@
 //! ScanVertices(col1, col2)
 //! ```
 
-use graphdb_core::types::expr::extract_property_refs;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -24,6 +23,7 @@ use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::ScanVerticesNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::extract_property_refs;
 
 /// ScanVertices Projection Pushdown Rule
 ///
@@ -181,10 +181,10 @@ impl PushDownRule for PushProjectDownScanVerticesRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::{Expression, YieldColumn};
-    use crate::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
     use std::sync::Arc;
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {

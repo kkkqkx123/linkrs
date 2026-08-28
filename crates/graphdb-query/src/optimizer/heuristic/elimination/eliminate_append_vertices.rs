@@ -28,8 +28,6 @@
 //! The output column of the AppendVertices function is an anonymous variable.
 //! The list expression of the project does not contain the PathBuild expression.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::visitor_checkers::PathBuildContainsChecker;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -40,6 +38,8 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor_checkers::PathBuildContainsChecker;
 
 /// Rules for removing redundancy and adding vertex operations
 ///

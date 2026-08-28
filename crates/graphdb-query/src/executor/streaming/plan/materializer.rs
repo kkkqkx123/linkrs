@@ -38,8 +38,8 @@ use super::super::subquery::SubqueryExecutor;
 use super::types::{
     FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
 };
-use graphdb_core::error::QueryError;
 use crate::executor::base::MemoryTracker;
+use graphdb_core::error::QueryError;
 
 use super::super::instance::QueryBindings;
 
@@ -417,7 +417,10 @@ impl PhysicalPlanMaterializer {
     /// Rough type compatibility check for parameter values.
     /// M1.3: ensures the runtime value is semantically assignable to the
     /// declared parameter type.
-    fn type_compatible(value: &graphdb_core::Value, expected_type: &graphdb_core::DataType) -> bool {
+    fn type_compatible(
+        value: &graphdb_core::Value,
+        expected_type: &graphdb_core::DataType,
+    ) -> bool {
         use graphdb_core::DataType;
         use graphdb_core::Value;
         matches!(
@@ -523,9 +526,8 @@ impl PhysicalPlanMaterializer {
         if let Some(ref ss) = bindings.shared_scheduler {
             runtime.set_shared_scheduler(Some(ss.clone()));
         } else if bindings.max_workers > 1 {
-            let pool = crate::executor::streaming::pool::MorselWorkerPool::new(
-                bindings.max_workers,
-            );
+            let pool =
+                crate::executor::streaming::pool::MorselWorkerPool::new(bindings.max_workers);
             runtime.set_worker_pool(Some(pool));
         }
 
@@ -642,9 +644,9 @@ fn take_binary_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::base::ExecutionContext;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::{ContextualExpression, ExpressionMeta};
-    use crate::executor::base::ExecutionContext;
 
     use crate::executor::streaming::parameters::ParameterSchema;
     use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;

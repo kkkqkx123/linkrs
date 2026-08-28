@@ -2,11 +2,6 @@
 //!
 //! Provide a function for evaluating specific expressions, implemented using direct recursive matching to avoid unnecessary abstract overhead.
 
-use graphdb_core::types::expr::analysis_utils::is_evaluable;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::value::list::List;
-use graphdb_core::value::NullType;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
 use crate::executor::expression::evaluator::functions::FunctionEvaluator;
 use crate::executor::expression::evaluator::operations::{
@@ -15,6 +10,11 @@ use crate::executor::expression::evaluator::operations::{
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::functions::global_registry;
 use crate::executor::expression::ExpressionError;
+use graphdb_core::types::expr::analysis_utils::is_evaluable;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 /// Implementation of an expression evaluator (unit struct, zero overhead)
 #[derive(Debug)]

@@ -1,12 +1,12 @@
 //! Batch Task Manager
 
-use graphdb_core::types::VertexId;
-use graphdb_core::{Edge, Value, Vertex};
 use crate::batch::types::*;
 use crate::storage::StorageClient;
 use dashmap::DashMap;
 use graphdb_api::api_core::{BatchConfig, BatchOperation};
 use graphdb_api::api_core::{CoreError, CoreResult};
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, Value, Vertex};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use uuid::Uuid;

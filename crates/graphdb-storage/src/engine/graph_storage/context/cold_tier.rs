@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::engine::config::ColdTierConfig;
 use graphdb_core::types::LabelId;
 use graphdb_core::StorageResult;
-use crate::engine::config::ColdTierConfig;
 
 use super::GraphStorageContext;
 

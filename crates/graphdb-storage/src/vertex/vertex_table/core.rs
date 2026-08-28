@@ -19,10 +19,10 @@ use super::super::{
     ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema,
     VertexTimestamp,
 };
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::encoding::EncodingSelector;
 use crate::mvcc::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
+use graphdb_core::{StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone)]
 pub struct VertexTableConfig {
@@ -290,10 +290,7 @@ impl VertexTable {
                 .map(|n| {
                     (
                         n.clone(),
-                        crate::cursor::ColumnValues::General(vec![
-                            None;
-                            internal_ids.len()
-                        ]),
+                        crate::cursor::ColumnValues::General(vec![None; internal_ids.len()]),
                     )
                 })
                 .collect();

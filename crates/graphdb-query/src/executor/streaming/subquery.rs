@@ -25,10 +25,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::SubqueryBody;
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::{Expression, Value};
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::context::BorrowedRowContext;
@@ -38,6 +34,10 @@ use crate::executor::streaming::plan::materializer::PhysicalPlanMaterializer;
 use crate::executor::streaming::plan::types::PhysicalPlan;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::SubqueryBody;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::{Expression, Value};
 use parking_lot::Mutex;
 
 /// Bundle of per-evaluation-environment state threaded into batch expression
@@ -457,9 +457,6 @@ impl SubqueryExecutor {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::ExpressionMeta;
-    use graphdb_core::types::ContextualExpression;
     use crate::executor::base::{ExecutionContext, MemoryBudget};
     use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
     use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -471,6 +468,9 @@ mod tests {
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnwindNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use crate::planning::plan::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
     use std::collections::HashMap;
 
     fn build_plan(node: &PlanNodeEnum) -> Arc<PhysicalPlan> {
@@ -520,8 +520,8 @@ mod tests {
     /// v, sum(v))`. Output rows are `[v, sum]`, so the table maps each value
     /// to its duplicated-sum (e.g. `[10, 10, 20]` → `{10: 20, 20: 20}`).
     fn group_join_plan(values: Vec<i32>) -> Arc<PhysicalPlan> {
-        use graphdb_core::types::operators::AggregateFunction;
         use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use graphdb_core::types::operators::AggregateFunction;
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let list = values

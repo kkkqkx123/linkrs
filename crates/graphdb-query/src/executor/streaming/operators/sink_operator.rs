@@ -3,11 +3,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -17,6 +12,11 @@ use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::{QueryStorage, StorageWriter};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
+use graphdb_core::Value;
 
 #[derive(Debug)]
 pub enum SinkOperatorKind {

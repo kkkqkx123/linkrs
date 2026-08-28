@@ -18,10 +18,10 @@
 
 use super::core::TimeTravelEdgeStore;
 use super::segment::CsrSegment;
-use graphdb_core::types::{Timestamp, VertexId};
-use graphdb_core::StorageResult;
 use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::{Csr, CsrBase, CsrVariant, EdgeStrategy, Nbr};
+use graphdb_core::types::{Timestamp, VertexId};
+use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
 /// Translate an encoded `(endpoint_internal_id, rank)` neighbor key using the

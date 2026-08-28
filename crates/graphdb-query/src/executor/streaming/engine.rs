@@ -17,12 +17,12 @@ use super::operators::blocking::BlockingOperatorKind;
 use super::operators::gather_operator::GatherOperator;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::plan::types::SyntheticNodeIdAllocator;
 use crate::executor::streaming::pool::MorselWorkerPool;
 use crate::executor::streaming::spill::{SpillConfig, SpillManager};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
 
 /// Streaming execution engine
 ///
@@ -902,7 +902,9 @@ mod tests {
                     join_condition: None,
                     hash_keys: vec![Expression::Variable("id".to_string())],
                     probe_keys: vec![Expression::Variable("id".to_string())],
-                    build_side: crate::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
+                    build_side:
+                        crate::executor::streaming::operators::join_operator::HashJoinBuildSide::new(
+                        ),
                     build_done: false,
                     memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                     right_col_names: Vec::new(),
@@ -1339,7 +1341,9 @@ mod tests {
                     aggregate_functions: vec![
                         (
                             graphdb_core::types::operators::AggregateFunction::Count,
-                            vec![graphdb_core::types::expr::Expression::Literal(Value::Int(1))],
+                            vec![graphdb_core::types::expr::Expression::Literal(Value::Int(
+                                1,
+                            ))],
                         ),
                         (
                             graphdb_core::types::operators::AggregateFunction::Sum,
@@ -1496,7 +1500,9 @@ mod tests {
                     probe_keys: vec![graphdb_core::types::expr::Expression::Variable(
                         "id".to_string(),
                     )],
-                    build_side: crate::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
+                    build_side:
+                        crate::executor::streaming::operators::join_operator::HashJoinBuildSide::new(
+                        ),
                     build_done: false,
                     memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                     right_col_names: Vec::new(),

@@ -4,8 +4,8 @@
 //! this trait so batch loaders can acquire the auto-commit write gate and
 //! register MVCC snapshots once for a run of statements.
 
-use graphdb_core::{StorageError, StorageResult};
 use crate::engine::graph_storage::AutoCommitBatchWindow;
+use graphdb_core::{StorageError, StorageResult};
 use std::sync::Arc;
 
 /// Operations for running a run of auto-commit DML statements inside a shared

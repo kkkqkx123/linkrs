@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use super::super::super::common::{EdgeProp, TagProp};
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::{ContextualExpression, EdgeDirection, SerializableExpression};
-use graphdb_core::Expression;
 use crate::define_binary_input_node;
 use crate::define_plan_node;
 use crate::define_plan_node_with_deps;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, EdgeDirection, SerializableExpression};
+use graphdb_core::Expression;
 
 define_plan_node! {
     pub struct ExpandNode {
@@ -121,12 +121,8 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for Ex
         self.col_names = names;
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::ExpandAll(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::ExpandAll(self)
     }
 }
 
@@ -147,25 +143,20 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonabl
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         let mut cloned = self.clone();
         cloned.id = new_id;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::ExpandAll(
-            cloned,
-        )
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::ExpandAll(cloned)
     }
 }
 
 impl crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode
     for ExpandAllNode
 {
-    fn inputs(
-        &self,
-    ) -> &[crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
+    fn inputs(&self) -> &[crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
         &self.deps
     }
 
     fn inputs_mut(
         &mut self,
-    ) -> &mut Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>
-    {
+    ) -> &mut Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum> {
         &mut self.deps
     }
 

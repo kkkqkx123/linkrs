@@ -32,14 +32,6 @@
 //! The `nodeAlias` of the `AppendVertices` function is only referenced once.
 //! - The Join hash keys match id() or _joinkey() patterns
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::expr::visitor_checkers::VariableContainsChecker;
-use graphdb_core::types::expr::visitor_collectors::PropertyCollector;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::YieldColumn;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
@@ -50,6 +42,14 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::core::nodes::join::join_node::{InnerJoinNode, LeftJoinNode};
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_checkers::VariableContainsChecker;
+use graphdb_core::types::expr::visitor_collectors::PropertyCollector;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::YieldColumn;
+use graphdb_core::Expression;
 use std::sync::Arc;
 
 /// Remove the rule that adds a vertex at the bottom of the connection.

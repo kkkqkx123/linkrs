@@ -5,9 +5,9 @@
 
 use super::super::{Csr, CsrBase, EdgeSchema, LabelId, Nbr, VertexId};
 use super::segment::CsrSegment;
+use crate::edge::PropertyTable;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::StorageResult;
-use crate::edge::PropertyTable;
 use std::collections::HashMap;
 
 pub(crate) use super::super::edge_table::remap::remap_immutable_csr;
@@ -217,9 +217,9 @@ impl SnapshotBuilder {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
+    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use graphdb_core::types::Timestamp;
     use graphdb_core::Value;
-    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use std::collections::HashMap;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {

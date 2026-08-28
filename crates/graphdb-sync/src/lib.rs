@@ -19,7 +19,8 @@ pub mod vector_error;
 #[cfg(feature = "vector")]
 pub mod vector_sync;
 
-pub use graphdb_search::SyncConfig;
+#[cfg(feature = "vector")]
+pub use backend::BackendDeliveryPolicy;
 #[cfg(feature = "fulltext-search")]
 pub use batch::FulltextBatchProcessor;
 pub use batch::{BatchConfig, BatchError, BatchProcessor, TransactionBatchBuffer};
@@ -37,7 +38,10 @@ pub use coordinator::{
     SyncCoordinatorError,
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-pub use manager::{EdgeProps, EdgeRef, OutboxConsumerConfig, SyncError, SyncManager};
+pub use graphdb_search::SyncConfig;
+pub use manager::{
+    EdgeProps, EdgeRef, OutboxBackpressureConfig, OutboxConsumerConfig, SyncError, SyncManager,
+};
 pub use outbox::{OutboxPayload, OutboxStats};
 pub use outbox_recovery::{
     find_latest_snapshot, find_latest_snapshot_at_or_before, live_database_exists, recover_outbox,
@@ -54,6 +58,7 @@ pub use sqlite_outbox::{
     TargetSyncDiagnostics,
 };
 pub use types::{IndexOpKey, IndexOperation};
+pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]
 pub use vector_sync::{
@@ -71,4 +76,3 @@ pub use vector_search::HealthStatus;
 // dependency. Only available with the qdrant feature.
 #[cfg(feature = "vector-qdrant")]
 pub use vector_client::{VectorClientConfig, VectorManager};
-

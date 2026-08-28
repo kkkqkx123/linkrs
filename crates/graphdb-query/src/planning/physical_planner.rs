@@ -36,8 +36,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         // ==================== Access Nodes ====================
         LogicalNodeEnum::Start(n) => {
             let mut node =
-                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(
-                );
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -52,7 +51,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 .into_iter()
                 .map(convert_logical_to_physical)
                 .collect();
-            let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::GetVerticesNode::new(n.space_id, &n.space_name, &n.src_vids);
+            let mut node =
+                crate::planning::plan::core::nodes::access::graph_scan_node::GetVerticesNode::new(
+                    n.space_id,
+                    &n.space_name,
+                    &n.src_vids,
+                );
             node.set_deps(deps);
             node.set_tag_props(n.tag_props);
             if let Some(expr) = n.expression {
@@ -72,7 +76,14 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::GetEdges(n) => {
-            let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::GetEdgesNode::new(n.space_id, &n.src, &n.edge_type, &n.rank, &n.dst);
+            let mut node =
+                crate::planning::plan::core::nodes::access::graph_scan_node::GetEdgesNode::new(
+                    n.space_id,
+                    &n.src,
+                    &n.edge_type,
+                    &n.rank,
+                    &n.dst,
+                );
             if let Some(expr) = n.expression {
                 node.set_filter(expr);
             }
@@ -93,7 +104,11 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 .into_iter()
                 .map(convert_logical_to_physical)
                 .collect();
-            let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode::new(n.space_id, &n.src_vids);
+            let mut node =
+                crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode::new(
+                    n.space_id,
+                    &n.src_vids,
+                );
             node.set_deps(deps);
             node.set_edge_types(n.edge_types);
             node.set_direction(&n.direction);
@@ -114,7 +129,11 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::ScanVertices(n) => {
-            let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(n.space_id, &n.space_name);
+            let mut node =
+                crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(
+                    n.space_id,
+                    &n.space_name,
+                );
             if let Some(tag) = n.tag {
                 node.set_tag(&tag);
             }
@@ -135,7 +154,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::ScanEdges(n) => {
             let edge_type = n.edge_type.unwrap_or_default();
-            let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode::new(n.space_id, &edge_type);
+            let mut node =
+                crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode::new(
+                    n.space_id, &edge_type,
+                );
             if let Some(expr) = n.expression {
                 node.set_filter(expr);
             }
@@ -154,9 +176,11 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         // ==================== Operation Nodes ====================
         LogicalNodeEnum::Project(n) => {
             let input = convert_logical_to_physical(*n.input.expect("ProjectNode missing input"));
-            let mut node = crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(
-                input, n.columns,
-            ).expect("Failed to construct ProjectNode");
+            let mut node =
+                crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(
+                    input, n.columns,
+                )
+                .expect("Failed to construct ProjectNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -185,12 +209,11 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::Sort(n) => {
             let input = convert_logical_to_physical(*n.input.expect("SortNode missing input"));
-            let mut node =
-                crate::planning::plan::core::nodes::operation::sort_node::SortNode::new(
-                    input,
-                    n.sort_items,
-                )
-                .expect("Failed to construct SortNode");
+            let mut node = crate::planning::plan::core::nodes::operation::sort_node::SortNode::new(
+                input,
+                n.sort_items,
+            )
+            .expect("Failed to construct SortNode");
             if let Some(l) = n.limit {
                 node.set_limit(l);
             }
@@ -219,13 +242,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::TopN(n) => {
             let input = convert_logical_to_physical(*n.input.expect("TopNNode missing input"));
-            let mut node =
-                crate::planning::plan::core::nodes::operation::sort_node::TopNNode::new(
-                    input,
-                    n.sort_items,
-                    n.limit,
-                )
-                .expect("Failed to construct TopNNode");
+            let mut node = crate::planning::plan::core::nodes::operation::sort_node::TopNNode::new(
+                input,
+                n.sort_items,
+                n.limit,
+            )
+            .expect("Failed to construct TopNNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -278,9 +300,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::Window(n) => {
             let input = convert_logical_to_physical(*n.input.expect("WindowNode missing input"));
-            let mut node = crate::planning::plan::core::nodes::graph_operations::window_node::WindowNode::new(
-                input, n.window_functions,
-            ).expect("Failed to construct WindowNode");
+            let mut node =
+                crate::planning::plan::core::nodes::graph_operations::window_node::WindowNode::new(
+                    input,
+                    n.window_functions,
+                )
+                .expect("Failed to construct WindowNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -299,11 +324,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             let right = convert_logical_to_physical(*n.right);
             let hash_keys = n.hash_keys;
             let probe_keys = n.probe_keys;
-            let mut node =
-                crate::planning::plan::core::nodes::join::join_node::InnerJoinNode::new(
-                    left, right, hash_keys, probe_keys,
-                )
-                .expect("Failed to construct InnerJoinNode");
+            let mut node = crate::planning::plan::core::nodes::join::join_node::InnerJoinNode::new(
+                left, right, hash_keys, probe_keys,
+            )
+            .expect("Failed to construct InnerJoinNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -317,11 +341,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             let right = convert_logical_to_physical(*n.right);
             let hash_keys = n.hash_keys;
             let probe_keys = n.probe_keys;
-            let mut node =
-                crate::planning::plan::core::nodes::join::join_node::LeftJoinNode::new(
-                    left, right, hash_keys, probe_keys,
-                )
-                .expect("Failed to construct LeftJoinNode");
+            let mut node = crate::planning::plan::core::nodes::join::join_node::LeftJoinNode::new(
+                left, right, hash_keys, probe_keys,
+            )
+            .expect("Failed to construct LeftJoinNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -333,14 +356,13 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::RightJoin(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
-            let mut node =
-                crate::planning::plan::core::nodes::join::join_node::RightJoinNode::new(
-                    left,
-                    right,
-                    n.hash_keys,
-                    n.probe_keys,
-                )
-                .expect("Failed to construct RightJoinNode");
+            let mut node = crate::planning::plan::core::nodes::join::join_node::RightJoinNode::new(
+                left,
+                right,
+                n.hash_keys,
+                n.probe_keys,
+            )
+            .expect("Failed to construct RightJoinNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -352,11 +374,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::CrossJoin(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
-            let mut node =
-                crate::planning::plan::core::nodes::join::join_node::CrossJoinNode::new(
-                    left, right,
-                )
-                .expect("Failed to construct CrossJoinNode");
+            let mut node = crate::planning::plan::core::nodes::join::join_node::CrossJoinNode::new(
+                left, right,
+            )
+            .expect("Failed to construct CrossJoinNode");
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -422,9 +443,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 .into_iter()
                 .map(convert_logical_to_physical)
                 .collect();
-            let mut node = crate::planning::plan::core::nodes::traversal::traversal_node::ExpandNode::new(
-                n.space_id, n.edge_types, n.direction,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::traversal_node::ExpandNode::new(
+                    n.space_id,
+                    n.edge_types,
+                    n.direction,
+                );
             if let Some(expr) = n.filter {
                 node.set_filter(expr);
             }
@@ -445,9 +469,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 .into_iter()
                 .map(convert_logical_to_physical)
                 .collect();
-            let mut node = crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode::new(
-                n.space_id, n.edge_types, &n.direction,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode::new(
+                    n.space_id,
+                    n.edge_types,
+                    &n.direction,
+                );
             node.set_any_edge_type(n.any_edge_type);
             if let Some(limit) = n.step_limit {
                 node.set_step_limit(limit);
@@ -481,9 +508,13 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::Traverse(n) => {
             let input = convert_logical_to_physical(*n.input.expect("TraverseNode missing input"));
-            let mut node = crate::planning::plan::core::nodes::traversal::traversal_node::TraverseNode::new(
-                n.space_id, &n.start_vids, n.min_steps, n.max_steps,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::traversal_node::TraverseNode::new(
+                    n.space_id,
+                    &n.start_vids,
+                    n.min_steps,
+                    n.max_steps,
+                );
             if let Some(end) = n.end_vids {
                 node.set_end_vids(&end);
             }
@@ -540,9 +571,16 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::BiExpand(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
-            let mut node = crate::planning::plan::core::nodes::traversal::traversal_node::BiExpandNode::new(
-                left, right, n.space_id, n.left_direction, n.right_direction, n.edge_types, n.max_hops,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::traversal_node::BiExpandNode::new(
+                    left,
+                    right,
+                    n.space_id,
+                    n.left_direction,
+                    n.right_direction,
+                    n.edge_types,
+                    n.max_hops,
+                );
             if let Some(var) = n.meeting_point_var {
                 node.set_meeting_point_var(var);
             }
@@ -571,7 +609,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 max_hops: n.max_hops,
                 path_var: n.path_var,
             };
-            let mut node = crate::planning::plan::core::nodes::traversal::traversal_node::BiTraverseNode::new(params);
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::traversal_node::BiTraverseNode::new(
+                    params,
+                );
             if let Some(alias) = n.edge_alias {
                 node.set_edge_alias(alias);
             }
@@ -599,9 +640,11 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::Loop(n) => {
             let body = n.body().cloned().map(convert_logical_to_physical);
-            let mut node = crate::planning::plan::core::nodes::control_flow::control_flow_node::LoopNode::new(
-                next_node_id(), n.condition().clone(),
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::control_flow::control_flow_node::LoopNode::new(
+                    next_node_id(),
+                    n.condition().clone(),
+                );
             if let Some(b) = body {
                 node.set_body(b);
             }
@@ -723,7 +766,9 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::RollUpApply(n) => {
             let input =
                 convert_logical_to_physical(*n.input.expect("RollUpApplyNode missing input"));
-            let fallback = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new().into_enum();
+            let fallback =
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new()
+                    .into_enum();
             let mut node = crate::planning::plan::core::nodes::graph_operations::graph_operations_node::RollUpApplyNode::new(
                 input, fallback, n.compare_cols, n.collect_col.clone(),
             ).expect("Failed to construct RollUpApplyNode");
@@ -878,9 +923,17 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::AllPaths(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
-            let mut node = crate::planning::plan::core::nodes::traversal::path_algorithms::AllPathsNode::new(
-                left, right, n.space_id, n.steps, n.edge_types, n.min_hop, n.max_hop, n.acyclic,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::traversal::path_algorithms::AllPathsNode::new(
+                    left,
+                    right,
+                    n.space_id,
+                    n.steps,
+                    n.edge_types,
+                    n.min_hop,
+                    n.max_hop,
+                    n.acyclic,
+                );
             node.set_start_vertex_ids(n.start_vertex_ids);
             node.set_end_vertex_ids(n.end_vertex_ids);
             if n.limit != 0 {

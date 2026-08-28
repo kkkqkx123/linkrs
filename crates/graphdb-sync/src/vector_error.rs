@@ -135,6 +135,127 @@ pub enum VectorCoordinatorError {
     BufferError(String),
 }
 
+/// Classification of vector backend errors for retry policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorErrorKind {
+    /// Transient failure that should be retried with exponential backoff.
+    Retryable,
+    /// Permanent failure that will never succeed (e.g. dimension mismatch).
+    NonRetryable,
+    /// Authentication / authorization failure that should pause delivery.
+    Auth,
+}
+
+impl VectorErrorKind {
+    /// Classify a [`VectorError`] into a retry bucket.
+    pub fn classify(err: &VectorError) -> Self {
+        match err {
+            VectorError::DimensionMismatch { .. }
+            | VectorError::InvalidVector(_)
+            | VectorError::InvalidPointId(_)
+            | VectorError::ConfigError(_)
+            | VectorError::IndexAlreadyExists(_)
+            | VectorError::CollectionNotFound(_)
+            | VectorError::IndexNotFound(_) => Self::NonRetryable,
+            VectorError::ConnectionFailed(_)
+            | VectorError::EngineUnavailable(_)
+            | VectorError::Timeout
+            | VectorError::QdrantError(_)
+            | VectorError::IndexCorrupted(_)
+            | VectorError::Locked(_)
+            | VectorError::Internal(_) => Self::Retryable,
+            VectorError::Cancelled
+            | VectorError::EmbeddingError(_)
+            | VectorError::EngineNotFound { .. } => Self::NonRetryable,
+        }
+    }
+
+    /// Classify a stringified error (used in `SyncManager::retry_outbox_sync`
+    /// where the error has been erased to `String`).
+    pub fn classify_str(msg: &str) -> Self {
+        let lower = msg.to_ascii_lowercase();
+        if lower.contains("dimensionmismatch")
+            || lower.contains("dimension mismatch")
+            || lower.contains("invalidconfig")
+            || lower.contains("invalid vector")
+            || lower.contains("invalid point id")
+            || lower.contains("invalidargument")
+            || lower.contains("configerror")
+        {
+            return Self::NonRetryable;
+        }
+        if lower.contains("auth")
+            || lower.contains("unauthorized")
+            || lower.contains("forbidden")
+            || lower.contains("permission")
+            || lower.contains("apikey")
+            || lower.contains("api key")
+        {
+            return Self::Auth;
+        }
+        if lower.contains("engine is disabled") || lower.contains("enginedisabled") {
+            return Self::Retryable;
+        }
+        if lower.contains("timeout")
+            || lower.contains("unavailable")
+            || lower.contains("connection")
+            || lower.contains("transport")
+            || lower.contains("deadline")
+            || lower.contains("temporarily")
+            || lower.contains("rate limit")
+            || lower.contains("qdrant")
+        {
+            return Self::Retryable;
+        }
+        // Default to NonRetryable for unknowns to avoid infinite retries on
+        // validation failures; callers may still retry with capped attempts.
+        // However for safety in outbox path treat unknown as Retryable unless
+        // it clearly looks like a validation failure.
+        if lower.contains("not found") || lower.contains("already exists") {
+            return Self::NonRetryable;
+        }
+        Self::Retryable
+    }
+}
+
+impl VectorError {
+    /// Convenience wrapper for [`VectorErrorKind::classify`].
+    pub fn kind(&self) -> VectorErrorKind {
+        VectorErrorKind::classify(self)
+    }
+}
+
+impl VectorCoordinatorError {
+    /// Classify a coordinator error into a retry bucket.
+    pub fn kind(&self) -> VectorErrorKind {
+        match self {
+            VectorCoordinatorError::Vector(err) => VectorErrorKind::classify(err),
+            VectorCoordinatorError::EngineDisabled => VectorErrorKind::Retryable,
+            VectorCoordinatorError::CollectionConfigConflict { .. }
+            | VectorCoordinatorError::FieldNotIndexed { .. }
+            | VectorCoordinatorError::InvalidOperation(_)
+            | VectorCoordinatorError::EmbeddingServiceNotAvailable
+            | VectorCoordinatorError::EmbeddingError(_)
+            | VectorCoordinatorError::NotInitialized
+            | VectorCoordinatorError::ShuttingDown
+            | VectorCoordinatorError::BufferError(_) => VectorErrorKind::NonRetryable,
+            VectorCoordinatorError::IndexCreationFailed { .. }
+            | VectorCoordinatorError::IndexDropFailed { .. }
+            | VectorCoordinatorError::IndexRebuildFailed(_)
+            | VectorCoordinatorError::VertexChangeFailed(_)
+            | VectorCoordinatorError::SpaceNotFound(_)
+            | VectorCoordinatorError::TagNotFound(_)
+            | VectorCoordinatorError::Sync(_)
+            | VectorCoordinatorError::Internal(_) => VectorErrorKind::Retryable,
+        }
+    }
+
+    /// Classify from the display string of the error.
+    pub fn kind_str(msg: &str) -> VectorErrorKind {
+        VectorErrorKind::classify_str(msg)
+    }
+}
+
 pub type VectorResult<T> = std::result::Result<T, VectorError>;
 pub type VectorCoordinatorResult<T> = std::result::Result<T, VectorCoordinatorError>;
 

@@ -3,9 +3,9 @@
 //! Provides rollback functionality for transactions using both OperationLog and UndoLog mechanisms.
 //! The UndoLog-based rollback is the recommended approach for NeuG architecture.
 
+use crate::undo_log::{UndoLogEntry, UndoTarget};
 use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use graphdb_core::StorageError;
-use crate::undo_log::{UndoLogEntry, UndoTarget};
 
 pub use crate::undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, RelatedEdgeInfo,

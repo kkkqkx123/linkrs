@@ -214,12 +214,8 @@ impl PlanNode for VectorSearchNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorSearch(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorSearch(self)
     }
 }
 
@@ -299,12 +295,8 @@ impl PlanNode for VectorLookupNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorLookup(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorLookup(self)
     }
 }
 
@@ -381,12 +373,8 @@ impl PlanNode for VectorMatchNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorMatch(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorMatch(self)
     }
 }
 

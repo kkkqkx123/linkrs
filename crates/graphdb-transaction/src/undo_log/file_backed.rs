@@ -19,9 +19,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use graphdb_core::types::UndoLogResult;
 use crate::undo_log::{UndoLogEntry, UndoTarget};
 use crate::wal::Timestamp;
+use graphdb_core::types::UndoLogResult;
 
 /// Configuration for file-backed undo log.
 #[derive(Debug, Clone)]
@@ -379,11 +379,11 @@ impl Drop for FileBackedUndoLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::undo_log::UpdateVertexPropUndo;
+    use crate::wal::{LabelId, VertexId};
     use graphdb_core::types::{
         ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, UndoLogError, VertexIdentifier,
     };
-    use crate::undo_log::UpdateVertexPropUndo;
-    use crate::wal::{LabelId, VertexId};
     use std::sync::Mutex;
 
     struct MockUndoTarget {

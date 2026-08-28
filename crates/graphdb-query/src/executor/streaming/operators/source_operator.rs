@@ -3,9 +3,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -16,6 +13,9 @@ use crate::storage::IndexCursor;
 use crate::storage::IndexRow;
 use crate::storage::ScanPredicate;
 use crate::storage::VertexCursor;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::Value;
 
 use super::spec::{BoundIndexPredicate, IndexProjection};
 
@@ -564,10 +564,10 @@ impl SourceOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
+    use graphdb_core::Value;
 
     fn source(kind: SourceOperatorKind) -> SourceOperator {
         SourceOperator::new(kind, Arc::new(SlotLayout::new(Vec::new())))
@@ -899,9 +899,9 @@ mod tests {
 
     #[test]
     fn storage_backed_source_reset_reopens_and_repulls() {
+        use crate::storage::MockStorage;
         use graphdb_core::types::storage_ids::VertexId;
         use graphdb_core::Edge;
-        use crate::storage::MockStorage;
 
         let mock = MockStorage::new().expect("MockStorage should be created");
         mock.set_edges(vec![Edge {

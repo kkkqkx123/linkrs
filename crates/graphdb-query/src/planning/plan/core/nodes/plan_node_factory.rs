@@ -13,18 +13,16 @@ use crate::planning::plan::core::nodes::graph_operations::graph_operations_node:
     DataCollectNode, DedupNode, PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::EdgeDirection;
-use graphdb_core::YieldColumn;
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
-use crate::planning::plan::core::nodes::operation::sort_node::{
-    LimitNode, SortItem, SortNode,
-};
+use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, SortNode};
 use crate::planning::plan::core::nodes::traversal::traversal_node::{
     AppendVerticesNode, ExpandAllNode, ExpandNode, TraverseNode,
 };
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::YieldColumn;
 
 /// Node Factory
 ///
@@ -66,14 +64,13 @@ impl PlanNodeFactory {
     }
 
     /// Create the starting node.
-    pub fn create_start_node() -> Result<PlanNodeEnum, crate::planning::planner::PlannerError>
-    {
+    pub fn create_start_node() -> Result<PlanNodeEnum, crate::planning::planner::PlannerError> {
         Ok(PlanNodeEnum::Start(StartNode::new()))
     }
 
     /// Create a placeholder node (using ArgumentNode as the placeholder).
-    pub fn create_placeholder_node(
-    ) -> Result<PlanNodeEnum, crate::planning::planner::PlannerError> {
+    pub fn create_placeholder_node() -> Result<PlanNodeEnum, crate::planning::planner::PlannerError>
+    {
         Ok(PlanNodeEnum::Argument(ArgumentNode::new(-1, "placeholder")))
     }
 

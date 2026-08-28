@@ -2,9 +2,6 @@
 //!
 //! Responsible for parsing statements related to graph traversal, including MATCH, GO, FIND PATH, GET SUBGRAPH, etc.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression as CoreExpression;
-use graphdb_core::types::graph_schema::EdgeDirection;
 use crate::parser::ast::pattern::{
     EdgePattern, EdgeRange, NodePattern, PathElement, PathPattern, Pattern, VariablePattern,
 };
@@ -15,6 +12,9 @@ use crate::parser::parsing::dml_parser::DmlParser;
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::graph_schema::EdgeDirection;
 
 /// Graph Traversal Parser
 pub struct TraversalParser;

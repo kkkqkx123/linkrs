@@ -3,16 +3,16 @@
 //! This rule identifies the Filter -> GetNeighbors mode.
 //! And push the filtering conditions to the GetNeighbors node.
 
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Rules that push the filtering conditions upstream to the GetNeighbors operation
 ///
@@ -149,10 +149,10 @@ impl PushDownRule for PushFilterDownGetNbrsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use graphdb_core::Expression;
 
     #[test]
     fn test_rule_name() {

@@ -2,8 +2,8 @@
 //!
 //! Provide definitions for the planning nodes related to user management.
 
-use graphdb_core::types::PasswordInfo;
 use crate::define_plan_node;
+use graphdb_core::types::PasswordInfo;
 
 define_plan_node! {
     pub struct CreateUserNode {

@@ -1,20 +1,18 @@
 use super::QueryPipelineManager;
+use crate::executor::base::{ExecutionContext, ExecutionResult};
+use crate::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
+use crate::executor::streaming::plan::PhysicalPlan;
+use crate::executor::streaming::transaction_scope::TransactionScope;
+use crate::executor::streaming::StreamingQueryResult;
+use crate::storage::QueryStorage;
+use crate::QueryContext;
+use crate::QueryRequestContext;
 use graphdb_core::error::{DBError, DBResult, QueryError};
 use graphdb_core::types::SpaceInfo;
 use graphdb_core::types::TransactionId;
 use graphdb_core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
-use crate::executor::base::{ExecutionContext, ExecutionResult};
-use crate::executor::streaming::instance::{
-    QueryBindings, QueryExecutionInstance, ResultSink,
-};
-use crate::executor::streaming::plan::PhysicalPlan;
-use crate::executor::streaming::transaction_scope::TransactionScope;
-use crate::executor::streaming::StreamingQueryResult;
-use crate::QueryContext;
-use crate::QueryRequestContext;
-use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -226,9 +224,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let controller = if ctrl_guard.as_ref().is_some_and(|c| c.is_active()) {
                 ctrl_guard.clone().unwrap()
             } else {
-                let ctrl = Arc::new(
-                    crate::executor::streaming::SessionTransactionController::new(),
-                );
+                let ctrl =
+                    Arc::new(crate::executor::streaming::SessionTransactionController::new());
                 if let Some(txn_id) = query_context.request_context().transaction_id {
                     let read_write = !query_context.request_context().read_only;
                     ctrl.begin_tracking(txn_id, read_write)

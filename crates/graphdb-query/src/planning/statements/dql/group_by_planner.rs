@@ -2,10 +2,6 @@
 //!
 //! Query planning for statements that involve the GROUP BY clause
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::operators::AggregateFunction;
 use crate::parser::ast::{GroupingType, Stmt};
 use crate::planning::plan::core::nodes::{
     AggregateNode, FilterNode, ProjectNode, ScanVerticesNode,
@@ -14,6 +10,10 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::AggregateFunction;
 use std::sync::Arc;
 
 /// GroupBy Operation Planner

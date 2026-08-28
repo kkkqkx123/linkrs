@@ -23,12 +23,12 @@
 //! read execution semantics from the `MultipleInputNode` declaration; the
 //! declaration is kept as-is so the optimizer rules keep working.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::define_plan_node;
 use crate::planning::plan::core::common::{EdgeProp, TagProp};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     /// Get vertices by point lookup on a static ID list.

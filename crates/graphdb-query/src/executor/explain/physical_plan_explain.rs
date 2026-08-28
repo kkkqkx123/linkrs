@@ -160,9 +160,8 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             }
         }
 
-        if let crate::executor::streaming::plan::properties::Distribution::HashPartitioned(
-            keys,
-        ) = &props.distribution
+        if let crate::executor::streaming::plan::properties::Distribution::HashPartitioned(keys) =
+            &props.distribution
         {
             if !keys.is_empty() {
                 pairs.push(Pair::new(
@@ -219,8 +218,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         // CorrelatedApply: the right subtree is re-executed per outer row.
         if let crate::executor::streaming::plan::types::OperatorKindSpec::Apply(
             crate::executor::streaming::operators::spec::ApplySpec::CorrelatedApply {
-                anti,
-                ..
+                anti, ..
             },
         ) = &op_spec.spec
         {
@@ -260,9 +258,8 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             }
         }
 
-        if let crate::executor::streaming::plan::properties::MemoryPolicy::Spillable {
-            threshold,
-        } = &props.memory_policy
+        if let crate::executor::streaming::plan::properties::MemoryPolicy::Spillable { threshold } =
+            &props.memory_policy
         {
             pairs.push(Pair::new("spill_threshold", format!("{}", threshold)));
         }
@@ -282,9 +279,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     "count_only",
                 ));
             } else if *emit_raw_ids {
-                pairs.push(crate::planning::plan::explain::Pair::new(
-                    "mode", "id_only",
-                ));
+                pairs.push(crate::planning::plan::explain::Pair::new("mode", "id_only"));
             }
         }
 
@@ -293,12 +288,26 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             &op_spec.spec
         {
             let col_names: Vec<String> = match src_spec {
-                crate::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. }
-                | crate::executor::streaming::operators::spec::SourceSpec::StandaloneValues { col_names, .. }
-                => col_names.clone(),
-                crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { col_names, .. } => col_names.clone(),
-                crate::executor::streaming::operators::spec::SourceSpec::ScanEdges { col_names, .. } => col_names.clone(),
-                crate::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { col_names, .. } => col_names.clone(),
+                crate::executor::streaming::operators::spec::SourceSpec::ScanVertices {
+                    col_names,
+                    ..
+                }
+                | crate::executor::streaming::operators::spec::SourceSpec::StandaloneValues {
+                    col_names,
+                    ..
+                } => col_names.clone(),
+                crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices {
+                    col_names,
+                    ..
+                } => col_names.clone(),
+                crate::executor::streaming::operators::spec::SourceSpec::ScanEdges {
+                    col_names,
+                    ..
+                } => col_names.clone(),
+                crate::executor::streaming::operators::spec::SourceSpec::StorageScanEdges {
+                    col_names,
+                    ..
+                } => col_names.clone(),
                 _ => vec![],
             };
             if !col_names.is_empty() {
@@ -309,12 +318,26 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             // (EnrichScanSlotsWithFilterProps, typed GetVertices/GetNeighbors
             // pushdown) are observable in EXPLAIN output.
             let projected: Vec<String> = match src_spec {
-                crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { projected_properties, .. }
-                | crate::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { projected_properties, .. }
-                | crate::executor::streaming::operators::spec::SourceSpec::GetVertices { projected_properties, .. }
-                | crate::executor::streaming::operators::spec::SourceSpec::GetEdges { projected_properties, .. }
-                | crate::executor::streaming::operators::spec::SourceSpec::GetNeighbors { projected_properties, .. }
-                => projected_properties.clone(),
+                crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices {
+                    projected_properties,
+                    ..
+                }
+                | crate::executor::streaming::operators::spec::SourceSpec::StorageScanEdges {
+                    projected_properties,
+                    ..
+                }
+                | crate::executor::streaming::operators::spec::SourceSpec::GetVertices {
+                    projected_properties,
+                    ..
+                }
+                | crate::executor::streaming::operators::spec::SourceSpec::GetEdges {
+                    projected_properties,
+                    ..
+                }
+                | crate::executor::streaming::operators::spec::SourceSpec::GetNeighbors {
+                    projected_properties,
+                    ..
+                } => projected_properties.clone(),
                 _ => vec![],
             };
             if !projected.is_empty() {

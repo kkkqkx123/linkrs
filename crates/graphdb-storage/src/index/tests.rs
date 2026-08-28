@@ -1,19 +1,15 @@
+use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector};
+use crate::index::key_codec::KeyBuilder;
+use crate::index::manifest::{GenerationBuildState, GenerationState, IndexManifest, IndexShard};
+use crate::index::types::{EdgeIdentity, IndexIdentity};
+use crate::index::*;
+use crate::persistence::write_versioned_payload;
 use graphdb_core::types::StorageVersion;
 use graphdb_core::types::{
     CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
     MAX_TIMESTAMP,
 };
 use graphdb_core::Value;
-use crate::cursor::{
-    IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
-};
-use crate::index::key_codec::KeyBuilder;
-use crate::index::manifest::{
-    GenerationBuildState, GenerationState, IndexManifest, IndexShard,
-};
-use crate::index::types::{EdgeIdentity, IndexIdentity};
-use crate::index::*;
-use crate::persistence::write_versioned_payload;
 use std::collections::BTreeMap;
 
 fn write_crashed_build_state(index_root: &std::path::Path, state: &GenerationBuildState) {
@@ -198,12 +194,11 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let shard_runtime =
-            crate::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
-                shard.checkpoint_file.clone(),
-                64 * 1024 * 1024,
-            )
-            .expect("load split shard");
+        let shard_runtime = crate::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
+            shard.checkpoint_file.clone(),
+            64 * 1024 * 1024,
+        )
+        .expect("load split shard");
         let forward = shard_runtime.read_forward().snapshot();
         shard_entries += forward.len();
         assert!(forward.keys().all(|key| key.starts_with(&first_prefix)));
@@ -686,10 +681,10 @@ fn included_columns_survive_rebuild_from_snapshot() {
 
 #[test]
 fn wal_recovers_data_after_checkpoint() {
-    use graphdb_core::types::storage_ids::VertexId;
-    use graphdb_core::wal::EntityRef;
     use crate::index::shard_runtime::ShardRuntime;
     use crate::index::types::IndexRecord;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::wal::EntityRef;
 
     let temp_dir = std::env::temp_dir().join("graphdb_wal_test");
     let _ = std::fs::remove_dir_all(&temp_dir);

@@ -3,10 +3,6 @@
 //! Query planning for handling Cypher-style CREATE statements
 //! supports CREATE (n:Label {props}) and CREATE (a)-[:Type]->(b) syntaxes
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Value;
-use graphdb_core::YieldColumn;
 use crate::parser::ast::{CreateStmt, CreateTarget, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -18,6 +14,10 @@ use crate::planning::plan::core::{
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Value;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// CREATE Data Statement Planner

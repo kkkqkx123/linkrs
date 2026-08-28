@@ -1,7 +1,7 @@
 use super::SyncWrapper;
+use crate::StorageClient;
 use graphdb_core::types::VertexId;
 use graphdb_core::{StorageError, Value, Vertex};
-use crate::StorageClient;
 use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {

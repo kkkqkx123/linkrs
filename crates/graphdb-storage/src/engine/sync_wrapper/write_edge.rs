@@ -1,7 +1,7 @@
 use super::SyncWrapper;
+use crate::StorageClient;
 use graphdb_core::types::VertexId;
 use graphdb_core::{Edge, StorageError, Value};
-use crate::StorageClient;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
     pub(super) fn sync_insert_edge(

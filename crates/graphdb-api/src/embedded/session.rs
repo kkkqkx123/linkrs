@@ -2,18 +2,18 @@
 //!
 //! Provide the concept of a "session" as the context in which queries are executed.
 
-use graphdb_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
+use crate::storage::StorageClient;
 use graphdb_core::Value;
+use graphdb_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use graphdb_core::{SessionStatistics, StatsManager};
 use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use graphdb_query::parser::ast::Stmt;
 use graphdb_query::parser::{Parser, ParserResult};
 #[cfg(feature = "fulltext-search")]
 use graphdb_search::FulltextIndexManager;
-use crate::storage::StorageClient;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::SearchOptions;
 use graphdb_sync::SyncManager;
@@ -297,7 +297,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -501,7 +503,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
         let mut query_api = self.db.query_api.write();
         if active {
             let txn_manager = self.txn_manager();
@@ -548,7 +552,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let result = {
             let mut query_api = self.db.query_api.write();
@@ -597,7 +603,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.db.query_api.write();
         let result = if let Some(txn_id) = *self.current_transaction.read() {
@@ -652,12 +660,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
         self.set_variable(assign.name.clone(), value);
-        Ok(QueryResult::from_core(crate::api_core::types::QueryResult::new(
-            graphdb_query::executor::base::ExecutionResult::from_data_set(
-                graphdb_core::types::DataSet::from_rows(rows, columns),
+        Ok(QueryResult::from_core(
+            crate::api_core::types::QueryResult::new(
+                graphdb_query::executor::base::ExecutionResult::from_data_set(
+                    graphdb_core::types::DataSet::from_rows(rows, columns),
+                ),
+                result.metadata,
             ),
-            result.metadata,
-        )))
+        ))
     }
 
     /// Execute a parameterized query
@@ -714,7 +724,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -787,7 +799,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {

@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use crate::engine::paths::StoragePaths;
+use crate::engine::persistence_coordinator::{CheckpointData, CheckpointInfo, CheckpointStats};
 use graphdb_core::types::{CompactConfig, CompactTarget, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
-use crate::engine::paths::StoragePaths;
-use crate::engine::persistence_coordinator::{
-    CheckpointData, CheckpointInfo, CheckpointStats,
-};
+use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
 use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
 use graphdb_transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
-use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
 
 use super::context::GraphStorageContext;
 
@@ -721,14 +719,14 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::VertexId;
-    use graphdb_core::{DataType, Value};
     use crate::engine::PersistenceConfig;
     use crate::types::StoragePropertyDef;
+    use graphdb_core::types::CommitLsn;
+    use graphdb_core::types::VertexId;
+    use graphdb_core::{DataType, Value};
+    use graphdb_sync::checkpoint_manifest::CheckpointManifest;
     use graphdb_transaction::wal::writer::WalWriter;
     use graphdb_transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
-    use graphdb_core::types::CommitLsn;
-    use graphdb_sync::checkpoint_manifest::CheckpointManifest;
     use postcard::to_allocvec;
     use std::fs;
     use std::io::Write;

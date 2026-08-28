@@ -11,16 +11,16 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::{ContextualExpression, Expression};
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::types::user::PasswordInfo;
-use graphdb_core::types::PropertyDef;
-use graphdb_core::{EdgeDirection, Value};
 use crate::executor::streaming::executor::SortDirection;
 use crate::executor::streaming::plan::types::PhysicalPlan;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::parser::ast::vector::VectorDistance;
 use crate::storage::ScanPredicate;
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::types::user::PasswordInfo;
+use graphdb_core::types::PropertyDef;
+use graphdb_core::{EdgeDirection, Value};
 
 // ── Bound index predicate types ─────────────────────────────────────────────
 
@@ -231,9 +231,7 @@ impl UnarySpec {
     /// Expression-level subquery runner specs of this operator (empty for
     /// kinds that do not host subqueries). The materializer instantiates a
     /// per-operator `SubqueryExecutor` from these.
-    pub fn subquery_runners(
-        &self,
-    ) -> &[crate::executor::streaming::subquery::SubqueryRunnerSpec] {
+    pub fn subquery_runners(&self) -> &[crate::executor::streaming::subquery::SubqueryRunnerSpec] {
         match self {
             Self::Filter {
                 subquery_runners, ..

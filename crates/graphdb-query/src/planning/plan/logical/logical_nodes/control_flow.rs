@@ -1,9 +1,9 @@
 //! Logical control flow nodes: Argument, Loop, PassThrough, Select, BeginTransaction, Commit, Rollback.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_plan_node;
 use crate::planning::plan::core::nodes::control_flow::control_flow_node::IsolationLevel;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 define_logical_plan_node! {
     pub struct LogicalArgumentNode {

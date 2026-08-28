@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
+use crate::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
+use crate::optimizer::stats::{RangeCondition, StatisticsManager};
 use graphdb_core::types::BinaryOperator;
 use graphdb_core::types::Expression;
 use graphdb_core::value::Value;
-use crate::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
-use crate::optimizer::stats::{RangeCondition, StatisticsManager};
 
 /// Build the normalized condition key for a predicate expression.
 ///
@@ -19,9 +19,8 @@ use crate::optimizer::stats::{RangeCondition, StatisticsManager};
 /// space is present the key is prefixed with `"{space}:"` so corrections are
 /// scoped to a space and can be invalidated per space.
 pub fn condition_key(space: Option<&str>, expr: &Expression) -> String {
-    let normalized = crate::optimizer::stats::feedback::fingerprint::normalize_query(
-        &format!("{:?}", expr),
-    );
+    let normalized =
+        crate::optimizer::stats::feedback::fingerprint::normalize_query(&format!("{:?}", expr));
     match space {
         Some(space) => format!("{}:{}", space, normalized),
         None => normalized,

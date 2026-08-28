@@ -1,11 +1,11 @@
-use graphdb_core::types::{
-    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, UndoLogError,
-    UndoLogResult, UndoTarget, VertexIdentifier,
-};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::transaction::{
     EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps, UpdateEdgePropertyUndoParams,
+};
+use graphdb_core::types::{
+    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, UndoLogError,
+    UndoLogResult, UndoTarget, VertexIdentifier,
 };
 
 fn checked_internal_vertex_id(vid: &graphdb_core::types::VertexId) -> UndoLogResult<u32> {

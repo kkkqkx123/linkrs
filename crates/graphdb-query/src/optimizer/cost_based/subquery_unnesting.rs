@@ -36,8 +36,6 @@
 //! // let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view, &selectivity);
 //! ```
 
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::Expression;
 use crate::optimizer::analysis::BatchPlanAnalysis;
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_corrected;
@@ -47,6 +45,8 @@ use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::PlanNodeEnum;
 use crate::planning::plan::core::nodes::{PatternApplyNode, SemiJoinNode};
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Expression;
 
 /// Maximum constant row bound accepted by [`SubqueryUnnestingOptimizer::has_bounded_input`]
 /// for heuristic decorrelation without statistics.
@@ -504,15 +504,15 @@ impl SubqueryUnnestingOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::ExpressionMeta;
-    use graphdb_core::types::ContextualExpression;
     use crate::optimizer::analysis::BatchPlanAnalyzer;
     use crate::optimizer::stats::StatisticsManager;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
     use crate::planning::plan::core::nodes::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::ContextualExpression;
     use std::sync::Arc;
 
     fn test_scan() -> PlanNodeEnum {
@@ -649,9 +649,9 @@ mod tests {
 
     #[test]
     fn test_shape_accepts_two_table_inner_join() {
+        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use graphdb_core::types::ContextualExpression;
-        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         let key = || {
             let ctx = Arc::new(ExpressionAnalysisContext::new());
             let expr = Expression::Binary {

@@ -2,8 +2,8 @@
 //!
 //! Provide definitions for the planning nodes related to edge type management.
 
-use graphdb_core::types::PropertyDef;
 use crate::define_plan_node;
+use graphdb_core::types::PropertyDef;
 
 define_plan_node! {
     pub struct CreateEdgeNode {

@@ -4,8 +4,8 @@
 
 use std::io::{Read, Write};
 
-use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use graphdb_core::NullBitmap;
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RleRun<T> {

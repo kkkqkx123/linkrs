@@ -81,43 +81,45 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         )),
 
         PlanNodeEnum::GetVertices(n) => {
-            let logical = crate::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode {
-                id: n.id(),
-                space_id: n.space_id(),
-                space_name: n.space_name().to_string(),
-                src_ref: n.src_ref().clone(),
-                src_vids: n.src_vids().to_string(),
-                tag_props: n.tag_props().to_vec(),
-                expression: n.filter().cloned(),
-                dedup: n.dedup(),
-                limit: n.limit(),
-                projected_properties: n.projected_properties().to_vec(),
-                output_var: n.output_var().map(|s| s.to_string()),
-                col_names: n.col_names().to_vec(),
-                column_types: n.column_types().to_vec(),
-                deps: Vec::new(),
-            };
+            let logical =
+                crate::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode {
+                    id: n.id(),
+                    space_id: n.space_id(),
+                    space_name: n.space_name().to_string(),
+                    src_ref: n.src_ref().clone(),
+                    src_vids: n.src_vids().to_string(),
+                    tag_props: n.tag_props().to_vec(),
+                    expression: n.filter().cloned(),
+                    dedup: n.dedup(),
+                    limit: n.limit(),
+                    projected_properties: n.projected_properties().to_vec(),
+                    output_var: n.output_var().map(|s| s.to_string()),
+                    col_names: n.col_names().to_vec(),
+                    column_types: n.column_types().to_vec(),
+                    deps: Vec::new(),
+                };
             Ok(LogicalNodeEnum::GetVertices(logical))
         }
 
         PlanNodeEnum::GetNeighbors(n) => {
-            let logical = crate::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
-                id: n.id(),
-                space_id: n.space_id(),
-                src_vids: n.src_vids().to_string(),
-                edge_types: n.edge_types().to_vec(),
-                direction: n.direction().to_string(),
-                edge_props: n.edge_props().to_vec(),
-                tag_props: n.tag_props().to_vec(),
-                expression: n.filter().cloned(),
-                dedup: n.dedup(),
-                limit: n.limit(),
-                projected_properties: n.projected_properties().to_vec(),
-                output_var: n.output_var().map(|s| s.to_string()),
-                col_names: n.col_names().to_vec(),
-                column_types: n.column_types().to_vec(),
-                deps: Vec::new(),
-            };
+            let logical =
+                crate::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
+                    id: n.id(),
+                    space_id: n.space_id(),
+                    src_vids: n.src_vids().to_string(),
+                    edge_types: n.edge_types().to_vec(),
+                    direction: n.direction().to_string(),
+                    edge_props: n.edge_props().to_vec(),
+                    tag_props: n.tag_props().to_vec(),
+                    expression: n.filter().cloned(),
+                    dedup: n.dedup(),
+                    limit: n.limit(),
+                    projected_properties: n.projected_properties().to_vec(),
+                    output_var: n.output_var().map(|s| s.to_string()),
+                    col_names: n.col_names().to_vec(),
+                    column_types: n.column_types().to_vec(),
+                    deps: Vec::new(),
+                };
             Ok(LogicalNodeEnum::GetNeighbors(logical))
         }
 
@@ -405,8 +407,7 @@ mod tests {
 
     #[test]
     fn test_convert_start() {
-        let start =
-            crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
+        let start = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
         let plan_enum = PlanNodeEnum::Start(start);
         let result = convert_plan(&plan_enum);
         assert!(result.is_ok());
@@ -416,8 +417,7 @@ mod tests {
 
     #[test]
     fn test_convert_filter_with_start() {
-        let start =
-            crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
+        let start = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
         let start_enum = PlanNodeEnum::Start(start);
 
         let ctx = std::sync::Arc::new(
@@ -428,11 +428,10 @@ mod tests {
         let id = ctx.register_expression(expr_meta);
         let condition = graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx);
 
-        let filter =
-            crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
-                start_enum, condition,
-            )
-            .expect("Filter node creation failed");
+        let filter = crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
+            start_enum, condition,
+        )
+        .expect("Filter node creation failed");
 
         let filter_enum = PlanNodeEnum::Filter(filter);
         let result = convert_plan(&filter_enum);
@@ -443,7 +442,10 @@ mod tests {
 
     #[test]
     fn test_convert_unsupported() {
-        let arg = crate::planning::plan::core::nodes::control_flow::control_flow_node::ArgumentNode::new(-1, "x");
+        let arg =
+            crate::planning::plan::core::nodes::control_flow::control_flow_node::ArgumentNode::new(
+                -1, "x",
+            );
         let plan_enum = PlanNodeEnum::Argument(arg);
         let result = convert_plan(&plan_enum);
         assert!(result.is_err());

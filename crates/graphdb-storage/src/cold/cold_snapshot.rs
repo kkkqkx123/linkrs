@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::edge_table::remap::remap_immutable_csr;
 use crate::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult, Value};
 
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
 
@@ -1117,11 +1117,11 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::EdgeId;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::types::EdgeId;
+    use graphdb_core::Value;
 
     fn make_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {

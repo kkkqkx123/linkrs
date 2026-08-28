@@ -9,11 +9,11 @@ use dashmap::DashMap;
 
 use super::checkpoint::CheckpointGate;
 use super::mvcc::VersionManager;
-use graphdb_core::types::Timestamp;
-use graphdb_sync::SyncManager;
 use crate::context::TransactionContext;
 use crate::error::TransactionError;
 use crate::types::{TransactionId, TransactionState, TransactionStats};
+use graphdb_core::types::Timestamp;
+use graphdb_sync::SyncManager;
 
 /// Transaction Cleaner
 ///

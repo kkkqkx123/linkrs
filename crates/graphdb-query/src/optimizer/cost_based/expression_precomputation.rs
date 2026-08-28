@@ -21,9 +21,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::optimizer::cost::CostCalculator;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::ContextualExpression;
-use crate::optimizer::cost::CostCalculator;
 
 /// Precomputation decision
 #[derive(Debug, Clone, PartialEq)]
@@ -412,10 +412,10 @@ impl ExpressionPrecomputationOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optimizer::stats::StatisticsManager;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::Expression;
     use graphdb_core::value::Value;
-    use crate::optimizer::stats::StatisticsManager;
 
     fn create_test_optimizer() -> ExpressionPrecomputationOptimizer {
         let stats_manager = Arc::new(StatisticsManager::new());

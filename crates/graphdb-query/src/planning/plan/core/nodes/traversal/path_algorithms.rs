@@ -3,11 +3,11 @@
 //!
 //! The selection of the algorithm was completed during the Planner phase; this module only contains the planning nodes related to the specific algorithm.
 
-use graphdb_core::types::{ContextualExpression, VertexId};
-use graphdb_core::{EdgeDirection, Value};
 use crate::define_binary_input_node;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use graphdb_core::types::{ContextualExpression, VertexId};
+use graphdb_core::{EdgeDirection, Value};
 
 define_binary_input_node! {
     /// Multi-source shortest path planning nodes

@@ -14,8 +14,8 @@
 //! The API layer (`GraphService`) owns the `TransactionManager` reference and
 //! performs the actual begin/commit/rollback; the controller tracks state.
 
-use graphdb_core::error::QueryError;
 use crate::executor::base::ExecutionResult;
+use graphdb_core::error::QueryError;
 
 pub use graphdb_core::types::TransactionId;
 

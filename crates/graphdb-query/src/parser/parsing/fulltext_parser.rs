@@ -3,8 +3,6 @@
 //! This module implements the parser for full-text search SQL statements,
 //! including CREATE FULLTEXT INDEX, SEARCH, and related queries.
 
-use graphdb_core::types::expr::{create_contextual_expression, Expression};
-use graphdb_core::types::FulltextEngineType;
 use crate::parser::ast::fulltext::{
     AlterFulltextIndex, AlterIndexAction, BM25Options, CreateFulltextIndex, DescribeFulltextIndex,
     DropFulltextIndex, FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
@@ -17,6 +15,8 @@ use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::{create_contextual_expression, Expression};
+use graphdb_core::types::FulltextEngineType;
 use std::collections::HashMap;
 
 /// Parse full-text search statements from ParseContext
@@ -309,9 +309,7 @@ pub fn parse_alter_fulltext_index_after_alter(
     Ok(Stmt::AlterFulltextIndex(alter))
 }
 
-fn parse_show_fulltext_index(
-    ctx: &mut ParseContext,
-) -> Result<Stmt, crate::parser::ParseError> {
+fn parse_show_fulltext_index(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
     ctx.consume_keyword("SHOW")?;
     ctx.consume_keyword("FULLTEXT")?;
     ctx.consume_keyword("INDEX")?;
@@ -474,9 +472,7 @@ fn parse_yield_clause(
     Ok(FulltextYieldClause { items })
 }
 
-fn parse_order_clause(
-    ctx: &mut ParseContext,
-) -> Result<OrderByClause, crate::parser::ParseError> {
+fn parse_order_clause(ctx: &mut ParseContext) -> Result<OrderByClause, crate::parser::ParseError> {
     let span = ctx.current_span();
     let mut items = Vec::new();
 

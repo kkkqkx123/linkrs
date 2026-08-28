@@ -1,11 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::value::NullType;
-use graphdb_core::Value;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -21,6 +16,11 @@ use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::spill::{
     HashPartitionConfig, HashPartitionSpiller, SpillManager, SpilledFile,
 };
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 pub mod aggregate;
 pub mod materialize;
@@ -183,9 +183,7 @@ impl BlockingOperator {
             } => BlockingOperatorKind::Sort {
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::Aggregate {
@@ -196,18 +194,14 @@ impl BlockingOperator {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::GroupBy {
                 group_by_expressions,
             } => BlockingOperatorKind::GroupBy {
                 group_by_expressions: group_by_expressions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::WindowFunction {
@@ -220,9 +214,7 @@ impl BlockingOperator {
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
                 order_by_directions: order_by_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::Window {
@@ -235,9 +227,7 @@ impl BlockingOperator {
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
                 order_by_directions: order_by_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::TopN {
@@ -248,27 +238,19 @@ impl BlockingOperator {
                 n: *n,
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::Distinct => BlockingOperatorKind::Distinct {
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::Materialize => BlockingOperatorKind::Materialize {
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::DataCollect => BlockingOperatorKind::DataCollect {
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::RollUpApply { rollup_expressions } => {
@@ -288,9 +270,7 @@ impl BlockingOperator {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
             super::spec::BlockingSpec::FinalAggregate {
@@ -301,9 +281,7 @@ impl BlockingOperator {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
         };
@@ -572,8 +550,7 @@ impl BlockingOperator {
 
                         let mut run_buffers = Vec::with_capacity(st.runs.len());
                         for run in &st.runs {
-                            let reader =
-                                crate::executor::streaming::spill::RunReader::open(run)?;
+                            let reader = crate::executor::streaming::spill::RunReader::open(run)?;
                             run_buffers.push(RunBuffer {
                                 rows: Vec::new(),
                                 index: 0,
@@ -928,10 +905,10 @@ impl BlockingOperator {
                                             )
                                         })?;
                                         let p =
-                                        crate::executor::streaming::spill::hash_row_partition(
-                                            &group_key,
-                                            spiller.num_partitions(),
-                                        ) as usize;
+                                            crate::executor::streaming::spill::hash_row_partition(
+                                                &group_key,
+                                                spiller.num_partitions(),
+                                            ) as usize;
                                         let partial_row = partial_row_of(&group_key, &arg_values);
                                         spiller.insert_row_to_partition(
                                             &partial_row,
@@ -1217,10 +1194,11 @@ impl BlockingOperator {
                                                 )
                                             })?;
                                         let group_key = eval_group_key(&row, &state.col_names);
-                                        let p = crate::executor::streaming::spill::hash_row_partition(
-                                            &group_key,
-                                            spiller.num_partitions(),
-                                        ) as usize;
+                                        let p =
+                                            crate::executor::streaming::spill::hash_row_partition(
+                                                &group_key,
+                                                spiller.num_partitions(),
+                                            ) as usize;
                                         spiller.insert_row_to_partition(&row, p, &manager)?;
                                         continue;
                                     }
@@ -1461,10 +1439,10 @@ impl BlockingOperator {
                                         let partition_key =
                                             eval_partition_key(&row, &state.col_names);
                                         let p =
-                                        crate::executor::streaming::spill::hash_row_partition(
-                                            &partition_key,
-                                            spiller.num_partitions(),
-                                        ) as usize;
+                                            crate::executor::streaming::spill::hash_row_partition(
+                                                &partition_key,
+                                                spiller.num_partitions(),
+                                            ) as usize;
                                         spiller.insert_row_to_partition(&row, p, &manager)?;
                                         continue;
                                     }
@@ -1724,10 +1702,10 @@ impl BlockingOperator {
                                         let partition_key =
                                             eval_partition_key(&row, &state.col_names);
                                         let p =
-                                        crate::executor::streaming::spill::hash_row_partition(
-                                            &partition_key,
-                                            spiller.num_partitions(),
-                                        ) as usize;
+                                            crate::executor::streaming::spill::hash_row_partition(
+                                                &partition_key,
+                                                spiller.num_partitions(),
+                                            ) as usize;
                                         spiller.insert_row_to_partition(&row, p, &manager)?;
                                         continue;
                                     }
@@ -1944,8 +1922,7 @@ impl BlockingOperator {
                             }
                         };
 
-                        let mut reader =
-                            crate::executor::streaming::spill::RunReader::open(run)?;
+                        let mut reader = crate::executor::streaming::spill::RunReader::open(run)?;
                         let mut partition_rows = Vec::new();
 
                         while let Some(row) = reader.read_row()? {

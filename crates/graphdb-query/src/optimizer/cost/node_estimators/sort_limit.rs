@@ -139,13 +139,13 @@ impl<'a> NodeEstimator for SortLimitEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::operators::AggregateFunction;
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
     use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
     use crate::planning::plan::core::nodes::operation::sort_node::*;
+    use graphdb_core::types::operators::AggregateFunction;
     use std::sync::Arc;
 
     fn create_test_calculator() -> CostCalculator {

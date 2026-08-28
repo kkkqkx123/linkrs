@@ -1,18 +1,18 @@
 use super::QueryPipelineManager;
-use graphdb_core::error::{DBError, DBResult, QueryError};
-use graphdb_core::types::SpaceInfo;
-use graphdb_core::types::Timestamp;
-use graphdb_core::types::TransactionId;
-use graphdb_core::types::TransactionIsolationLevel;
 use crate::binder::BoundStatement;
 use crate::executor::base::ExecutionResult;
 use crate::executor::streaming::instance::ResultSink;
 use crate::executor::streaming::transaction_scope::TransactionScope;
 use crate::executor::streaming::StreamingQueryResult;
 use crate::parser::ast::Stmt;
+use crate::storage::QueryStorage;
 use crate::QueryContext;
 use crate::QueryRequestContext;
-use crate::storage::QueryStorage;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::SpaceInfo;
+use graphdb_core::types::Timestamp;
+use graphdb_core::types::TransactionId;
+use graphdb_core::types::TransactionIsolationLevel;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -284,9 +284,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // literal values as parameters at execution time.
         let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled
             && is_direct_dml(parser_result.ast.stmt())
-            && !rctx.parameters.iter().any(|(name, _)| {
-                name.starts_with(crate::planning::dml_shape::DML_PARAM_PREFIX)
-            }) {
+            && !rctx
+                .parameters
+                .iter()
+                .any(|(name, _)| name.starts_with(crate::planning::dml_shape::DML_PARAM_PREFIX))
+        {
             if let Some(shape) =
                 crate::planning::dml_shape::normalize_shape(parser_result.ast.stmt())
             {
@@ -906,9 +908,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .unwrap_or_else(|| position.index.to_string());
             position.expected_type = request.parameters.get(&name).map(|value| value.data_type());
         }
-        crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(
-            &param_positions,
-        )
+        crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(&param_positions)
     }
 }
 

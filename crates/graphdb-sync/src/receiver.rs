@@ -354,16 +354,15 @@ impl VectorReceiver {
         // outbox `idempotency` table still guards against replay after a
         // restart for those older LSNs.
         if next.receipts.len() > VECTOR_RECEIPT_MAX_ENTRIES {
-            let water_level = next.applied_lsn.saturating_sub(VECTOR_RECEIPT_RETENTION_LSN_WINDOW);
+            let water_level = next
+                .applied_lsn
+                .saturating_sub(VECTOR_RECEIPT_RETENTION_LSN_WINDOW);
             next.receipts.retain(|_, lsn| *lsn >= water_level);
             // If still over capacity (e.g. bursty LSNs within window), drop
             // the oldest entries by LSN until under the limit.
             if next.receipts.len() > VECTOR_RECEIPT_MAX_ENTRIES {
-                let mut entries: Vec<(String, u64)> = next
-                    .receipts
-                    .iter()
-                    .map(|(k, v)| (k.clone(), *v))
-                    .collect();
+                let mut entries: Vec<(String, u64)> =
+                    next.receipts.iter().map(|(k, v)| (k.clone(), *v)).collect();
                 entries.sort_by_key(|(_, lsn)| *lsn);
                 let to_remove = entries.len() - VECTOR_RECEIPT_MAX_ENTRIES;
                 for (key, _) in entries.into_iter().take(to_remove) {

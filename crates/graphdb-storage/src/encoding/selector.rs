@@ -3,8 +3,8 @@
 //! Analyzes column data characteristics to choose the optimal encoding.
 //! Thresholds are configurable via `EncodingThresholds`.
 
-use graphdb_core::{DataType, Value};
 use crate::encoding::EncodingType;
+use graphdb_core::{DataType, Value};
 
 /// Configurable thresholds for encoding selection.
 #[derive(Debug, Clone)]

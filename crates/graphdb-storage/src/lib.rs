@@ -65,9 +65,8 @@ pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, 
 pub use stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
 pub use types::StoragePropertyDef;
 
-pub use graphdb_core::StorageError;
 pub use cold::cold_snapshot::ColdSnapshot;
+pub use graphdb_core::StorageError;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test_mock::MockStorage;
-

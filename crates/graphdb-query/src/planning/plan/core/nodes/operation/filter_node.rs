@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node_with_deps;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, SerializableExpression};
 
 define_plan_node_with_deps! {
     pub struct FilterNode {

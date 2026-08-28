@@ -1,7 +1,7 @@
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::geography::{Geography, GeographyValue, LineStringValue, PolygonValue};
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 pub fn execute_st_buffer(args: &[Value]) -> Result<Value, ExpressionError> {
     let distance_km = match &args[1] {

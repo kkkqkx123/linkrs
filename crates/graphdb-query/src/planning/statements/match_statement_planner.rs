@@ -9,7 +9,6 @@
 //!   - LIMIT/SKIP – Pagination options
 //!   - Selection of intelligent scanning strategies (index scanning, attribute scanning, full table scanning)
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::binder::validation::CypherClauseKind;
 use crate::binder::validation::ValidationInfo;
 use crate::binder::BoundStatement;
@@ -25,6 +24,7 @@ use crate::planning::statements::pattern_planner::PlanningContext;
 use crate::planning::statements::plan_combiner;
 use crate::planning::statements::statement_planner::{ClausePlanner, StatementPlanner};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 /// Pagination Information Structure

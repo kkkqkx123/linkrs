@@ -3,8 +3,6 @@
 //! This rule identifies the Filter -> Traverse mode.
 //! And push the filtering conditions for the edge attributes down to the Traverse node.
 
-use graphdb_core::types::expr::{ExpressionVisitor, VariableCollector};
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::split_filter;
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -12,6 +10,8 @@ use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use graphdb_core::types::expr::{ExpressionVisitor, VariableCollector};
+use graphdb_core::Expression;
 
 /// Push the filtering conditions up to the rules that are used in the traversal operation.
 ///

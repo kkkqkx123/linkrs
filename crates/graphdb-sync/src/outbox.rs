@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use graphdb_core::{Edge, Value};
 use crate::types::ChangeType;
+use graphdb_core::{Edge, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OutboxPayload {

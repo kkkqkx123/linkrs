@@ -27,9 +27,6 @@ use super::specs::{
     build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
     is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::AggregateFunction;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -38,6 +35,9 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 };
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::{PartitionSource, PartitionStrategy};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 
 /// A partitioned physical plan: operators, fragments, root fragment, root operator.
 type PartitionedPlan = (
@@ -390,11 +390,21 @@ fn equality_join_keys_are_simple(
         && hash_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_)))
+            .is_some_and(|m| {
+                matches!(
+                    m.inner(),
+                    graphdb_core::types::expr::Expression::Variable(_)
+                )
+            })
         && probe_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_)))
+            .is_some_and(|m| {
+                matches!(
+                    m.inner(),
+                    graphdb_core::types::expr::Expression::Variable(_)
+                )
+            })
 }
 
 /// Whether a join key references the vertex-id partition key (`vid`), the only
@@ -1079,9 +1089,6 @@ fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
-    use graphdb_core::Expression;
     use crate::executor::base::ExecutionContext;
     use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
     use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -1089,6 +1096,9 @@ mod tests {
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::ScanVerticesNode;
     use crate::planning::plan::{PartitionSource, PartitionSpec};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
+    use graphdb_core::Expression;
     use std::sync::Arc;
 
     fn test_context() -> ExecutionContext {
@@ -1173,9 +1183,9 @@ mod tests {
             other => panic!("expected PartitionedInputs, got {:?}", other),
         }
 
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &Arc::new(plan),
-        )
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(
+            plan,
+        ))
         .expect("partitioned plan should validate");
     }
 
@@ -1201,9 +1211,8 @@ mod tests {
         let mut partial_count = 0;
         let mut final_count = 0;
         for op in &plan.operators {
-            if let crate::executor::streaming::plan::types::OperatorKindSpec::Blocking(
-                spec,
-            ) = &op.spec
+            if let crate::executor::streaming::plan::types::OperatorKindSpec::Blocking(spec) =
+                &op.spec
             {
                 match spec {
                     BlockingSpec::PartialAggregate { .. } => partial_count += 1,
@@ -1215,9 +1224,9 @@ mod tests {
         assert_eq!(partial_count, 2);
         assert_eq!(final_count, 1);
 
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &Arc::new(plan),
-        )
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(
+            plan,
+        ))
         .expect("partitioned aggregate plan should validate");
     }
 
@@ -1331,9 +1340,9 @@ mod tests {
             other => panic!("expected PartitionedInputs, got {:?}", other),
         }
 
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &Arc::new(plan),
-        )
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(
+            plan,
+        ))
         .expect("co-partitioned join plan should validate");
     }
 
@@ -1385,9 +1394,9 @@ mod tests {
         }
         assert_eq!(join_count, 2, "two partition-local join fragments");
 
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &Arc::new(plan),
-        )
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(
+            plan,
+        ))
         .expect("hash-exchange join plan should validate");
     }
 }

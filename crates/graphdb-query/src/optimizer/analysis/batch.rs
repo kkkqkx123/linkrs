@@ -9,12 +9,12 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::types::ContextualExpression;
 use crate::optimizer::analysis::{
     ExpressionAnalysis, ExpressionAnalyzer, FingerprintCalculator, PlanFingerprint,
     ReferenceCountAnalysis, SubplanId, SubplanReferenceInfo,
 };
 use crate::planning::plan::core::nodes::PlanNodeEnum;
+use graphdb_core::types::ContextualExpression;
 
 /// Combined plan analysis result from a single traversal
 #[derive(Debug, Clone)]

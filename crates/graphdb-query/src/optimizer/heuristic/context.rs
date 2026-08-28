@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Rewrite the context
 ///

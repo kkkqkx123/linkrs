@@ -9,11 +9,11 @@
 use std::io::Read;
 use std::path::Path;
 
-use graphdb_core::{StorageError, StorageResult};
 use crate::compression::CompressionType;
 use crate::encoding::EncodingType;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use crate::vertex::IdKey;
+use graphdb_core::{StorageError, StorageResult};
 
 use super::core::VertexTable;
 
@@ -495,9 +495,8 @@ impl VertexTable {
                     let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
                     let mut stats_bytes = vec![0u8; stats_len];
                     cursor.read_exact(&mut stats_bytes)?;
-                    let stats = crate::column_stats::ColumnStats::deserialize_meta(
-                        &mut &stats_bytes[..],
-                    )?;
+                    let stats =
+                        crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
                     if let Some(col) = self.columns.get_column_mut(&name) {
                         col.set_stats(stats);
                     }
@@ -562,9 +561,8 @@ impl VertexTable {
                     let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
                     let mut stats_bytes = vec![0u8; stats_len];
                     cursor.read_exact(&mut stats_bytes)?;
-                    let stats = crate::column_stats::ColumnStats::deserialize_meta(
-                        &mut &stats_bytes[..],
-                    )?;
+                    let stats =
+                        crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
                     if let Some(col) = self.columns.get_column_mut(&name) {
                         col.set_stats(stats);
                     }

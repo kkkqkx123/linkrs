@@ -8,8 +8,6 @@
 //! - Start
 
 use super::{get_input_rows, NodeEstimator};
-use graphdb_core::types::BinaryOperator;
-use graphdb_core::Expression;
 use crate::optimizer::cost::config::CostModelConfig;
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::expression_parser::ExpressionParser;
@@ -19,6 +17,8 @@ use crate::optimizer::error::CostError;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::graph_operations::UnwindNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::BinaryOperator;
+use graphdb_core::Expression;
 
 /// Data processing node estimator
 pub struct DataProcessingEstimator<'a> {
@@ -140,15 +140,15 @@ impl<'a> NodeEstimator for DataProcessingEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::ExpressionMeta;
-    use graphdb_core::YieldColumn;
-    use graphdb_core::{Expression, Value};
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::*;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::YieldColumn;
+    use graphdb_core::{Expression, Value};
     use std::sync::Arc;
 
     fn create_test_expression() -> graphdb_core::types::ContextualExpression {
@@ -297,7 +297,12 @@ mod tests {
         let config = CostModelConfig::default();
         let estimator = DataProcessingEstimator::new(&calculator, &selectivity_estimator, config);
 
-        let node = PlanNodeEnum::ScanVertices(crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(1, "test_space"));
+        let node = PlanNodeEnum::ScanVertices(
+            crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(
+                1,
+                "test_space",
+            ),
+        );
         let child_estimates = vec![];
         let result = estimator.estimate(
             &calculator.stats_view(Some("test")),

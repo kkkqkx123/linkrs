@@ -288,13 +288,13 @@ impl NodeVisitor for NodeVisitorFinder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::Expression;
     use graphdb_core::Value;
-    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
-    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
 
     #[test]

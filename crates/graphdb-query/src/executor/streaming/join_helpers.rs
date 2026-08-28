@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::executor::ValueRowContext;
 use crate::executor::streaming::slot::{combine_layouts, SlotLayout};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 /// Evaluate join key expressions against a row, returning the key values.
 pub fn evaluate_join_key(

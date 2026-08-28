@@ -2,9 +2,9 @@
 //!
 //! The `AggregateNode` is used to perform aggregation operations on the input data.
 
+use crate::define_plan_node_with_deps;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
-use crate::define_plan_node_with_deps;
 
 define_plan_node_with_deps! {
     pub struct AggregateNode {
@@ -159,8 +159,7 @@ mod tests {
     fn test_aggregate_node_creation() {
         let start_node =
             crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Start(
-                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(
-                ),
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
             );
 
         let group_keys = vec!["category".to_string()];
@@ -179,8 +178,7 @@ mod tests {
     fn test_aggregate_node_with_grouping_sets() {
         let start_node =
             crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Start(
-                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(
-                ),
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
             );
 
         let group_keys = vec!["a".to_string(), "b".to_string(), "c".to_string()];

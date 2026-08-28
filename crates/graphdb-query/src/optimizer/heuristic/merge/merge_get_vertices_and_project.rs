@@ -126,11 +126,11 @@ impl MergeRule for MergeGetVerticesAndProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::ContextualExpression;
-    use graphdb_core::{Expression, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetVerticesNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
 
     #[test]
     fn test_rule_name() {

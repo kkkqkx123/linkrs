@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::EdgeDirection;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::{EdgeTypeStatistics, StatisticsManager};
+use graphdb_core::types::EdgeDirection;
 
 /// Deep context allocation
 #[derive(Debug, Clone)]

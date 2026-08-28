@@ -2,7 +2,6 @@
 //!
 //! Responsible for planning the execution of the UNWIND clause, which expands the list into multiple lines.
 
-use graphdb_core::types::ContextualExpression;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -11,6 +10,7 @@ use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
+use graphdb_core::types::ContextualExpression;
 use std::sync::Arc;
 
 /// UNWIND Sentence Planner
@@ -78,9 +78,9 @@ mod tests {
 
     #[test]
     fn test_extract_unwind_info() {
+        use crate::parser::ast::Span;
         use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use graphdb_core::Expression;
-        use crate::parser::ast::Span;
         use std::sync::Arc;
 
         let ctx = Arc::new(ExpressionAnalysisContext::new());

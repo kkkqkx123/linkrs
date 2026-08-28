@@ -1,9 +1,5 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -14,6 +10,10 @@ use crate::executor::traversal::config::TraversalConfig;
 use crate::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{EdgeDirection, Value};
 
 use super::super::visited_set::VisitedSet;
 use super::ExpandCtx;

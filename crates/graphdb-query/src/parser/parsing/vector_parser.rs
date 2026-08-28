@@ -3,7 +3,6 @@
 //! This module implements the parser for vector search SQL statements,
 //! including CREATE VECTOR INDEX, SEARCH VECTOR, and related queries.
 
-use graphdb_core::types::expr::{create_contextual_expression, Expression};
 use crate::parser::ast::stmt::Stmt;
 use crate::parser::ast::stmt::{OrderByClause, OrderByItem};
 use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
@@ -15,6 +14,7 @@ use crate::parser::ast::vector::{
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::{create_contextual_expression, Expression};
 
 /// Parse vector search statements from ParseContext
 pub fn parse_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
@@ -143,16 +143,13 @@ fn parse_vector_index_config(
                 match q_str.to_lowercase().as_str() {
                     "none" | "disabled" | "off" => quantization = None,
                     "scalar" => {
-                        quantization =
-                            Some(crate::parser::ast::vector::QuantizationKind::Scalar)
+                        quantization = Some(crate::parser::ast::vector::QuantizationKind::Scalar)
                     }
                     "binary" => {
-                        quantization =
-                            Some(crate::parser::ast::vector::QuantizationKind::Binary)
+                        quantization = Some(crate::parser::ast::vector::QuantizationKind::Binary)
                     }
                     "product" | "pq" => {
-                        quantization =
-                            Some(crate::parser::ast::vector::QuantizationKind::Product)
+                        quantization = Some(crate::parser::ast::vector::QuantizationKind::Product)
                     }
                     _ => {
                         return Err(crate::parser::ParseError::new(
@@ -210,45 +207,48 @@ fn parse_vector_index_config(
                 });
             }
             "always_ram" => {
-                let b =
-                    match ctx.current_token().kind.clone() {
-                        TokenKind::BooleanLiteral(v) => {
-                            ctx.next_token();
-                            v
-                        }
-                        TokenKind::StringLiteral(s) => {
-                            ctx.next_token();
-                            match s.to_lowercase().as_str() {
-                                "true" | "1" | "yes" | "on" => true,
-                                "false" | "0" | "no" | "off" => false,
-                                _ => return Err(crate::parser::ParseError::new(
+                let b = match ctx.current_token().kind.clone() {
+                    TokenKind::BooleanLiteral(v) => {
+                        ctx.next_token();
+                        v
+                    }
+                    TokenKind::StringLiteral(s) => {
+                        ctx.next_token();
+                        match s.to_lowercase().as_str() {
+                            "true" | "1" | "yes" | "on" => true,
+                            "false" | "0" | "no" | "off" => false,
+                            _ => {
+                                return Err(crate::parser::ParseError::new(
                                     crate::parser::core::error::ParseErrorKind::SyntaxError,
                                     format!("Unknown always_ram '{}', expected true/false", s),
                                     ctx.current_position(),
-                                )),
+                                ))
                             }
                         }
-                        TokenKind::Identifier(s) => {
-                            let lower = s.to_lowercase();
-                            ctx.next_token();
-                            match lower.as_str() {
-                                "true" | "1" | "yes" | "on" => true,
-                                "false" | "0" | "no" | "off" => false,
-                                _ => return Err(crate::parser::ParseError::new(
+                    }
+                    TokenKind::Identifier(s) => {
+                        let lower = s.to_lowercase();
+                        ctx.next_token();
+                        match lower.as_str() {
+                            "true" | "1" | "yes" | "on" => true,
+                            "false" | "0" | "no" | "off" => false,
+                            _ => {
+                                return Err(crate::parser::ParseError::new(
                                     crate::parser::core::error::ParseErrorKind::SyntaxError,
                                     format!("Unknown always_ram '{}', expected true/false", s),
                                     ctx.current_position(),
-                                )),
+                                ))
                             }
                         }
-                        _ => {
-                            return Err(crate::parser::ParseError::new(
-                                crate::parser::core::error::ParseErrorKind::SyntaxError,
-                                "always_ram expects true/false".to_string(),
-                                ctx.current_position(),
-                            ))
-                        }
-                    };
+                    }
+                    _ => {
+                        return Err(crate::parser::ParseError::new(
+                            crate::parser::core::error::ParseErrorKind::SyntaxError,
+                            "always_ram expects true/false".to_string(),
+                            ctx.current_position(),
+                        ))
+                    }
+                };
                 always_ram = Some(b);
             }
             _ => {
@@ -301,9 +301,7 @@ fn parse_vector_index_config(
 }
 
 /// Parse DROP VECTOR INDEX statement
-pub fn parse_drop_vector_index(
-    ctx: &mut ParseContext,
-) -> Result<Stmt, crate::parser::ParseError> {
+pub fn parse_drop_vector_index(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
     ctx.consume_keyword("DROP")?;
     parse_drop_vector_index_after_drop(ctx)
 }
@@ -448,9 +446,7 @@ fn parse_vector_query_expr(
 }
 
 /// Parse vector literal
-fn parse_vector_literal(
-    ctx: &mut ParseContext,
-) -> Result<String, crate::parser::ParseError> {
+fn parse_vector_literal(ctx: &mut ParseContext) -> Result<String, crate::parser::ParseError> {
     ctx.expect_token(TokenKind::LBracket)?;
     let mut elements = Vec::new();
 
@@ -468,9 +464,7 @@ fn parse_vector_literal(
 }
 
 /// Parse ORDER BY clause
-fn parse_order_clause(
-    ctx: &mut ParseContext,
-) -> Result<OrderByClause, crate::parser::ParseError> {
+fn parse_order_clause(ctx: &mut ParseContext) -> Result<OrderByClause, crate::parser::ParseError> {
     let span = ctx.current_span();
     let mut items = Vec::new();
 
@@ -527,9 +521,7 @@ fn parse_vector_yield_clause(
 }
 
 /// Parse LOOKUP VECTOR statement
-pub fn parse_lookup_vector(
-    ctx: &mut ParseContext,
-) -> Result<Stmt, crate::parser::ParseError> {
+pub fn parse_lookup_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
     let span = ctx.current_span();
 
     ctx.consume_keyword("LOOKUP")?;
@@ -564,9 +556,7 @@ pub fn parse_lookup_vector(
 }
 
 /// Parse MATCH VECTOR statement
-pub fn parse_match_vector(
-    ctx: &mut ParseContext,
-) -> Result<Stmt, crate::parser::ParseError> {
+pub fn parse_match_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
     let span = ctx.current_span();
 
     ctx.consume_keyword("MATCH")?;

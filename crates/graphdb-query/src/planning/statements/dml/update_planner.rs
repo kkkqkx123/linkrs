@@ -2,7 +2,6 @@
 //!
 //! Query planning for processing UPDATE VERTEX/EDGE statements
 
-use graphdb_core::types::ContextualExpression;
 use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -12,6 +11,7 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::ContextualExpression;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -161,10 +161,7 @@ impl Planner for UpdatePlanner {
                 }
 
                 let mut scan_node =
-                    crate::planning::plan::core::nodes::ScanVerticesNode::new(
-                        0,
-                        &space_name,
-                    );
+                    crate::planning::plan::core::nodes::ScanVerticesNode::new(0, &space_name);
                 scan_node.set_tag(tag_name);
 
                 let vertex_info = VertexUpdateInfo {

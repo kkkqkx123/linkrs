@@ -153,9 +153,7 @@ impl PlanNode for CreateVectorIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorManage(
             VectorManageNode::Create(self),
@@ -229,9 +227,7 @@ impl PlanNode for DropVectorIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorManage(
             VectorManageNode::Drop(self),

@@ -162,7 +162,10 @@ impl VertexSchema {
     /// - Comparable (support <, >, ==)
     /// - Hashable
     /// - Not composite types
-    fn validate_key_type(data_type: &graphdb_core::DataType, prop_name: &str) -> Result<(), String> {
+    fn validate_key_type(
+        data_type: &graphdb_core::DataType,
+        prop_name: &str,
+    ) -> Result<(), String> {
         use graphdb_core::DataType;
 
         // Composite and structural types cannot be used as keys. The vertex id

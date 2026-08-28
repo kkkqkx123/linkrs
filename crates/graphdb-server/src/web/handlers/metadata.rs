@@ -8,6 +8,9 @@ use axum::{
     Router,
 };
 
+use crate::storage::{
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+};
 use crate::web::{
     error::WebResult,
     models::{
@@ -19,9 +22,6 @@ use crate::web::{
     },
     services::metadata_service::MetadataService,
     WebState,
-};
-use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Create metadata routes (without state)

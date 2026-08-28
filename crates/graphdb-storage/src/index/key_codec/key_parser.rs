@@ -304,8 +304,8 @@ impl KeyParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::index::key_codec::key_builder::KeyBuilder;
+    use graphdb_core::Value;
 
     #[test]
     fn test_parse_vertex_id_from_key() {

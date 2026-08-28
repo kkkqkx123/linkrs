@@ -333,11 +333,7 @@ impl PropertyTable {
 
     /// Batch retrieval of properties, sorted by offset for cache locality
     /// Returns results in original order via the provided iterator
-    pub fn get_batch<'a, I>(
-        &'a self,
-        offsets: I,
-        query_ts: Option<Timestamp>,
-    ) -> BatchPropertyRows
+    pub fn get_batch<'a, I>(&'a self, offsets: I, query_ts: Option<Timestamp>) -> BatchPropertyRows
     where
         I: IntoIterator<Item = &'a u32>,
     {

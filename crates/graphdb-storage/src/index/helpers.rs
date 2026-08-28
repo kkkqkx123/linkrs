@@ -1,14 +1,14 @@
-#[cfg(test)]
-use graphdb_core::types::IndexType;
-use graphdb_core::types::{Index, Timestamp};
-use graphdb_core::wal::{EntityRef, OutboxIntent};
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::chunk::serialize::write_chunked_index_checkpoint;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::manifest::IndexManifest;
 use crate::index::shard_runtime::{GenerationRuntime, IndexMaps};
 use crate::index::types::IndexRecord;
+#[cfg(test)]
+use graphdb_core::types::IndexType;
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::wal::{EntityRef, OutboxIntent};
+use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::{BTreeMap, HashMap};
 
 pub(crate) fn merge_split_wal_changes<F, R>(

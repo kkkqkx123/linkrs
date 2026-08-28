@@ -15,13 +15,13 @@ use log::{error, info};
 use vector_client::VectorManager;
 
 use crate::config::Config;
-use graphdb_core::error::DBResult;
-use graphdb_core::types::set_bcrypt_cost;
-use crate::{GraphService, HttpServer};
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
     StorageCommitOps, SyncWrapper,
 };
+use crate::{GraphService, HttpServer};
+use graphdb_core::error::DBResult;
+use graphdb_core::types::set_bcrypt_cost;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_transaction::{TransactionConfig, TransactionManager, TransactionManagerConfig};
@@ -94,14 +94,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 let data_dir = config.vector_data_dir();
                 match vector_search::LocalVectorEngine::open(&data_dir) {
                     Ok(engine) => {
-                        if let Some(hnsw) =
-                            graphdb_api::vector_config::local_hnsw_config(&config.vector_config().local)
-                        {
+                        if let Some(hnsw) = graphdb_api::vector_config::local_hnsw_config(
+                            &config.vector_config().local,
+                        ) {
                             engine.set_default_hnsw_config(hnsw);
                         }
-                        if let Some(ivf) =
-                            graphdb_api::vector_config::local_ivf_config(&config.vector_config().local)
-                        {
+                        if let Some(ivf) = graphdb_api::vector_config::local_ivf_config(
+                            &config.vector_config().local,
+                        ) {
                             engine.set_default_ivf_config(ivf);
                         }
                         if let Some(quant) = graphdb_api::vector_config::local_quantization_config(
@@ -414,16 +414,32 @@ fn attach_vector_coordinator(
     };
     #[cfg(feature = "vector-qdrant")]
     let vector_coordinator = Arc::new(graphdb_sync::vector_sync::VectorSyncCoordinator::new(
-        backend,
+        backend.clone(),
         embedding_service,
         handle,
     ));
     #[cfg(not(feature = "vector-qdrant"))]
     let vector_coordinator = Arc::new(
-        graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+        graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+            backend.clone(),
+            handle,
+        ),
     );
     info!("Vector index sync enabled");
-    sync_manager.with_vector_coordinator(vector_coordinator)
+    let mut manager = sync_manager.with_vector_coordinator(vector_coordinator);
+    // Backend-aware delivery policy: batch / lease / retries / concurrency
+    // derived from `VectorConfig` so `manager.rs` does not branch on `is_local`.
+    let policy = graphdb_sync::backend::BackendDeliveryPolicy::from_config(_config.vector_config());
+    info!(
+        "Vector delivery policy: {} batch={} lease_ms={} retries={} concurrency={}",
+        policy.policy_name,
+        policy.batch_size,
+        policy.lease_ms,
+        policy.max_retries,
+        policy.max_concurrency
+    );
+    manager.configure_backend_policy(policy);
+    manager
 }
 
 fn property_graph_config_from_config(

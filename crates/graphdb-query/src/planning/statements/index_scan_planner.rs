@@ -1,14 +1,12 @@
-use graphdb_core::types::expr::{ContextualExpression, Expression};
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::Value;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::pattern::NodePattern;
-use crate::planning::plan::core::nodes::access::index_scan::{
-    IndexLimit, IndexScanNode, ScanType,
-};
+use crate::planning::plan::core::nodes::access::index_scan::{IndexLimit, IndexScanNode, ScanType};
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Value;
 
 pub fn try_create_index_scan_plan(
     node: &NodePattern,

@@ -11,7 +11,9 @@ impl DdlParser {
         ctx.expect_token(TokenKind::Drop)?;
 
         if ctx.check_keyword("FULLTEXT") {
-            return crate::parser::parsing::fulltext_parser::parse_drop_fulltext_index_after_drop(ctx);
+            return crate::parser::parsing::fulltext_parser::parse_drop_fulltext_index_after_drop(
+                ctx,
+            );
         }
 
         if ctx.check_keyword("VECTOR") {

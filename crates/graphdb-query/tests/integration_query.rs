@@ -20,9 +20,9 @@ use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::parser::Parser;
 use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::planning::PlannerConfig;
+use graphdb_query::storage::StorageSchemaOps;
 use graphdb_query::QueryContext;
 use graphdb_query::QueryRequestContext;
-use graphdb_query::storage::StorageSchemaOps;
 use std::sync::Arc;
 
 /// Creating a query context for testing

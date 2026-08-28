@@ -5,9 +5,9 @@
 //! - Vector property functions (dimension, l2_norm, nnz, normalize)
 //! - Vector access functions (element access, slicing)
 
-use graphdb_core::Value;
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use graphdb_core::Value;
 
 /// Vector function enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -409,9 +409,7 @@ pub fn register_vector_functions(
     );
 
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Vector(
-            VectorFunction::DotProduct,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::DotProduct),
     );
 
     registry.register_builtin(
@@ -427,15 +425,11 @@ pub fn register_vector_functions(
     );
 
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Vector(
-            VectorFunction::Dimension,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::Dimension),
     );
 
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Vector(
-            VectorFunction::L2Norm,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::L2Norm),
     );
 
     registry.register_builtin(
@@ -443,9 +437,7 @@ pub fn register_vector_functions(
     );
 
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Vector(
-            VectorFunction::Normalize,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::Normalize),
     );
 }
 

@@ -1,18 +1,16 @@
 use super::QueryPipelineManager;
-use graphdb_core::error::{DBError, DBResult, QueryError};
 use crate::binder::BoundStatement;
 use crate::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
 };
 use crate::optimizer::PartitioningConfig;
 use crate::parser::ast::Stmt;
-use crate::QueryContext;
 use crate::storage::QueryStorage;
+use crate::QueryContext;
+use graphdb_core::error::{DBError, DBResult, QueryError};
 use std::sync::Arc;
 
-use crate::executor::streaming::parameters::{
-    ParameterDesc, ParameterSchema, ParameterSlot,
-};
+use crate::executor::streaming::parameters::{ParameterDesc, ParameterSchema, ParameterSlot};
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn optimize_execution_plan(
@@ -86,10 +84,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
         use crate::planning::planner::PlannerError;
 
-        let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(
-            bound,
-        )
-        .ok_or_else(|| {
+        let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(bound)
+            .ok_or_else(|| {
             DBError::from(QueryError::pipeline_planning_error(
                 PlannerError::NoSuitablePlanner(format!(
                     "No planner for bound statement: {}",
@@ -132,9 +128,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // reverse stripping (`LogicalPlan::from_plan_node`) remains only as
         // a fallback for planners that still emit physical trees.
         if let Some(logical_root) = sub_plan.logical_root().cloned() {
-            execution_plan.set_logical_plan(
-                crate::planning::plan::logical_plan::LogicalPlan::new(logical_root),
-            );
+            execution_plan.set_logical_plan(crate::planning::plan::logical_plan::LogicalPlan::new(
+                logical_root,
+            ));
         } else if let Some(ref root_node) = execution_plan.root {
             if let Ok(logical_plan) =
                 crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(root_node)

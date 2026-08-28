@@ -4,6 +4,6 @@
 
 pub mod authenticator;
 pub mod error;
-pub use graphdb_core::UserStorage;
 pub use authenticator::{Authenticator, AuthenticatorFactory, PasswordAuthenticator, UserVerifier};
 pub use error::{AuthError, AuthResult};
+pub use graphdb_core::UserStorage;

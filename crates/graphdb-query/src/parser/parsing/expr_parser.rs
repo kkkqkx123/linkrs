@@ -5,14 +5,14 @@
 
 use std::sync::Arc;
 
+use crate::parser::core::error::{ParseError, ParseErrorKind};
+use crate::parser::parsing::parse_context::ParseContext;
+use crate::parser::TokenKind;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::types::{DataType, Position, Span};
 use graphdb_core::{StructValue, Value};
-use crate::parser::core::error::{ParseError, ParseErrorKind};
-use crate::parser::parsing::parse_context::ParseContext;
-use crate::parser::TokenKind;
 
 /// Expression parse result with span information.
 pub struct ParseResult {
@@ -1623,8 +1623,7 @@ mod tests {
             };
             for pattern_str in &body.patterns {
                 let ctx = &mut ParseContext::new(pattern_str);
-                let mut parser =
-                    crate::parser::parsing::traversal_parser::TraversalParser::new();
+                let mut parser = crate::parser::parsing::traversal_parser::TraversalParser::new();
                 let pattern = parser.parse_pattern(ctx);
                 assert!(
                     pattern.is_ok(),

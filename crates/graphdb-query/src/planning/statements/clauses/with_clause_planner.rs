@@ -9,9 +9,6 @@
 //! 4. Pagination: The number of results can be limited using the SKIP/LIMIT parameters.
 //! 5. Scope reset: Only the variables that are output are retained; all other variables become invisible.
 
-use graphdb_core::types::expr::expression_utils::extract_group_info;
-use graphdb_core::types::semantic::AliasType;
-use graphdb_core::YieldColumn;
 use crate::binder::validation::{
     CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
 };
@@ -21,6 +18,9 @@ use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_utils::extract_group_info;
+use graphdb_core::types::semantic::AliasType;
+use graphdb_core::YieldColumn;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -156,13 +156,11 @@ impl WithClausePlanner {
         }
 
         // Create a sorting node.
-        let sort_node = crate::planning::plan::core::nodes::SortNode::new(
-            input_node.clone(),
-            sort_items,
-        )
-        .map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create sort node: {}", e))
-        })?;
+        let sort_node =
+            crate::planning::plan::core::nodes::SortNode::new(input_node.clone(), sort_items)
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create sort node: {}", e))
+                })?;
 
         Ok(SubPlan::new(
             Some(PlanNodeEnum::Sort(sort_node)),
@@ -198,15 +196,13 @@ impl WithClausePlanner {
         })?;
 
         // Create a deduplication node (using a simplified version of AggregateNode)
-        let dedup_node = crate::planning::plan::core::nodes::DedupNode::new(
-            input_node.clone(),
-        )
-        .map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!(
-                "Failed to create de-duplicated node: {}",
-                e
-            ))
-        })?;
+        let dedup_node = crate::planning::plan::core::nodes::DedupNode::new(input_node.clone())
+            .map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!(
+                    "Failed to create de-duplicated node: {}",
+                    e
+                ))
+            })?;
 
         Ok(SubPlan::new(
             Some(PlanNodeEnum::Dedup(dedup_node)),
@@ -241,11 +237,11 @@ impl WithClausePlanner {
     /// - Collecting information about aliases
     /// - Handling aggregate expressions and grouping keys
     fn extract_with_context(stmt: &Stmt) -> Result<WithClauseContext, PlannerError> {
-        use graphdb_core::YieldColumn;
         use crate::binder::validation::{
             OrderByClauseContext, PaginationContext, YieldClauseContext,
         };
         use crate::parser::ast::Stmt;
+        use graphdb_core::YieldColumn;
 
         let with_stmt = match stmt {
             Stmt::With(w) => w,

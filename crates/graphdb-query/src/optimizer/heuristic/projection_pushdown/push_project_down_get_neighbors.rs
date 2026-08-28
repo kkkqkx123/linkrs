@@ -142,13 +142,13 @@ impl crate::optimizer::heuristic::rule::PushDownRule for PushProjectDownGetNeigh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optimizer::heuristic::context::RewriteContext;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
+    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::{Expression, YieldColumn};
-    use crate::optimizer::heuristic::context::RewriteContext;
-    use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
-    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
 
     fn contextual(expr: Expression) -> ContextualExpression {

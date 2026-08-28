@@ -21,10 +21,6 @@
 //!   group context even with constant arguments).
 //! - evaluation failures keep the original expression (conservative).
 
-use graphdb_core::types::expr::analysis_utils::is_evaluable;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
 use crate::executor::expression::evaluation_context::DefaultExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::expression::functions::global_registry_ref;
@@ -42,6 +38,10 @@ use crate::planning::plan::core::nodes::join::join_node::{
 };
 use crate::planning::plan::core::nodes::operation::sort_node::{SortItem, SortNode};
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::analysis_utils::is_evaluable;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Constant folding rule.
 #[derive(Debug)]
@@ -594,6 +594,10 @@ impl RewriteRule for FoldConstantsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::planning::plan::core::nodes::operation::FilterNode;
+    use crate::planning::plan::core::nodes::operation::ProjectNode;
     use graphdb_core::types::expr::analysis_utils::is_evaluable;
     use graphdb_core::types::expr::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
@@ -601,10 +605,6 @@ mod tests {
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::Value;
     use graphdb_core::YieldColumn;
-    use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
-    use crate::planning::plan::core::nodes::operation::FilterNode;
-    use crate::planning::plan::core::nodes::operation::ProjectNode;
     use std::sync::Arc;
 
     fn contextual(
@@ -1000,8 +1000,8 @@ mod tests {
 
     #[test]
     fn test_fold_aggregate_node_filters() {
-        use graphdb_core::AggregateFunction;
         use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use graphdb_core::AggregateFunction;
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let aggregate =

@@ -3,9 +3,9 @@
 //! Handles schema operations like adding, removing, and renaming properties.
 //! Schema modifications invalidate the property index cache, which is rebuilt on-demand.
 
-use graphdb_core::StorageResult;
 use crate::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
 use crate::types::StoragePropertyDef;
+use graphdb_core::StorageResult;
 
 use super::core::VertexTable;
 

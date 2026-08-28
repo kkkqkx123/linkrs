@@ -1,9 +1,9 @@
 use dashmap::DashMap;
 
 use super::trait_def::BatchBuffer;
-use graphdb_core::types::TransactionId;
 use crate::batch::error::BatchResult;
 use crate::types::{IndexOpKey, IndexOperation};
+use graphdb_core::types::TransactionId;
 
 #[derive(Debug, Default)]
 pub struct TransactionBufferEntry {

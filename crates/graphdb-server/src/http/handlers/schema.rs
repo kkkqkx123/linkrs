@@ -6,12 +6,12 @@ use axum::{
 use graphdb_wire::schema::{CreateEdgeTypeRequest, CreateSpaceRequest, CreateTagRequest};
 use tokio::task;
 
-use graphdb_core::DataType;
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use graphdb_api::api_core::{PropertyDef as CorePropertyDef, SpaceConfig};
+use graphdb_core::DataType;
 
 // ==================== Space related ====================
 

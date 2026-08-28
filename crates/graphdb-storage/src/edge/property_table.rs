@@ -48,11 +48,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
-use graphdb_core::types::Timestamp;
-use graphdb_core::{
-    data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
-    TypeInfo, Value,
-};
 use crate::column_stats::{compute_stats, ColumnStats};
 use crate::encoding::EncodingType;
 use crate::mvcc::TieredTombstoneManager;
@@ -60,6 +55,11 @@ use crate::naming::NameIndexer;
 use crate::persistence::{read_header, read_u32_le, read_u64_le, section, write_header};
 use crate::types::PropertyId;
 use crate::vertex::column_store::ColumnStore;
+use graphdb_core::types::Timestamp;
+use graphdb_core::{
+    data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
+    TypeInfo, Value,
+};
 
 // Internal submodules: each holds one `impl PropertyTable` block grouped by
 // responsibility. They are descendants of this module, so they can access the

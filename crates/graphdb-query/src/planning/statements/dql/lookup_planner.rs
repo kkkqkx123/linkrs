@@ -8,10 +8,6 @@
 //! Add logic for selecting attribute indexes.
 //! Use IndexSelector to automatically select the optimal index.
 
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
-use graphdb_core::Value;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::{LookupStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
@@ -26,6 +22,10 @@ use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 pub use crate::planning::plan::core::nodes::{
@@ -393,8 +393,10 @@ impl LookupPlanner {
             let expr = Expression::Variable("_vertex".to_string());
             let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
             let id = validated.expr_context().register_expression(meta);
-            let ctx_expr =
-                graphdb_core::types::ContextualExpression::new(id, validated.expr_context().clone());
+            let ctx_expr = graphdb_core::types::ContextualExpression::new(
+                id,
+                validated.expr_context().clone(),
+            );
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),

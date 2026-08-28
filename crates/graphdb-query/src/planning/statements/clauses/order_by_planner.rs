@@ -3,7 +3,6 @@
 //! Responsible for planning the execution of the ORDER BY clause and sorting the results.
 //! Supports both simple column references and complex expressions (e.g., function calls).
 
-use graphdb_core::types::ContextualExpression;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::parser::OrderByItem;
@@ -18,6 +17,7 @@ use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
+use graphdb_core::types::ContextualExpression;
 use std::sync::Arc;
 
 /// The ORDER BY clause planner
@@ -140,12 +140,12 @@ impl ClausePlanner for OrderByClausePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::OrderDirection;
-    use graphdb_core::Expression;
     use crate::parser::ast::{OrderByItem, Span};
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::OrderDirection;
+    use graphdb_core::Expression;
     use std::sync::Arc;
 
     #[test]

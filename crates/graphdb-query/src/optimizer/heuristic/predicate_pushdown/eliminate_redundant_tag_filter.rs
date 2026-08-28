@@ -29,11 +29,6 @@
 //!     ScanVertices(Node)
 //! ```
 
-use graphdb_core::types::expr::ContextualExpression;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::types::Expression;
-use graphdb_core::Value;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -41,6 +36,11 @@ use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::scan_predicate::and_of;
+use graphdb_core::types::expr::ContextualExpression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::Expression;
+use graphdb_core::Value;
 
 /// Rule that drops tag-membership conjuncts already implied by the scan's tag.
 #[derive(Debug)]
@@ -191,10 +191,10 @@ fn collect_conjuncts<'a>(expr: &'a Expression, out: &mut Vec<&'a Expression>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::ContextualExpression;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::ScanVerticesNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
     use std::sync::Arc;
 
     fn contextual(expr: Expression) -> ContextualExpression {

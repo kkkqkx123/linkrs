@@ -1,6 +1,6 @@
+use crate::engine::data_store::EdgeTableKey;
 use graphdb_core::types::{CompactConfig, LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
-use crate::engine::data_store::EdgeTableKey;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

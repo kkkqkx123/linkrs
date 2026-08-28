@@ -1438,11 +1438,11 @@ impl TransactionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::TransactionErrorKind;
+    use crate::undo_log::{UndoLogResult, UndoTarget};
     use graphdb_core::types::{
         ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
     };
-    use crate::error::TransactionErrorKind;
-    use crate::undo_log::{UndoLogResult, UndoTarget};
     use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]

@@ -2,15 +2,15 @@
 //!
 //! Responsible for parsing various shared clauses, including RETURN, YIELD, SET, OVER, WHERE, etc.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression as CoreExpression;
-use graphdb_core::types::graph_schema::EdgeDirection;
 use crate::parser::ast::stmt::*;
 use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::graph_schema::EdgeDirection;
 
 /// Sentence parser
 pub struct ClauseParser;
@@ -289,11 +289,10 @@ impl ClauseParser {
     fn parse_assignment(&mut self, ctx: &mut ParseContext) -> Result<Assignment, ParseError> {
         // Parse the LHS as a property path (not a full expression) so the
         // assignment `=` is not consumed as an equality comparison.
-        let property_expr =
-            crate::parser::parsing::expr_parser::parse_property_path_with_context(
-                ctx,
-                ctx.expression_context_clone(),
-            )?;
+        let property_expr = crate::parser::parsing::expr_parser::parse_property_path_with_context(
+            ctx,
+            ctx.expression_context_clone(),
+        )?;
         ctx.expect_token(TokenKind::Assign)?;
         let value = self.parse_expression(ctx)?;
 

@@ -2,7 +2,6 @@
 //!
 //! Query planning for processing the YIELD statement
 
-use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{OrderDirection, Stmt, YieldItem, YieldStmt};
 use crate::planning::plan::core::nodes::{
     DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode,
@@ -10,6 +9,7 @@ use crate::planning::plan::core::nodes::{
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// YIELD Statement Planner

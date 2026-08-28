@@ -18,10 +18,10 @@ use tantivy::TantivyDocument;
 #[cfg(feature = "jieba")]
 use crate::jieba_tokenizer::JiebaTokenizer;
 
-use graphdb_core::Value;
 use crate::engine::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
+use graphdb_core::Value;
 
 pub use graphdb_config::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
 

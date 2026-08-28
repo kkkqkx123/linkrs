@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::{NullType, Value};
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
@@ -14,6 +12,8 @@ use crate::executor::streaming::operators::spec::{
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::{SlotInfo, SlotLayout};
 use crate::storage::{QueryStorage, StorageSchemaOps};
+use graphdb_core::error::QueryError;
+use graphdb_core::{NullType, Value};
 
 /// Pre-computed layout for DDL manage result chunks (action, name, status).
 fn manage_result_layout() -> Arc<SlotLayout> {

@@ -3,8 +3,8 @@
 //! Represents a window function operation (OVER clause) in the query plan.
 //! Handles PARTITION BY and ORDER BY within partitions.
 
-use graphdb_core::types::expr::Expression;
 use crate::define_plan_node_with_deps;
+use graphdb_core::types::expr::Expression;
 
 /// Specification for a window function call
 #[derive(Debug, Clone)]

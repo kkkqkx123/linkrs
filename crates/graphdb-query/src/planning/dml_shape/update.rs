@@ -1,7 +1,7 @@
 //! UPDATE / UPSERT statement shape renderer.
 
-use graphdb_core::Value;
 use crate::parser::ast::{Assignment, UpdateStmt, UpdateTarget};
+use graphdb_core::Value;
 
 use super::render_contextual;
 

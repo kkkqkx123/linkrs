@@ -4,8 +4,8 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{NodePattern, SeekResult, SeekStrategyContext, SeekStrategyType};
-use graphdb_core::{StorageError, Value, Vertex};
 use crate::storage::StorageReader;
+use graphdb_core::{StorageError, Value, Vertex};
 
 #[derive(Debug, Clone)]
 pub struct ScanSeek {

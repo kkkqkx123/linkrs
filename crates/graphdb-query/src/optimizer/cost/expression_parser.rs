@@ -6,9 +6,9 @@
 //! Analyze various expression patterns
 //! Expression constant folding optimization
 
+use crate::optimizer::cost::config::CostModelConfig;
 use graphdb_core::types::{BinaryOperator, Expression, UnaryOperator};
 use graphdb_core::value::Value;
-use crate::optimizer::cost::config::CostModelConfig;
 
 /// Expression parser
 ///

@@ -491,9 +491,7 @@ impl BatchOptimizer {
     }
 
     /// Create a new batch optimizer from a rule registry
-    pub fn from_registry(
-        registry: crate::optimizer::heuristic::rule_enum::RuleRegistry,
-    ) -> Self {
+    pub fn from_registry(registry: crate::optimizer::heuristic::rule_enum::RuleRegistry) -> Self {
         let mut optimizer = Self::new();
 
         // Default batch assignment based on rule categories
@@ -983,13 +981,13 @@ mod tests {
         // filter, must converge within the bounded chain passes: the
         // optimized plan is unchanged when optimized again (fixed point),
         // and no cross-batch oscillation is reported.
-        use graphdb_core::types::expr::ExpressionMeta;
-        use graphdb_core::Expression;
-        use graphdb_core::Value;
         use crate::optimizer::analysis::FingerprintCalculator;
         use crate::optimizer::heuristic::rule_enum::RuleRegistry;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::Expression;
+        use graphdb_core::Value;
         use std::sync::Arc;
 
         let optimizer = BatchOptimizer::from_registry(RuleRegistry::default());

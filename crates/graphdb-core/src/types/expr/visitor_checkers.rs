@@ -154,11 +154,7 @@ impl ExpressionVisitor for ConstantChecker {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         if self.is_constant {
             self.visit(expression);
         }
@@ -439,11 +435,7 @@ impl ExpressionVisitor for PropertyContainsChecker {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         if !self.contains {
             self.visit(expression);
         }
@@ -943,11 +935,7 @@ impl ExpressionVisitor for AggregateFunctionChecker {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         if !self.contains_aggregate {
             self.visit(expression);
         }
@@ -1228,11 +1216,7 @@ impl ExpressionVisitor for VariableContainsChecker {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         if !self.contains {
             self.visit(expression);
         }
@@ -1503,11 +1487,7 @@ impl ExpressionVisitor for PathBuildContainsChecker {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         if !self.contains_path_build {
             self.visit(expression);
         }

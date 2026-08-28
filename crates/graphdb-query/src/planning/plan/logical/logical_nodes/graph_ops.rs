@@ -1,10 +1,10 @@
 //! Logical graph operation nodes: DataCollect, Remove, PatternApply, RollUpApply, Union, Minus, Intersect, Unwind, Materialize, Assign, Apply, Dedup.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_join_node;
 use crate::define_logical_plan_node_with_deps;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 define_logical_plan_node_with_deps! {
     pub struct LogicalUnionNode {

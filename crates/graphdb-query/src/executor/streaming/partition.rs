@@ -5,8 +5,8 @@
 
 use std::ops::Range;
 
-use graphdb_core::error::QueryError;
 use crate::planning::plan::PartitionSpec;
+use graphdb_core::error::QueryError;
 
 /// A view of data partitioned for parallel processing
 ///

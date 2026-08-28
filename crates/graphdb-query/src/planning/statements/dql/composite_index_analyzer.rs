@@ -11,11 +11,11 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::Expression;
-use graphdb_core::Value;
 use crate::optimizer::cost::CostModelConfig;
 use crate::planning::plan::core::nodes::access::IndexLimit;
 use crate::planning::statements::seeks::seek_strategy_base::IndexInfo;
+use graphdb_core::Expression;
+use graphdb_core::Value;
 
 pub type AnalyzerError = String;
 

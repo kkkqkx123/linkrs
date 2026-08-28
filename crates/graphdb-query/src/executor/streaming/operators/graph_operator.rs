@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::{EdgeDirection, Value};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::{EdgeDirection, Value};
 
 use super::super::runtime::ExecutionRuntime;
 use super::spec::GraphSpec;

@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::parser::ast::{SetOperationStmt, SetOperationType, Stmt};
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Set Operation Planner
 /// Responsible for converting set operation statements into execution plans.
@@ -69,10 +69,7 @@ impl SetOperationPlanner {
 
                 let expr_context = Arc::new(ExpressionAnalysisContext::new());
                 let validation_info = crate::binder::validation::ValidationInfo::new();
-                let ast = Arc::new(crate::parser::ast::Ast::new(
-                    stmt.clone(),
-                    expr_context,
-                ));
+                let ast = Arc::new(crate::parser::ast::Ast::new(stmt.clone(), expr_context));
                 let validated = ValidatedStatement::new(ast, validation_info);
 
                 planner.transform(&validated, qctx)

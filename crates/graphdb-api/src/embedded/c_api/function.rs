@@ -4,9 +4,7 @@
 
 use crate::embedded::c_api::error::graphdb_error_code_t;
 use crate::embedded::c_api::session::GraphDbSessionHandle;
-use crate::embedded::c_api::types::{
-    graphdb_session_t, graphdb_value_t, graphdb_value_type_t,
-};
+use crate::embedded::c_api::types::{graphdb_session_t, graphdb_value_t, graphdb_value_type_t};
 use graphdb_query::executor::expression::functions::{
     AggregateFinalCallback, AggregateStepCallback, CFunctionContext, CustomFunction,
     ScalarFunctionCallback,

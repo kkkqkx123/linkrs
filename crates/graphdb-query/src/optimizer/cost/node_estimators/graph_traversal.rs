@@ -10,13 +10,13 @@
 //! - GetEdges
 
 use super::{get_input_rows, NodeEstimator};
-use graphdb_core::types::EdgeDirection;
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::error::CostError;
 use crate::optimizer::stats::StatsView;
 use crate::optimizer::stats::{EdgeTypeStatistics, SkewnessLevel};
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::EdgeDirection;
 
 /// Graph Traversal Operation Estimator
 pub struct GraphTraversalEstimator<'a> {

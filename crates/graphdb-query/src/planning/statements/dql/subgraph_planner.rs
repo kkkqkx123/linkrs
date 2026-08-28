@@ -8,9 +8,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::EdgeDirection;
-use graphdb_core::Expression;
 use crate::parser::ast::stmt::Steps;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::{
@@ -20,6 +17,9 @@ use crate::planning::plan::core::nodes::{
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::Expression;
 
 /// SUBGRAPH Query Planner
 /// Responsible for converting SUBGRAPH queries into execution plans.

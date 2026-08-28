@@ -4,9 +4,6 @@
 
 use std::time::Duration;
 
-use graphdb_core::types::{
-    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexIdentifier,
-};
 use crate::context::TransactionContext;
 use crate::types::{
     DurabilityLevel, OperationLog, TransactionConfig, TransactionId, TransactionState,
@@ -14,6 +11,9 @@ use crate::types::{
 use crate::undo_log::{InsertVertexUndo, UndoLogEntry};
 use crate::undo_log::{UndoLogResult, UndoTarget};
 use crate::TransactionErrorKind;
+use graphdb_core::types::{
+    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexIdentifier,
+};
 
 struct MockUndoTarget;
 

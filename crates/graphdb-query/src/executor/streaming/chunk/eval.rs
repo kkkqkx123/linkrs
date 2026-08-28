@@ -1,7 +1,5 @@
 //! Batch expression evaluation on DataChunk
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::operations::{
     BinaryOperationEvaluator, UnaryOperationEvaluator,
 };
@@ -11,6 +9,8 @@ use crate::executor::streaming::chunk::core::DataChunk;
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::slot::SlotId;
 use crate::executor::streaming::subquery::EvalEnv;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use std::collections::HashMap;
 
 use super::kind::typed_literal_batch;

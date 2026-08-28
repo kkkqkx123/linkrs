@@ -1,7 +1,7 @@
-use graphdb_core::types::{AutoCompactConfig, CompactConfig, Timestamp};
-use graphdb_core::StorageResult;
 use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::background_freeze::{FreezeGuard, FreezeStats};
+use graphdb_core::types::{AutoCompactConfig, CompactConfig, Timestamp};
+use graphdb_core::StorageResult;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -275,8 +275,12 @@ impl GraphStorageContext {
                     freeze_reasons
                         .iter()
                         .map(|r| match r {
-                            crate::engine::background_freeze::FreezeReason::EdgeCountExceeded => "edges",
-                            crate::engine::background_freeze::FreezeReason::MemoryExceeded => "memory",
+                            crate::engine::background_freeze::FreezeReason::EdgeCountExceeded => {
+                                "edges"
+                            }
+                            crate::engine::background_freeze::FreezeReason::MemoryExceeded => {
+                                "memory"
+                            }
                             crate::engine::background_freeze::FreezeReason::Both => "edges+memory",
                             crate::engine::background_freeze::FreezeReason::None => "none",
                         })

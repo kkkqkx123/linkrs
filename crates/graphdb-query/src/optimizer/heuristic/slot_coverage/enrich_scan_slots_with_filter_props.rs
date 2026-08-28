@@ -37,14 +37,14 @@
 //! - The rewrite is a pure no-op when the predicate columns are already
 //!   projected, so fixed-point iteration terminates immediately.
 
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::{GetVerticesNode, ScanEdgesNode, ScanVerticesNode};
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::Expression;
 
 /// Collects property names whose object expression is a `Variable`.
 #[derive(Debug, Default)]
@@ -202,12 +202,12 @@ impl RewriteRule for EnrichScanSlotsWithFilterPropsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
     use graphdb_core::types::operators::BinaryOperator;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::Value;
-    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use std::sync::Arc;
 
     fn contextual(expr: Expression) -> ContextualExpression {

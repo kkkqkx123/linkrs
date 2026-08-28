@@ -13,9 +13,7 @@ use crate::optimizer::cost::expression_parser::ExpressionParser;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::error::CostError;
 use crate::optimizer::stats::StatsView;
-use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
-    LoopNode, SelectNode,
-};
+use crate::planning::plan::core::nodes::control_flow::control_flow_node::{LoopNode, SelectNode};
 use crate::planning::plan::PlanNodeEnum;
 
 /// Control Flow Node Estimator

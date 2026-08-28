@@ -8,14 +8,12 @@ use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
-use graphdb_core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
-use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use crate::edge::PropertyTable;
 use crate::index::edge_index_manager::EdgePropertyIndex;
-use crate::schema::{
-    ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType,
-};
+use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType};
 use crate::types::{PropertyId, StoragePropertyDef};
+use graphdb_core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 

@@ -587,15 +587,15 @@ fn first_tag_of_input(node: &PlanNodeEnum) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-    use graphdb_core::value::Value;
     use crate::optimizer::stats::StatisticsManager;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::sort_node::{
         LimitNode, SortItem, SortNode, TopNNode,
     };
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+    use graphdb_core::value::Value;
     use std::sync::Arc;
 
     fn setup() -> (Arc<StatisticsManager>, SelectivityEstimator) {
@@ -647,8 +647,7 @@ mod tests {
     fn topn_caps_input_rows() {
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats =
-            crate::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 100;
         manager.update_tag_stats("test", tag_stats);
         let mut scan = ScanVerticesNode::new(1, "test");
@@ -717,8 +716,7 @@ mod tests {
 
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats =
-            crate::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 1_000;
         manager.update_tag_stats("test", tag_stats);
         let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
@@ -757,8 +755,7 @@ mod tests {
 
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats =
-            crate::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 100;
         manager.update_tag_stats("test", tag_stats);
         let mut scan = ScanVerticesNode::new(1, "test");
@@ -797,8 +794,7 @@ mod tests {
 
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats =
-            crate::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 100;
         manager.update_tag_stats("test", tag_stats);
         let mut scan = ScanVerticesNode::new(1, "test");

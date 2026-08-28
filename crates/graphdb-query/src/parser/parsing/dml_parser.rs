@@ -2,9 +2,6 @@
 //!
 //! Responsible for parsing statements related to data modification, including INSERT, DELETE, UPDATE, MERGE, etc.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::Expression as CoreExpression;
-use graphdb_core::types::EdgeDirection;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::ParseError;
 use crate::parser::core::token::TokenKindExt;
@@ -13,6 +10,9 @@ use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::parsing::traversal_parser::TraversalParser;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
+use graphdb_core::types::EdgeDirection;
 
 /// Data Modification Parser
 pub struct DmlParser;

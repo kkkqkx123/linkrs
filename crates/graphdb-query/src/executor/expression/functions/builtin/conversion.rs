@@ -1,8 +1,8 @@
 //! Implementation of type conversion functions
 
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 define_function_enum! {
     /// Type conversion function enumeration

@@ -1,10 +1,10 @@
-use graphdb_core::types::PropertyDef;
-use graphdb_core::{ArrayTypeInfo, NullType, StructTypeInfo, Value};
 use crate::parser::ast::types::DataType;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use graphdb_core::types::PropertyDef;
+use graphdb_core::{ArrayTypeInfo, NullType, StructTypeInfo, Value};
 use std::sync::Arc;
 
 use super::DdlParser;

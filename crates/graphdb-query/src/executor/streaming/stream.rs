@@ -3,8 +3,8 @@ use std::sync::Arc;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
 use super::runtime::ExecutionRuntime;
-use graphdb_core::error::QueryError;
 use crate::data_set::DataSet;
+use graphdb_core::error::QueryError;
 
 /// Streaming result handle for pull-based chunk consumption.
 ///
@@ -198,7 +198,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::executor::StreamingExecutor;
     use crate::executor::streaming::operators::base::OperatorBase;
@@ -206,6 +205,7 @@ mod tests {
     use crate::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::executor::streaming::runtime::QueryIdentity;
     use crate::executor::streaming::slot::SlotLayout;
+    use graphdb_core::Value;
 
     #[test]
     fn cancellation_error_releases_resources_immediately() {

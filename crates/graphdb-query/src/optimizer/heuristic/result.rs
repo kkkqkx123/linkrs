@@ -180,9 +180,8 @@ mod tests {
         assert!(!result.has_new_nodes());
         assert!(!result.has_folded);
 
-        let node = crate::planning::plan::PlanNodeEnum::ScanVertices(ScanVerticesNode::new(
-            1, "default",
-        ));
+        let node =
+            crate::planning::plan::PlanNodeEnum::ScanVertices(ScanVerticesNode::new(1, "default"));
         result.add_new_node(node);
 
         assert!(result.has_new_nodes());
@@ -197,9 +196,8 @@ mod tests {
         let mut result = MatchedResult::new();
         assert!(!result.has_matches());
 
-        let node = crate::planning::plan::PlanNodeEnum::ScanVertices(ScanVerticesNode::new(
-            1, "default",
-        ));
+        let node =
+            crate::planning::plan::PlanNodeEnum::ScanVertices(ScanVerticesNode::new(1, "default"));
         result.add_node(node);
 
         assert!(result.has_matches());

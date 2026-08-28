@@ -17,8 +17,8 @@ use crate::encoding::{
     AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
     FsstEncoder, RleIntColumn,
 };
-use graphdb_core::NullBitmap;
 use bitvec::prelude::*;
+use graphdb_core::NullBitmap;
 
 /// Unified column storage interface.
 pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
@@ -1817,9 +1817,7 @@ impl ColumnStore {
                 .map(|name| {
                     let values = match self.get_column(name) {
                         Some(column) => decode_column_values_at_ts(column, rows, query_ts),
-                        None => {
-                            crate::cursor::ColumnValues::General(vec![None; rows.len()])
-                        }
+                        None => crate::cursor::ColumnValues::General(vec![None; rows.len()]),
                     };
                     (name.clone(), values)
                 })

@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::types::expr::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -30,6 +29,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 };
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+use graphdb_core::types::expr::Expression;
 
 /// Whole-plan rule that annotates `ExpandAll` hops with id_only/count_only.
 #[derive(Debug)]
@@ -450,15 +450,15 @@ fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+    use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::{ContextualExpression, ExpressionMeta};
     use graphdb_core::types::operators::AggregateFunction;
     use graphdb_core::Expression;
     use graphdb_core::Value;
-    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
-    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
-    use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
     use std::sync::Arc;
 
     fn ctx_expr(expr: Expression) -> ContextualExpression {

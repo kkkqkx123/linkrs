@@ -1,8 +1,8 @@
 use super::*;
+use crate::types::StoragePropertyDef;
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::Timestamp;
 use graphdb_core::DataType;
-use crate::types::StoragePropertyDef;
 
 /// Test-only extension trait for invariant verification.
 trait VerifyInvariants {

@@ -8,14 +8,14 @@
 //! `Filter` node is intentionally kept (pre-filter semantics) so the rewrite
 //! can never change query results.
 
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::ExpressionMeta;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::scan_predicate::{and_of, pushable_conjuncts};
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::ExpressionMeta;
 
 /// Rule that pushes filter conjuncts into the ScanEdges node's filter.
 #[derive(Debug)]
@@ -95,11 +95,8 @@ mod tests {
     use graphdb_core::Expression;
     use graphdb_core::Value;
 
-    fn scan_node(
-    ) -> crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode {
-        crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode::new(
-            0, "knows",
-        )
+    fn scan_node() -> crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode {
+        crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode::new(0, "knows")
     }
 
     fn filter_node(

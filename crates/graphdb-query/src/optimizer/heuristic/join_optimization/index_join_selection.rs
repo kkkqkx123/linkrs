@@ -25,15 +25,15 @@
 //!   IndexJoin using property indexes
 //! ```
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 
 /// Rules for index-based JOIN selection
 #[derive(Debug)]

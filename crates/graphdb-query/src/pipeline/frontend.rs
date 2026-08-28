@@ -1,11 +1,11 @@
 use super::QueryPipelineManager;
-use graphdb_core::error::{DBError, DBResult, QueryError};
-use graphdb_core::MetricType;
 use crate::binder::Binder;
 use crate::binder::BoundStatement;
 use crate::parser::Parser;
-use crate::QueryContext;
 use crate::storage::QueryStorage;
+use crate::QueryContext;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::MetricType;
 use std::sync::Arc;
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {

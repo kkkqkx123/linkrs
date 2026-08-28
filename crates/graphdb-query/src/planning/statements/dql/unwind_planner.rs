@@ -5,9 +5,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::YieldColumn;
 use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::Stmt;
 use crate::planning::physical_planner::convert_logical_to_physical;
@@ -23,6 +20,9 @@ use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::YieldColumn;
 
 /// UNWIND statement planner
 /// Responsible for converting the UNWIND statement into an execution plan.
@@ -43,10 +43,7 @@ impl UnwindPlanner {
                 let mut columns = Vec::new();
                 for item in &return_clause.items {
                     match item {
-                        crate::parser::ast::stmt::ReturnItem::Expression {
-                            expression,
-                            alias,
-                        } => {
+                        crate::parser::ast::stmt::ReturnItem::Expression { expression, alias } => {
                             let col_alias = alias
                                 .clone()
                                 .unwrap_or_else(|| expression.to_expression_string());

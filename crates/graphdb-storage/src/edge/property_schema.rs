@@ -3,9 +3,9 @@
 //! Contains schema definitions and compaction statistics for property storage.
 //! These types are separated from the table implementation for better modularity.
 
+use crate::encoding::EncodingType;
 use graphdb_core::types::Timestamp;
 use graphdb_core::DataType;
-use crate::encoding::EncodingType;
 
 /// Sentinel value meaning "no properties"
 pub const PROP_OFFSET_NONE: u32 = 0;

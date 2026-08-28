@@ -1,8 +1,8 @@
-use graphdb_core::types::Timestamp;
 use crate::cache::BufferPool;
 use crate::index::chunk::data::{build_chunks, Chunk, ChunkId, CHUNK_TARGET_SIZE};
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::types::IndexRecord;
+use graphdb_core::types::Timestamp;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::Arc;

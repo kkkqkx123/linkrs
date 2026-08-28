@@ -2,12 +2,6 @@
 //!
 //! Responsible for planning the execution of the RETURN statement and implementing the projection of the results.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression::ExpressionMeta;
-use graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual;
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::Expression;
-use graphdb_core::YieldColumn;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
@@ -31,6 +25,12 @@ use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression::ExpressionMeta;
+use graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Expression;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 pub use crate::planning::plan::core::PlanNodeEnum;
@@ -102,10 +102,7 @@ fn extract_return_columns(stmt: &Stmt) -> Result<Vec<YieldColumn>, PlannerError>
         if let Some(return_clause) = &match_stmt.return_clause {
             for item in &return_clause.items {
                 match item {
-                    crate::parser::ast::stmt::ReturnItem::Expression {
-                        expression,
-                        alias,
-                    } => {
+                    crate::parser::ast::stmt::ReturnItem::Expression { expression, alias } => {
                         let alias = alias
                             .clone()
                             .or_else(|| Some(generate_default_alias_from_contextual(expression)));
@@ -696,12 +693,12 @@ fn extract_aggregate_function(
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::contextual::ContextualExpression;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::Expression;
     use crate::parser::ast::Span;
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
+    use graphdb_core::types::expr::contextual::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Expression;
     use std::sync::Arc;
 
     #[test]

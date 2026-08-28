@@ -39,12 +39,12 @@ use graphdb_sync::checkpoint_manifest::{
     CheckpointManifest, CheckpointManifestManager, IndexManifestRef,
 };
 
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageError, StorageResult};
 use crate::engine::config::PropertyGraphConfig;
 use crate::engine::snapshot_manager::{SnapshotManager, SnapshotOptions};
 use crate::engine::WalManager;
 use crate::index::shard_runtime::IndexBarrierRegistry;
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
 
 /// Type alias for the outbox frontier provider callback.
@@ -218,7 +218,10 @@ impl PersistenceCoordinator {
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);
         checkpoint_manager.init().map_err(|e| {
-            graphdb_core::StorageError::db_error(format!("Failed to init checkpoint manager: {}", e))
+            graphdb_core::StorageError::db_error(format!(
+                "Failed to init checkpoint manager: {}",
+                e
+            ))
         })?;
         checkpoint_manager
             .adopt_published_sequence(published_sequence)

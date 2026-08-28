@@ -1,5 +1,3 @@
-use graphdb_core::types::Index;
-use graphdb_core::{StorageError, StorageResult};
 use crate::cursor::IndexScanPlan;
 use crate::index::edge_index_manager::{compute_edge_index_scan_range, EdgeIndexCursor};
 use crate::index::key_codec::key_types::SecondaryIndexKey;
@@ -7,10 +5,10 @@ use crate::index::manifest::{ManifestCatalog, ManifestHandle};
 use crate::index::shard_runtime::GenerationRuntime;
 use crate::index::types::IndexRecord;
 use crate::index::types::StaleChecker;
-use crate::index::vertex_index_manager::{
-    compute_vertex_index_scan_range, VertexIndexCursor,
-};
+use crate::index::vertex_index_manager::{compute_vertex_index_scan_range, VertexIndexCursor};
 use crate::index::IndexDataManagerImpl;
+use graphdb_core::types::Index;
+use graphdb_core::{StorageError, StorageResult};
 use std::collections::HashSet;
 use std::sync::Arc;
 

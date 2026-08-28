@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use graphdb_core::{DataType, Value};
     use crate::engine::graph_storage::GraphStorageContext;
     use crate::types::StoragePropertyDef;
+    use graphdb_core::{DataType, Value};
     use tempfile::TempDir;
 
     fn temp_dir(name: &str) -> TempDir {

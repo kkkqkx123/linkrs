@@ -1,10 +1,10 @@
+use crate::executor::streaming::chunk::DataChunk;
+use crate::executor::streaming::operators::spec::UserManageCommand;
+use crate::storage::StorageAuthOps;
 use graphdb_core::error::QueryError;
 use graphdb_core::permission::RoleType;
 use graphdb_core::types::user::{UserAlterInfo, UserInfo};
 use graphdb_core::Value;
-use crate::executor::streaming::chunk::DataChunk;
-use crate::executor::streaming::operators::spec::UserManageCommand;
-use crate::storage::StorageAuthOps;
 
 pub(super) fn execute_user_manage(
     op: &mut super::DdlOperator,

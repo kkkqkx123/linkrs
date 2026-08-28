@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::operators::spec::MigrateAction;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 
 pub(super) fn execute_show_stats(
     op: &mut super::DdlOperator,

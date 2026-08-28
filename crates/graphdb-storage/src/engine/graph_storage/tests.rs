@@ -1,6 +1,12 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
+    use crate::{
+        GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
+        StorageAdmin, StorageAuthOps, StorageCommitOps, StorageOperationContext,
+        StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageSchemaOps,
+        StorageWriter,
+    };
     use graphdb_core::types::{
         AutoCompactConfig, EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef,
         SpaceInfo, Timestamp, UserInfo, VertexId,
@@ -8,12 +14,6 @@ mod tests {
     use graphdb_core::vertex_edge_path::Tag;
     use graphdb_core::DataType;
     use graphdb_core::{Edge, EdgeDirection, RoleType, Value, Vertex};
-    use crate::{
-        GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
-        StorageAdmin, StorageAuthOps, StorageCommitOps, StorageOperationContext,
-        StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageSchemaOps,
-        StorageWriter,
-    };
 
     fn create_test_storage() -> GraphStorage {
         GraphStorage::new().expect("Failed to create GraphStorage")
@@ -123,9 +123,9 @@ mod tests {
 
     #[test]
     fn vertex_column_stats_snapshot_matches_inserted_range() {
+        use crate::stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
         use graphdb_core::vertex_edge_path::{Tag, Vertex};
         use graphdb_core::Value;
-        use crate::stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
         use std::sync::Arc;
 
         let mut storage = create_test_storage();
@@ -184,9 +184,9 @@ mod tests {
 
     #[test]
     fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
+        use crate::stats_reader::ColumnStatsReader;
         use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
         use graphdb_core::Value;
-        use crate::stats_reader::ColumnStatsReader;
 
         let mut storage = create_test_storage();
         setup_space(&mut storage);
@@ -659,10 +659,11 @@ mod tests {
                 .save_to_disk()
                 .expect("Failed to persist base schema");
 
-            let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("age".to_string(), DataType::BigInt),
-            ]);
+            let tag =
+                graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+                    PropertyDef::new("name".to_string(), DataType::String),
+                    PropertyDef::new("age".to_string(), DataType::BigInt),
+                ]);
             storage
                 .create_tag("test_space", &tag)
                 .expect("Failed to create tag");
@@ -2535,9 +2536,7 @@ mod tests {
     #[test]
     fn test_background_freeze_manager_basics() {
         use crate::engine::background_freeze::BackgroundFreezeManager;
-        use crate::engine::config::{
-            FreezeConfig, FreezeDecisionInput, FreezeStrategyType,
-        };
+        use crate::engine::config::{FreezeConfig, FreezeDecisionInput, FreezeStrategyType};
 
         let config = FreezeConfig {
             strategy: FreezeStrategyType::Conservative,
@@ -3290,13 +3289,14 @@ mod tests {
         let reconstructed = storage.apply_cold_delta(base.label(), &delta_path).unwrap();
         assert_eq!(reconstructed.edge_count(), 2);
         // Structural equality with the latest snapshot: same (src, dst) rows.
-        let edge_set = |snapshot: &crate::cold::ColdSnapshot| -> std::collections::HashSet<(u32, i64)> {
-            snapshot
-                .scan_edges()
-                .iter()
-                .map(|r| (r.src_internal, r.dst_vid.as_int64().unwrap_or(0)))
-                .collect()
-        };
+        let edge_set =
+            |snapshot: &crate::cold::ColdSnapshot| -> std::collections::HashSet<(u32, i64)> {
+                snapshot
+                    .scan_edges()
+                    .iter()
+                    .map(|r| (r.src_internal, r.dst_vid.as_int64().unwrap_or(0)))
+                    .collect()
+            };
         assert_eq!(edge_set(&reconstructed), edge_set(&latest));
 
         // v9: consolidate the shelf into a single merged snapshot.
@@ -3654,8 +3654,8 @@ mod tests {
             SpaceInfo::new("second_space".to_string()).with_vid_type(DataType::BigInt);
         storage.create_space(&mut second_space).unwrap();
 
-        let second_person =
-            graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        let second_person = graphdb_core::types::TagInfo::new("Person".to_string())
+            .with_properties(vec![
                 PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
                 PropertyDef::new("name".to_string(), DataType::String),
             ]);
@@ -3711,9 +3711,9 @@ mod tests {
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
 
-        let edge_type =
-            graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string()).with_properties(vec![
-                PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
+        let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string())
+            .with_properties(vec![
+                PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true)
             ]);
         storage
             .create_edge_type("test_space", &edge_type)

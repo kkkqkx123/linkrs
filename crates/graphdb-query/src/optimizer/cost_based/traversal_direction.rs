@@ -25,9 +25,9 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::EdgeDirection;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::EdgeTypeStatistics;
+use graphdb_core::types::EdgeDirection;
 
 /// Decision on the direction of traversal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

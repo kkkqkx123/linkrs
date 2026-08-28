@@ -2,13 +2,13 @@
 //!
 //! Responsible for planning shortest path queries, supporting algorithms such as BFS (Breadth-First Search).
 
-use graphdb_core::types::graph_schema::EdgeDirection;
-use graphdb_core::types::VertexId;
-use graphdb_core::{Edge, StorageError, Value, Vertex};
 use crate::planning::statements::seeks::seek_strategy_base::{
     NodePattern, SeekStrategyContext, SeekStrategySelector, SeekStrategyType,
 };
 use crate::storage::StorageReader;
+use graphdb_core::types::graph_schema::EdgeDirection;
+use graphdb_core::types::VertexId;
+use graphdb_core::{Edge, StorageError, Value, Vertex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub type PlannerError = StorageError;

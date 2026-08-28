@@ -226,7 +226,6 @@ mod vector_config_tests {
 #[cfg(feature = "embedded")]
 pub use embedded::GraphDatabase;
 
-
 pub mod storage {
     pub use graphdb_storage::*;
 

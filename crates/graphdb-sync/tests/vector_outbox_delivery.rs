@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use graphdb_sync::core::types::{CommitLsn, TransactionId};
-use graphdb_sync::core::{Value, VectorValue};
+use graphdb_core::types::{CommitLsn, TransactionId};
+use graphdb_core::{Value, VectorValue};
 use graphdb_sync::types::ChangeType;
 use graphdb_sync::{SyncManager, VectorBackend, VectorSyncCoordinator};
 use vector_search::{DistanceMetric, LocalVectorEngine};

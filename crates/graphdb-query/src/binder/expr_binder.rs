@@ -7,10 +7,10 @@
 //! `ExpressionAnalysisContext`. It is a pure function from `Expression` →
 //! `DataType`, designed to be called from `Binder::bind_inner_expr()`.
 
+use crate::binder::scope::BinderScope;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use graphdb_core::DataType;
-use crate::binder::scope::BinderScope;
 
 /// Stateless expression type deduction.
 pub struct ExpressionBinder<'a> {

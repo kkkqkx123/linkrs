@@ -2,9 +2,9 @@
 //!
 //! This module provides the minimum amount of contextual information required to execute the query, thereby avoiding the need for the query layer to rely on the API layer.
 
-use graphdb_core::Value;
 use crate::storage::QueryStorage;
 use crate::storage::StorageOperationContext;
+use graphdb_core::Value;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

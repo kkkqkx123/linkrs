@@ -1,11 +1,11 @@
 //! Logical search nodes: FulltextSearch, FulltextLookup, MatchFulltext, VectorSearch, VectorLookup, VectorMatch.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_plan_node;
 use crate::parser::ast::fulltext::{
     FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
 };
 use crate::parser::ast::stmt::OrderByClause;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 define_logical_plan_node! {
     pub struct LogicalFulltextSearchNode {

@@ -5,13 +5,13 @@ use std::sync::Arc;
 use log::info;
 
 use crate::config::Config;
-use graphdb_core::error::DBResult;
-use crate::HttpServer;
 use crate::storage::UndoTarget;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
     StorageSyncContextOps,
 };
+use crate::HttpServer;
+use graphdb_core::error::DBResult;
 
 use super::shutdown::async_shutdown_signal;
 
@@ -90,17 +90,16 @@ pub async fn start_http_and_grpc_servers<
 
     // Create WebState for web management APIs
     let storage_path = format!("{}/metadata.db", config.storage_path());
-    let web_router =
-        match crate::web::WebState::new(&storage_path, http_state.clone()).await {
-            Ok(web_state) => Some(crate::web::create_router(web_state)),
-            Err(e) => {
-                log::warn!(
-                    "Failed to initialize web management: {}, continuing without it",
-                    e
-                );
-                None
-            }
-        };
+    let web_router = match crate::web::WebState::new(&storage_path, http_state.clone()).await {
+        Ok(web_state) => Some(crate::web::create_router(web_state)),
+        Err(e) => {
+            log::warn!(
+                "Failed to initialize web management: {}, continuing without it",
+                e
+            );
+            None
+        }
+    };
 
     let http_app = crate::http::router::create_router(http_state.clone(), web_router);
 

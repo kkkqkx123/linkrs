@@ -2,10 +2,6 @@ use std::hash::Hasher;
 
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::value::NullType;
-use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::ColumnarBatch;
@@ -14,6 +10,10 @@ use crate::executor::streaming::executor::SortDirection;
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::spill::{RunReader, SpillManager, SpilledFile, SpilledRun};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 #[derive(Debug)]
 pub struct SortState {

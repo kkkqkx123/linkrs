@@ -2,11 +2,11 @@
 //!
 //! Provide the functionality to evaluate aggregate functions.
 
+use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 
 /// Function evaluator
 pub struct FunctionEvaluator;

@@ -1,6 +1,6 @@
+use crate::parser::ast::pattern::Pattern;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::Span;
-use crate::parser::ast::pattern::Pattern;
 
 use super::YieldClause;
 

@@ -2,8 +2,8 @@
 //!
 //! Provide error code conversion and error message management functions.
 
-use graphdb_core::{CoreError, ExtendedErrorCode};
 use crate::embedded::c_api::types::{graphdb_extended_error_code_t, graphdb_session_t};
+use graphdb_core::{CoreError, ExtendedErrorCode};
 use std::cell::RefCell;
 use std::ffi::CString;
 

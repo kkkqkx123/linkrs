@@ -16,7 +16,6 @@
 //! ScanEdges(col1, col2)
 //! ```
 
-use graphdb_core::types::expr::extract_property_refs;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -24,6 +23,7 @@ use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::ScanEdgesNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::extract_property_refs;
 
 /// ScanEdges Projection Pushdown Rule
 ///
@@ -155,10 +155,10 @@ impl PushDownRule for PushProjectDownScanEdgesRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::{ProjectNode, ScanEdgesNode};
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::{Expression, YieldColumn};
-    use crate::planning::plan::core::nodes::{ProjectNode, ScanEdgesNode};
     use std::sync::Arc;
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {

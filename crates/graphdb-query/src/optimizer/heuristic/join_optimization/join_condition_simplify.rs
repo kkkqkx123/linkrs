@@ -33,13 +33,13 @@
 //! JOIN condition is a constant true.
 //! JOIN conditions can be simplified.
 
-use graphdb_core::{Expression, Value};
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::join::join_node::{CrossJoinNode, InnerJoinNode};
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::{Expression, Value};
 
 /// Rules for simplifying JOIN conditions
 ///

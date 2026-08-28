@@ -3,10 +3,10 @@
 //! Provides transport layer-independent Schema management capabilities
 
 use crate::api_core::{CoreError, CoreResult, IndexTarget, PropertyDef, SpaceConfig};
+use crate::storage::StorageClient;
 use graphdb_core::types::{
     EdgeTypeInfo, Index, IndexField, IndexStatus, IndexType, SpaceInfo, TagInfo,
 };
-use crate::storage::StorageClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

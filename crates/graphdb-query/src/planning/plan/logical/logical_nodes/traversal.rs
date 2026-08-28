@@ -1,12 +1,12 @@
 //! Logical traversal nodes: Expand, ExpandAll, Traverse, AppendVertices, BiExpand, BiTraverse.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::EdgeDirection;
-use graphdb_core::Value;
 use crate::define_logical_binary_input_node;
 use crate::define_logical_plan_node;
 use crate::define_logical_plan_node_with_deps;
 use crate::planning::plan::core::common::{EdgeProp, TagProp};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::EdgeDirection;
+use graphdb_core::Value;
 
 define_logical_plan_node! {
     pub struct LogicalExpandNode {

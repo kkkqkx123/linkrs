@@ -4,16 +4,14 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::{Expression, ExpressionMeta};
-use graphdb_core::Value;
 use crate::optimizer::analysis::{
     ExpressionAnalysis, ExpressionAnalyzer, FingerprintCalculator, PlanFingerprint,
     ReferenceCountAnalysis, ReferenceCountAnalyzer,
 };
-use crate::planning::plan::core::nodes::{
-    FilterNode, GetVerticesNode, PlanNodeEnum, ProjectNode,
-};
+use crate::planning::plan::core::nodes::{FilterNode, GetVerticesNode, PlanNodeEnum, ProjectNode};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{Expression, ExpressionMeta};
+use graphdb_core::Value;
 
 /// Create an expression context for testing purposes.
 fn create_test_context(expr: Expression) -> graphdb_core::types::ContextualExpression {
@@ -131,8 +129,7 @@ fn test_reference_count_analyzer_integration() {
     let analyzer = ReferenceCountAnalyzer::new();
 
     // Create a simple plan tree.
-    let start_node =
-        PlanNodeEnum::Start(crate::planning::plan::core::nodes::StartNode::new());
+    let start_node = PlanNodeEnum::Start(crate::planning::plan::core::nodes::StartNode::new());
 
     let analysis = analyzer.analyze(&start_node);
 

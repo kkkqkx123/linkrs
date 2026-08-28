@@ -14,12 +14,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
-use graphdb_core::value::list::List;
-use graphdb_core::value::NullType;
-use graphdb_core::DataType;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::evaluator::functions::FunctionEvaluator;
@@ -33,6 +27,12 @@ use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
 use crate::executor::streaming::subquery::EvalEnv;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::DataType;
+use graphdb_core::Value;
 
 /// Global runtime switch for the compiled evaluation path.
 ///
@@ -599,8 +599,8 @@ impl CompiledExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
     use crate::executor::streaming::slot::SlotLayout;
+    use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 
     fn layout(names: &[&str]) -> Arc<SlotLayout> {
         Arc::new(SlotLayout::from_names(

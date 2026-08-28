@@ -1,3 +1,8 @@
+use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
+use crate::engine::background_freeze::FreezeStats;
+use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
+use crate::mvcc::SnapshotHandle;
+use crate::schema::{LabelVersionHistory, PropertyChange};
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
 use graphdb_core::types::TransactionId;
 use graphdb_core::types::{
@@ -5,13 +10,6 @@ use graphdb_core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::cursor::{
-    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
-};
-use crate::engine::background_freeze::FreezeStats;
-use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
-use crate::mvcc::SnapshotHandle;
-use crate::schema::{LabelVersionHistory, PropertyChange};
 use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
 use graphdb_transaction::UndoTarget;
 use std::path::Path;
@@ -287,8 +285,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Option<String>, StorageError> {
         let edge_types = self.list_edge_types(space)?;
         Ok(edge_types.into_iter().find_map(|edge_type| {
-            if crate::index::helpers::stable_hash(edge_type.edge_type_name.as_bytes())
-                as u32
+            if crate::index::helpers::stable_hash(edge_type.edge_type_name.as_bytes()) as u32
                 == hash
             {
                 Some(edge_type.edge_type_name)
@@ -607,9 +604,8 @@ pub struct StorageOperationContext {
     /// Lazily registered vertex labels with their snapshot handles (for unregistration on finalize)
     pub registered_vertex_labels: parking_lot::RwLock<std::collections::HashSet<LabelId>>,
     /// Lazily registered edge partitions (for snapshot unregistration on finalize)
-    pub registered_edge_partitions: parking_lot::RwLock<
-        std::collections::HashSet<crate::engine::data_store::EdgeTableKey>,
-    >,
+    pub registered_edge_partitions:
+        parking_lot::RwLock<std::collections::HashSet<crate::engine::data_store::EdgeTableKey>>,
     /// Undo log entry count at the start of this statement's segment (group
     /// mode only). Used by `finalize_operation` to roll back only the failed
     /// statement's segment when a shared undo log is in use.

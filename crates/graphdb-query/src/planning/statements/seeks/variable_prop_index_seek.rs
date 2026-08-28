@@ -9,8 +9,8 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{IndexInfo, SeekResult, SeekStrategyContext, SeekStrategyType};
-use graphdb_core::{StorageError, Value};
 use crate::storage::StorageReader;
+use graphdb_core::{StorageError, Value};
 
 /// Variable attribute predicate
 #[derive(Debug, Clone, PartialEq)]

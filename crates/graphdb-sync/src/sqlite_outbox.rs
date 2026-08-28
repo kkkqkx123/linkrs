@@ -1099,10 +1099,7 @@ impl SqliteOutbox {
         })
     }
 
-    pub async fn prune_applied_events(
-        &self,
-        retention_lsn: CommitLsn,
-    ) -> Result<u64, String> {
+    pub async fn prune_applied_events(&self, retention_lsn: CommitLsn) -> Result<u64, String> {
         let retention = to_sql_i64(retention_lsn.get(), "retention LSN")?;
         let result = sqlx::query(
             "DELETE FROM events WHERE status IN ('applied','skipped') AND commit_lsn <= ?",

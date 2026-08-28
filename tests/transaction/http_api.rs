@@ -30,7 +30,9 @@ async fn test_http_transaction_begin_commit() {
         session_id: 1,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     // This should complete without deadlock
     let result = timeout(
@@ -53,7 +55,9 @@ async fn test_http_transaction_begin_commit() {
         session_id: 1,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -83,7 +87,9 @@ async fn test_http_transaction_rollback() {
         session_id: 2,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -100,7 +106,9 @@ async fn test_http_transaction_rollback() {
         session_id: 2,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -134,7 +142,9 @@ async fn test_http_concurrent_transaction_requests() {
                 session_id,
                 parameters: Default::default(),
                 session_variables: Default::default(),
-             consistency: Default::default(), minimum_lsn: None, };
+                consistency: Default::default(),
+                minimum_lsn: None,
+            };
 
             let result = timeout(
                 Duration::from_secs(10),
@@ -158,7 +168,9 @@ async fn test_http_concurrent_transaction_requests() {
                 session_id,
                 parameters: Default::default(),
                 session_variables: Default::default(),
-             consistency: Default::default(), minimum_lsn: None, };
+                consistency: Default::default(),
+                minimum_lsn: None,
+            };
 
             let result = timeout(
                 Duration::from_secs(10),
@@ -207,7 +219,9 @@ async fn test_http_transaction_with_data_operations() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(begin_req).await;
     assert!(result.success, "BEGIN should succeed");
@@ -218,7 +232,9 @@ async fn test_http_transaction_with_data_operations() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(insert_req).await;
     assert!(result.success, "INSERT should succeed");
@@ -229,7 +245,9 @@ async fn test_http_transaction_with_data_operations() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(commit_req).await;
     assert!(result.success, "COMMIT should succeed");
@@ -256,7 +274,9 @@ async fn test_http_rapid_transaction_requests() {
             session_id,
             parameters: Default::default(),
             session_variables: Default::default(),
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let result = timeout(
             Duration::from_secs(5),
@@ -273,7 +293,9 @@ async fn test_http_rapid_transaction_requests() {
             session_id,
             parameters: Default::default(),
             session_variables: Default::default(),
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let result = timeout(
             Duration::from_secs(5),
@@ -301,7 +323,9 @@ async fn test_http_transaction_savepoints() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(req).await;
     assert!(result.success, "BEGIN should succeed");
@@ -312,7 +336,9 @@ async fn test_http_transaction_savepoints() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(req).await;
     assert!(result.success, "SAVEPOINT should succeed");
@@ -323,7 +349,9 @@ async fn test_http_transaction_savepoints() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(req).await;
     assert!(result.success, "RELEASE SAVEPOINT should succeed");
@@ -334,7 +362,9 @@ async fn test_http_transaction_savepoints() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(req).await;
     assert!(result.success, "COMMIT should succeed");
@@ -355,7 +385,9 @@ async fn test_http_transaction_error_handling() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(invalid_req).await;
     assert!(!result.success, "Invalid query should fail");
@@ -367,7 +399,9 @@ async fn test_http_transaction_error_handling() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = simulate_http_query_execute(unknown_req).await;
     assert!(!result.success, "Unknown command should fail");
@@ -388,7 +422,9 @@ async fn test_http_streaming_transaction() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -405,7 +441,9 @@ async fn test_http_streaming_transaction() {
         session_id,
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -438,7 +476,9 @@ async fn test_mixed_api_transaction_consistency() {
         session_id: txn_id.0 as i64, // Using txn_id as session_id for test
         parameters: Default::default(),
         session_variables: Default::default(),
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let result = timeout(
         Duration::from_secs(5),
@@ -539,7 +579,9 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 session_id: i as i64,
                 parameters: Default::default(),
                 session_variables: Default::default(),
-             consistency: Default::default(), minimum_lsn: None, };
+                consistency: Default::default(),
+                minimum_lsn: None,
+            };
 
             // Direct await - this is the fixed pattern
             let result = simulate_http_query_execute(request).await;
@@ -556,7 +598,9 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 session_id: i as i64,
                 parameters: Default::default(),
                 session_variables: Default::default(),
-             consistency: Default::default(), minimum_lsn: None, };
+                consistency: Default::default(),
+                minimum_lsn: None,
+            };
 
             let result = simulate_http_query_execute(request).await;
 

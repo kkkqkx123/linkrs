@@ -1,10 +1,3 @@
-use graphdb_core::error::StorageError;
-use graphdb_core::metadata::IndexMetadataManager;
-use graphdb_core::types::{
-    EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
-    PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
-};
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::{
     LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
@@ -12,6 +5,13 @@ use crate::{
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
     StorageSyncContextOps, StorageWriter,
 };
+use graphdb_core::error::StorageError;
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::{
+    EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
+    PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
 use graphdb_transaction::UndoTarget;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -287,9 +287,7 @@ impl StoragePersistenceOps for MockStorage {
         Ok(())
     }
 
-    fn create_checkpoint(
-        &self,
-    ) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
+    fn create_checkpoint(&self) -> graphdb_core::StorageResult<Option<crate::CheckpointStats>> {
         Ok(None)
     }
 

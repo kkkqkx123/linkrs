@@ -12,7 +12,6 @@
 //! - FulltextManageNode: Fulltext index DDL operations
 //! - VectorManageNode: Vector index DDL operations
 
-use crate::query_core::{NodeCategory, NodeType, NodeTypeMapping};
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
@@ -42,6 +41,7 @@ use crate::planning::plan::core::nodes::search::fulltext::management::{
 use crate::planning::plan::core::nodes::search::vector::management::{
     CreateVectorIndexNode, DropVectorIndexNode,
 };
+use crate::query_core::{NodeCategory, NodeType, NodeTypeMapping};
 
 macro_rules! define_manage_node_enum {
     (

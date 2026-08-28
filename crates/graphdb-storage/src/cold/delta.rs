@@ -41,10 +41,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::{Csr, CsrBase, Nbr};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult, Value};
 
 use super::ColdSnapshot;
 
@@ -381,9 +381,7 @@ impl ColdDelta {
 
     /// Build an index of `(src_internal, neighbor bytes)` -> `ImmutableNbr`
     /// for structural edge matching.
-    fn edge_index(
-        snapshot: &ColdSnapshot,
-    ) -> HashMap<(u32, VertexId), crate::edge::ImmutableNbr> {
+    fn edge_index(snapshot: &ColdSnapshot) -> HashMap<(u32, VertexId), crate::edge::ImmutableNbr> {
         let mut index = HashMap::new();
         let cap = snapshot.vertex_capacity();
         for src in 0..cap {
@@ -504,9 +502,7 @@ impl ColdSnapshot {
                 schema: self.schema().clone(),
             };
             let names = index.indexed_property_names();
-            Some(crate::cold::ColdPropertyIndex::build(
-                &exported, &names,
-            ))
+            Some(crate::cold::ColdPropertyIndex::build(&exported, &names))
         } else {
             None
         };
@@ -649,11 +645,11 @@ fn encode_props(buf: &mut Vec<u8>, props: &[(String, Value)]) -> StorageResult<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::cold::ColdSnapshot;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::Value;
 
     fn make_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
@@ -662,7 +658,10 @@ mod tests {
             src_label: 0,
             dst_label: 0,
             properties: vec![
-                StoragePropertyDef::new("weight".to_string(), graphdb_core::types::DataType::Double),
+                StoragePropertyDef::new(
+                    "weight".to_string(),
+                    graphdb_core::types::DataType::Double,
+                ),
                 StoragePropertyDef::new("name".to_string(), graphdb_core::types::DataType::String),
             ],
             oe_strategy: EdgeStrategy::Multiple,
@@ -790,8 +789,7 @@ mod tests {
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let exported = table.export_snapshot(100).unwrap();
-        let index =
-            crate::cold::ColdPropertyIndex::build(&exported, &["weight".to_string()]);
+        let index = crate::cold::ColdPropertyIndex::build(&exported, &["weight".to_string()]);
         let base =
             ColdSnapshot::create_with_index(&exported, Some(index), dir.path().join("base.lkcs"))
                 .unwrap();

@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual;
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
@@ -12,6 +10,8 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 type PredMap =
     HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>>;

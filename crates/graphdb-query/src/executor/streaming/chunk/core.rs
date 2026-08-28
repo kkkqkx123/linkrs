@@ -3,10 +3,10 @@
 use super::schema::{ColumnInfo, Schema};
 use super::typed::TypedColumn;
 use super::view::ChunkView;
-use graphdb_core::Value;
 use crate::executor::base::MemoryReservation;
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
+use graphdb_core::Value;
 use std::sync::Arc;
 
 /// A chunk of rows processed in streaming execution

@@ -106,9 +106,7 @@ impl RewriteRule for ConvertSortLimitToTopNRule {
 mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
-    use crate::planning::plan::core::nodes::operation::sort_node::{
-        LimitNode, SortItem, SortNode,
-    };
+    use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, SortNode};
 
     #[test]
     fn test_rule_name() {

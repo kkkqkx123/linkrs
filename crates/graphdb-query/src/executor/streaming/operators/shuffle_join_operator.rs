@@ -1,18 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
-use crate::executor::streaming::join_helpers::{
-    evaluate_join_key, evaluate_residual_condition,
-};
+use crate::executor::streaming::join_helpers::{evaluate_join_key, evaluate_residual_condition};
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 const CHUNK_SIZE: usize = 2048;
 

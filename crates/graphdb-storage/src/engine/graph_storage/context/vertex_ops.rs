@@ -1,6 +1,6 @@
+use crate::vertex::VertexRecord;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
-use crate::vertex::VertexRecord;
 use std::sync::atomic::Ordering;
 
 use super::GraphStorageContext;

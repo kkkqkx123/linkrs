@@ -559,9 +559,9 @@ impl FulltextSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ast::fulltext::{IndexFieldDef, IndexOptions};
     use graphdb_core::types::span::Span;
     use graphdb_core::types::FulltextEngineType;
-    use crate::parser::ast::fulltext::{IndexFieldDef, IndexOptions};
 
     #[test]
     fn test_fulltext_search_planner_new() {

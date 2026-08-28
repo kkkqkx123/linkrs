@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
@@ -28,6 +27,7 @@ use crate::optimizer::decision::OptimizationDecision;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
+use graphdb_core::types::ContextualExpression;
 
 /// Aggregation policy type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -840,12 +840,12 @@ mod tests {
 
     #[test]
     fn logical_walk_emits_aggregate_strategy_note() {
-        use graphdb_core::types::operators::AggregateFunction;
         use crate::optimizer::cost::SelectivityEstimator;
         use crate::optimizer::stats::StatsView;
         use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
         use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
         use crate::planning::plan::logical::LogicalNodeEnum;
+        use graphdb_core::types::operators::AggregateFunction;
 
         let stats_manager = Arc::new(StatisticsManager::new());
         let cost_calculator = Arc::new(CostCalculator::new(stats_manager.clone()));

@@ -7,8 +7,6 @@
 //! Improving the handling of JOIN operations
 //! - Add support for attribute projection.
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::{ContextualExpression, EdgeDirection};
 use crate::parser::ast::{GoStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
@@ -21,6 +19,8 @@ use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{ContextualExpression, EdgeDirection};
 use std::sync::Arc;
 
 /// GO Query Planner

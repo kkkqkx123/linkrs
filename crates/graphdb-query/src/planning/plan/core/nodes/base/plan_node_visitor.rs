@@ -46,9 +46,7 @@ pub use crate::planning::plan::core::nodes::join::join_node::{
 pub use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 pub use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
-pub use crate::planning::plan::core::nodes::operation::sort_node::{
-    LimitNode, SortNode, TopNNode,
-};
+pub use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
 pub use crate::planning::plan::core::nodes::traversal::path_algorithms::{
     AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
 };

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::parser::ast::stmt::{Ast, Stmt};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::{ParseContext, RecoveryScope};
 use crate::parser::parsing::stmt_parser::StmtParser;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Parser analysis results, including the AST (Statement + Expression Context).
 #[derive(Debug, Clone)]

@@ -92,9 +92,7 @@ mod tests {
     use crate::optimizer::cost::CostCalculator;
     use crate::optimizer::stats::{StatisticsManager, TagStatistics};
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-    use crate::planning::plan::core::nodes::operation::sort_node::{
-        LimitNode, SortItem, SortNode,
-    };
+    use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, SortNode};
     use std::sync::Arc;
 
     fn test_optimizer() -> SortEliminationOptimizer {

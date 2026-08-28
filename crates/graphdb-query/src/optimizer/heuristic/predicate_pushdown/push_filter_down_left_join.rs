@@ -3,8 +3,6 @@
 //! This rule identifies the Filter -> LeftJoin mode.
 //! And push the filtering conditions to both sides of the connection.
 
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::{check_col_name, split_filter};
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -13,6 +11,8 @@ use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Rules that push the filtering conditions to the left hash join operation
 ///
@@ -213,9 +213,9 @@ impl PushDownRule for PushFilterDownLeftJoinRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::join::join_node::LeftJoinNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

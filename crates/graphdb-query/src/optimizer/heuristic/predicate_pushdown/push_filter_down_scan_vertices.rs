@@ -7,14 +7,14 @@
 //! pure pre-filter and the full condition still runs on top of the scan, so
 //! the rewrite can never change results.
 
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::ExpressionMeta;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::scan_predicate::{and_of, pushable_conjuncts};
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::ExpressionMeta;
 
 /// Rule that pushes filter conjuncts into the scan node's vertex filter.
 #[derive(Debug)]
@@ -95,8 +95,8 @@ mod tests {
     use graphdb_core::Expression;
     use graphdb_core::Value;
 
-    fn scan_node(
-    ) -> crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode {
+    fn scan_node() -> crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode
+    {
         crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(
             0, "test",
         )

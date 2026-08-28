@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::engine::resource_budget::MemoryAccounting;
 use graphdb_core::stats::CacheStats;
 use graphdb_core::types::Timestamp;
-use crate::engine::resource_budget::MemoryAccounting;
 
 use super::buffer_pool::BufferPool;
 use super::config::*;

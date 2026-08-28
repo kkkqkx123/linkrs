@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
+use crate::index::traits::VertexIndexOps;
+use crate::index::types::EdgeIdentity;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{
     ColumnId, EdgeIdentifier, EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp,
@@ -10,9 +13,6 @@ use graphdb_core::wal::redo::{
 };
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
-use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
-use crate::index::traits::VertexIndexOps;
-use crate::index::types::EdgeIdentity;
 use graphdb_transaction::undo_log::{
     InsertEdgeUndo, InsertVertexUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogEntry,
     UpdateVertexPropUndo,

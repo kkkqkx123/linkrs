@@ -12,13 +12,13 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use crate::executor::streaming::chunk::core::DataChunk;
+use crate::executor::streaming::chunk::typed::{bitmap_is_valid, TypedColumn, TypedKind};
+use crate::executor::streaming::helpers::compare_values;
 use graphdb_core::value::date_time::{DateTimeValue, DateValue};
 use graphdb_core::value::decimal128::Decimal128Value;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::streaming::chunk::core::DataChunk;
-use crate::executor::streaming::chunk::typed::{bitmap_is_valid, TypedColumn, TypedKind};
-use crate::executor::streaming::helpers::compare_values;
 
 /// Column-major accumulation of one output column across chunks.
 #[derive(Debug, Clone)]

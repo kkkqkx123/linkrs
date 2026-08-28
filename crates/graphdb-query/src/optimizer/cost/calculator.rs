@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
+use crate::optimizer::stats::{StatisticsManager, StatsView};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::value::Value;
-use crate::optimizer::stats::{StatisticsManager, StatsView};
 
 use super::config::CostModelConfig;
 

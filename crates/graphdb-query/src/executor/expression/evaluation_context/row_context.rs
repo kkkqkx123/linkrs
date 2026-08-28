@@ -53,9 +53,7 @@ impl RowExpressionContext {
     }
 }
 
-impl crate::executor::expression::evaluator::traits::ExpressionContext
-    for RowExpressionContext
-{
+impl crate::executor::expression::evaluator::traits::ExpressionContext for RowExpressionContext {
     fn get_variable(&self, name: &str) -> Option<Value> {
         // First, check the variable mapping.
         if let Some(value) = self.variables.get(name) {

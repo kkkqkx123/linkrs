@@ -34,5 +34,3 @@ pub use result::{
 pub use tantivy_index::TantivySearchEngine;
 #[cfg(feature = "fulltext-search")]
 pub use warmup::IndexWarmer;
-
-

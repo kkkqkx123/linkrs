@@ -8,8 +8,8 @@
 
 use super::compaction::CompactionCoordinator;
 use super::core::VertexTable;
-use graphdb_core::StorageResult;
 use crate::vertex::IdKey;
+use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
 impl VertexTable {

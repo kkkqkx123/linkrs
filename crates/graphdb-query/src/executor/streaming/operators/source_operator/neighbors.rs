@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{error::QueryError, EdgeDirection};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::state::GlobalState;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{error::QueryError, EdgeDirection};
 use std::sync::Arc;
 
 use super::util::{attach_columnar_stats, make_flat_vertex_row, reserve_memory, storage_error};

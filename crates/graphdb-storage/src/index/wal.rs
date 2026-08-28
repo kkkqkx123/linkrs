@@ -4,11 +4,11 @@
 //! since the last checkpoint. On checkpoint, the full state is written to the
 //! data files and the WAL is truncated.
 
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageError, StorageResult};
 use crate::index::entity_ref_codec::{write_entity_ref, EntityRefReader};
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::types::IndexRecord;
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 use std::io::Write;
 use std::path::Path;
 

@@ -2,8 +2,6 @@
 //!
 //! Query planning for handling the REMOVE statement
 
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::YieldColumn;
 use crate::parser::ast::{RemoveStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -12,6 +10,8 @@ use crate::planning::plan::core::{
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// Attribute/Tag Remover Planner

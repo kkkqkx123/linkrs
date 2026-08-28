@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::ContextualExpression;
 use crate::binder::validation::ValidationInfo;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::pattern::{
@@ -17,9 +15,7 @@ use crate::planning::plan::core::nodes::data_modification::info::{
     EdgeDeleteInfo, VertexDeleteInfo,
 };
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
-use crate::planning::plan::core::nodes::{
-    ArgumentNode, ExpandAllNode, LoopNode, ScanVerticesNode,
-};
+use crate::planning::plan::core::nodes::{ArgumentNode, ExpandAllNode, LoopNode, ScanVerticesNode};
 use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
 use crate::planning::plan::logical::logical_nodes::control_flow::{
     LogicalArgumentNode, LogicalLoopNode,
@@ -30,6 +26,8 @@ use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ContextualExpression;
 
 pub struct PlanningContext<'a> {
     pub space_id: u64,
@@ -859,13 +857,13 @@ fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::graph_schema::EdgeDirection;
-    use graphdb_core::types::Span;
     use crate::binder::validation::ValidationInfo;
     use crate::metadata::MetadataContext;
     use crate::parser::ast::pattern::PathPattern;
     use crate::QueryRequestContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::graph_schema::EdgeDirection;
+    use graphdb_core::types::Span;
     use std::collections::HashMap;
 
     #[allow(clippy::arc_with_non_send_sync)]

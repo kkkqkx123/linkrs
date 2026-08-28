@@ -17,8 +17,8 @@
 //!     .build();
 //! ```
 
-use graphdb_core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
 use crate::executor::streaming::query_registry::CancelToken;
+use graphdb_core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
 use graphdb_core::{Arena, IdGenerator};
 use std::sync::Arc;
 

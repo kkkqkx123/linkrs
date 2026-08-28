@@ -1,7 +1,7 @@
-use crate::HttpServer;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use crate::HttpServer;
 use std::sync::Arc;
 
 #[derive(Clone)]

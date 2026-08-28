@@ -18,9 +18,9 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::types::LabelId;
 use graphdb_core::{StorageError, StorageResult};
-use crate::persistence::{read_u32_le, read_u64_le};
 
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
 

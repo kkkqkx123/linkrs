@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::{Position, Span};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::lexing::LexError;
 use crate::parser::lexing::Lexer;
 use crate::parser::ParseErrors;
 use crate::parser::Token;
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::{Position, Span};
 
 const RECOVERY_LIMIT: usize = 5;
 
@@ -881,7 +881,9 @@ impl<'a> ParseContext<'a> {
             }
             TokenKind::Null => {
                 self.next_token();
-                Ok(graphdb_core::Value::Null(graphdb_core::null::NullType::Null))
+                Ok(graphdb_core::Value::Null(
+                    graphdb_core::null::NullType::Null,
+                ))
             }
             _ => {
                 let pos = self.current_position();

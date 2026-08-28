@@ -10,13 +10,13 @@ use std::time::Instant;
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::group_commit::GroupCommitCoordinator;
 use super::sync::elapsed_since;
+use crate::wal::parser::{LocalWalParser, WalParser};
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::traits::WalWriter;
 use graphdb_core::wal::types::{
     ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
     WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
 };
-use crate::wal::parser::{LocalWalParser, WalParser};
 
 /// Parameters for building a WAL header, bundling the many fields
 /// that [`LocalWalWriter::build_wal_header`] needs.
@@ -1107,14 +1107,14 @@ impl Drop for LocalWalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wal::{
+        collect_committed_transactions, LocalWalParser, SyncPolicy, TransactionWalEntry, WalParser,
+    };
     use graphdb_core::types::{
         IdempotencyKey, IndexGeneration, OrderingKey, TargetId, TransactionId, VertexId,
     };
     use graphdb_core::wal::{
         EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION,
-    };
-    use crate::wal::{
-        collect_committed_transactions, LocalWalParser, SyncPolicy, TransactionWalEntry, WalParser,
     };
     use tempfile::TempDir;
 

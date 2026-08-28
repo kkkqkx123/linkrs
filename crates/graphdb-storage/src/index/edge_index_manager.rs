@@ -1,9 +1,5 @@
 use std::collections::HashMap;
 
-use graphdb_core::types::{Index, Timestamp};
-use graphdb_core::value::ordered_codec::OrderedCodec;
-use graphdb_core::wal::EntityRef;
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
 use crate::index::chunk::chunked_index::ChunkedIndex;
@@ -11,6 +7,10 @@ use crate::index::cursor::ChainForwardIterator;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
 use crate::index::manifest::ManifestHandle;
 use crate::index::types::{IndexRecord, StaleChecker};
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{StorageError, StorageResult, Value};
 
 pub(crate) fn compute_edge_index_scan_range(
     space_id: u64,

@@ -10,7 +10,6 @@
 pub mod binder;
 pub mod cache;
 pub mod context;
-pub mod query_core;
 pub mod data_set;
 pub mod executor;
 pub mod metadata;
@@ -18,6 +17,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod pipeline;
 pub mod planning;
+pub mod query_core;
 pub mod query_manager;
 
 // Re-export DataSet for convenience
@@ -34,7 +34,6 @@ pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
 pub use query_manager::{QueryInfo, QueryManager, QueryStats, QueryStatus};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;
-
 
 pub mod storage {
     pub use graphdb_storage::*;

@@ -164,4 +164,3 @@ mod tests {
         assert_eq!(options.durability, DurabilityLevel::None);
     }
 }
-

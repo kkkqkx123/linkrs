@@ -10,10 +10,10 @@
 //! The original filter expression is never modified: the pushed predicate is
 //! a pure pre-filter and the full condition still runs on top of the scan.
 
+use crate::storage::ScanPredicate;
 use graphdb_core::types::expr::{ContextualExpression, Expression};
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::Value;
-use crate::storage::ScanPredicate;
 
 /// Extract pushable conjuncts from a scan-level filter expression.
 ///

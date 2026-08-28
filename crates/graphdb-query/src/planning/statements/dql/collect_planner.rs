@@ -4,13 +4,13 @@
 //! row, e.g. `GO FROM 1 OVER KNOWS | YIELD target.name AS name
 //! | COLLECT LIST(name) AS names`.
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::AggregateFunction;
 use crate::parser::ast::stmt::{CollectStmt, Stmt};
 use crate::planning::plan::core::nodes::{AggregateNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 use std::sync::Arc;
 
 /// Standalone COLLECT statement planner.

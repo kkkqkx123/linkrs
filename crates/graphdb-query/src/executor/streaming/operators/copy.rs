@@ -13,13 +13,13 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rayon::prelude::*;
 
+use crate::executor::streaming::operators::spec::CopyTarget;
+use crate::executor::streaming::runtime::ExecutionRuntime;
+use crate::storage::{QueryStorage, StorageWriter};
 use graphdb_core::error::QueryError;
 use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
 use graphdb_core::Value;
-use crate::executor::streaming::operators::spec::CopyTarget;
-use crate::executor::streaming::runtime::ExecutionRuntime;
-use crate::storage::{QueryStorage, StorageWriter};
 
 /// Default batch size when the statement does not specify one.
 const DEFAULT_BATCH_SIZE: usize = 1000;

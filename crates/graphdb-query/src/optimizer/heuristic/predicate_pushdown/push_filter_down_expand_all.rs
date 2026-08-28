@@ -204,9 +204,9 @@ impl PushDownRule for PushFilterDownExpandAllRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Expression;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+    use graphdb_core::Expression;
 
     #[test]
     fn test_rule_name() {
@@ -235,12 +235,11 @@ mod tests {
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(condition);
         let id = ctx.register_expression(expr_meta);
         let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
-        let filter =
-            crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
-                start_enum.clone(),
-                ctx_expr,
-            )
-            .expect("Failed to create FilterNode");
+        let filter = crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
+            start_enum.clone(),
+            ctx_expr,
+        )
+        .expect("Failed to create FilterNode");
         let filter_enum = PlanNodeEnum::Filter(filter);
 
         let expand_all = ExpandAllNode::new(1, vec![], "OUT");

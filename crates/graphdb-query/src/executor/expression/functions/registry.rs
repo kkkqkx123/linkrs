@@ -5,9 +5,9 @@
 
 use super::BuiltinFunction;
 use super::CustomFunction;
-use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use graphdb_core::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 

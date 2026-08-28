@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use crate::storage::{QueryStorage, ScanOptions};
 use graphdb_core::types::EdgeDirection;
 use graphdb_core::vertex_edge_path::Vertex;
-use crate::storage::{QueryStorage, ScanOptions};
 
 use super::{EdgeTypeStatistics, PropertyStatistics, StatisticsManager, TagStatistics};
 

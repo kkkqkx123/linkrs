@@ -3,11 +3,11 @@
 //! Unified WAL (Write-Ahead Log) manager that properly integrates with LocalWalWriter.
 //! This module provides a single source of truth for LSN management and WAL operations.
 
+use crate::index::shard_runtime::IndexBarrierRegistry;
 use graphdb_core::types::{CommitLsn, Timestamp, TransactionId};
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::wal::OutboxIntent;
 use graphdb_core::{StorageError, StorageResult};
-use crate::index::shard_runtime::IndexBarrierRegistry;
 use graphdb_transaction::wal::writer::WalWriter;
 use graphdb_transaction::wal::TransactionWalEntry;
 use graphdb_transaction::wal::{LocalWalWriter, Lsn, WalConfig};

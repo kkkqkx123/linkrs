@@ -1,8 +1,8 @@
 //! Join and apply (correlated subquery) spec builders.
 
-use graphdb_core::types::expr::Expression;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{ApplySpec, BuildSide, JoinSpec};
+use graphdb_core::types::expr::Expression;
 
 use super::contextual_to_expression;
 

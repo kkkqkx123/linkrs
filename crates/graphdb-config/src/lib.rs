@@ -1,8 +1,8 @@
 pub mod columnar;
 pub mod database;
 pub mod fulltext;
-pub mod logging;
 pub mod log;
+pub mod logging;
 pub mod monitoring;
 pub mod optimizer;
 pub mod parallel;
@@ -26,8 +26,8 @@ pub mod security;
 pub use columnar::*;
 pub use database::*;
 pub use fulltext::*;
-pub use logging::*;
 pub use log::*;
+pub use logging::*;
 pub use monitoring::*;
 pub use optimizer::*;
 pub use parallel::*;
@@ -59,9 +59,7 @@ pub use log::LogConfig;
 pub use monitoring::{MonitoringConfig, SlowQueryLogConfig};
 pub use optimizer::{OptimizerConfig, OptimizerRulesConfig};
 pub use parallel::ParallelConfig;
-pub use storage::{
-    CompressionAlgorithm, QueryResourceConfig, StorageConfig, StorageEngine,
-};
+pub use storage::{CompressionAlgorithm, QueryResourceConfig, StorageConfig, StorageEngine};
 pub use transaction::TransactionConfig;
 
 #[cfg(feature = "server")]
@@ -249,12 +247,24 @@ impl Default for IvfSettings {
     }
 }
 
-fn default_ivf_min_build_points() -> u64 { 100_000 }
-fn default_ivf_sample_limit() -> usize { 65_536 }
-fn default_ivf_kmeans_max_iter() -> u32 { 10 }
-fn default_ivf_drift_threshold() -> f64 { 0.10 }
-fn default_ivf_drift_check_interval() -> u64 { 25_000 }
-fn default_ivf_nprobe() -> usize { 8 }
+fn default_ivf_min_build_points() -> u64 {
+    100_000
+}
+fn default_ivf_sample_limit() -> usize {
+    65_536
+}
+fn default_ivf_kmeans_max_iter() -> u32 {
+    10
+}
+fn default_ivf_drift_threshold() -> f64 {
+    0.10
+}
+fn default_ivf_drift_check_interval() -> u64 {
+    25_000
+}
+fn default_ivf_nprobe() -> usize {
+    8
+}
 
 /// HNSW settings for the local vector engine (raw TOML surface).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
@@ -286,8 +296,12 @@ impl Default for HnswSettings {
     }
 }
 
-fn default_hnsw_m() -> usize { 16 }
-fn default_hnsw_ef_construct() -> usize { 100 }
+fn default_hnsw_m() -> usize {
+    16
+}
+fn default_hnsw_ef_construct() -> usize {
+    100
+}
 
 /// Quantization settings for the local vector engine (raw TOML surface).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
@@ -331,7 +345,9 @@ pub struct VectorConfig {
     pub qdrant: VectorClientConfig,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for VectorConfig {
     fn default() -> Self {
@@ -526,33 +542,65 @@ impl Config {
         Ok(())
     }
 
-    pub fn log_level(&self) -> &str { &self.common.log.level }
-    pub fn log_dir(&self) -> &str { &self.common.log.dir }
-    pub fn log_file(&self) -> &str { &self.common.log.file }
-    pub fn host(&self) -> &str { &self.common.database.host }
-    pub fn port(&self) -> u16 { self.common.database.port }
+    pub fn log_level(&self) -> &str {
+        &self.common.log.level
+    }
+    pub fn log_dir(&self) -> &str {
+        &self.common.log.dir
+    }
+    pub fn log_file(&self) -> &str {
+        &self.common.log.file
+    }
+    pub fn host(&self) -> &str {
+        &self.common.database.host
+    }
+    pub fn port(&self) -> u16 {
+        self.common.database.port
+    }
 
     #[cfg(feature = "server")]
-    pub fn grpc_port(&self) -> u16 { self.server.grpc.port }
+    pub fn grpc_port(&self) -> u16 {
+        self.server.grpc.port
+    }
 
     #[cfg(feature = "server")]
-    pub fn grpc(&self) -> &GrpcConfig { &self.server.grpc }
+    pub fn grpc(&self) -> &GrpcConfig {
+        &self.server.grpc
+    }
 
     #[cfg(feature = "server")]
-    pub fn grpc_enabled(&self) -> bool { self.server.grpc.enabled }
+    pub fn grpc_enabled(&self) -> bool {
+        self.server.grpc.enabled
+    }
 
-    pub fn storage_path(&self) -> &str { &self.common.database.storage_path }
-    pub fn max_connections(&self) -> usize { self.common.database.max_connections }
-    pub fn transaction_timeout(&self) -> u64 { self.common.transaction.default_timeout }
-    pub fn max_concurrent_transactions(&self) -> usize { self.common.transaction.max_concurrent_transactions }
+    pub fn storage_path(&self) -> &str {
+        &self.common.database.storage_path
+    }
+    pub fn max_connections(&self) -> usize {
+        self.common.database.max_connections
+    }
+    pub fn transaction_timeout(&self) -> u64 {
+        self.common.transaction.default_timeout
+    }
+    pub fn max_concurrent_transactions(&self) -> usize {
+        self.common.transaction.max_concurrent_transactions
+    }
 
-    pub fn slow_query_log(&self) -> &SlowQueryLogConfig { &self.common.monitoring.slow_query_log }
+    pub fn slow_query_log(&self) -> &SlowQueryLogConfig {
+        &self.common.monitoring.slow_query_log
+    }
     pub fn to_slow_query_config(&self) -> graphdb_core::stats::SlowQueryConfig {
         self.common.monitoring.slow_query_log.to_slow_query_config()
     }
-    pub fn storage(&self) -> &StorageConfig { &self.common.storage }
-    pub fn query_resource(&self) -> &QueryResourceConfig { &self.common.query_resource }
-    pub fn columnar(&self) -> &ColumnarConfig { &self.common.columnar }
+    pub fn storage(&self) -> &StorageConfig {
+        &self.common.storage
+    }
+    pub fn query_resource(&self) -> &QueryResourceConfig {
+        &self.common.query_resource
+    }
+    pub fn columnar(&self) -> &ColumnarConfig {
+        &self.common.columnar
+    }
 
     pub fn is_vector_enabled(&self) -> bool {
         #[cfg(feature = "vector")]
@@ -564,25 +612,37 @@ impl Config {
             }
         }
         #[cfg(not(feature = "vector"))]
-        { false }
+        {
+            false
+        }
     }
 
     pub fn is_local_vector(&self) -> bool {
         #[cfg(feature = "vector")]
-        { self.vector.enabled && self.vector.engine == VectorEngineKind::Local }
+        {
+            self.vector.enabled && self.vector.engine == VectorEngineKind::Local
+        }
         #[cfg(not(feature = "vector"))]
-        { false }
+        {
+            false
+        }
     }
 
     pub fn vector_engine(&self) -> Option<VectorEngineKind> {
         #[cfg(feature = "vector")]
-        { self.vector.enabled.then_some(self.vector.engine) }
+        {
+            self.vector.enabled.then_some(self.vector.engine)
+        }
         #[cfg(not(feature = "vector"))]
-        { None }
+        {
+            None
+        }
     }
 
     #[cfg(feature = "vector")]
-    pub fn vector_config(&self) -> &VectorConfig { &self.vector }
+    pub fn vector_config(&self) -> &VectorConfig {
+        &self.vector
+    }
 
     #[cfg(feature = "vector")]
     pub fn vector_data_dir(&self) -> PathBuf {
@@ -596,11 +656,15 @@ impl Config {
 
 impl std::ops::Deref for Config {
     type Target = CommonConfig;
-    fn deref(&self) -> &Self::Target { &self.common }
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
 }
 
 impl std::ops::DerefMut for Config {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.common }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
+    }
 }
 
 #[cfg(test)]
@@ -627,11 +691,21 @@ mod tests {
     fn test_config_load_save() {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
         let config = Config::default();
-        let toml_content = toml::to_string_pretty(&config).expect("Failed to serialize config to TOML");
-        temp_file.write_all(toml_content.as_bytes()).expect("Failed to write TOML content to temporary file");
-        let loaded_config = Config::load(temp_file.path()).expect("Failed to load config from temporary file");
-        assert_eq!(config.common.database.host, loaded_config.common.database.host);
-        assert_eq!(config.common.database.port, loaded_config.common.database.port);
+        let toml_content =
+            toml::to_string_pretty(&config).expect("Failed to serialize config to TOML");
+        temp_file
+            .write_all(toml_content.as_bytes())
+            .expect("Failed to write TOML content to temporary file");
+        let loaded_config =
+            Config::load(temp_file.path()).expect("Failed to load config from temporary file");
+        assert_eq!(
+            config.common.database.host,
+            loaded_config.common.database.host
+        );
+        assert_eq!(
+            config.common.database.port,
+            loaded_config.common.database.port
+        );
         assert_eq!(config.common.log.level, loaded_config.common.log.level);
     }
 
@@ -665,14 +739,19 @@ max_concurrent_queries = 50
 max_memory_per_query = 1073741824
 "#;
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
-        temp_file.write_all(config_content.as_bytes()).expect("Failed to write config file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
         let config = Config::load(temp_file.path()).expect("Failed to load config");
         assert_eq!(config.common.database.host, "0.0.0.0");
         assert_eq!(config.common.database.port, 8080);
         assert_eq!(config.common.transaction.default_timeout, 60);
         assert_eq!(config.common.transaction.max_concurrent_transactions, 500);
         assert_eq!(config.common.log.level, "debug");
-        assert_eq!(config.common.storage.compression, CompressionAlgorithm::Zstd);
+        assert_eq!(
+            config.common.storage.compression,
+            CompressionAlgorithm::Zstd
+        );
         assert_eq!(config.common.storage.compression_level, 5);
         assert_eq!(config.common.query_resource.max_concurrent_queries, 50);
     }
@@ -690,7 +769,9 @@ vertex_id_start = 0
 vertex_id_end = 100000
 "#;
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
-        temp_file.write_all(config_content.as_bytes()).expect("Failed to write config file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
         let config = Config::load(temp_file.path()).expect("Failed to load config");
         assert!(config.common.parallel.enabled);
         assert_eq!(config.common.parallel.workers, 4);
@@ -707,7 +788,9 @@ vertex_id_end = 100000
 host = "0.0.0.0"
 "#;
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
-        temp_file.write_all(config_content.as_bytes()).expect("Failed to write config file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
         let config = Config::load(temp_file.path()).expect("Failed to load config");
         assert!(!config.common.parallel.enabled);
         assert_eq!(config.common.parallel.workers, 1);
@@ -726,9 +809,18 @@ storage_path = "data/graphdb"
         let config_path = config_dir.join("config.toml");
         std::fs::write(&config_path, config_content).expect("Failed to write config");
         let config = Config::load(&config_path).expect("Failed to load config");
-        assert_eq!(config.common.database.storage_path, config_dir.join("data/graphdb").to_string_lossy());
-        assert_eq!(config.common.log.dir, config_dir.join("logs").to_string_lossy());
-        assert_eq!(config.common.monitoring.slow_query_log.log_file_path, config_dir.join("logs/slow_query.log").to_string_lossy());
+        assert_eq!(
+            config.common.database.storage_path,
+            config_dir.join("data/graphdb").to_string_lossy()
+        );
+        assert_eq!(
+            config.common.log.dir,
+            config_dir.join("logs").to_string_lossy()
+        );
+        assert_eq!(
+            config.common.monitoring.slow_query_log.log_file_path,
+            config_dir.join("logs/slow_query.log").to_string_lossy()
+        );
         assert_eq!(config.fulltext.index_path, config_dir.join("data/fulltext"));
     }
 
@@ -741,11 +833,16 @@ storage_path = "data/graphdb"
 [database]
 storage_path = "storage"
 "#;
-        std::fs::write(config_dir.join("config.toml"), config_content).expect("Failed to write config");
+        std::fs::write(config_dir.join("config.toml"), config_content)
+            .expect("Failed to write config");
         let previous_dir = env::var("GRAPHDB_CONFIG_DIR").ok();
         env::set_var("GRAPHDB_CONFIG_DIR", &config_dir);
-        let config = Config::load_user_config_named("config.toml").expect("Failed to load user config");
-        assert_eq!(config.common.database.storage_path, config_dir.join("storage").to_string_lossy());
+        let config =
+            Config::load_user_config_named("config.toml").expect("Failed to load user config");
+        assert_eq!(
+            config.common.database.storage_path,
+            config_dir.join("storage").to_string_lossy()
+        );
         if let Some(value) = previous_dir {
             env::set_var("GRAPHDB_CONFIG_DIR", value);
         } else {
@@ -818,7 +915,10 @@ upsert_timeout_secs = 30
         let config: Config = toml::from_str(toml).expect("vector section should deserialize");
         assert!(config.is_vector_enabled());
         assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
-        assert_eq!(config.vector_data_dir(), std::path::PathBuf::from("data/graphdb/vector"));
+        assert_eq!(
+            config.vector_data_dir(),
+            std::path::PathBuf::from("data/graphdb/vector")
+        );
         assert!(config.vector.qdrant.enabled);
         assert_eq!(config.vector.qdrant.connection.host, "localhost");
         assert_eq!(config.vector.qdrant.connection.port, 6334);

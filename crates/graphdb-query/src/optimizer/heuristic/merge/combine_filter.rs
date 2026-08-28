@@ -1,7 +1,5 @@
 //! Rules that combine multiple filtering operations
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -9,6 +7,8 @@ use crate::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Rules that combine multiple filtering operations
 ///
@@ -151,9 +151,9 @@ impl MergeRule for CombineFilterRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::Expression;
-    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 
     #[test]

@@ -1,8 +1,8 @@
-use graphdb_core::types::LabelId;
-use graphdb_core::StorageResult;
 use crate::edge::EdgeStrategy;
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
+use graphdb_core::types::LabelId;
+use graphdb_core::StorageResult;
 
 use super::GraphStorageContext;
 

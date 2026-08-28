@@ -3,13 +3,13 @@
 //! This module provides functions for parameterizing query requests and extracting templates, which are used for planning the caching process.
 //! Replace the specific parameter values with placeholders, so that queries with semantically equivalent content can share the cache.
 
-use graphdb_core::types::expr::{ContextualExpression, Expression};
-use graphdb_core::{NullType, Value};
 use crate::parser::ast::stmt::OrderDirection;
 use crate::parser::ast::stmt::{
     DeleteStmt, FetchStmt, FromClause, GoStmt, InsertStmt, LookupStmt, MatchStmt, Pattern,
     ReturnClause, ReturnItem, SetClause, Stmt, UpdateStmt, YieldClause,
 };
+use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::{NullType, Value};
 
 /// Parameterized results
 #[derive(Debug, Clone)]

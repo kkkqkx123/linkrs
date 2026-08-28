@@ -3,8 +3,6 @@
 //! This rule identifies the `vFilter` element within the Traverse/AppendVertices nodes.
 //! And push the filter conditions that can be applied “downward” (i.e., applied to the data at a lower level in the system) back to the data source.
 
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::{check_col_name, split_filter};
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -13,6 +11,8 @@ use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::traversal::traversal_node::TraverseNode;
 use crate::planning::plan::core::nodes::AppendVerticesNode;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Rules that push the filtering conditions to the Traverse/AppendVertices node
 ///

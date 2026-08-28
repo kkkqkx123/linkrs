@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
@@ -14,6 +11,9 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 mod cross_semi_join;
 mod hash_join;
@@ -334,9 +334,7 @@ impl JoinOperator {
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
             },
@@ -351,9 +349,7 @@ impl JoinOperator {
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
             },
@@ -372,27 +368,21 @@ impl JoinOperator {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
             },
             super::spec::JoinSpec::LeftJoin { join_condition } => JoinOperatorKind::LeftJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
             },
             super::spec::JoinSpec::RightJoin { join_condition } => JoinOperatorKind::RightJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
                 right_consumed: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
             },
             super::spec::JoinSpec::FullOuterJoin { join_condition } => {
@@ -414,9 +404,7 @@ impl JoinOperator {
                 all_right_rows: Vec::new(),
                 left_consumed: false,
                 right_consumed: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
                 output_done: false,
             },
@@ -428,9 +416,7 @@ impl JoinOperator {
                 anti: *anti,
                 right_rows: Vec::new(),
                 right_consumed: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
             },
         };

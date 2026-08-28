@@ -5,12 +5,12 @@ mod tests {
 
     use parking_lot::RwLock;
 
-    use graphdb_core::types::{LabelId, VertexId};
-    use graphdb_core::Value;
     use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::engine::data_store::EdgeTableKey;
     use crate::types::StoragePropertyDef;
     use crate::vertex::{IdKey, ShardedVertexTable, VertexSchema};
+    use graphdb_core::types::{LabelId, VertexId};
+    use graphdb_core::Value;
 
     use crate::engine::transaction::ops::{
         create_edge_type_undo, create_vertex_type_undo, delete_edge_type, delete_vertex_type,

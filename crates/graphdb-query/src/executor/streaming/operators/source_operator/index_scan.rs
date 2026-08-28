@@ -1,13 +1,13 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::MAX_TIMESTAMP;
-use graphdb_core::wal::EntityRef;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::state::GlobalState;
 use crate::storage::{open_index_cursor, IndexPredicate, IndexRow, IndexScanPlan, QueryStorage};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::MAX_TIMESTAMP;
+use graphdb_core::wal::EntityRef;
 use parking_lot::RwLock;
 
 use super::super::spec::{BoundIndexPredicate, IndexProjection};
@@ -334,7 +334,6 @@ mod tests {
     use graphdb_core::types::EdgeTypeInfo;
     use graphdb_core::Edge;
 
-    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::source_operator::{
         OperatorConfig, PhysicalOperatorId,
@@ -343,6 +342,7 @@ mod tests {
     use crate::executor::streaming::slot::SlotLayout;
     use crate::storage::IndexCursor;
     use crate::storage::{IndexRow, MockStorage, StorageError};
+    use graphdb_core::Value;
 
     /// FNV-1a matching the storage index write path (`stable_hash`).
     fn edge_type_hash(name: &str) -> u32 {

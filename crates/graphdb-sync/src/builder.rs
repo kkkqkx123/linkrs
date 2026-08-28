@@ -185,9 +185,9 @@ impl VectorCoordinatorBuilder {
     }
 
     pub fn build(self) -> Result<Arc<VectorSyncCoordinator>, crate::SyncError> {
-        let manager = self.vector_manager.ok_or_else(|| {
-            crate::SyncError::Internal("VectorManager is required".to_string())
-        })?;
+        let manager = self
+            .vector_manager
+            .ok_or_else(|| crate::SyncError::Internal("VectorManager is required".to_string()))?;
         let handle = self.runtime_handle.unwrap_or_else(|| {
             tokio::runtime::Handle::try_current().expect("No tokio runtime available")
         });

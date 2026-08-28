@@ -1,7 +1,7 @@
 //! DELETE statement shape renderer.
 
-use graphdb_core::Value;
 use crate::parser::ast::{DeleteStmt, DeleteTarget};
+use graphdb_core::Value;
 
 use super::{render_contextual, ContextualExpression};
 

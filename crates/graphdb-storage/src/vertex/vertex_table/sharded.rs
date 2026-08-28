@@ -3,13 +3,13 @@ use std::path::Path;
 use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageResult, Value};
 use crate::compression::CompressionType;
 use crate::mvcc::SnapshotHandle;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{IdKey, VertexRecord};
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageResult, Value};
 
 /// Maximum shard count per vertex table. Lifted from 16 to 256 so a single
 /// vertex label's write concurrency is no longer pinned to 16 on large
@@ -194,8 +194,7 @@ impl ShardedVertexTable {
             let table = self.shards[shard_idx].read();
             for &pos in positions {
                 let (_, local_id) = decode_id(ids[pos], self.num_shards);
-                let chunk =
-                    local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
+                let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
                     let Some(bounds) = table.columns.zone_maps_for_column(&range.column) else {
                         continue;
@@ -730,9 +729,9 @@ impl ShardedVertexTable {
         for (index, data_type) in types.into_iter().enumerate() {
             if let Some(data_type) = data_type {
                 let general = merged[index].1.to_general();
-                if let Some(typed) = crate::cursor::ColumnValues::from_general_with_type(
-                    general, &data_type,
-                ) {
+                if let Some(typed) =
+                    crate::cursor::ColumnValues::from_general_with_type(general, &data_type)
+                {
                     merged[index].1 = typed;
                 }
             }
@@ -873,8 +872,8 @@ mod tests {
     use super::*;
     use graphdb_core::types::MAX_TIMESTAMP;
     const TEST_TS: Timestamp = MAX_TIMESTAMP - 1;
-    use graphdb_core::{DataType, Value};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::{DataType, Value};
     use std::sync::Arc;
 
     fn test_schema() -> crate::vertex::VertexSchema {
@@ -951,10 +950,7 @@ mod tests {
             insert_with_name(&table, &format!("v_{}", i), ts);
         }
         table
-            .flush(
-                &dir,
-                crate::compression::CompressionType::Zstd { level: 0 },
-            )
+            .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
             .unwrap();
 
         let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);

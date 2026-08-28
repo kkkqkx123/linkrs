@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::{Expression, Index};
 use crate::optimizer::cost::{CostCalculator, SelectivityEstimator};
+use graphdb_core::types::{Expression, Index};
 
 /// Index selector
 #[derive(Debug)]

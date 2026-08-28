@@ -9,10 +9,10 @@ use axum::{
     response::Response,
 };
 
-use crate::web::WebState;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use crate::web::WebState;
 
 /// Web authentication middleware
 ///

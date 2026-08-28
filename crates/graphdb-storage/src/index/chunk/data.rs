@@ -1,6 +1,6 @@
-use graphdb_core::types::Timestamp;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::types::IndexRecord;
+use graphdb_core::types::Timestamp;
 
 pub(crate) type ChunkId = u32;
 

@@ -8,14 +8,14 @@
 //! Support for the shortest path with weights
 //! Improve the logic for path filtering.
 
-use graphdb_core::types::VertexId;
-use graphdb_core::Value;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
 use crate::planning::plan::core::PlanNode;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::VertexId;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 pub use crate::planning::plan::core::nodes::{
@@ -181,10 +181,7 @@ impl PathPlanner {
         stmt.shortest
     }
 
-    fn get_edge_types_from_stmt(
-        &self,
-        stmt: &crate::parser::ast::FindPathStmt,
-    ) -> Vec<String> {
+    fn get_edge_types_from_stmt(&self, stmt: &crate::parser::ast::FindPathStmt) -> Vec<String> {
         stmt.over
             .as_ref()
             .map(|over| over.edge_types.clone())

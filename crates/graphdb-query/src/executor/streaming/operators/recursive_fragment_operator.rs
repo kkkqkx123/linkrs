@@ -6,9 +6,6 @@ use super::algorithms::{
     bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs, AllPathsConfig,
     BidirBfsConfig,
 };
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
@@ -17,6 +14,9 @@ use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{EdgeDirection, Value};
 
 use super::spec::RecursiveFragmentSpec;
 

@@ -108,9 +108,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 .scan_limits()
                 .first()
                 .map(index_limit_to_predicate)
-                .unwrap_or(
-                    crate::executor::streaming::operators::spec::BoundIndexPredicate::Full,
-                );
+                .unwrap_or(crate::executor::streaming::operators::spec::BoundIndexPredicate::Full);
             let projection = if scan_node.return_columns().is_empty() {
                 crate::executor::streaming::operators::spec::IndexProjection::RowIdOnly
             } else {
@@ -122,9 +120,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
             // Widen the output layout with flat property columns (`{var}.{prop}`)
             // so covering index rows can hit the columnar `Property` fast path.
             let mut layout_names = col_names.clone();
-            if let crate::executor::streaming::operators::spec::IndexProjection::Columns(
-                columns,
-            ) = &projection
+            if let crate::executor::streaming::operators::spec::IndexProjection::Columns(columns) =
+                &projection
             {
                 if let Some(var) = col_names.first() {
                     layout_names.extend(columns.iter().map(|col| format!("{var}.{col}")));
@@ -162,7 +159,9 @@ fn index_limit_to_predicate(
                 value: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(graphdb_core::Value::Null(graphdb_core::value::NullType::Null)),
+                    .unwrap_or(graphdb_core::Value::Null(
+                        graphdb_core::value::NullType::Null,
+                    )),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Range => {
@@ -180,7 +179,9 @@ fn index_limit_to_predicate(
                 prefix: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(graphdb_core::Value::Null(graphdb_core::value::NullType::Null)),
+                    .unwrap_or(graphdb_core::Value::Null(
+                        graphdb_core::value::NullType::Null,
+                    )),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Full => {

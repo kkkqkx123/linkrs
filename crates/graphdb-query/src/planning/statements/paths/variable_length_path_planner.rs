@@ -12,9 +12,9 @@
 
 use std::collections::HashSet;
 
+use crate::parser::ast::pattern::{EdgeRange, RepetitionType};
 use graphdb_core::types::graph_schema::EdgeDirection;
 use graphdb_core::Value;
-use crate::parser::ast::pattern::{EdgeRange, RepetitionType};
 
 pub type PlannerError = String;
 

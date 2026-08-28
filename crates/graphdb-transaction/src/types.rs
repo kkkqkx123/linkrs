@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use graphdb_core::types::{CommitLsn, EdgeIdentifier, Timestamp, VertexId};
 use crate::undo_log::UndoLogEntry;
 use crate::wal::TransactionWalEntry;
+use graphdb_core::types::{CommitLsn, EdgeIdentifier, Timestamp, VertexId};
 
 /// Transaction ID
 pub use graphdb_core::types::TransactionId;

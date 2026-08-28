@@ -1,12 +1,12 @@
 use std::collections::{HashSet, VecDeque};
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{Edge, Vertex};
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::traversal::config::{TraversalConfig, TraversalOrder, VisitedPolicy};
 use crate::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::executor::traversal::stats::TraversalStats;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, Vertex};
 
 #[derive(Debug, Clone)]
 pub struct TraversalItem {

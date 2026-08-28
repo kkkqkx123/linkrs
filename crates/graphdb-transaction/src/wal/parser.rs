@@ -807,9 +807,9 @@ impl WalParserFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::wal::types::WalConfig;
     use crate::wal::writer::{LocalWalWriter, WalWriter};
     use crate::wal::WalOpType;
+    use graphdb_core::wal::types::WalConfig;
     use std::fs::OpenOptions;
     use std::io::{Read, Seek, SeekFrom, Write};
     use tempfile::TempDir;

@@ -26,7 +26,6 @@
 //!   ScanVertices(a)
 //! ```
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -35,6 +34,7 @@ use crate::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, InnerJoinNode, LeftJoinNode,
 };
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 /// Rules for eliminating redundant JOIN operations
 #[derive(Debug)]

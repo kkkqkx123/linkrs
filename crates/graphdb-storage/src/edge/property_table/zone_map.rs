@@ -108,10 +108,7 @@ impl PropertyTable {
         None
     }
 
-    pub fn compute_column_stats(
-        &self,
-        col_idx: usize,
-    ) -> Option<crate::column_stats::ColumnStats> {
+    pub fn compute_column_stats(&self, col_idx: usize) -> Option<crate::column_stats::ColumnStats> {
         if col_idx >= self.schema.len() {
             return None;
         }

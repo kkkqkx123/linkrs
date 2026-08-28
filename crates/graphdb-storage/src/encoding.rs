@@ -142,7 +142,11 @@ impl ColumnEncoding {
         Ok(written)
     }
 
-    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> graphdb_core::StorageResult<()> {
+    pub fn set(
+        &mut self,
+        row_idx: usize,
+        value: Option<&Value>,
+    ) -> graphdb_core::StorageResult<()> {
         use graphdb_core::StorageError;
 
         match self {

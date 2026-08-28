@@ -1,7 +1,6 @@
 //! Maintenance Operation Planner
 //! Handling query planning related to maintenance tasks (such as SUBMIT JOB, etc.)
 
-use graphdb_core::types::PropertyDef;
 use crate::parser::ast::{AlterTarget, CreateTarget, IndexType, ShowTarget, Stmt};
 use crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo;
 use crate::planning::plan::core::nodes::management::index_nodes::IndexManageInfo;
@@ -27,6 +26,7 @@ use crate::planning::plan::{
 };
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::types::PropertyDef;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -158,19 +158,17 @@ impl MaintainPlanner {
 
                 let plan_node = match index_type {
                     IndexType::Tag => {
-                        let node =
-                            crate::planning::plan::core::nodes::CreateTagIndexNode::new(
-                                next_node_id(),
-                                index_info,
-                            );
+                        let node = crate::planning::plan::core::nodes::CreateTagIndexNode::new(
+                            next_node_id(),
+                            index_info,
+                        );
                         PlanNodeEnum::IndexManage(IndexManageNode::CreateTagIndex(node))
                     }
                     IndexType::Edge => {
-                        let node =
-                            crate::planning::plan::core::nodes::CreateEdgeIndexNode::new(
-                                next_node_id(),
-                                index_info,
-                            );
+                        let node = crate::planning::plan::core::nodes::CreateEdgeIndexNode::new(
+                            next_node_id(),
+                            index_info,
+                        );
                         PlanNodeEnum::IndexManage(IndexManageNode::CreateEdgeIndex(node))
                     }
                 };
@@ -457,15 +455,13 @@ impl Planner for MaintainPlanner {
             }
 
             Stmt::ShowQueries(_) => {
-                let node =
-                    crate::planning::plan::core::nodes::ShowQueriesNode::new(next_node_id());
+                let node = crate::planning::plan::core::nodes::ShowQueriesNode::new(next_node_id());
                 PlanNodeEnum::ShowQueries(node)
             }
 
             Stmt::ShowSessions(_) => {
-                let node = crate::planning::plan::core::nodes::ShowSessionsNode::new(
-                    next_node_id(),
-                );
+                let node =
+                    crate::planning::plan::core::nodes::ShowSessionsNode::new(next_node_id());
                 PlanNodeEnum::ShowSessions(node)
             }
 

@@ -1,6 +1,6 @@
+use crate::storage::QueryStorage;
 use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::{Edge, EdgeDirection, Vertex};
-use crate::storage::QueryStorage;
 
 pub struct TraversalGraphReader<'a> {
     storage: &'a dyn QueryStorage,

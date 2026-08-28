@@ -1,12 +1,12 @@
 use super::*;
-use graphdb_core::types::{DataType, VertexId};
-use graphdb_core::Value;
 use crate::edge::edge_table::core::EdgeTableConfig;
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::edge_table::segment::DeletionInfo;
 use crate::edge::{EdgeSchema, EdgeStrategy};
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
+use graphdb_core::types::{DataType, VertexId};
+use graphdb_core::Value;
 
 // Type alias for backward compatibility with existing tests
 type EdgeTable = TimeTravelEdgeStore;

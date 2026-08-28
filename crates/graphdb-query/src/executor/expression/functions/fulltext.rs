@@ -6,9 +6,9 @@
 //! - matched_fields(): Get the list of matched fields
 //! - snippet(): Get a text snippet
 
-use graphdb_core::Value;
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use graphdb_core::Value;
 use graphdb_search::FulltextSearchEntry;
 use std::collections::HashMap;
 
@@ -495,9 +495,7 @@ pub fn register_fulltext_functions(
     registry: &mut crate::executor::expression::functions::FunctionRegistry,
 ) {
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Fulltext(
-            FulltextFunction::Score,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Fulltext(FulltextFunction::Score),
     );
 
     registry.register_builtin(
@@ -519,9 +517,7 @@ pub fn register_fulltext_functions(
     );
 
     registry.register_builtin(
-        crate::executor::expression::functions::BuiltinFunction::Fulltext(
-            FulltextFunction::Rank,
-        ),
+        crate::executor::expression::functions::BuiltinFunction::Fulltext(FulltextFunction::Rank),
     );
 
     registry.register_builtin(

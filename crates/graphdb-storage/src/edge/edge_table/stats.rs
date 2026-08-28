@@ -171,10 +171,10 @@ pub struct MergeMetricsResult {
 mod tests {
     use super::super::super::{EdgeSchema, EdgeStrategy};
     use super::*;
-    use graphdb_core::types::DataType;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
 
     fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {

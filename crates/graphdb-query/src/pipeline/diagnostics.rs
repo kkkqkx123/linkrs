@@ -1,17 +1,15 @@
 use super::QueryPipelineManager;
-use graphdb_core::error::{DBError, DBResult, QueryError};
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::Value;
 use crate::executor::base::ExecutionResult;
 use crate::executor::explain::physical_plan_explain::physical_plan_to_plan_description;
-use crate::executor::streaming::instance::{
-    QueryBindings, QueryExecutionInstance, ResultSink,
-};
+use crate::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
 use crate::executor::streaming::transaction_scope::TransactionScope;
 use crate::parser::ast::stmt::{ExplainStmt, ProfileStmt};
 use crate::planning::plan::explain::ProfilingStats;
-use crate::QueryContext;
 use crate::storage::QueryStorage;
+use crate::QueryContext;
+use graphdb_core::error::{DBError, DBResult, QueryError};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::Value;
 use std::sync::Arc;
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {

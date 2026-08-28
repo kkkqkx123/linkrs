@@ -1,10 +1,10 @@
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::state::GlobalState;
 use crate::executor::streaming::state::GlobalStateKey;
 use crate::storage::{open_edge_scan, ScanOptions, VecEdgeCursor};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
 
 use super::util::{
     attach_columnar_stats, make_edge_row, make_flat_edge_row, make_flat_vertex_row,

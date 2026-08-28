@@ -1,6 +1,6 @@
+use crate::engine::graph_storage::GraphStorageContext;
 use graphdb_core::types::{CompactConfig, CompactResult, CompactStats, CompactTarget};
 use graphdb_core::types::{CompactError, Timestamp};
-use crate::engine::graph_storage::GraphStorageContext;
 
 impl CompactTarget for GraphStorageContext {
     fn compact(&self, config: &CompactConfig, ts: Timestamp) -> CompactResult<()> {

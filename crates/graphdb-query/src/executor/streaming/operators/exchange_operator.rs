@@ -4,14 +4,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
-use crate::executor::streaming::executor::{
-    SortDirection, StreamingExecutor, ValueRowContext,
-};
+use crate::executor::streaming::executor::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::ExchangeSpec;
@@ -19,6 +14,9 @@ use crate::executor::streaming::operators::state::{ExchangeState, MergeInputStat
 use crate::executor::streaming::pool::{PartitionBatch, PartitionHandle};
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 const CHUNK_SIZE: usize = 2048;
 

@@ -1,10 +1,5 @@
 //! Rules for combining multiple projection operations
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::YieldColumn;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::rewrite_contextual_expression;
 use crate::optimizer::heuristic::pattern::Pattern;
@@ -13,6 +8,11 @@ use crate::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// Rules for combining multiple projection operations
@@ -281,9 +281,9 @@ impl MergeRule for CollapseProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use graphdb_core::types::expr::ExpressionMeta;
     use graphdb_core::YieldColumn;
-    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
     use ExpressionAnalysisContext;
 

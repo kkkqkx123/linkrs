@@ -48,12 +48,12 @@ pub trait ClausePlanner: std::fmt::Debug {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::binder::validation::ValidatedStatement;
     use crate::parser::ast::{Ast, Span};
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
     use crate::QueryRequestContext;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::collections::HashMap;
 
     #[derive(Debug)]

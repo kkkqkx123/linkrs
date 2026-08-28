@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{Edge, EdgeDirection, Value};
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
 use crate::executor::streaming::executor::StreamingExecutor;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::{Edge, EdgeDirection, Value};
 
 use super::{GraphOperator, GraphOperatorKind};
 

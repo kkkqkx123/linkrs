@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use super::chunk::{ColumnInfo, DataChunk, Schema};
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use graphdb_core::error::QueryError;
 use crate::data_set::DataSet;
 use crate::executor::base::ExecutionResult;
+use graphdb_core::error::QueryError;
 
 /// Thread-safe (Send + Sync) streaming result handle.
 ///
@@ -369,7 +369,6 @@ impl StreamingQueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::engine::StreamingExecutionEngine;
     use crate::executor::streaming::executor::StreamingExecutor;
@@ -378,6 +377,7 @@ mod tests {
     use crate::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::executor::streaming::runtime::QueryIdentity;
     use crate::executor::streaming::slot::SlotLayout;
+    use graphdb_core::Value;
 
     fn create_test_stream(count: usize) -> StreamingQueryResult {
         let mut engine = StreamingExecutionEngine::new();

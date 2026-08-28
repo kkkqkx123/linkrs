@@ -1,7 +1,7 @@
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::geography::{Geography, GeographyValue};
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 pub fn execute_st_point(args: &[Value]) -> Result<Value, ExpressionError> {
     let (lon, lat) = match (&args[0], &args[1]) {

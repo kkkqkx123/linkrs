@@ -2,9 +2,9 @@
 //!
 //! It includes various types of join nodes, such as inner joins, left joins, etc.
 
-use graphdb_core::types::ContextualExpression;
 use crate::define_binary_input_node;
 use crate::define_join_node;
+use graphdb_core::types::ContextualExpression;
 
 define_join_node! {
     pub struct InnerJoinNode {
@@ -57,9 +57,7 @@ impl InnerJoinNode {
         })
     }
 
-    pub fn right(
-        &self,
-    ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    pub fn right(&self) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.right
     }
 

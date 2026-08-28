@@ -36,13 +36,13 @@ pub use stats::{MergeMetrics, MergeMetricsResult, MergeStats};
 // Re-export from parent
 pub use super::{CsrBase, CsrVariant, Nbr};
 
-use graphdb_core::types::CompactConfig;
-use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::{StorageError, StorageResult};
 use crate::cold::{ColdPropertyIndex, ColdSnapshot};
 use crate::edge::edge_table::core::EdgeTableConfig;
 use crate::edge::edge_table::snapshot::max_edge_row;
 use crate::persistence::write_header_to;
+use graphdb_core::types::CompactConfig;
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -794,11 +794,9 @@ impl core::TimeTravelEdgeStore {
         let page_size = crate::compression::DEFAULT_PAGE_SIZE;
 
         let mut meta_payload = Vec::new();
-        write_header_to(
-            &mut meta_payload,
-            crate::persistence::section::EDGE_META,
-        )
-        .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
+        write_header_to(&mut meta_payload, crate::persistence::section::EDGE_META).map_err(
+            |e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)),
+        )?;
 
         persistence::flush_metadata(
             &mut meta_payload,
@@ -962,12 +960,12 @@ impl core::TimeTravelEdgeStore {
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::types::DataType;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::CsrBase;
     use crate::edge::EdgeSchema;
     use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
 
     fn create_test_schema() -> EdgeSchema {
         EdgeSchema {

@@ -97,16 +97,16 @@ impl RewriteRule for UnnestSimplePatternApplyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::ExpressionMeta;
-    use graphdb_core::types::operators::BinaryOperator;
-    use graphdb_core::types::ContextualExpression;
-    use graphdb_core::Expression;
     use crate::optimizer::heuristic::context::RewriteContext;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::PatternApplyNode;
     use crate::planning::plan::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use std::sync::Arc;
 
     fn test_scan() -> PlanNodeEnum {

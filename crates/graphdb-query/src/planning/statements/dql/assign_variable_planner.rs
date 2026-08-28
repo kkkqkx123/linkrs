@@ -6,12 +6,12 @@
 //! stores the produced value in the session; the query engine itself never
 //! touches session state.
 
-use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{AssignVariableStmt, Stmt};
 use crate::planning::plan::core::nodes::{ProjectNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// LET statement planner

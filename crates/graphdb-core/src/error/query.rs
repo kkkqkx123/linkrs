@@ -632,8 +632,7 @@ mod tests {
 
     #[test]
     fn test_queryerror_with_source() {
-        let storage_err =
-            StorageError::node_not_found(crate::types::VertexId::from_int64(42));
+        let storage_err = StorageError::node_not_found(crate::types::VertexId::from_int64(42));
         let query_err = QueryError::from(storage_err);
         assert_eq!(query_err.kind(), QueryErrorKind::Storage);
     }

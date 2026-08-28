@@ -15,8 +15,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use graphdb_core::types::expr::ContextualExpression;
 use crate::planning::plan::core::nodes::{BinaryInputNode, PlanNodeEnum, SingleInputNode};
+use graphdb_core::types::expr::ContextualExpression;
 
 /// Plan node fingerprint
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

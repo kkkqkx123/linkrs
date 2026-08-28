@@ -3,9 +3,9 @@
 //! Provides transport layer-independent batch operation capabilities
 //! Supports both synchronous and asynchronous execution modes
 
+use crate::storage::StorageClient;
 use crate::CoreResult;
 use graphdb_core::{Edge, Vertex};
-use crate::storage::StorageClient;
 
 /// Batch operation configuration
 #[derive(Debug, Clone)]

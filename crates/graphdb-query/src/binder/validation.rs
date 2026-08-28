@@ -22,10 +22,7 @@ pub struct ValidatedStatement {
 }
 
 impl ValidatedStatement {
-    pub fn new(
-        ast: Arc<crate::parser::ast::stmt::Ast>,
-        validation_info: ValidationInfo,
-    ) -> Self {
+    pub fn new(ast: Arc<crate::parser::ast::stmt::Ast>, validation_info: ValidationInfo) -> Self {
         Self {
             ast,
             validation_info,

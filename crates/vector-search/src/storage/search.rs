@@ -151,14 +151,8 @@ impl CollectionStore {
         if self.has_quantization() {
             // Try the quantized path; if it fails (corrupt quant file) fall
             // back to exact scan transparently.
-            let quant_result = self.search_quantized(
-                query,
-                &snap,
-                metric,
-                next_slot,
-                filtered,
-                started,
-            );
+            let quant_result =
+                self.search_quantized(query, &snap, metric, next_slot, filtered, started);
             if let Ok(results) = quant_result {
                 return Ok(results);
             }

@@ -1,8 +1,8 @@
 use super::PermissionResult;
 use crate::config::AuthConfig;
-use graphdb_core::{Permission, RoleType};
 use crate::permission::{PermissionManager, GOD_SPACE_ID};
 use crate::session::ClientSession;
+use graphdb_core::{Permission, RoleType};
 
 /// Operation type – corresponds to different permission checks
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

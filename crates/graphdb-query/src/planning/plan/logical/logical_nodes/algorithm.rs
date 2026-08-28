@@ -1,9 +1,9 @@
 //! Logical algorithm nodes: MultiShortestPath, BFSShortest, AllPaths, ShortestPath.
 
+use crate::define_logical_binary_input_node;
 use graphdb_core::types::EdgeDirection;
 use graphdb_core::types::VertexId;
 use graphdb_core::Value;
-use crate::define_logical_binary_input_node;
 
 define_logical_binary_input_node! {
     pub struct LogicalMultiShortestPathNode {

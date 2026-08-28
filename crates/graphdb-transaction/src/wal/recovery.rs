@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use postcard::from_bytes;
 use serde::de::DeserializeOwned;
 
-use graphdb_core::types::Timestamp;
-use graphdb_core::{StorageError, StorageResult};
 use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
@@ -14,6 +12,8 @@ use crate::wal::{
     RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateVertexPropRedo, WalOpType,
     WalParser, WalRecoveryMode,
 };
+use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult};
 
 macro_rules! recovery_arm_ref {
     ($applier:expr, $op:expr, $entry:expr, $payload:expr, $ts:expr, $stats:expr, $redo_type:ty, $replay_fn:ident) => {{
@@ -203,14 +203,13 @@ impl RecoveryManager {
             self.stats.last_lsn = wal_result.last_lsn;
             return Ok(());
         }
-        let transactions =
-            crate::wal::collect_committed_transactions(&wal_result.all_entries)
-                .map_err(|error| {
-                    StorageError::wal_error(format!(
-                        "Failed to validate committed WAL batches: {}",
-                        error
-                    ))
-                })?;
+        let transactions = crate::wal::collect_committed_transactions(&wal_result.all_entries)
+            .map_err(|error| {
+                StorageError::wal_error(format!(
+                    "Failed to validate committed WAL batches: {}",
+                    error
+                ))
+            })?;
         for transaction in transactions {
             self.replay_parsed_entries(&transaction.redo_entries, applier)?;
             self.stats.last_lsn = Lsn::new(transaction.commit_lsn.get());
@@ -570,12 +569,12 @@ impl Default for RecoveryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::wal::writer::LocalWalWriter;
     use crate::wal::writer::WalWriter;
     use crate::wal::{
         InsertVertexRedo, LabelId, Timestamp, TransactionWalEntry, VertexId, WalOpType,
     };
+    use graphdb_core::Value;
     use postcard::to_allocvec;
     use std::path::Path;
     use std::sync::{Arc, Mutex};

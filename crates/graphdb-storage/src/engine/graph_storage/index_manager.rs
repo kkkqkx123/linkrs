@@ -1,17 +1,15 @@
+use crate::index::chunk::chunked_index::ChunkedIndex;
+use crate::index::chunk::serialize::write_chunked_index_checkpoint;
+use crate::index::key_codec::{KeyBuilder, KeyParser};
+use crate::index::manifest::{GenerationBuildState, GenerationState, IndexManifest, IndexShard};
+use crate::index::types::IndexRecord;
+use crate::index::{EdgeIndexOps, VertexIndexOps};
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::types::{
     CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp,
 };
 use graphdb_core::wal::EntityRef;
 use graphdb_core::{StorageError, StorageResult, Value};
-use crate::index::chunk::chunked_index::ChunkedIndex;
-use crate::index::chunk::serialize::write_chunked_index_checkpoint;
-use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{
-    GenerationBuildState, GenerationState, IndexManifest, IndexShard,
-};
-use crate::index::types::IndexRecord;
-use crate::index::{EdgeIndexOps, VertexIndexOps};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -956,18 +954,18 @@ pub(crate) fn list_edge_indexes(
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::types::{
-        CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
-        OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
-    };
-    use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
-    use graphdb_core::Value;
     use crate::engine::graph_storage::context::GraphStorageContext;
     use crate::index::manifest::{GenerationBuildState, GenerationState};
     use crate::index::types::IndexRecord;
     use crate::{
         GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
     };
+    use graphdb_core::types::{
+        CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
+        OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
+    };
+    use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
+    use graphdb_core::Value;
 
     fn setup_context() -> GraphStorageContext {
         GraphStorageContext::new()
@@ -1106,7 +1104,10 @@ mod tests {
             .create_space(&mut space)
             .expect("space should be created");
         let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
+            graphdb_core::types::PropertyDef::new(
+                "name".to_string(),
+                graphdb_core::DataType::String,
+            ),
         ]);
         storage
             .create_tag("test_space", &tag)
@@ -1225,12 +1226,13 @@ mod tests {
             storage
                 .create_space(&mut space)
                 .expect("space should be created");
-            let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-                graphdb_core::types::PropertyDef::new(
-                    "name".to_string(),
-                    graphdb_core::DataType::String,
-                ),
-            ]);
+            let tag =
+                graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+                    graphdb_core::types::PropertyDef::new(
+                        "name".to_string(),
+                        graphdb_core::DataType::String,
+                    ),
+                ]);
             storage
                 .create_tag("test_space", &tag)
                 .expect("tag should be created");
@@ -1542,17 +1544,21 @@ mod tests {
         });
 
         let vertices = vec![];
-        let (forward, reverse) =
-            super::build_vertex_index_data(0, &index, &vertices, graphdb_core::types::MAX_TIMESTAMP)
-                .expect("build should succeed with empty input");
+        let (forward, reverse) = super::build_vertex_index_data(
+            0,
+            &index,
+            &vertices,
+            graphdb_core::types::MAX_TIMESTAMP,
+        )
+        .expect("build should succeed with empty input");
         assert!(forward.is_empty(), "forward map should be empty");
         assert!(reverse.is_empty(), "reverse map should be empty");
     }
 
     #[test]
     fn test_flush_index_data_writes_valid_files() {
-        use graphdb_core::types::MAX_TIMESTAMP;
         use crate::index::types::IndexRecord;
+        use graphdb_core::types::MAX_TIMESTAMP;
         use std::collections::BTreeMap;
         use std::fs;
 

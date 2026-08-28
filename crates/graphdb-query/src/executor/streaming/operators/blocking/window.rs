@@ -1,10 +1,10 @@
-use graphdb_core::types::expr::Expression;
-use graphdb_core::value::NullType;
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::executor::{SortDirection, ValueRowContext};
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
+use graphdb_core::types::expr::Expression;
+use graphdb_core::value::NullType;
+use graphdb_core::Value;
 
 /// Sort the rows of a single window partition by the ORDER BY expressions.
 ///

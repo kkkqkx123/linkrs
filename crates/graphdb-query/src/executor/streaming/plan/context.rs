@@ -8,11 +8,11 @@
 //! is immutable, cacheable, and safe to share across concurrent executions.
 
 use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
-use graphdb_core::error::QueryError;
 use crate::executor::base::ExecutionContext;
 use crate::executor::streaming::parameters::ParameterSchema;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::planning::plan::PartitionSpec;
+use graphdb_core::error::QueryError;
 
 /// Schema identifier for catalog lookups during plan building.
 #[derive(Debug, Clone)]
@@ -149,16 +149,12 @@ impl PhysicalPlanBuildContext {
     }
 
     /// Allocate a new fragment ID.
-    pub fn allocate_fragment_id(
-        &mut self,
-    ) -> crate::executor::streaming::plan::types::FragmentId {
+    pub fn allocate_fragment_id(&mut self) -> crate::executor::streaming::plan::types::FragmentId {
         self.fragment_id_alloc.allocate()
     }
 
     /// Peek at the next operator ID without consuming it.
-    pub fn peek_operator_id(
-        &self,
-    ) -> crate::executor::streaming::plan::types::PhysicalOperatorId {
+    pub fn peek_operator_id(&self) -> crate::executor::streaming::plan::types::PhysicalOperatorId {
         self.operator_id_alloc.peek()
     }
 

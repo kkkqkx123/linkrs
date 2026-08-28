@@ -38,12 +38,12 @@ pub mod recovery;
 pub mod writer;
 
 // Direct imports from core WAL layer
-pub use graphdb_core::types::{TableId, TableTracker, TableTrackerConfig, TableType};
-pub use graphdb_core::wal::redo::*;
-pub use graphdb_core::wal::types::*;
 pub use checkpoint::{Checkpoint, CheckpointManager, CheckpointMode, CheckpointResult};
 pub use commit::{collect_committed_transactions, CommittedWalTransaction, TransactionWalEntry};
 pub use filter::{filter_intents_for_index, filter_intents_for_indexes};
+pub use graphdb_core::types::{TableId, TableTracker, TableTrackerConfig, TableType};
+pub use graphdb_core::wal::redo::*;
+pub use graphdb_core::wal::types::*;
 pub use parser::{
     LocalWalParser, ParallelWalParser, ParsedWalEntry, RecoveryResult, WalEntryIter, WalParser,
     WalParserFactory,

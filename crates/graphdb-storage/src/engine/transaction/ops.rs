@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use crate::edge::UpdateEdgePropertyByOffsetParams;
 use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use graphdb_core::Value;
-use crate::edge::UpdateEdgePropertyByOffsetParams;
 use graphdb_transaction::undo_log::{UndoLogError, UndoLogResult};
 
 use crate::edge::EdgeStore;

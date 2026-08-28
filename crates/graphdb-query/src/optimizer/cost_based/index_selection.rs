@@ -10,10 +10,6 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::types::Index;
-use graphdb_core::value::Value;
 use crate::optimizer::cost_based::traversal::rewrite_children;
 use crate::optimizer::cost_based::traversal_logical::rewrite_children_logical;
 use crate::optimizer::cost_based::{
@@ -21,15 +17,17 @@ use crate::optimizer::cost_based::{
 };
 use crate::optimizer::stats::StatisticsManager;
 use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-use crate::planning::plan::core::nodes::access::index_scan::{
-    IndexLimit, IndexScanNode, ScanType,
-};
+use crate::planning::plan::core::nodes::access::index_scan::{IndexLimit, IndexScanNode, ScanType};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
 use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::types::Index;
+use graphdb_core::value::Value;
 
 /// Rewrite eligible `ScanVertices` scans into `IndexScan` nodes.
 ///
@@ -433,9 +431,9 @@ fn try_decide_index_scan_logical(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::optimizer::cost::CostCalculator;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     fn test_selector() -> (IndexSelector, Arc<StatisticsManager>) {

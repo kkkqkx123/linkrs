@@ -2,8 +2,8 @@
 //!
 //! Provides plan nodes for INSERT VERTEX and INSERT EDGE operations.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_plan_node;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 use super::info::{EdgeInsertInfo, TagInsertSpec, VertexInsertInfo};
 

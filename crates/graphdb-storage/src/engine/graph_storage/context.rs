@@ -5,11 +5,6 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use graphdb_core::metadata::{IndexManager, SchemaManager};
-use graphdb_core::stats::StatsManager;
-use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
-use graphdb_core::UserStorage;
-use graphdb_core::{StorageError, StorageResult};
 use crate::cold::ColdSnapshot;
 use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::cache_manager::CacheManager;
@@ -23,9 +18,14 @@ use crate::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::mvcc::SnapshotHandle;
 use crate::vertex::{gc_manager::VertexGcManager, IdKey};
 use crate::StorageOperationContext;
-use graphdb_transaction::VersionManager;
+use graphdb_core::metadata::{IndexManager, SchemaManager};
+use graphdb_core::stats::StatsManager;
 use graphdb_core::types::EdgeIdentifier;
+use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
+use graphdb_core::UserStorage;
+use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::undo_log::UndoLogManager;
+use graphdb_transaction::VersionManager;
 use graphdb_transaction::{
     MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
 };
@@ -866,12 +866,12 @@ impl GraphStorageRuntime {
             vertex_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
-            thread_pool: Arc::new(
-                crate::thread_pool::StorageThreadPool::new().unwrap_or_else(|e| {
+            thread_pool: Arc::new(crate::thread_pool::StorageThreadPool::new().unwrap_or_else(
+                |e| {
                     log::error!("Failed to build storage thread pool: {}", e);
                     crate::thread_pool::StorageThreadPool::default()
-                }),
-            ),
+                },
+            )),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
             last_auto_compact: Arc::new(Mutex::new(None)),
             last_edge_write: Arc::new(Mutex::new(HashMap::new())),
@@ -1084,6 +1084,16 @@ impl GraphStorageContext {
         self.persistent.auto_commit_write_gate.stats()
     }
 
+    /// Current outbox pending depth (staged + durable) for backpressure
+    /// observability. Returns `0` when no stats manager is configured.
+    pub fn outbox_pending(&self) -> u64 {
+        self.persistent
+            .stats_manager
+            .as_ref()
+            .and_then(|m| m.get_value(graphdb_core::stats::MetricType::OutboxPending))
+            .unwrap_or(0)
+    }
+
     /// Lazily register a vertex label snapshot if not already registered.
     /// Returns the snapshot handle if registration succeeded.
     ///
@@ -1288,9 +1298,7 @@ mod tests {
     fn test_auto_commit_recorder_forwards_entity_keys_to_write_set() {
         let recorder = AutoCommitMutationRecorder {
             undo: Arc::new(Mutex::new(UndoLogManager::new())),
-            write_set: Arc::new(Mutex::new(
-                graphdb_transaction::types::WriteSet::new(),
-            )),
+            write_set: Arc::new(Mutex::new(graphdb_transaction::types::WriteSet::new())),
         };
 
         let vertex_id = VertexId::from_int64(42);

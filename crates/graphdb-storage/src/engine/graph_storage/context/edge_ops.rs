@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use graphdb_core::types::{LabelId, Timestamp, VertexId};
-use graphdb_core::{StorageError, StorageResult};
 use crate::cold::ColdSnapshot;
 use crate::edge::{EdgeRecord, Nbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::{EdgeOperationParams, InsertEdgeParams};
 use crate::vertex::ShardedVertexTable;
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::{StorageError, StorageResult};
 
 use super::super::ops::endpoint_label_id;
 use super::helpers;

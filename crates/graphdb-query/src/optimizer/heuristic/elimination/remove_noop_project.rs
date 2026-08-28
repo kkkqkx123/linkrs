@@ -23,7 +23,6 @@
 //! The list expression for the project represents a simple property reference (either VarProperty or InputProperty).
 //! The child node is in the allowed list (removing a project is not allowed for certain types of nodes).
 
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -31,6 +30,7 @@ use crate::optimizer::heuristic::rule::{EliminationRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::Expression;
 use std::collections::HashSet;
 
 /// Remove the rule that applies to projections with no operations.
@@ -236,12 +236,12 @@ impl EliminationRule for RemoveNoopProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::ContextualExpression;
-    use graphdb_core::{Expression, YieldColumn};
     use crate::optimizer::heuristic::rule::RewriteRule;
     use crate::planning::plan::core::nodes::access::{IndexScanNode, ScanType};
     use crate::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
     use std::sync::Arc;
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {

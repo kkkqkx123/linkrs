@@ -2,9 +2,9 @@
 //!
 //! Provide definitions for the planning nodes related to label management.
 
-use graphdb_core::types::PropertyDef;
 use crate::define_plan_node;
 use crate::parser::ast::stmt::PropertyChange;
+use graphdb_core::types::PropertyDef;
 
 define_plan_node! {
     pub struct CreateTagNode {

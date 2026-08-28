@@ -11,9 +11,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::{Expression, Value};
 use crate::parser::ast::{MergeStmt, Pattern, SetClause, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
@@ -24,6 +21,9 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::{Expression, Value};
 
 /// Merge Operation Planner
 /// Responsible for converting MERGE statements into execution plans.
@@ -52,7 +52,9 @@ impl MergePlanner {
         &self,
         pattern: &Pattern,
         space_name: String,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<VertexInsertInfo, PlannerError> {
         match pattern {
             Pattern::Node(node_pattern) => {
@@ -96,7 +98,9 @@ impl MergePlanner {
         &self,
         pattern: &Pattern,
         space_name: String,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<EdgeInsertInfo, PlannerError> {
         match pattern {
             Pattern::Edge(edge_pattern) => {
@@ -154,7 +158,9 @@ impl MergePlanner {
     fn extract_properties_and_vid(
         &self,
         props_expr: &ContextualExpression,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<(Vec<String>, Vec<ContextualExpression>, ContextualExpression), PlannerError> {
         if let Some(Expression::Map(entries)) = props_expr.get_expression() {
             let mut prop_names = Vec::new();
@@ -188,7 +194,9 @@ impl MergePlanner {
 
     fn create_vid_expression(
         &self,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<ContextualExpression, PlannerError> {
         let random_id = rand::random::<i64>().abs();
         let vid_meta = ExpressionMeta::new(Expression::Literal(Value::BigInt(random_id)));
@@ -200,7 +208,9 @@ impl MergePlanner {
         &self,
         set_clause: &SetClause,
         space_name: String,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<VertexUpdateInfo, PlannerError> {
         let mut properties = HashMap::new();
 
@@ -227,7 +237,9 @@ impl MergePlanner {
         &self,
         on_match: &SetClause,
         space_name: String,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let update_info = self.build_update_info(on_match, space_name, expr_context)?;
         let update_node = UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(update_info));
@@ -239,7 +251,9 @@ impl MergePlanner {
         vertex_info: VertexInsertInfo,
         on_create: Option<&SetClause>,
         space_name: String,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let insert_node = InsertVerticesNode::new(next_node_id(), vertex_info);
         let mut current_node = PlanNodeEnum::InsertVertices(insert_node);
@@ -256,7 +270,9 @@ impl MergePlanner {
 
     fn create_exists_condition(
         &self,
-        expr_context: &Arc<graphdb_core::types::expr::expression_context::ExpressionAnalysisContext>,
+        expr_context: &Arc<
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
+        >,
     ) -> Result<ContextualExpression, PlannerError> {
         let condition = Expression::Function {
             name: "exists".to_string(),

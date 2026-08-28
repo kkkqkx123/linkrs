@@ -2,9 +2,9 @@
 //!
 //! The `SortNode` is used to perform sorting operations on the input data.
 
+use crate::define_plan_node_with_deps;
 use graphdb_core::types::graph_schema::OrderDirection;
 use graphdb_core::Expression;
-use crate::define_plan_node_with_deps;
 
 /// Sorting item definition
 /// Includes expression and sorting direction.

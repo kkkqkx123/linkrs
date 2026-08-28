@@ -277,8 +277,14 @@ impl VectorApi {
         field_name: &str,
         point: VectorPoint,
     ) -> CoreResult<()> {
-        self.insert_vector_with_mode(space_id, tag_name, field_name, point, VectorWriteMode::Direct)
-            .await
+        self.insert_vector_with_mode(
+            space_id,
+            tag_name,
+            field_name,
+            point,
+            VectorWriteMode::Direct,
+        )
+        .await
     }
 
     /// Insert a vector point with explicit write mode.
@@ -350,8 +356,14 @@ impl VectorApi {
         field_name: &str,
         points: Vec<VectorPoint>,
     ) -> CoreResult<()> {
-        self.insert_vector_batch_with_mode(space_id, tag_name, field_name, points, VectorWriteMode::Direct)
-            .await
+        self.insert_vector_batch_with_mode(
+            space_id,
+            tag_name,
+            field_name,
+            points,
+            VectorWriteMode::Direct,
+        )
+        .await
     }
 
     /// Insert vector points in batch with explicit write mode.
@@ -582,8 +594,9 @@ impl VectorApi {
         &self,
         query: ScrollQuery<'_>,
     ) -> CoreResult<(Vec<VectorPoint>, Option<String>)> {
-        let collection_name = VectorIndexLocation::new(query.space_id, query.tag_name, query.field_name)
-            .to_collection_name();
+        let collection_name =
+            VectorIndexLocation::new(query.space_id, query.tag_name, query.field_name)
+                .to_collection_name();
         self.backend
             .scroll(
                 &collection_name,

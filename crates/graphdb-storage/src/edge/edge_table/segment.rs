@@ -594,8 +594,8 @@ impl std::fmt::Debug for CsrSegment {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use graphdb_core::Value;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {

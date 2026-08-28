@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-use graphdb_core::{StorageResult, Value};
 use crate::encoding::EncodingType;
+use graphdb_core::{StorageResult, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnStats {

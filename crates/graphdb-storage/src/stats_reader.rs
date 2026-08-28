@@ -81,8 +81,7 @@ pub(crate) fn merge_max(cur: &mut Option<Value>, candidate: Option<Value>) {
     let Some(v) = candidate else { return };
     match cur {
         Some(c)
-            if crate::vertex::column_store::compare_values(c, &v)
-                != std::cmp::Ordering::Less => {}
+            if crate::vertex::column_store::compare_values(c, &v) != std::cmp::Ordering::Less => {}
         _ => *cur = Some(v),
     }
 }

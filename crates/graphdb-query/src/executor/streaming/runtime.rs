@@ -12,14 +12,14 @@ use super::query_registry::{CancelToken, QueryId, QueryRegistry};
 use super::spill::SpillManager;
 use super::state::StateArenaSet;
 use super::transaction_scope::{CancelReason, SessionTransactionController, TransactionScope};
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::base::MemoryBudget;
 use crate::executor::streaming::pool::TaskScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::query_manager::QueryManager;
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
 use graphdb_core::Arena;
+use graphdb_core::Value;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]

@@ -22,13 +22,13 @@ use super::plan::validator::PhysicalPlanValidator;
 use super::result_utils::convert_chunks_to_dataset;
 use super::runtime::ExecutionRuntime;
 use super::stream_result::StreamingQueryResult;
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::base::{ExecutionResult, MemoryBudget};
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
 use graphdb_core::Arena;
+use graphdb_core::Value;
 
 use super::parameters::{ParameterFrame, ParameterSchema};
 use super::query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
@@ -408,8 +408,10 @@ impl QueryExecutionInstance {
                     let shape_key = if condition_key.is_some() {
                         None
                     } else {
-                        crate::executor::streaming::operators::spec::
-                            operator_cardinality_shape_key(feedback.space.as_deref(), &operator.spec)
+                        crate::executor::streaming::operators::spec::operator_cardinality_shape_key(
+                            feedback.space.as_deref(),
+                            &operator.spec,
+                        )
                     };
                     feedback.add_operator_feedback(OperatorFeedback {
                         operator_id: key.physical_operator_id.0.to_string(),

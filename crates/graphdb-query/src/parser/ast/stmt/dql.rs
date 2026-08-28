@@ -1,7 +1,7 @@
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::{EdgeDirection, OrderDirection, Span};
 use crate::parser::ast::pattern::Pattern;
 use crate::parser::ast::types::{LimitClause, SampleClause, SkipClause};
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::{EdgeDirection, OrderDirection, Span};
 
 use super::Stmt;
 

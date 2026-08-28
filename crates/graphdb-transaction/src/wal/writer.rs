@@ -13,7 +13,7 @@ mod group_commit;
 mod local;
 mod sync;
 
-pub use graphdb_core::wal::traits::WalWriter;
 pub use compression::decompress_payload;
+pub use graphdb_core::wal::traits::WalWriter;
 pub use group_commit::GroupCommitCoordinator;
 pub use local::LocalWalWriter;

@@ -219,7 +219,10 @@ impl ColdSnapshotService for ColdSnapshotServer {
 /// and writes it to `dest_path`, verifying the per-chunk CRC32 of the final
 /// assembly (the file CRC is carried by every chunk).
 pub struct ColdSnapshotClient {
-    inner: crate::grpc::proto::coldsnapshot::cold_snapshot_service_client::ColdSnapshotServiceClient<tonic::transport::Channel>,
+    inner:
+        crate::grpc::proto::coldsnapshot::cold_snapshot_service_client::ColdSnapshotServiceClient<
+            tonic::transport::Channel,
+        >,
 }
 
 impl ColdSnapshotClient {

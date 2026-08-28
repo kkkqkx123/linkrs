@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 
 use super::common;
 use super::{ExpandCtx, GraphOperator, GraphOperatorKind};

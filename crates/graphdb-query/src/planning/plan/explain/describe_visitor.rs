@@ -38,9 +38,7 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
-use crate::planning::plan::core::nodes::operation::sort_node::{
-    LimitNode, SortNode, TopNNode,
-};
+use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
 use crate::planning::plan::core::nodes::traversal::path_algorithms::{
     AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
 };
@@ -830,13 +828,13 @@ impl PlanNodeVisitor for DescribeVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+    use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
     use graphdb_core::types::operators::BinaryOperator;
     use graphdb_core::types::ContextualExpression;
     use graphdb_core::Expression;
-    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-    use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     use std::sync::Arc;
 
     fn scan() -> PlanNodeEnum {

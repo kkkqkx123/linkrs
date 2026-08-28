@@ -2,9 +2,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-#[cfg(feature = "vector")]
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
@@ -12,6 +9,9 @@ use crate::executor::streaming::operators::spec::VectorManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
+#[cfg(feature = "vector")]
+use graphdb_core::Value;
 #[cfg(feature = "vector")]
 use graphdb_sync::VectorSyncCoordinator;
 
@@ -299,7 +299,8 @@ impl VectorOperator {
                                             cfg
                                         }
                                         crate::parser::ast::vector::QuantizationKind::Binary => {
-                                            let mut cfg = vector_search::QuantizationConfig::binary();
+                                            let mut cfg =
+                                                vector_search::QuantizationConfig::binary();
                                             if let Some(ar) = always_ram {
                                                 cfg = cfg.with_always_ram(*ar);
                                             }

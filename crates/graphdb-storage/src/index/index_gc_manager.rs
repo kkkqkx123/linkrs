@@ -38,8 +38,8 @@
 //! handle.join().unwrap();
 //! ```
 
-use graphdb_core::types::Timestamp;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
+use graphdb_core::types::Timestamp;
 use graphdb_transaction::VersionManager;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

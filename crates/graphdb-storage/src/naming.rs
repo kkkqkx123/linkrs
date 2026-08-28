@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::{StorageError, StorageResult};
 use crate::types::PropertyId;
+use graphdb_core::{StorageError, StorageResult};
 
 /// Maps string names to PropertyId.
 #[derive(Debug, Clone)]

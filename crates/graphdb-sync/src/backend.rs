@@ -55,6 +55,76 @@ impl fmt::Debug for VectorBackend {
     }
 }
 
+/// Delivery policy that varies by backend.
+///
+/// Unified outbox chain (`WAL → SQLite → claim/ack`) stays backend-agnostic;
+/// only batch, concurrency and retry tuning branch here. Created once at
+/// startup via `BackendDeliveryPolicy::from_config` and injected into
+/// `SyncManager`, so `manager.rs` does not scatter `if is_local` checks.
+#[derive(Debug, Clone)]
+pub struct BackendDeliveryPolicy {
+    /// Human readable name (`local` / `qdrant`).
+    pub policy_name: String,
+    /// Max events claimed per delivery round per target.
+    pub batch_size: usize,
+    /// Lease duration in milliseconds for `claim_next`.
+    pub lease_ms: u64,
+    /// Maximum retry attempts before dead-letter.
+    pub max_retries: u64,
+    /// Concurrent `claim → apply → ack` workers per target.
+    pub max_concurrency: usize,
+}
+
+impl Default for BackendDeliveryPolicy {
+    fn default() -> Self {
+        Self::local_default()
+    }
+}
+
+impl BackendDeliveryPolicy {
+    /// Policy tuned for the in-process `LocalVectorEngine`.
+    pub fn local_default() -> Self {
+        Self {
+            policy_name: "local".to_string(),
+            batch_size: 128,
+            lease_ms: 30_000,
+            max_retries: 16,
+            max_concurrency: 1,
+        }
+    }
+
+    /// Policy tuned for the remote Qdrant service.
+    pub fn qdrant_default() -> Self {
+        Self {
+            policy_name: "qdrant".to_string(),
+            batch_size: 512,
+            lease_ms: 60_000,
+            max_retries: 32,
+            max_concurrency: 4,
+        }
+    }
+
+    /// Build a policy from the global vector configuration.
+    pub fn from_config(config: &graphdb_config::VectorConfig) -> Self {
+        match config.engine {
+            graphdb_config::VectorEngineKind::Local => Self::local_default(),
+            #[cfg(feature = "vector-qdrant")]
+            graphdb_config::VectorEngineKind::Qdrant => Self::qdrant_default(),
+        }
+    }
+
+    /// Map to the consumer config used by `SyncManager::retry_outbox_sync`.
+    pub fn to_consumer_config(&self) -> crate::manager::OutboxConsumerConfig {
+        crate::manager::OutboxConsumerConfig {
+            consumer_id: format!("sync-manager-{}-{}", self.policy_name, uuid::Uuid::new_v4()),
+            batch_size: self.batch_size,
+            lease_duration_ms: self.lease_ms,
+            max_retries: self.max_retries,
+            max_concurrency: self.max_concurrency,
+        }
+    }
+}
+
 impl VectorBackend {
     /// Wrap a [`LocalVectorEngine`] in the [`VectorBackend`] handle.
     pub fn local(engine: LocalVectorEngine) -> Self {
@@ -90,9 +160,7 @@ impl VectorBackend {
     ///
     /// Only handles the local engine synchronously. For async Qdrant
     /// construction, use [`Self::from_config_async`].
-    pub fn from_config(
-        config: &graphdb_config::VectorConfig,
-    ) -> VectorCoordinatorResult<Self> {
+    pub fn from_config(config: &graphdb_config::VectorConfig) -> VectorCoordinatorResult<Self> {
         match config.engine {
             graphdb_config::VectorEngineKind::Local => {
                 let data_dir = config

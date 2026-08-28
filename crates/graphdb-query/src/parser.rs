@@ -9,8 +9,8 @@ pub mod lexing;
 pub mod parsing;
 
 // Re-export the common types of the core module
-pub use graphdb_core::types::{Position, Span};
 pub use core::{ParseError, ParseErrors, Token, TokenKind};
+pub use graphdb_core::types::{Position, Span};
 
 // Re-export types
 pub use graphdb_core::types::EdgeDirection;

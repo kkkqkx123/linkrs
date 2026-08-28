@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::stats::StatsManager;
-use graphdb_core::StorageResult;
 use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::PersistenceConfig;
 use crate::index::IndexGcConfig;
 use crate::vertex::VertexGcConfig;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::StorageResult;
 
 use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};
 

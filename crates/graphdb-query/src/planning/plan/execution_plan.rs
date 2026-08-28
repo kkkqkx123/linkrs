@@ -211,9 +211,8 @@ impl SubPlan {
     pub fn from_logical_root(
         logical_root: crate::planning::plan::logical::LogicalNodeEnum,
     ) -> Self {
-        let physical_root = crate::planning::physical_planner::convert_logical_to_physical(
-            logical_root.clone(),
-        );
+        let physical_root =
+            crate::planning::physical_planner::convert_logical_to_physical(logical_root.clone());
         Self {
             root: Some(physical_root),
             tail: None,

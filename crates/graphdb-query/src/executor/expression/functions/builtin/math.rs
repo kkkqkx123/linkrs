@@ -1,8 +1,8 @@
 //! Implementation of mathematical functions
 
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 define_function_enum! {
     /// Enumeration of mathematical functions

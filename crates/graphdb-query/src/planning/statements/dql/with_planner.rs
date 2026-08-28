@@ -2,7 +2,6 @@
 //!
 //! Query planning for queries that handle the WITH statement
 
-use graphdb_core::YieldColumn;
 use crate::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
 use crate::planning::plan::core::{
     next_node_id,
@@ -12,6 +11,7 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// WITH Statement Planner

@@ -5,16 +5,16 @@
 //! Note: This trait is used for the evaluation of runtime expressions.
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
-use graphdb_core::types::expr::{Expression, SubqueryBody};
-use graphdb_core::value::list::List;
-use graphdb_core::value::NullType;
-use graphdb_core::vertex_edge_path::{Path, Step};
-use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::executor::expression::functions::OwnedFunctionRef;
 use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::slot::SlotId;
+use graphdb_core::types::expr::{Expression, SubqueryBody};
+use graphdb_core::value::list::List;
+use graphdb_core::value::NullType;
+use graphdb_core::vertex_edge_path::{Path, Step};
+use graphdb_core::Value;
 
 /// The "expression evaluation context trait"
 ///
@@ -364,10 +364,10 @@ pub trait ExpressionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::expression::evaluation_context::DefaultExpressionContext;
     use graphdb_core::types::expr::Expression;
     use graphdb_core::types::VertexId;
     use graphdb_core::vertex_edge_path::{Edge, Tag};
-    use crate::executor::expression::evaluation_context::DefaultExpressionContext;
     use std::collections::HashMap;
 
     fn context() -> DefaultExpressionContext {

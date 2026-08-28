@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -13,6 +11,8 @@ use crate::storage::open_vertex_scan;
 use crate::storage::{
     EdgeColumnBatch, RequiredProperty, ScanOptions, StorageError, VertexColumnBatch,
 };
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 
 use super::util::{
     attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,

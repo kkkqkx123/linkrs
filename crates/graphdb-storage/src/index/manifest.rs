@@ -6,9 +6,9 @@ use std::time::Instant;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
+use crate::cursor::PartitionSelector;
 use graphdb_core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
 use graphdb_core::{StorageError, StorageResult};
-use crate::cursor::PartitionSelector;
 
 const MANIFEST_FORMAT_VERSION: u16 = 3;
 
@@ -596,8 +596,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{IndexManifest, IndexShard, ManifestCatalog};
-    use graphdb_core::types::IndexGeneration;
     use crate::cursor::PartitionSelector;
+    use graphdb_core::types::IndexGeneration;
 
     fn shard(shard_id: u32, lower: Option<&[u8]>, upper: Option<&[u8]>) -> IndexShard {
         IndexShard {

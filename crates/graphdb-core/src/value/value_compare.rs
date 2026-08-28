@@ -597,10 +597,7 @@ impl Value {
     }
 
     // Struct comparison: field count, then field-name order, then field values.
-    fn cmp_struct(
-        a: &crate::value::StructValue,
-        b: &crate::value::StructValue,
-    ) -> CmpOrdering {
+    fn cmp_struct(a: &crate::value::StructValue, b: &crate::value::StructValue) -> CmpOrdering {
         a.fields.len().cmp(&b.fields.len()).then_with(|| {
             a.fields.iter().zip(b.fields.iter()).fold(
                 CmpOrdering::Equal,
@@ -616,10 +613,7 @@ impl Value {
     }
 
     // Array comparison: element-by-element lexicographic, then length.
-    fn cmp_array(
-        a: &crate::value::ArrayValue,
-        b: &crate::value::ArrayValue,
-    ) -> CmpOrdering {
+    fn cmp_array(a: &crate::value::ArrayValue, b: &crate::value::ArrayValue) -> CmpOrdering {
         a.values
             .iter()
             .zip(b.values.iter())

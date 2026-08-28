@@ -1,12 +1,12 @@
 //! Plan nodes related to index scanning
 //! Search-related operations, including index scanning
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::graph_schema::OrderDirection;
-use graphdb_core::Value;
 use crate::define_plan_node;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_visitor::PlanNodeVisitor;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::graph_schema::OrderDirection;
+use graphdb_core::Value;
 
 /// Definition of sorting items
 #[derive(Debug, Clone, PartialEq)]

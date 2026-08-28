@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use graphdb_core::Value;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
+use graphdb_core::Value;
 
 #[derive(Debug)]
 pub struct DistinctState {

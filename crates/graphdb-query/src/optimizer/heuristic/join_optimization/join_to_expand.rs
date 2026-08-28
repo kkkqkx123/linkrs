@@ -21,9 +21,6 @@
 //! JOIN condition connects vertex ID to edge source/destination
 //! The edge types can be determined from the ScanEdges
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -32,6 +29,9 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNod
 use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 
 /// Rules for converting Vertex-Edge JOIN to ExpandAll
 #[derive(Debug)]

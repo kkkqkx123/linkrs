@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use crate::vertex::ShardedVertexTable;
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 
 pub fn resolve_internal_id(
     _ctx: &super::GraphStorageContext,

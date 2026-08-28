@@ -1,4 +1,5 @@
 use super::{set_typed_columns_enabled, DataChunk, RowPool, TypedColumn, TypedKind};
+use crate::executor::streaming::slot::SlotLayout;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::types::storage_ids::VertexId;
@@ -7,7 +8,6 @@ use graphdb_core::value::decimal128::Decimal128Value;
 use graphdb_core::value::DateValue;
 use graphdb_core::Value;
 use graphdb_core::Vertex;
-use crate::executor::streaming::slot::SlotLayout;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -1128,9 +1128,9 @@ fn nullable_bool_and_or_errors_like_row_path() {
 
 #[test]
 fn columnar_batch_keeps_nullable_typed_columns() {
-    use graphdb_core::value::NullType;
     use crate::executor::streaming::chunk::columnar_batch::ColumnarBatch;
     use crate::executor::streaming::chunk::schema::{ColumnInfo, Schema};
+    use graphdb_core::value::NullType;
 
     let mut chunk = DataChunk::new(
         vec![

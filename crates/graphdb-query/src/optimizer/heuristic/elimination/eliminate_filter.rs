@@ -23,14 +23,14 @@
 //!
 //! The filtering condition is a permanently false value (such as FALSE, null, etc.).
 
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::{Expression, Value};
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{EliminationRule, RewriteRule};
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::{Expression, Value};
 
 /// Rules for eliminating the "always false" filtering operation
 ///

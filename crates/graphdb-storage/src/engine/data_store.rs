@@ -6,10 +6,10 @@ use std::time::Instant;
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use graphdb_core::types::LabelId;
-use graphdb_core::{StorageError, StorageResult};
 use crate::edge::EdgeStore;
 use crate::vertex::ShardedVertexTable;
+use graphdb_core::types::LabelId;
+use graphdb_core::{StorageError, StorageResult};
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct EdgeTableKey {

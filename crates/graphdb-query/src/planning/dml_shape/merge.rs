@@ -4,9 +4,9 @@
 //! `MERGE`). Non-outbound edge directions, edge ranges, and pattern
 //! predicates are not re-rendered and fall back to the non-cached path.
 
+use crate::parser::ast::{EdgePattern, MergeStmt, NodePattern, PathElement, Pattern};
 use graphdb_core::types::EdgeDirection;
 use graphdb_core::Value;
-use crate::parser::ast::{EdgePattern, MergeStmt, NodePattern, PathElement, Pattern};
 
 use super::render_contextual;
 

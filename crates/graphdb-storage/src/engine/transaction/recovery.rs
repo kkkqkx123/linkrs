@@ -1,15 +1,16 @@
-use graphdb_core::error::storage::StorageErrorKind;
-use graphdb_core::types::{
-    DataType, EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
-};
-use graphdb_core::wal::traits::RecoveryApplier;
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::edge::EdgeStrategy;
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::params::{CreateEdgeTypeParams, EdgeOperationParams};
 use crate::engine::transaction::{AddEdgeParams, TransactionOps};
 use crate::index::{EdgeIndexOps, VertexIndexOps};
 use crate::types::StoragePropertyDef;
+use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::metadata::IndexMetadataManager;
+use graphdb_core::types::{
+    DataType, EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
+};
+use graphdb_core::wal::traits::RecoveryApplier;
+use graphdb_core::{StorageError, StorageResult, Value};
 use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
@@ -17,7 +18,6 @@ use graphdb_transaction::wal::{
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
     RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
 };
-use graphdb_core::metadata::IndexMetadataManager;
 
 impl RecoveryApplier for GraphStorageContext {
     // ========================================================================
@@ -474,13 +474,12 @@ impl RecoveryApplier for GraphStorageContext {
                         // Column exists - need to record schema change for recovery
                         self.data_store().with_vertex_tables_mut(|vertex_tables| {
                             if let Some(table) = vertex_tables.get(&redo.label) {
-                                let change_details =
-                                    crate::schema::ChangeDetails::PropertyAdded {
-                                        name: prop.name.clone(),
-                                        data_type: prop.data_type.clone(),
-                                        nullable: prop.nullable,
-                                        default_value: None,
-                                    };
+                                let change_details = crate::schema::ChangeDetails::PropertyAdded {
+                                    name: prop.name.clone(),
+                                    data_type: prop.data_type.clone(),
+                                    nullable: prop.nullable,
+                                    default_value: None,
+                                };
                                 table.rebuild_schema_change_from_redo(change_details)?;
                                 added_props.push((prop.name, prop.data_type));
                             }
@@ -541,13 +540,12 @@ impl RecoveryApplier for GraphStorageContext {
                             .with_edge_tables(|tables| tables.get(&key).cloned());
                         if let Some(arc) = arc {
                             let mut table = arc.write();
-                            let change_details =
-                                crate::schema::ChangeDetails::PropertyAdded {
-                                    name: prop.name.clone(),
-                                    data_type: prop.data_type.clone(),
-                                    nullable: prop.nullable,
-                                    default_value: None,
-                                };
+                            let change_details = crate::schema::ChangeDetails::PropertyAdded {
+                                name: prop.name.clone(),
+                                data_type: prop.data_type.clone(),
+                                nullable: prop.nullable,
+                                default_value: None,
+                            };
                             table.rebuild_schema_change_from_redo(change_details)?;
                         }
                     } else {
@@ -1089,9 +1087,9 @@ fn parse_data_type(raw: &str) -> StorageResult<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{EdgeOperationParams, InsertEdgeParams};
     use graphdb_core::wal::traits::RecoveryApplier;
     use graphdb_core::Value;
-    use crate::engine::{EdgeOperationParams, InsertEdgeParams};
 
     #[test]
     fn test_schema_replay_roundtrip() {

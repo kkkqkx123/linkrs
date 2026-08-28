@@ -8,15 +8,15 @@
 //! Index keys now use the order-preserving `OrderedCodec`, eliminating the
 //! need for post-filtering predicate matches on range scans.
 
-use graphdb_core::types::{Index, Timestamp};
-use graphdb_core::value::ordered_codec::OrderedCodec;
-use graphdb_core::wal::EntityRef;
-use graphdb_core::{StorageError, StorageResult, Value};
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::index::cursor::ChainForwardIterator;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
 use crate::index::manifest::ManifestHandle;
 use crate::index::types::StaleChecker;
+use graphdb_core::types::{Index, Timestamp};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::wal::EntityRef;
+use graphdb_core::{StorageError, StorageResult, Value};
 
 pub(crate) fn compute_vertex_index_scan_range(
     space_id: u64,

@@ -1,8 +1,8 @@
 use thiserror::Error;
 
-use graphdb_search::SearchError;
 #[cfg(feature = "fulltext-search")]
 use crate::coordinator::CoordinatorError;
+use graphdb_search::SearchError;
 
 #[derive(Debug, Error)]
 pub enum BatchError {

@@ -9,10 +9,10 @@
 
 use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{IndexInfo, SeekResult, SeekStrategyContext, SeekStrategyType};
+use crate::storage::StorageReader;
 use graphdb_core::types::expr::visitor::ExpressionVisitor;
 use graphdb_core::types::expr::visitor_collectors::OrConditionCollector;
 use graphdb_core::{StorageError, Value};
-use crate::storage::StorageReader;
 
 /// Attribute filtering criteria
 #[derive(Debug, Clone, PartialEq)]

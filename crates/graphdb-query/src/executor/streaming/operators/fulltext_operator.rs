@@ -2,10 +2,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-#[cfg(feature = "fulltext-search")]
-use graphdb_core::Value;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "fulltext-search")]
@@ -14,9 +10,13 @@ use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::FulltextManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use crate::storage::QueryStorage;
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+#[cfg(feature = "fulltext-search")]
+use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
 use graphdb_search::manager::FulltextIndexManager;
-use crate::storage::QueryStorage;
 
 #[cfg(feature = "fulltext-search")]
 use crate::executor::streaming::chunk::{ColumnInfo, Schema};

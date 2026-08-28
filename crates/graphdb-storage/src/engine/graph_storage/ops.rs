@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::types::{LabelId, PasswordInfo, UserAlterInfo, UserInfo, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::edge::EdgeRecord;
 use crate::vertex::VertexRecord;
 use crate::StorageStats;
+use graphdb_core::types::{LabelId, PasswordInfo, UserAlterInfo, UserInfo, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
 
 use super::context::GraphStorageContext;
 use super::writer;
@@ -359,10 +359,10 @@ pub(crate) fn repair_dangling_edges(
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::types::VertexId;
-    use graphdb_core::Value;
     use crate::edge::EdgeRecord;
     use crate::vertex::VertexRecord;
+    use graphdb_core::types::VertexId;
+    use graphdb_core::Value;
 
     use super::{
         edge_record_to_edge, edge_type_storage_name, serialize_properties, value_to_string,

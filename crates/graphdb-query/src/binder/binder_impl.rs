@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use crate::parser::ast::pattern::{PathElement, Pattern};
+use crate::parser::ast::stmt::Ast;
+use crate::parser::ast::{FetchTarget, MatchDeleteTarget, ReturnItem, SetOperationType, Stmt};
 use graphdb_core::error::DBError;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::types::expr::contextual::ContextualExpression;
@@ -10,11 +13,6 @@ use graphdb_core::value::NullType;
 use graphdb_core::DBResult;
 use graphdb_core::DataType;
 use graphdb_core::Value;
-use crate::parser::ast::pattern::{PathElement, Pattern};
-use crate::parser::ast::stmt::Ast;
-use crate::parser::ast::{
-    FetchTarget, MatchDeleteTarget, ReturnItem, SetOperationType, Stmt,
-};
 
 use super::bound::{
     BoundAggregateCall, BoundExpression, BoundFetchEdgesStatement, BoundFetchVerticesStatement,
@@ -684,10 +682,7 @@ impl Binder {
 
     // ── MATCH binding (produces QueryGraph) ────────────────────────────────
 
-    fn bind_match(
-        &mut self,
-        stmt: &crate::parser::ast::MatchStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_match(&mut self, stmt: &crate::parser::ast::MatchStmt) -> DBResult<BoundStatement> {
         let query_graph = self.build_query_graph(&stmt.patterns)?;
 
         // Register MATCH variables in scope BEFORE binding WHERE / RETURN /
@@ -1166,10 +1161,7 @@ impl Binder {
         }))
     }
 
-    fn bind_lookup(
-        &mut self,
-        stmt: &crate::parser::ast::LookupStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_lookup(&mut self, stmt: &crate::parser::ast::LookupStmt) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
             crate::parser::ast::LookupTarget::Tag(t) => {
                 self.resolve_tags(std::slice::from_ref(t))?;
@@ -1218,10 +1210,7 @@ impl Binder {
         }))
     }
 
-    fn bind_fetch(
-        &mut self,
-        stmt: &crate::parser::ast::FetchStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_fetch(&mut self, stmt: &crate::parser::ast::FetchStmt) -> DBResult<BoundStatement> {
         match &stmt.target {
             FetchTarget::Vertices {
                 tag_name,
@@ -1351,10 +1340,7 @@ impl Binder {
         }))
     }
 
-    fn bind_return(
-        &mut self,
-        stmt: &crate::parser::ast::ReturnStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_return(&mut self, stmt: &crate::parser::ast::ReturnStmt) -> DBResult<BoundStatement> {
         let items = stmt
             .items
             .iter()
@@ -1395,10 +1381,7 @@ impl Binder {
         }))
     }
 
-    fn bind_with(
-        &mut self,
-        stmt: &crate::parser::ast::WithStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_with(&mut self, stmt: &crate::parser::ast::WithStmt) -> DBResult<BoundStatement> {
         let items = stmt
             .items
             .iter()
@@ -1439,10 +1422,7 @@ impl Binder {
         }))
     }
 
-    fn bind_unwind(
-        &mut self,
-        stmt: &crate::parser::ast::UnwindStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_unwind(&mut self, stmt: &crate::parser::ast::UnwindStmt) -> DBResult<BoundStatement> {
         let expr = self.bind_expr(&stmt.expression)?;
         Ok(BoundStatement::Unwind(BoundUnwindStatement {
             span: stmt.span,
@@ -1451,10 +1431,7 @@ impl Binder {
         }))
     }
 
-    fn bind_pipe(
-        &mut self,
-        stmt: &crate::parser::ast::PipeStmt,
-    ) -> DBResult<BoundStatement> {
+    fn bind_pipe(&mut self, stmt: &crate::parser::ast::PipeStmt) -> DBResult<BoundStatement> {
         let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
 
         Ok(BoundStatement::Pipe(BoundPipeStatement {

@@ -5,11 +5,11 @@
 
 use super::super::{CsrBase, CsrVariant};
 use super::segment::{CsrSegment, DeletionInfo};
-use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::{StorageError, StorageResult};
 use crate::edge::EdgeSchema;
 use crate::edge::PropertyTable;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -502,8 +502,8 @@ pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use graphdb_core::Value;
 
     fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {

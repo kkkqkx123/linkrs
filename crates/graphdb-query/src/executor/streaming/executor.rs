@@ -6,9 +6,9 @@ use std::time::Instant;
 use super::chunk::DataChunk;
 use super::runtime::{ExecutionRuntime, OperatorProfile, OperatorProfileKey};
 use super::slot::SlotLayout;
+use crate::executor::base::{MemoryTracker, Spillable};
 use graphdb_core::error::QueryError;
 use graphdb_core::Value;
-use crate::executor::base::{MemoryTracker, Spillable};
 
 pub use super::context::ValueRowContext;
 pub use super::helpers::{comparison, conversion};
@@ -1053,13 +1053,13 @@ mod tests {
         BlockingOperator, ExecutionRuntime, OperatorBase, OperatorProfileKey, SetOperator,
         SortDirection, SourceOperator, StreamingExecutor, UnaryOperator,
     };
-    use graphdb_core::Value;
     use crate::executor::streaming::helpers::compare_values;
     use crate::executor::streaming::operators::set_operator::SetOperatorKind;
     use crate::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::executor::streaming::operators::unary_operator::UnaryOperatorKind;
     use crate::executor::streaming::plan::types::PhysicalOperatorId;
     use crate::executor::streaming::slot::SlotLayout;
+    use graphdb_core::Value;
     use std::sync::Arc;
 
     fn create_test_buffer() -> Vec<Vec<Value>> {
@@ -1457,12 +1457,12 @@ mod tests {
         col_names: Vec<String>,
         spill_budget_bytes: Option<usize>,
     ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
-        use graphdb_core::types::expr::Expression;
-        use graphdb_core::types::operators::AggregateFunction;
         use crate::executor::base::MemoryBudget;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::slot::SlotLayout;
         use crate::executor::streaming::spill::{SpillConfig, SpillManager};
+        use graphdb_core::types::expr::Expression;
+        use graphdb_core::types::operators::AggregateFunction;
 
         let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
         let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
@@ -1697,12 +1697,12 @@ mod tests {
         col_names: Vec<String>,
         spill_budget_bytes: Option<usize>,
     ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
-        use graphdb_core::types::expr::Expression;
         use crate::executor::base::MemoryBudget;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::plan::types::PhysicalOperatorId;
         use crate::executor::streaming::slot::SlotLayout;
         use crate::executor::streaming::spill::{SpillConfig, SpillManager};
+        use graphdb_core::types::expr::Expression;
 
         let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
         let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
@@ -1917,9 +1917,9 @@ mod tests {
 
     #[test]
     fn blocking_sort_reset_falls_back_to_close_open_and_marks_flag() {
-        use graphdb_core::types::expr::Expression;
         use crate::executor::streaming::operators::spec::BlockingSpec;
         use crate::executor::streaming::slot::SlotLayout;
+        use graphdb_core::types::expr::Expression;
 
         let rows: Vec<Vec<Value>> = (0..6).map(|v| vec![Value::BigInt(5 - v)]).collect();
         let scan = Box::new(scan_executor(rows, vec!["v".to_string()]));

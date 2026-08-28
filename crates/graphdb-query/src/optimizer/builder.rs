@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::optimizer::OptimizerEngine;
 use crate::optimizer::{CostModelConfig, CteCacheManager, StatisticsManager};
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Builder for creating OptimizerEngine instances
 pub struct OptimizerEngineBuilder {

@@ -1,7 +1,5 @@
 //! Unary, blocking, graph-pattern and recursive-fragment spec builders.
 
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::AggregateFunction;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{
@@ -9,9 +7,9 @@ use crate::executor::streaming::operators::spec::{
 };
 use crate::executor::streaming::subquery::SubqueryRunnerSpec;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::{
-    PlanNode, SingleInputNode,
-};
+use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::AggregateFunction;
 
 use super::contextual_to_expression;
 

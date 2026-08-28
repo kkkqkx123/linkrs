@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use graphdb_core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::cold::{ColdIndexEntry, ColdSnapshot};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::{EdgeRecord, EdgeStore, Nbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::params::EdgeOperationParams;
+use graphdb_core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 
 use super::context::helpers;
 use super::context::GraphStorageContext;
@@ -1823,11 +1823,8 @@ pub(crate) fn count_edges_by_type(
                 .sum()
         })
     } else {
-        let key = crate::engine::data_store::EdgeTableKey::new(
-            src_label_id,
-            dst_label_id,
-            edge_label_id,
-        );
+        let key =
+            crate::engine::data_store::EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
         ctx.ensure_edge_snapshot_registered(key);
         ctx.data_store()
             .with_single_edge_table(&key, |t| Ok(t.edge_count()))

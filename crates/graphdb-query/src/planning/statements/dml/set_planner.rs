@@ -2,8 +2,6 @@
 //!
 //! Query planning for processing SET statements (set properties on vertices/edges)
 
-use graphdb_core::types::{ContextualExpression, ExpressionMeta};
-use graphdb_core::Expression;
 use crate::parser::ast::{SetStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -13,6 +11,8 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::{ContextualExpression, ExpressionMeta};
+use graphdb_core::Expression;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -170,10 +170,8 @@ impl Planner for SetPlanner {
         }
 
         // If no assignments at all, return an empty plan
-        let arg_node = crate::planning::plan::core::nodes::ArgumentNode::new(
-            next_node_id(),
-            "set_input",
-        );
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
         let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
         let sub_plan = SubPlan::new(Some(arg_node_enum.clone()), Some(arg_node_enum));
         Ok(sub_plan)

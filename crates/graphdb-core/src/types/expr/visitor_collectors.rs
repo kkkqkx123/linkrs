@@ -107,11 +107,7 @@ impl ExpressionVisitor for PropertyCollector {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         self.visit(expression);
     }
 
@@ -767,11 +763,7 @@ impl ExpressionVisitor for VariableCollector {
         }
     }
 
-    fn visit_type_cast(
-        &mut self,
-        expression: &Expression,
-        _target_type: &crate::types::DataType,
-    ) {
+    fn visit_type_cast(&mut self, expression: &Expression, _target_type: &crate::types::DataType) {
         self.visit(expression);
     }
 
@@ -908,11 +900,7 @@ impl ExpressionVisitor for FunctionCollector {
         self.visit(right);
     }
 
-    fn visit_unary(
-        &mut self,
-        _op: crate::types::operators::UnaryOperator,
-        operand: &Expression,
-    ) {
+    fn visit_unary(&mut self, _op: crate::types::operators::UnaryOperator, operand: &Expression) {
         self.visit(operand);
     }
 

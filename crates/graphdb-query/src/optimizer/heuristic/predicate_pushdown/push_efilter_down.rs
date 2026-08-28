@@ -3,13 +3,13 @@
 //! This rule identifies the eFilter within the Traverse node.
 //! Rewrite it as a specific expression for the edge attributes.
 
-use graphdb_core::types::expr::visitor_checkers::WildcardReplacer;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use graphdb_core::types::expr::visitor_checkers::WildcardReplacer;
+use graphdb_core::Expression;
 
 /// Rules that push the edge filtering conditions to the Traverse node
 ///

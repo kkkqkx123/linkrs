@@ -2,11 +2,11 @@
 //!
 //! This module defines plan nodes for full-text index management operations.
 
-use graphdb_core::types::FulltextEngineType;
 use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions};
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
+use graphdb_core::types::FulltextEngineType;
 use serde::{Deserialize, Serialize};
 
 /// CREATE FULLTEXT INDEX plan node
@@ -68,11 +68,11 @@ impl PlanNode for CreateFulltextIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(FulltextManageNode::Create(self))
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(
+            FulltextManageNode::Create(self),
+        )
     }
 }
 
@@ -119,11 +119,11 @@ impl PlanNode for DropFulltextIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(FulltextManageNode::Drop(self))
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(
+            FulltextManageNode::Drop(self),
+        )
     }
 }
 
@@ -170,11 +170,11 @@ impl PlanNode for AlterFulltextIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(FulltextManageNode::Alter(self))
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(
+            FulltextManageNode::Alter(self),
+        )
     }
 }
 
@@ -221,11 +221,11 @@ impl PlanNode for ShowFulltextIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(FulltextManageNode::Show(self))
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(
+            FulltextManageNode::Show(self),
+        )
     }
 }
 
@@ -268,11 +268,11 @@ impl PlanNode for DescribeFulltextIndexNode {
 
     fn set_col_names(&mut self, _names: Vec<String>) {}
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         use crate::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(FulltextManageNode::Describe(self))
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::FulltextManage(
+            FulltextManageNode::Describe(self),
+        )
     }
 }
 

@@ -176,10 +176,10 @@ fn collect_lkcs_into(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::Value;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::Value;
 
     fn make_snapshot(ts: Timestamp, edges: &[(u32, u32)]) -> ColdSnapshot {
         let schema = EdgeSchema {

@@ -37,14 +37,11 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
 use crate::optimizer::cost_based::{
     AggregateContext, AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
 };
-use crate::optimizer::heuristic::batch::{
-    BatchOptimizer, BatchStatistics, OptimizationBatch,
-};
+use crate::optimizer::heuristic::batch::{BatchOptimizer, BatchStatistics, OptimizationBatch};
 use crate::optimizer::heuristic::rule_enum::RuleRegistry;
 use crate::optimizer::partitioning::{
     PartitioningConfig, PartitioningLayoutInfo, PartitioningPlanner,
@@ -59,6 +56,7 @@ use crate::optimizer::{
     BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager, SelectivityEstimator,
     StatisticsManager, SubqueryUnnestingOptimizer,
 };
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 use crate::planning::plan::logical_plan::LogicalPlan;
 use crate::planning::plan::ExecutionPlan;
@@ -218,9 +216,7 @@ impl OptimizerEngine {
             decision_feedback,
             feedback_trigger: AutoFeedbackTrigger::default(),
             enable_feedback: true,
-            columnar_policy: Arc::new(
-                crate::executor::streaming::chunk::ColumnarPolicy::default(),
-            ),
+            columnar_policy: Arc::new(crate::executor::streaming::chunk::ColumnarPolicy::default()),
         }
     }
 
@@ -713,14 +709,13 @@ impl OptimizerEngine {
                 self.selectivity_estimator.clone(),
             );
             let mut notes = Vec::new();
-            let rewritten =
-                crate::optimizer::cost_based::index_selection::rewrite_index_scans(
-                    root,
-                    &selector,
-                    &self.stats_manager,
-                    space,
-                    &mut notes,
-                );
+            let rewritten = crate::optimizer::cost_based::index_selection::rewrite_index_scans(
+                root,
+                &selector,
+                &self.stats_manager,
+                space,
+                &mut notes,
+            );
             plan.set_root(rewritten);
             plan.cbo_notes.extend(notes);
         }
@@ -830,14 +825,13 @@ impl OptimizerEngine {
         // are discarded — the logical walker is the note source).
         if let Some(ref root) = plan.root.clone() {
             let mut scratch = Vec::new();
-            let rewritten =
-                crate::optimizer::cost_based::index_selection::rewrite_index_scans(
-                    root,
-                    &selector,
-                    &self.stats_manager,
-                    space,
-                    &mut scratch,
-                );
+            let rewritten = crate::optimizer::cost_based::index_selection::rewrite_index_scans(
+                root,
+                &selector,
+                &self.stats_manager,
+                space,
+                &mut scratch,
+            );
             plan.set_root(rewritten);
         }
     }
@@ -868,15 +862,14 @@ impl OptimizerEngine {
         if let Some(ref root) = plan.root.clone() {
             let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
             let mut notes = Vec::new();
-            let rewritten =
-                crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits(
-                    root,
-                    &optimizer,
-                    stats,
-                    &self.selectivity_estimator,
-                    &self.cardinality_feedback,
-                    &mut notes,
-                );
+            let rewritten = crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits(
+                root,
+                &optimizer,
+                stats,
+                &self.selectivity_estimator,
+                &self.cardinality_feedback,
+                &mut notes,
+            );
             plan.set_root(rewritten);
             plan.cbo_notes.extend(notes);
         }
@@ -901,8 +894,7 @@ impl OptimizerEngine {
             let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator.clone());
             let notes =
                 crate::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
-                    root,
-                    &optimizer,
+                    root, &optimizer,
                 );
             plan.cbo_notes.extend(notes);
         }
@@ -1089,11 +1081,9 @@ mod tests {
 
     #[test]
     fn test_feedback_loop_corrects_selectivity() {
-        use graphdb_core::types::Expression;
         use crate::optimizer::cost::selectivity::condition_key;
-        use crate::optimizer::stats::feedback::query::{
-            OperatorFeedback, QueryExecutionFeedback,
-        };
+        use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
+        use graphdb_core::types::Expression;
 
         let engine = OptimizerEngine::default();
 
@@ -1160,9 +1150,7 @@ mod tests {
 
     #[test]
     fn test_feedback_loop_respects_enable_switch() {
-        use crate::optimizer::stats::feedback::query::{
-            OperatorFeedback, QueryExecutionFeedback,
-        };
+        use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
 
         let mut engine = OptimizerEngine::default();
         engine.set_enable_feedback(false);
@@ -1194,9 +1182,7 @@ mod tests {
 
     #[test]
     fn test_feedback_loop_corrects_cardinality_shape_keys() {
-        use crate::optimizer::stats::feedback::query::{
-            OperatorFeedback, QueryExecutionFeedback,
-        };
+        use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
 
         let engine = OptimizerEngine::default();
 
@@ -1261,16 +1247,16 @@ mod tests {
 
     #[test]
     fn cost_based_phases_rewrite_and_emit_notes() {
-        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-        use graphdb_core::types::{Index, IndexStatus, IndexType};
-        use graphdb_core::Value;
         use crate::optimizer::stats::TagStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
         use crate::planning::plan::core::nodes::operation::sort_node::{
             LimitNode, SortItem, SortNode,
         };
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::{Index, IndexStatus, IndexType};
+        use graphdb_core::Value;
         use std::sync::Arc;
 
         let engine = OptimizerEngine::default();
@@ -1369,13 +1355,13 @@ mod tests {
 
     #[test]
     fn precompute_notes_emitted_for_reused_expressions() {
+        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
         use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
         use graphdb_core::types::operators::BinaryOperator;
         use graphdb_core::Value;
         use graphdb_core::YieldColumn;
-        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-        use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
         use std::sync::Arc;
 
         let mut engine = OptimizerEngine::default();
@@ -1430,10 +1416,6 @@ mod tests {
 
     #[test]
     fn cost_based_consumes_logical_plan_when_attached() {
-        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
-        use graphdb_core::types::{Index, IndexStatus, IndexType};
-        use graphdb_core::Value;
         use crate::optimizer::stats::TagStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -1441,6 +1423,10 @@ mod tests {
             LimitNode, SortItem, SortNode,
         };
         use crate::planning::plan::logical_plan::LogicalPlan;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use graphdb_core::types::{Index, IndexStatus, IndexType};
+        use graphdb_core::Value;
         use std::sync::Arc;
 
         let engine = OptimizerEngine::default();

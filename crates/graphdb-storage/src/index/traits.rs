@@ -1,6 +1,6 @@
+use crate::index::types::{EdgeIdentity, GcStats};
 use graphdb_core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use graphdb_core::{StorageError, Value};
-use crate::index::types::{EdgeIdentity, GcStats};
 
 pub trait VertexIndexOps: Send + Sync {
     fn update_vertex_indexes_mvcc(

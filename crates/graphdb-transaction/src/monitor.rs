@@ -9,9 +9,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 
 use crate::context::TransactionContext;
-use crate::types::{
-    TransactionId, TransactionInfo, TransactionMetrics, TransactionStats,
-};
+use crate::types::{TransactionId, TransactionInfo, TransactionMetrics, TransactionStats};
 
 /// Transaction Monitor
 ///

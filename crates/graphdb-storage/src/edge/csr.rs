@@ -6,8 +6,8 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use graphdb_core::{StorageError, StorageResult};
 use crate::persistence::{read_u32_le, read_u64_le};
+use graphdb_core::{StorageError, StorageResult};
 
 use super::{CsrBase, EdgeId, ImmutableNbr, Nbr, Timestamp, VertexId};
 

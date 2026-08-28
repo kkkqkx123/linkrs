@@ -21,11 +21,6 @@
 //! JOIN condition connects edge destination/source to vertex ID
 //! The vertex tag can be determined from the ScanVertices
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::expr::visitor_collectors::VariableCollector;
-use graphdb_core::types::expr::ExpressionAnalysisContext;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -35,6 +30,11 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNod
 use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
+use graphdb_core::types::expr::ExpressionAnalysisContext;
+use graphdb_core::Expression;
 use std::sync::Arc;
 
 /// Rules for converting Edge-Vertex JOIN to AppendVertices

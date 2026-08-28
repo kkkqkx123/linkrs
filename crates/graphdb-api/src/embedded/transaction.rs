@@ -2,11 +2,11 @@
 //!
 //! Provides full transaction management functionality, including savepoint support
 
-use graphdb_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::Session;
-use graphdb_core::Value;
 use crate::storage::StorageClient;
+use graphdb_core::Value;
+use graphdb_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use graphdb_transaction::types::{SavepointId, SavepointInfo};
 use graphdb_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;
@@ -203,7 +203,9 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let result = {
             let mut query_api = self.session.query_api_mut();
@@ -243,7 +245,9 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-         consistency: Default::default(), minimum_lsn: None, };
+            consistency: Default::default(),
+            minimum_lsn: None,
+        };
 
         let result = {
             let mut query_api = self.session.query_api_mut();

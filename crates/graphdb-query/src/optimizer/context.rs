@@ -5,12 +5,10 @@
 
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::optimizer::analysis::{
-    BatchPlanAnalysis, ExpressionAnalysis, ReferenceCountAnalysis,
-};
+use crate::optimizer::analysis::{BatchPlanAnalysis, ExpressionAnalysis, ReferenceCountAnalysis};
 use crate::optimizer::cost::{CostCalculator, CostModelConfig, SelectivityEstimator};
 use crate::optimizer::stats::StatisticsManager;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Optimization Context
 ///

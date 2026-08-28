@@ -5,11 +5,11 @@
 //! at runtime is prohibited — all Variable references are resolved through
 //! the layout.
 
-use graphdb_core::Value;
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::ExpressionError;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
 use crate::executor::streaming::subquery::{EvalEnv, SubqueryExecutor};
+use graphdb_core::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -10,9 +10,7 @@ use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
-use crate::planning::plan::{
-    PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum,
-};
+use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum};
 
 /// Static configuration for partition selection. The default is disabled so
 /// introducing the optimizer cannot change query results without an explicit
@@ -563,13 +561,19 @@ impl PartitioningPlanner {
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_))
+                    matches!(
+                        m.inner(),
+                        graphdb_core::types::expr::Expression::Variable(_)
+                    )
                 })
             && probe_keys
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(m.inner(), graphdb_core::types::expr::Expression::Variable(_))
+                    matches!(
+                        m.inner(),
+                        graphdb_core::types::expr::Expression::Variable(_)
+                    )
                 })
     }
 
@@ -1135,9 +1139,9 @@ mod tests {
 
     #[test]
     fn equality_join_with_variable_key_selects_partition_layout() {
+        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         use graphdb_core::types::expr::contextual::ContextualExpression;
         use graphdb_core::types::expr::ExpressionMeta;
-        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
         let mut left_scan = ScanVerticesNode::new(1, "space");
@@ -1175,9 +1179,9 @@ mod tests {
 
     #[test]
     fn hash_inner_join_with_variable_key_selects_partition_layout() {
+        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         use graphdb_core::types::expr::contextual::ContextualExpression;
         use graphdb_core::types::expr::ExpressionMeta;
-        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         // Real keyed-join queries lower to a InnerJoin node; the partition
         // decision must treat it the same as the plain InnerJoin variant.
@@ -1216,9 +1220,9 @@ mod tests {
 
     #[test]
     fn hash_inner_join_with_composite_key_is_rejected() {
+        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         use graphdb_core::types::expr::contextual::ContextualExpression;
         use graphdb_core::types::expr::ExpressionMeta;
-        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
         let mut left_scan = ScanVerticesNode::new(1, "space");
@@ -1250,9 +1254,9 @@ mod tests {
 
     #[test]
     fn non_vid_join_key_selects_hash_partition_layout() {
+        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
         use graphdb_core::types::expr::contextual::ContextualExpression;
         use graphdb_core::types::expr::ExpressionMeta;
-        use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         // Q4: a join on a property variable cannot map onto the vertex-id
         // domain, so the plan declares a hash distribution by that key.
@@ -1323,11 +1327,11 @@ mod tests {
 
     #[test]
     fn edge_scan_with_traversal_above_rejected() {
-        use graphdb_core::EdgeDirection;
         use crate::optimizer::stats::EdgeTypeStatistics;
         use crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
         use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
         use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandNode;
+        use graphdb_core::EdgeDirection;
 
         let stats = StatisticsManager::new();
         let mut edge = EdgeTypeStatistics::new("follows".to_string());

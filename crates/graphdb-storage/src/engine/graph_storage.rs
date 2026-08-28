@@ -25,18 +25,8 @@ pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_core::stats::StatsManager;
-use graphdb_core::types::{
-    CommitLsn, CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId,
-    PasswordInfo, PropertyDef, SnapshotTimestamp, SpaceInfo, TagInfo, Timestamp, UpdateInfo,
-    UserAlterInfo, UserInfo, VertexId,
-};
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::client::ColdSnapshotInfo;
-use crate::cursor::{
-    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
-};
+use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::engine::PersistenceConfig;
@@ -48,6 +38,14 @@ use crate::{
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
     StorageSchemaContextOps, StorageSchemaOps, StorageStats, StorageSyncContextOps, StorageWriter,
 };
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::{
+    CommitLsn, CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId,
+    PasswordInfo, PropertyDef, SnapshotTimestamp, SpaceInfo, TagInfo, Timestamp, UpdateInfo,
+    UserAlterInfo, UserInfo, VertexId,
+};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 
 #[derive(Clone)]
 pub struct GraphStorage {
@@ -100,6 +98,11 @@ impl GraphStorage {
     /// [`context::WriteGateStats`]).
     pub fn write_gate_stats(&self) -> context::WriteGateStats {
         self.ctx.write_gate_stats()
+    }
+
+    /// Outbox pending depth for backpressure-aware clients.
+    pub fn outbox_pending(&self) -> u64 {
+        self.ctx.outbox_pending()
     }
 
     pub fn begin_auto_commit_batch(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
@@ -172,16 +175,12 @@ impl GraphStorage {
 
     /// Create with production configuration for small systems.
     pub fn new_production_small() -> StorageResult<Self> {
-        Self::new_with_config(
-            crate::engine::config::PropertyGraphConfig::production_small(),
-        )
+        Self::new_with_config(crate::engine::config::PropertyGraphConfig::production_small())
     }
 
     /// Create with production configuration for large systems (LSM tiered freeze).
     pub fn new_production_large() -> StorageResult<Self> {
-        Self::new_with_config(
-            crate::engine::config::PropertyGraphConfig::production_large(),
-        )
+        Self::new_with_config(crate::engine::config::PropertyGraphConfig::production_large())
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
@@ -1372,9 +1371,8 @@ impl StorageSchemaOps for GraphStorage {
             .schema_manager()
             .rename_tag_property(space, tag, old_name, new_name)?;
         if renamed {
-            let label_id =
-                crate::engine::graph_storage::ops::tag_label_id(&self.ctx, space, tag)?
-                    .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+            let label_id = crate::engine::graph_storage::ops::tag_label_id(&self.ctx, space, tag)?
+                .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
             schema_engine::rename_vertex_property(&self.ctx, label_id, old_name, new_name)?;
         }
         Ok(renamed)
@@ -1985,9 +1983,7 @@ impl crate::client::StorageSnapshotOps for GraphStorage {
 
 /// Build `ColdSnapshotInfo` from a snapshot, reading file metadata when a
 /// backing file exists.
-fn cold_snapshot_info(
-    snapshot: &crate::cold::ColdSnapshot,
-) -> StorageResult<ColdSnapshotInfo> {
+fn cold_snapshot_info(snapshot: &crate::cold::ColdSnapshot) -> StorageResult<ColdSnapshotInfo> {
     let (file_path, file_size) = match snapshot.backing_path() {
         Some(path) => {
             let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);

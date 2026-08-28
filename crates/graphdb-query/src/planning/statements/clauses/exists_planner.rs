@@ -15,10 +15,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use graphdb_core::types::{ContextualExpression, Expression};
 use crate::binder::validation::ValidationInfo;
 use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::parser::ast::pattern::PatternUtils;
@@ -45,6 +41,10 @@ use crate::planning::planner::PlannerError;
 use crate::planning::statements::pattern_planner::{self, PlanningContext};
 use crate::planning::statements::plan_combiner;
 use crate::QueryContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use graphdb_core::types::{ContextualExpression, Expression};
 
 /// An EXISTS / IN subquery at a conjunctive WHERE position.
 #[derive(Debug, Clone)]
@@ -1522,8 +1522,8 @@ mod tests {
 
     #[test]
     fn plans_correlated_scalar_aggregate_as_group_join() {
-        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use graphdb_core::types::expr::SubqueryBody;
 
         // `t.city IN { (p:person) WHERE p.city = t.city RETURN max(p.age) }`
         // at an expression position: the correlated part reduces to an equi
@@ -1585,8 +1585,8 @@ mod tests {
 
     #[test]
     fn non_equi_scalar_aggregate_keeps_correlated_apply_fallback() {
-        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use graphdb_core::types::expr::SubqueryBody;
 
         // Non-equi correlation cannot reduce to equi keys: the extracted-key
         // attempt is restored and the per-row CorrelatedApply fallback kept.
@@ -1673,8 +1673,8 @@ mod tests {
 
     #[test]
     fn plans_complex_correlated_exists_as_correlated_apply() {
-        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use graphdb_core::types::expr::SubqueryBody;
 
         // A multi-pattern (cross-joined) correlated subquery is not a simple
         // single-table shape, so it keeps the per-row CorrelatedApply
@@ -1743,8 +1743,8 @@ mod tests {
 
     #[test]
     fn nested_correlated_exists_wraps_inner_mark_join() {
-        use graphdb_core::types::expr::SubqueryBody;
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use graphdb_core::types::expr::SubqueryBody;
 
         // Outer EXISTS over `(p:person)` whose WHERE contains a nested EXISTS
         // correlated against `p` (`q.age > p.age`). The nested subquery is a

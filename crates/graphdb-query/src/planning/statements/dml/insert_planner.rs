@@ -2,7 +2,6 @@
 //!
 //! Query planning for INSERT VERTEX and INSERT EDGE statements
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::{InsertStmt, InsertTarget, Stmt, VertexRow};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -15,14 +14,15 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::parser::ast::utils::ExprFactory;
 #[cfg(test)]
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 #[cfg(test)]
 use graphdb_core::YieldColumn;
-#[cfg(test)]
-use crate::parser::ast::utils::ExprFactory;
 
 /// Insert Operation Planner
 /// Responsible for converting INSERT statements into execution plans.
@@ -256,15 +256,15 @@ impl Default for InsertPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::contextual::ContextualExpression;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::Value;
     use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::utils::ExprFactory;
     use crate::parser::ast::{Ast, Span, Stmt};
     use crate::parser::ast::{InsertStmt, InsertTarget, TagInsertSpec, VertexRow};
     use crate::planning::planner::{Planner, ValidatedStatement};
     use crate::QueryContext;
+    use graphdb_core::types::expr::contextual::ContextualExpression;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::Value;
     use std::sync::Arc;
 
     fn create_test_span() -> Span {

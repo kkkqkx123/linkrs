@@ -30,12 +30,6 @@
 //! The projection columns can be separated into left and right sides.
 //! The JOIN keys are retained in the projection.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::expr::visitor_collectors::VariableCollector;
-use graphdb_core::types::YieldColumn;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
@@ -44,6 +38,12 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::join::join_node::{InnerJoinNode, LeftJoinNode};
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::expr::visitor_collectors::VariableCollector;
+use graphdb_core::types::YieldColumn;
+use graphdb_core::Expression;
 use std::sync::Arc;
 
 /// Rules for pushing projection operations down to JOIN

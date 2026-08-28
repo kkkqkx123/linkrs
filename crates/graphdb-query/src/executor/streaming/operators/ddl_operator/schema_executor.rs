@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
+use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::executor::streaming::operators::spec::{
+    EdgeManageCommand, IndexManageCommand, SpaceManageCommand, TagManageCommand,
+};
+use crate::storage::StorageSchemaOps;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::edge::EdgeTypeInfo;
 use graphdb_core::types::index::{Index, IndexConfig, IndexType};
 use graphdb_core::types::space::SpaceInfo;
 use graphdb_core::types::tag::TagInfo;
 use graphdb_core::{NullType, Value};
-use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
-use crate::executor::streaming::operators::spec::{
-    EdgeManageCommand, IndexManageCommand, SpaceManageCommand, TagManageCommand,
-};
-use crate::storage::StorageSchemaOps;
 
 pub(super) fn execute_space_manage(
     op: &mut super::DdlOperator,

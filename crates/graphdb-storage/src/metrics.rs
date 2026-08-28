@@ -1,14 +1,6 @@
 use std::sync::Arc;
 
-use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_core::types::{
-    EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
-    SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
-};
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::cursor::{
-    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
-};
+use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::macros::forward_methods;
 use crate::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
@@ -16,6 +8,12 @@ use crate::{
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
     StorageStats, StorageSyncContextOps, StorageWriter,
 };
+use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
+use graphdb_core::types::{
+    EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
+    SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+};
+use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use graphdb_sync::SyncManager;
 
 pub struct MetricsStorage<S: StorageClient> {
@@ -56,9 +54,7 @@ impl<S: StorageClient> crate::stats_reader::ColumnStatsReader for MetricsStorage
     }
 }
 
-impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps
-    for MetricsStorage<S>
-{
+impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps for MetricsStorage<S> {
     fn begin_auto_commit_batch(&self) -> StorageResult<Arc<crate::AutoCommitBatchWindow>> {
         self.inner.begin_auto_commit_batch()
     }
@@ -79,9 +75,7 @@ impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps
     }
 }
 
-impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps
-    for MetricsStorage<S>
-{
+impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for MetricsStorage<S> {
     fn begin_auto_commit_group(&self) -> StorageResult<Arc<crate::AutoCommitBatchWindow>> {
         self.inner.begin_auto_commit_group()
     }

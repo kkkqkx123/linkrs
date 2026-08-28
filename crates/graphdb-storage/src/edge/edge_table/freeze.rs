@@ -7,8 +7,8 @@
 use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-use graphdb_core::types::Timestamp;
 use crate::edge::CsrVariant;
+use graphdb_core::types::Timestamp;
 
 impl TimeTravelEdgeStore {
     /// Freeze CSR only (convert mutable delta to immutable segment).

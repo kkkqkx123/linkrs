@@ -1,11 +1,11 @@
 use std::sync::atomic::Ordering;
 
-use graphdb_core::types::LabelId;
-use graphdb_core::{StorageError, StorageResult};
 use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{ShardedVertexTable, VertexSchema};
+use graphdb_core::types::LabelId;
+use graphdb_core::{StorageError, StorageResult};
 
 use super::context::GraphStorageContext;
 
@@ -291,9 +291,9 @@ pub fn rename_edge_property(
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::DataType;
     use crate::edge::EdgeStrategy;
     use crate::types::StoragePropertyDef;
+    use graphdb_core::DataType;
 
     use super::super::GraphStorageContext;
 

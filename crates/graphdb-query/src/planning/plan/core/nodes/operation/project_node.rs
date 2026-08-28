@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
+use crate::define_plan_node_with_deps;
+use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::SerializableExpression;
 use graphdb_core::YieldColumn;
-use crate::define_plan_node_with_deps;
-use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
 
 define_plan_node_with_deps! {
     pub struct ProjectNode {
@@ -122,8 +122,7 @@ mod tests {
     fn test_project_node_creation() {
         let start_node =
             crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Start(
-                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(
-                ),
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
             );
 
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -150,8 +149,7 @@ mod tests {
     fn test_project_node_columns() {
         let start_node =
             crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Start(
-                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(
-                ),
+                crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
             );
 
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());

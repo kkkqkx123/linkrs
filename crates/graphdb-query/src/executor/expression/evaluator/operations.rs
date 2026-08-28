@@ -1,11 +1,11 @@
+use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
+use crate::executor::expression::ExpressionError;
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::value::list::List;
 /// Arithmetic and logical operations module
 ///
 /// This module is responsible for handling basic arithmetic operations, comparison operations, logical operations, and other fundamental operations involved in the evaluation of expressions.
 use graphdb_core::value::Value;
-use crate::executor::expression::evaluator::collection_operations::CollectionOperationEvaluator;
-use crate::executor::expression::ExpressionError;
 
 /// Binary operation evaluator
 pub struct BinaryOperationEvaluator;

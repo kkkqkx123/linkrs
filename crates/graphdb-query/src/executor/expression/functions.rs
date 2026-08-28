@@ -45,10 +45,10 @@ pub use builtin::regex::RegexFunction;
 pub use builtin::string::StringFunction;
 pub use builtin::utility::UtilityFunction;
 
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Value;
 
 use std::ffi::c_void;
 

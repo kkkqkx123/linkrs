@@ -3,13 +3,13 @@
 //! This rule identifies the vFilter within the Traverse node.
 //! And rewrite it as a specific expression for the vertex attributes.
 
-use graphdb_core::types::expr::visitor_checkers::WildcardReplacer;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use graphdb_core::types::expr::visitor_checkers::WildcardReplacer;
+use graphdb_core::Expression;
 
 /// The rule that pushes the vertex filtering conditions to the ScanVertices node
 ///

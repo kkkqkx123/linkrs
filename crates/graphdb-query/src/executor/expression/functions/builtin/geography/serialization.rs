@@ -1,6 +1,6 @@
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 
 pub fn execute_st_astext(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {

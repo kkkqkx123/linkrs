@@ -3,7 +3,6 @@
 //! Responsible for parsing various statements, including MATCH, GO, CREATE, DELETE, UPDATE, etc.
 //! This module serves as an entry point; it delegates the specific analysis logic to the various sub-modules.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
@@ -12,6 +11,7 @@ use crate::parser::parsing::{
     user_parser::UserParser, util_stmt_parser::UtilStmtParser,
 };
 use crate::parser::TokenKind;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 /// Statement parser - namespace for statement parsing functions.
 pub struct StmtParser;
@@ -337,9 +337,9 @@ impl StmtParser {
 
     /// Analysis of the GROUP BY statement
     fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use graphdb_core::types::expr::Expression;
         use crate::parser::ast::stmt::{GroupByStmt, GroupingType, YieldItem};
         use crate::parser::parsing::clause_parser::ClauseParser;
+        use graphdb_core::types::expr::Expression;
 
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Group)?;
@@ -540,9 +540,9 @@ impl StmtParser {
             ctx.expect_token(TokenKind::Users)?;
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowUsers(
-                crate::parser::ast::stmt::ShowUsersStmt { span },
-            ))
+            Ok(Stmt::ShowUsers(crate::parser::ast::stmt::ShowUsersStmt {
+                span,
+            }))
         } else if ctx.check_token(TokenKind::Roles) {
             UtilStmtParser::new().parse_show_roles_internal(ctx, start_span)
         } else if ctx.check_token(TokenKind::Create) {
@@ -689,7 +689,9 @@ impl StmtParser {
         // Check whether it is a CREATE VECTOR INDEX statement.
         if ctx.check_keyword("VECTOR") {
             // Parse as vector index statement (CREATE already consumed)
-            return crate::parser::parsing::vector_parser::parse_create_vector_index_after_create(ctx);
+            return crate::parser::parsing::vector_parser::parse_create_vector_index_after_create(
+                ctx,
+            );
         }
 
         // Check the DDL CREATE type.

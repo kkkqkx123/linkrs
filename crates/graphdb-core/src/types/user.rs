@@ -97,10 +97,7 @@ impl UserInfo {
     }
 
     /// change your password
-    pub fn change_password(
-        &mut self,
-        new_password: String,
-    ) -> Result<(), crate::StorageError> {
+    pub fn change_password(&mut self, new_password: String) -> Result<(), crate::StorageError> {
         self.password_hash = bcrypt::hash(new_password, bcrypt_cost()).map_err(|e| {
             crate::StorageError::db_error(format!("Password encryption failed: {}", e))
         })?;

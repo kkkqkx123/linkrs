@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::Value;
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::Value;
 
 #[derive(Debug)]
 pub enum SetOperatorKind {

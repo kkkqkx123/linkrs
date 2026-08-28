@@ -11,9 +11,9 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use graphdb_core::Value;
 use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
+use graphdb_core::Value;
 
 #[cfg(feature = "embedding")]
 use graphdb_embedding::EmbeddingService;
@@ -541,6 +541,68 @@ impl VectorSyncCoordinator {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
 
+        // Local WAL group-commit alignment: batch per collection into one
+        // `apply_txn(txn_id, ops)` so the vector WAL is fsync'ed once per
+        // collection per graph commit burst, instead of once per point. This
+        // reduces double `fsync` jitter between the graph WAL and the vector
+        // WAL when the same `commit_lsn` fans out to multiple (tag,field) groups.
+        // Qdrant keeps its existing per-collection streaming path.
+        if self.backend.is_local() {
+            if let Some(local) = self.backend.as_local() {
+                let txn_id = {
+                    // Deterministic per-batch id: low bits are timestamp, high
+                    // bits mix the batch size so two concurrent batches at the
+                    // same ms do not collide. Idempotent replay on the same
+                    // `txn_id` is safe (`CollectionStore::apply_txn` deduplicates).
+                    let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    now.wrapping_mul(0x9e3779b97f4a7c15)
+                        .wrapping_add(contexts.len() as u64)
+                };
+                let mut ops: Vec<vector_search::engine::TxnOp> = Vec::with_capacity(contexts.len());
+                for ctx in contexts {
+                    let collection = ctx.location.to_collection_name();
+                    let point_id = ctx.data.id;
+                    match ctx.change_type {
+                        VectorChangeType::Insert => {
+                            let mut json_payload: HashMap<String, serde_json::Value> = ctx
+                                .data
+                                .payload
+                                .into_iter()
+                                .filter_map(|(k, v)| {
+                                    serde_json::to_value(&v).ok().map(|json| (k, json))
+                                })
+                                .collect();
+                            json_payload.insert(
+                                "group_id".to_string(),
+                                serde_json::to_value(ctx.location.group_id())
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
+                            let point = VectorPoint::new(point_id, ctx.data.vector)
+                                .with_payload(json_payload);
+                            ops.push(vector_search::engine::TxnOp::Upsert { collection, point });
+                        }
+                        VectorChangeType::Delete => {
+                            ops.push(vector_search::engine::TxnOp::Delete {
+                                collection,
+                                point_id,
+                            });
+                        }
+                    }
+                }
+                if !ops.is_empty() {
+                    // `apply_txn` groups by collection internally and performs
+                    // one WAL `apply_txn` per collection in lexicographic order,
+                    // reusing the per-collection fsync barrier rather than
+                    // issuing one fsync per point.
+                    local.apply_txn(txn_id, ops).map_err(|e| {
+                        VectorCoordinatorError::Vector(crate::vector_error::VectorError::from(e))
+                    })?;
+                    debug!("Local vector group-commit txn {} applied", txn_id);
+                }
+                return Ok(());
+            }
+        }
+
         let mut upsert_by_collection: HashMap<String, Vec<VectorPoint>> = HashMap::new();
         let mut delete_by_collection: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -580,33 +642,52 @@ impl VectorSyncCoordinator {
             }
         }
 
+        // Qdrant path: per-collection concurrent upsert. The plan calls for
+        // `claim 4` concurrency at the outbox layer (handled in
+        // `SyncManager::retry_outbox_sync`) plus per-collection `upsert_batch`
+        // concurrency here. Box the futures so upsert and delete branches share
+        // one trait-object type.
+        use std::future::Future;
+        use std::pin::Pin;
+        let mut all_futs: Vec<Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send>>> =
+            Vec::new();
         for (collection_name, points) in upsert_by_collection {
-            let points_count = points.len();
-            if points_count == 1 {
-                self.backend
-                    .upsert(&collection_name, points.into_iter().next().unwrap())
-                    .await?;
-            } else if !points.is_empty() {
-                self.backend.upsert_batch(&collection_name, points).await?;
-                debug!(
-                    "Batch upserted {} vectors to collection {}",
-                    points_count, collection_name
-                );
-            }
+            let backend = self.backend.clone();
+            all_futs.push(Box::pin(async move {
+                let points_count = points.len();
+                if points_count == 1 {
+                    backend
+                        .upsert(&collection_name, points.into_iter().next().unwrap())
+                        .await?;
+                } else if !points.is_empty() {
+                    backend.upsert_batch(&collection_name, points).await?;
+                    debug!(
+                        "Batch upserted {} vectors to collection {}",
+                        points_count, collection_name
+                    );
+                }
+                Ok::<(), VectorCoordinatorError>(())
+            }));
         }
-
         for (collection_name, point_ids) in delete_by_collection {
-            let point_ids_count = point_ids.len();
-            if point_ids_count == 1 {
-                self.backend.delete(&collection_name, &point_ids[0]).await?;
-            } else if !point_ids.is_empty() {
-                let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
-                self.backend.delete_batch(&collection_name, &refs).await?;
-                debug!(
-                    "Batch deleted {} vectors from collection {}",
-                    point_ids_count, collection_name
-                );
-            }
+            let backend = self.backend.clone();
+            all_futs.push(Box::pin(async move {
+                let point_ids_count = point_ids.len();
+                if point_ids_count == 1 {
+                    backend.delete(&collection_name, &point_ids[0]).await?;
+                } else if !point_ids.is_empty() {
+                    let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
+                    backend.delete_batch(&collection_name, &refs).await?;
+                    debug!(
+                        "Batch deleted {} vectors from collection {}",
+                        point_ids_count, collection_name
+                    );
+                }
+                Ok::<(), VectorCoordinatorError>(())
+            }));
+        }
+        if !all_futs.is_empty() {
+            futures::future::try_join_all(all_futs).await?;
         }
 
         Ok(())
@@ -699,8 +780,8 @@ impl VectorSyncCoordinator {
                     }
                 };
                 if minimum_lsn.get() != 0 {
-                    let target = graphdb_core::types::TargetId::new("vector".to_string())
-                        .map_err(|e| {
+                    let target =
+                        graphdb_core::types::TargetId::new("vector".to_string()).map_err(|e| {
                             VectorCoordinatorError::Vector(
                                 crate::vector_error::VectorError::Internal(e),
                             )

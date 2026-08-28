@@ -2,11 +2,6 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
-use graphdb_core::stats::{OutboxState, StatsManager};
-use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
-use graphdb_core::Value;
-#[cfg(feature = "fulltext-search")]
-use graphdb_search::SyncConfig;
 use crate::checkpoint_manifest::CheckpointManifestManager;
 #[cfg(feature = "fulltext-search")]
 use crate::coordinator::{CoordinatorError, SyncCoordinator};
@@ -14,6 +9,11 @@ use crate::outbox::OutboxPayload;
 use crate::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::types::ChangeType;
 use dashmap::DashMap;
+use graphdb_core::stats::{OutboxState, StatsManager};
+use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
+use graphdb_core::Value;
+#[cfg(feature = "fulltext-search")]
+use graphdb_search::SyncConfig;
 #[cfg(feature = "vector")]
 use std::collections::HashMap;
 use std::path::Path;
@@ -61,6 +61,12 @@ pub struct SyncManager {
     #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
+    #[cfg(feature = "vector")]
+    backend_policy: Option<Arc<crate::backend::BackendDeliveryPolicy>>,
+    backpressure: Arc<OutboxBackpressureConfig>,
+    /// When an `Auth` error is seen, delivery is paused until this timestamp
+    /// (millis since epoch). Atomic for lock-free reads in the hot path.
+    auth_paused_until_ms: Arc<std::sync::atomic::AtomicU64>,
     stats_manager: Option<Arc<StatsManager>>,
     handle: JoinHandleGuard,
 }
@@ -72,6 +78,9 @@ pub struct OutboxConsumerConfig {
     pub batch_size: usize,
     pub lease_duration_ms: u64,
     pub max_retries: u64,
+    /// Max concurrent `claim → apply → ack` workers per target.
+    /// `1` = legacy single-threaded delivery (Local); `4` = Qdrant concurrent.
+    pub max_concurrency: usize,
 }
 
 impl Default for OutboxConsumerConfig {
@@ -81,6 +90,27 @@ impl Default for OutboxConsumerConfig {
             batch_size: 128,
             lease_duration_ms: 30_000,
             max_retries: 16,
+            max_concurrency: 1,
+        }
+    }
+}
+
+/// Backpressure limits for the transactional outbox staging path.
+#[derive(Debug, Clone)]
+pub struct OutboxBackpressureConfig {
+    /// Maximum intents staged for a single transaction.
+    pub max_pending_per_txn: usize,
+    /// Maximum intents staged across all in-flight transactions plus the
+    /// durable `pending` backlog (queried lazily). Exceeding either limit
+    /// makes `stage_intent` return `OutboxBackpressure`.
+    pub max_pending_total: usize,
+}
+
+impl Default for OutboxBackpressureConfig {
+    fn default() -> Self {
+        Self {
+            max_pending_per_txn: 10_000,
+            max_pending_total: 100_000,
         }
     }
 }
@@ -99,6 +129,10 @@ impl Clone for SyncManager {
             #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
+            #[cfg(feature = "vector")]
+            backend_policy: self.backend_policy.clone(),
+            backpressure: self.backpressure.clone(),
+            auth_paused_until_ms: self.auth_paused_until_ms.clone(),
             stats_manager: self.stats_manager.clone(),
             handle: Mutex::new(None),
         }
@@ -177,7 +211,12 @@ impl SyncManager {
                 OutboxPayload::CreateIndex { fields, .. } => {
                     fields.iter().any(|(_, v)| v.as_vector().is_some())
                 }
-                OutboxPayload::DropIndex { space_id, schema_name, fields, .. } => {
+                OutboxPayload::DropIndex {
+                    space_id,
+                    schema_name,
+                    fields,
+                    ..
+                } => {
                     // Drop needs vector only if any dropped field is a vector index
                     fields
                         .iter()
@@ -222,9 +261,9 @@ impl SyncManager {
                     }
                     false
                 }
-                OutboxPayload::CreateIndex { fields, .. } => fields.iter().any(|(_, v)| {
-                    matches!(v, Value::String(_) | Value::FixedString(_))
-                }),
+                OutboxPayload::CreateIndex { fields, .. } => fields
+                    .iter()
+                    .any(|(_, v)| matches!(v, Value::String(_) | Value::FixedString(_))),
                 OutboxPayload::DropIndex {
                     space_id,
                     schema_name,
@@ -236,14 +275,12 @@ impl SyncManager {
                         .iter()
                         .any(|meta| meta.tag_name == *schema_name && meta.field_name == *field)
                 }),
-                OutboxPayload::EdgeInsert { space_id, edge } => edge.props.iter().any(
-                    |(field, value)| {
-                        let is_text =
-                            matches!(value, Value::String(_) | Value::FixedString(_));
-                        is_text
-                            && manager.has_index(*space_id, &edge.edge_type, field)
-                    },
-                ),
+                OutboxPayload::EdgeInsert { space_id, edge } => {
+                    edge.props.iter().any(|(field, value)| {
+                        let is_text = matches!(value, Value::String(_) | Value::FixedString(_));
+                        is_text && manager.has_index(*space_id, &edge.edge_type, field)
+                    })
+                }
                 OutboxPayload::EdgeDelete {
                     space_id,
                     edge_type,
@@ -279,6 +316,65 @@ impl SyncManager {
                 "Synchronized writes require a configured durable outbox".to_string(),
             ));
         }
+        // Backpressure: bound the in-memory staging map so a hot writer cannot
+        // grow `pending_intents` without bound and hide `p99` delivery latency.
+        let needed_targets = self
+            .delivery_target_names()
+            .into_iter()
+            .filter(|name| match *name {
+                "vector" => needs_vector,
+                "fulltext" => needs_fulltext,
+                _ => true,
+            })
+            .count();
+        if needed_targets > 0 {
+            // Per-transaction limit
+            let current_len = self
+                .pending_intents
+                .get(&txn_id)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if current_len + needed_targets > self.backpressure.max_pending_per_txn {
+                return Err(SyncError::OutboxBackpressure(format!(
+                    "txn {} pending {} + {} exceeds max_pending_per_txn {}",
+                    txn_id.0, current_len, needed_targets, self.backpressure.max_pending_per_txn
+                )));
+            }
+            // Global in-memory limit (approximate; durable backlog is counted
+            // separately via `outbox_pending` metric but not used for fencing
+            // to keep the hot path lock-free).
+            let total_pending: usize = self.pending_intents.iter().map(|e| e.value().len()).sum();
+            if total_pending + needed_targets > self.backpressure.max_pending_total {
+                return Err(SyncError::OutboxBackpressure(format!(
+                    "global pending {} + {} exceeds max_outbox_pending {}",
+                    total_pending, needed_targets, self.backpressure.max_pending_total
+                )));
+            }
+            // Optional: also fence on durable `pending` if outbox is configured
+            // and already large. This is best-effort via the cached stats; a
+            // stale read may still allow one extra batch through.
+            if let Some(outbox) = self.sqlite_outbox.as_ref() {
+                if let Some(stats) = self
+                    .stats_manager
+                    .as_ref()
+                    .and_then(|s| s.get_value(graphdb_core::stats::MetricType::OutboxPending))
+                {
+                    let durable_pending = stats as usize;
+                    if durable_pending + total_pending + needed_targets
+                        > self.backpressure.max_pending_total
+                    {
+                        return Err(SyncError::OutboxBackpressure(format!(
+                            "durable pending {} + staged {} + {} exceeds limit {}",
+                            durable_pending,
+                            total_pending,
+                            needed_targets,
+                            self.backpressure.max_pending_total
+                        )));
+                    }
+                    let _ = outbox;
+                }
+            }
+        }
         let mut intents = self.pending_intents.entry(txn_id).or_default();
         for target_name in self.delivery_target_names() {
             let should_deliver = match target_name {
@@ -295,6 +391,11 @@ impl SyncManager {
                 )
             })?;
             intents.push(payload_to_intent(txn_id, sequence, target_name, &payload)?);
+        }
+        // Update the staged backlog gauge for observability.
+        if let Some(stats) = self.stats_manager.as_ref() {
+            let total: usize = self.pending_intents.iter().map(|e| e.value().len()).sum();
+            stats.set_value(graphdb_core::stats::MetricType::OutboxPending, total as u64);
         }
         Ok(())
     }
@@ -332,6 +433,10 @@ impl SyncManager {
             #[cfg(feature = "vector")]
             vector_receiver: None,
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
+            #[cfg(feature = "vector")]
+            backend_policy: None,
+            backpressure: Arc::new(OutboxBackpressureConfig::default()),
+            auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stats_manager: None,
             handle: Mutex::new(None),
         }
@@ -398,8 +503,8 @@ impl SyncManager {
         // still being an incomplete or corrupt SQLite projection after a crash.
         // Restore the snapshot referenced by the latest valid combined
         // checkpoint first, then fall back to the directory-wide snapshot scan.
-        let live_is_healthy = self
-            .execute_sync(|| async { Ok(crate::verify_live_database(&sqlite_path).await) })?;
+        let live_is_healthy =
+            self.execute_sync(|| async { Ok(crate::verify_live_database(&sqlite_path).await) })?;
         if !live_is_healthy {
             match restore_outbox_from_candidates(
                 &sqlite_path,
@@ -474,7 +579,61 @@ impl SyncManager {
             batch_size: config.batch_size.max(1),
             lease_duration_ms: config.lease_duration_ms.max(1_000),
             max_retries: config.max_retries.max(1),
+            max_concurrency: config.max_concurrency.max(1),
         });
+    }
+
+    /// Inject a backend-aware delivery policy (Local vs Qdrant) from startup.
+    ///
+    /// The policy replaces the raw `OutboxConsumerConfig` with backend-tuned
+    /// values and records the chosen policy for observability.
+    #[cfg(feature = "vector")]
+    pub fn configure_backend_policy(&mut self, policy: crate::backend::BackendDeliveryPolicy) {
+        self.backend_policy = Some(Arc::new(policy.clone()));
+        self.configure_outbox_consumer(policy.to_consumer_config());
+        // Align the per-target concurrency with the policy.
+        let mut consumer = (*self.outbox_consumer).clone();
+        consumer.max_concurrency = policy.max_concurrency.max(1);
+        self.outbox_consumer = Arc::new(consumer);
+    }
+
+    /// Override the backpressure limits (defaults: 10k per txn, 100k total).
+    pub fn configure_backpressure(&mut self, config: OutboxBackpressureConfig) {
+        self.backpressure = Arc::new(OutboxBackpressureConfig {
+            max_pending_per_txn: config.max_pending_per_txn.max(1),
+            max_pending_total: config.max_pending_total.max(1),
+        });
+    }
+
+    /// Current in-memory staged intent count across all transactions.
+    pub fn staged_pending_len(&self) -> usize {
+        self.pending_intents.iter().map(|e| e.value().len()).sum()
+    }
+
+    /// Expose the current durable + staged pending depth for storage-layer
+    /// flow control. Returns `0` when no outbox is configured.
+    pub fn outbox_pending(&self) -> usize {
+        let staged = self.staged_pending_len();
+        if let Some(outbox) = self.sqlite_outbox.clone() {
+            // Best-effort synchronous fetch; failures fall back to staged only.
+            let durable = std::thread::Builder::new()
+                .name("outbox-pending".to_string())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .ok()?;
+                    rt.block_on(async move { outbox.stats().await.ok() })
+                })
+                .ok()
+                .and_then(|h| h.join().ok())
+                .flatten()
+                .map(|s| s.pending)
+                .unwrap_or(0);
+            staged + durable
+        } else {
+            staged
+        }
     }
 
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
@@ -518,92 +677,353 @@ impl SyncManager {
         let Some(outbox) = &self.sqlite_outbox else {
             return Ok(0);
         };
+        // Auth pause fence: if the last failure was an auth error, suppress
+        // delivery until the pause window expires.
+        let now_for_pause = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let paused_until = self
+            .auth_paused_until_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if paused_until > now_for_pause {
+            tracing::warn!(
+                paused_until,
+                now = now_for_pause,
+                "outbox delivery paused due to auth failure"
+            );
+            return Ok(0);
+        }
         let stats_manager = self.stats_manager.clone();
-        self.execute_sync(|| async {
+        // Capture consumer config for the async block (Clone is cheap).
+        let consumer = self.outbox_consumer.clone();
+        let backend_policy_name = {
+            #[cfg(feature = "vector")]
+            {
+                self.backend_policy
+                    .as_ref()
+                    .map(|p| p.policy_name.clone())
+                    .unwrap_or_default()
+            }
+            #[cfg(not(feature = "vector"))]
+            {
+                String::new()
+            }
+        };
+        let self_clone = self.clone();
+        self.execute_sync(move || async move {
+            let consumer = consumer.clone();
+            let stats_manager = stats_manager.clone();
+            let self_clone = self_clone.clone();
+            let backend_policy_name = backend_policy_name.clone();
             let targets = outbox
                 .delivery_targets()
                 .await
                 .map_err(SyncError::PersistenceError)?;
             let mut processed = 0usize;
             for target in targets {
-                // Each delivery target owns its full batch budget so a hot
-                // target cannot starve the others until the next poll cycle.
-                let mut target_processed = 0usize;
-                while target_processed < self.outbox_consumer.batch_size {
-                    let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-                    let Some(event) = outbox
-                        .claim_next(
-                            &target,
-                            &self.outbox_consumer.consumer_id,
-                            now,
-                            self.outbox_consumer.lease_duration_ms,
-                        )
-                        .await
-                        .map_err(SyncError::PersistenceError)?
-                    else {
-                        break;
-                    };
-                    let apply_started = std::time::Instant::now();
-                    match self
-                        .apply_index_mutation(&event.mutation, event.commit_lsn)
-                        .await
-                    {
-                        Ok(()) => {
-                            if let Some(stats) = &stats_manager {
-                                stats.record_transport_latency(
-                                    apply_started.elapsed().as_millis() as u64
-                                );
-                            }
-                            outbox
-                                .acknowledge(&event)
-                                .await
-                                .map_err(SyncError::PersistenceError)?;
+                let max_concurrency = if target.as_str() == "vector"
+                    && backend_policy_name == "qdrant"
+                {
+                    consumer.max_concurrency.max(4)
+                } else if target.as_str() == "vector" && backend_policy_name == "local" {
+                    1
+                } else {
+                    consumer.max_concurrency.max(1)
+                };
+                if max_concurrency <= 1 {
+                    // Single-threaded path (Local and legacy): preserves global
+                    // commit_lsn ordering and keeps SQLite contention minimal.
+                    let mut target_processed = 0usize;
+                    while target_processed < consumer.batch_size {
+                        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                        // Re-check auth pause inside loop in case a worker set it.
+                        let paused = self_clone
+                            .auth_paused_until_ms
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if paused > now {
+                            break;
                         }
-                        Err(error) => {
-                            if let Some(stats) = &stats_manager {
-                                stats.record_transport_latency(
-                                    apply_started.elapsed().as_millis() as u64
-                                );
-                            }
-                            // Qdrant disabled events are retained for retry after
-                            // engine recovery and must not be dead-lettered even after
-                            // max_retries. Detect by the EngineDisabled message.
-                            let is_disabled_error = error.contains("Vector engine is disabled")
-                                || error.contains("EngineDisabled");
-                            if is_disabled_error {
-                                // Fixed 5s backoff for disabled, not counting toward
-                                // dead-letter threshold.
-                                let backoff = 5_000u64;
+                        let Some(event) = outbox
+                            .claim_next(
+                                &target,
+                                &consumer.consumer_id,
+                                now,
+                                consumer.lease_duration_ms,
+                            )
+                            .await
+                            .map_err(SyncError::PersistenceError)?
+                        else {
+                            break;
+                        };
+                        let apply_started = std::time::Instant::now();
+                        let result = self_clone
+                            .apply_index_mutation(&event.mutation, event.commit_lsn)
+                            .await;
+                        match result {
+                            Ok(()) => {
+                                if let Some(stats) = &stats_manager {
+                                    stats.record_transport_latency(
+                                        apply_started.elapsed().as_millis() as u64
+                                    );
+                                }
                                 outbox
-                                    .retry(&event, now.saturating_add(backoff), &error)
+                                    .acknowledge(&event)
                                     .await
                                     .map_err(SyncError::PersistenceError)?;
-                            } else {
-                                let retry_count = outbox
-                                    .retry_count(event.event_id)
-                                    .await
-                                    .map_err(SyncError::PersistenceError)?;
-                                if retry_count.saturating_add(1)
-                                    >= self.outbox_consumer.max_retries
-                                {
-                                    outbox
-                                        .dead_letter(&event, now, &error)
-                                        .await
-                                        .map_err(SyncError::PersistenceError)?;
-                                } else {
-                                    let backoff = 100u64
-                                        .saturating_mul(1u64 << retry_count.min(16))
-                                        .min(300_000);
+                            }
+                            Err(error) => {
+                                if let Some(stats) = &stats_manager {
+                                    stats.record_transport_latency(
+                                        apply_started.elapsed().as_millis() as u64
+                                    );
+                                }
+                                // Qdrant disabled events are retained for retry after
+                                // engine recovery and must not be dead-lettered even after
+                                // max_retries. Detect by the EngineDisabled message.
+                                let is_disabled_error = error.contains("Vector engine is disabled")
+                                    || error.contains("EngineDisabled");
+                                if is_disabled_error {
+                                    let backoff = 5_000u64;
                                     outbox
                                         .retry(&event, now.saturating_add(backoff), &error)
                                         .await
                                         .map_err(SyncError::PersistenceError)?;
+                                } else {
+                                    // Classify the error so NonRetryable goes straight to
+                                    // dead_letter and Auth pauses delivery.
+                                    let kind = crate::vector_error::VectorErrorKind::classify_str(
+                                        &error,
+                                    );
+                                    match kind {
+                                        crate::vector_error::VectorErrorKind::Auth => {
+                                            let pause_until = now.saturating_add(60_000);
+                                            self_clone.auth_paused_until_ms.store(
+                                                pause_until,
+                                                std::sync::atomic::Ordering::Relaxed,
+                                            );
+                                            tracing::error!(
+                                                target = target.as_str(),
+                                                error = %error,
+                                                pause_until,
+                                                "auth failure: pausing outbox delivery for 60s"
+                                            );
+                                            let backoff = 60_000u64;
+                                            outbox
+                                                .retry(
+                                                    &event,
+                                                    now.saturating_add(backoff),
+                                                    &error,
+                                                )
+                                                .await
+                                                .map_err(SyncError::PersistenceError)?;
+                                            // Pause the target after recording the retry.
+                                            break;
+                                        }
+                                        crate::vector_error::VectorErrorKind::NonRetryable => {
+                                            outbox
+                                                .dead_letter(&event, now, &error)
+                                                .await
+                                                .map_err(SyncError::PersistenceError)?;
+                                        }
+                                        crate::vector_error::VectorErrorKind::Retryable => {
+                                            let retry_count = outbox
+                                                .retry_count(event.event_id)
+                                                .await
+                                                .map_err(SyncError::PersistenceError)?;
+                                            if retry_count.saturating_add(1)
+                                                >= consumer.max_retries
+                                            {
+                                                outbox
+                                                    .dead_letter(&event, now, &error)
+                                                    .await
+                                                    .map_err(SyncError::PersistenceError)?;
+                                            } else {
+                                                let backoff = 100u64
+                                                    .saturating_mul(1u64 << retry_count.min(16))
+                                                    .min(300_000);
+                                                outbox
+                                                    .retry(
+                                                        &event,
+                                                        now.saturating_add(backoff),
+                                                        &error,
+                                                    )
+                                                    .await
+                                                    .map_err(SyncError::PersistenceError)?;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
+                        processed = processed.saturating_add(1);
+                        target_processed = target_processed.saturating_add(1);
                     }
-                    processed = processed.saturating_add(1);
-                    target_processed = target_processed.saturating_add(1);
+                } else {
+                    // Concurrent delivery (Qdrant): multiple workers claim with
+                    // distinct lease owners so `claim_next`'s BEGIN IMMEDIATE +
+                    // lease_epoch fencing guarantees no overlapping acks. Each
+                    // worker respects the global commit_lsn order via the
+                    // `NOT EXISTS (ordering_key)` fence plus `ORDER BY`.
+                    let per_worker_batch =
+                        (consumer.batch_size + max_concurrency - 1) / max_concurrency;
+                    let outbox_for_workers = outbox.clone();
+                    let target_for_workers = target.clone();
+                    let consumer_for_workers = consumer.clone();
+                    let self_for_workers = self_clone.clone();
+                    let stats_for_workers = stats_manager.clone();
+                    let mut handles = Vec::with_capacity(max_concurrency);
+                    for worker_idx in 0..max_concurrency {
+                        let outbox_c = outbox_for_workers.clone();
+                        let target_c = target_for_workers.clone();
+                        let consumer_c = consumer_for_workers.clone();
+                        let self_c = self_for_workers.clone();
+                        let stats_c = stats_for_workers.clone();
+                        let worker_consumer_id =
+                            format!("{}-worker-{}", consumer_c.consumer_id, worker_idx);
+                        handles.push(tokio::spawn(async move {
+                            let mut local_processed = 0usize;
+                            while local_processed < per_worker_batch {
+                                let now =
+                                    chrono::Utc::now().timestamp_millis().max(0) as u64;
+                                let paused = self_c
+                                    .auth_paused_until_ms
+                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                if paused > now {
+                                    break;
+                                }
+                                let Some(event) = outbox_c
+                                    .claim_next(
+                                        &target_c,
+                                        &worker_consumer_id,
+                                        now,
+                                        consumer_c.lease_duration_ms,
+                                    )
+                                    .await
+                                    .map_err(SyncError::PersistenceError)?
+                                else {
+                                    break;
+                                };
+                                let apply_started = std::time::Instant::now();
+                                let result = self_c
+                                    .apply_index_mutation(&event.mutation, event.commit_lsn)
+                                    .await;
+                                match result {
+                                    Ok(()) => {
+                                        if let Some(stats) = &stats_c {
+                                            stats.record_transport_latency(
+                                                apply_started.elapsed().as_millis() as u64
+                                            );
+                                        }
+                                        outbox_c
+                                            .acknowledge(&event)
+                                            .await
+                                            .map_err(SyncError::PersistenceError)?;
+                                    }
+                                    Err(error) => {
+                                        if let Some(stats) = &stats_c {
+                                            stats.record_transport_latency(
+                                                apply_started.elapsed().as_millis() as u64
+                                            );
+                                        }
+                                        let is_disabled_error = error
+                                            .contains("Vector engine is disabled")
+                                            || error.contains("EngineDisabled");
+                                        if is_disabled_error {
+                                            let backoff = 5_000u64;
+                                            outbox_c
+                                                .retry(
+                                                    &event,
+                                                    now.saturating_add(backoff),
+                                                    &error,
+                                                )
+                                                .await
+                                                .map_err(SyncError::PersistenceError)?;
+                                        } else {
+                                            let kind =
+                                                crate::vector_error::VectorErrorKind::classify_str(
+                                                    &error,
+                                                );
+                                            match kind {
+                                                crate::vector_error::VectorErrorKind::Auth => {
+                                                    let pause_until = now.saturating_add(60_000);
+                                                    self_c.auth_paused_until_ms.store(
+                                                        pause_until,
+                                                        std::sync::atomic::Ordering::Relaxed,
+                                                    );
+                                                    tracing::error!(
+                                                        target = target_c.as_str(),
+                                                        error = %error,
+                                                        pause_until,
+                                                        "auth failure: pausing outbox delivery"
+                                                    );
+                                                    outbox_c
+                                                        .retry(
+                                                            &event,
+                                                            now.saturating_add(60_000),
+                                                            &error,
+                                                        )
+                                                        .await
+                                                        .map_err(
+                                                            SyncError::PersistenceError,
+                                                        )?;
+                                                    break;
+                                                }
+                                                crate::vector_error::VectorErrorKind::NonRetryable => {
+                                                    outbox_c
+                                                        .dead_letter(&event, now, &error)
+                                                        .await
+                                                        .map_err(
+                                                            SyncError::PersistenceError,
+                                                        )?;
+                                                }
+                                                crate::vector_error::VectorErrorKind::Retryable => {
+                                                    let retry_count = outbox_c
+                                                        .retry_count(event.event_id)
+                                                        .await
+                                                        .map_err(
+                                                            SyncError::PersistenceError,
+                                                        )?;
+                                                    if retry_count.saturating_add(1)
+                                                        >= consumer_c.max_retries
+                                                    {
+                                                        outbox_c
+                                                            .dead_letter(&event, now, &error)
+                                                            .await
+                                                            .map_err(
+                                                                SyncError::PersistenceError,
+                                                            )?;
+                                                    } else {
+                                                        let backoff = 100u64
+                                                            .saturating_mul(
+                                                                1u64 << retry_count.min(16),
+                                                            )
+                                                            .min(300_000);
+                                                        outbox_c
+                                                            .retry(
+                                                                &event,
+                                                                now.saturating_add(backoff),
+                                                                &error,
+                                                            )
+                                                            .await
+                                                            .map_err(
+                                                                SyncError::PersistenceError,
+                                                            )?;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                local_processed += 1;
+                            }
+                            Ok::<usize, SyncError>(local_processed)
+                        }));
+                    }
+                    for h in handles {
+                        match h.await {
+                            Ok(Ok(n)) => processed = processed.saturating_add(n),
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => return Err(SyncError::Internal(e.to_string())),
+                        }
+                    }
                 }
             }
             if let Some(stats) = &stats_manager {
@@ -904,10 +1324,7 @@ impl SyncManager {
                             vector.to_vec(),
                             crate::vector_sync::VectorChangeType::Insert,
                         ),
-                        _ => (
-                            Vec::new(),
-                            crate::vector_sync::VectorChangeType::Delete,
-                        ),
+                        _ => (Vec::new(), crate::vector_sync::VectorChangeType::Delete),
                     };
                     let payload = properties
                         .iter()
@@ -1314,9 +1731,7 @@ impl SyncManager {
         })
     }
 
-    pub fn create_checkpoint_outbox_snapshot(
-        &self,
-    ) -> Result<crate::OutboxSnapshot, SyncError> {
+    pub fn create_checkpoint_outbox_snapshot(&self) -> Result<crate::OutboxSnapshot, SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
             return Err(SyncError::PersistenceError(
                 "SQLite outbox is not configured".to_string(),
@@ -1608,10 +2023,7 @@ fn payload_to_intent(
                 format!("{}->{}#{}", edge.src, edge.dst, edge.ranking)
             }
             OutboxPayload::EdgeDelete {
-                src,
-                dst,
-                ranking,
-                ..
+                src, dst, ranking, ..
             } => format!("{}->{}#{}", src, dst, ranking),
             OutboxPayload::CreateIndex { index_name, .. }
             | OutboxPayload::DropIndex { index_name, .. } => {
@@ -1770,6 +2182,9 @@ pub enum SyncError {
 
     #[error("Persistence error: {0}")]
     PersistenceError(String),
+
+    #[error("Outbox backpressure: {0}")]
+    OutboxBackpressure(String),
 
     #[error("Internal error: {0}")]
     Internal(String),

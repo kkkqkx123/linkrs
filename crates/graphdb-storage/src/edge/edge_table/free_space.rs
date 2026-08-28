@@ -128,8 +128,8 @@ impl SegmentFreeList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::{EdgeId, VertexId};
     use crate::edge::CsrBase;
+    use graphdb_core::types::{EdgeId, VertexId};
 
     #[test]
     fn allocates_best_fit_slot() {

@@ -1,6 +1,5 @@
 //! Sink (write), DDL manage, fulltext and vector spec builders.
 
-use graphdb_core::types::expr::Expression;
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{
@@ -8,6 +7,7 @@ use crate::executor::streaming::operators::spec::{
     PropertyRename, SinkSpec, SpaceManageCommand, TagManageCommand, UserManageCommand,
     VectorManageCommand, VectorSpec,
 };
+use graphdb_core::types::expr::Expression;
 
 use super::contextual_to_expression;
 
@@ -259,12 +259,12 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_copy_from_spec(
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
     let target = match node.target() {
-        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(tag) => {
-            crate::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone())
-        }
-        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(edge) => {
-            crate::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone())
-        }
+        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(
+            tag,
+        ) => crate::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone()),
+        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(
+            edge,
+        ) => crate::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone()),
     };
     Ok(SinkSpec::CopyFrom {
         space_name: exec_ctx
@@ -284,12 +284,12 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_copy_to_spec(
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
     let target = match node.target() {
-        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(tag) => {
-            crate::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone())
-        }
-        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(edge) => {
-            crate::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone())
-        }
+        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(
+            tag,
+        ) => crate::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone()),
+        crate::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(
+            edge,
+        ) => crate::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone()),
     };
     Ok(SinkSpec::CopyTo {
         space_name: exec_ctx
@@ -786,9 +786,7 @@ fn vector_query_to_vec(
         }
     }
 }
-fn fulltext_query_to_string(
-    expr: &crate::parser::ast::fulltext::FulltextQueryExpr,
-) -> String {
+fn fulltext_query_to_string(expr: &crate::parser::ast::fulltext::FulltextQueryExpr) -> String {
     match expr {
         crate::parser::ast::fulltext::FulltextQueryExpr::Simple(text)
         | crate::parser::ast::fulltext::FulltextQueryExpr::Phrase(text)

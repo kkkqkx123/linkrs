@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use graphdb_core::{StorageError, StorageResult, Value};
 use graphdb_core::NullBitmap;
+use graphdb_core::{StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone)]
 pub struct StringDictionary {

@@ -2,15 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::cold::ColdSnapshot;
 use crate::cursor::{EdgeCursor, FlatVertexRecord, ScanOptions, VertexCursor};
 use crate::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::edge::Nbr;
 use crate::engine::data_store::EdgeTableKey;
 use crate::vertex::ShardedVertexTable;
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{Edge, StorageError, StorageResult, Value, Vertex};
 
 use super::context::GraphStorageContext;
 use super::ops::endpoint_label_id;
@@ -296,8 +296,7 @@ impl GraphVertexCursor {
                 // reject after decoding, so skipping their decode is a pure
                 // optimization with identical results.
                 if !self.predicate.is_empty() {
-                    let ranges =
-                        crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
+                    let ranges = crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
                     let mask = table.zone_prune_mask(&run_internal, &ranges);
                     if mask.iter().any(|&keep| !keep) {
                         let mut kept_internal = Vec::with_capacity(run_rows);
@@ -320,8 +319,7 @@ impl GraphVertexCursor {
                 for (name, _) in &decoded {
                     if !union_names.contains(name) {
                         union_names.push(name.clone());
-                        let mut new_column =
-                            crate::cursor::ColumnValues::General(Vec::new());
+                        let mut new_column = crate::cursor::ColumnValues::General(Vec::new());
                         new_column.append_nulls(before);
                         columns.push(new_column);
                     }

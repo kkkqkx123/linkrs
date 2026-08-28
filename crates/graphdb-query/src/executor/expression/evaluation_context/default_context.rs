@@ -5,10 +5,10 @@
 //! Note: This context is used for the evaluation of runtime expressions.
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
-use graphdb_core::Value;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::storage::StorageReader;
+use graphdb_core::Value;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -164,14 +164,10 @@ impl crate::executor::expression::evaluator::traits::ExpressionContext
         let registry = global_registry_ref();
         registry
             .get_builtin(name)
-            .map(|f| {
-                crate::executor::expression::functions::OwnedFunctionRef::Builtin(f.clone())
-            })
+            .map(|f| crate::executor::expression::functions::OwnedFunctionRef::Builtin(f.clone()))
             .or_else(|| {
                 registry.get_custom(name).map(|f| {
-                    crate::executor::expression::functions::OwnedFunctionRef::Custom(
-                        f.clone(),
-                    )
+                    crate::executor::expression::functions::OwnedFunctionRef::Custom(f.clone())
                 })
             })
     }

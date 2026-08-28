@@ -19,13 +19,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use graphdb_core::types::expr::visitor::ExpressionVisitor;
-use graphdb_core::types::ContextualExpression;
-use graphdb_core::Expression;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::visitor::ExpressionVisitor;
+use graphdb_core::types::ContextualExpression;
+use graphdb_core::Expression;
 
 /// Property requirement for one variable binding.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -601,16 +601,16 @@ fn merge_requirement(passed: &mut Vec<PropertyRequirement>, req: &PropertyRequir
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::expr::ExpressionMeta;
-    use graphdb_core::types::operators::BinaryOperator;
-    use graphdb_core::{Value, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::{
         GetNeighborsNode, GetVerticesNode, ScanVerticesNode,
     };
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use crate::planning::plan::core::nodes::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::{Value, YieldColumn};
     use std::sync::Arc;
 
     fn contextual(expr: Expression) -> ContextualExpression {

@@ -176,11 +176,11 @@ impl PhysicalPlanBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::executor::base::ExecutionContext;
     use crate::executor::streaming::plan::types::{InputContract, OperatorKindSpec};
     use crate::executor::streaming::SourceSpec;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     fn test_context() -> ExecutionContext {
@@ -231,10 +231,8 @@ mod tests {
         let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).unwrap();
         let plan_arc = Arc::new(plan);
 
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &plan_arc,
-        )
-        .unwrap();
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&plan_arc)
+            .unwrap();
 
         let bindings = QueryBindings {
             parameters: Arc::new(std::collections::HashMap::new()),
@@ -314,22 +312,22 @@ mod tests {
                 .input_contract,
             InputContract::UnaryInput(_)
         ));
-        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
-            &Arc::new(plan),
-        )
+        crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(
+            plan,
+        ))
         .expect("transaction plan should validate");
     }
 
     #[test]
     fn correlated_apply_builds_nested_sub_plan_rooted_at_argument() {
-        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-        use graphdb_core::types::{ContextualExpression, ExpressionMeta};
         use crate::executor::streaming::operators::spec::ApplySpec;
         use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
         use crate::planning::plan::core::nodes::control_flow::ArgumentNode;
         use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode;
         use crate::planning::plan::core::nodes::join::CrossJoinNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::{ContextualExpression, ExpressionMeta};
 
         // Outer (left) plan.
         let left = PlanNodeEnum::Start(StartNode::new());

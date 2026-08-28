@@ -285,10 +285,7 @@ fn failing_undo_returns_error() {
         fn delete_vertex_type(&self, _label: LabelId) -> UndoLogResult<()> {
             Ok(())
         }
-        fn delete_edge_type(
-            &self,
-            _edge_key: graphdb_core::types::EdgeKey,
-        ) -> UndoLogResult<()> {
+        fn delete_edge_type(&self, _edge_key: graphdb_core::types::EdgeKey) -> UndoLogResult<()> {
             Ok(())
         }
         fn delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {

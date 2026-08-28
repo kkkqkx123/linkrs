@@ -1,11 +1,6 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
-use crate::executor::expression::evaluator::compiled::{
-    compiled_eval_enabled, CompiledExpr,
-};
+use crate::executor::expression::evaluator::compiled::{compiled_eval_enabled, CompiledExpr};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::{selection_propagation_enabled, DataChunk};
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -14,6 +9,9 @@ use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::subquery::{EvalEnv, SubqueryExecutor};
+use graphdb_core::error::QueryError;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 
 #[derive(Debug, Default)]
 pub struct UnaryOperatorState {
@@ -632,15 +630,15 @@ impl UnaryOperator {
                             Ok(val) => val,
                             Err(_) => Value::Null(graphdb_core::NullType::Null),
                         };
-                        let vid = match graphdb_core::types::storage_ids::VertexId::try_from(&entity)
-                        {
-                            Ok(vid) => vid,
-                            Err(_) => {
-                                new_row.push(Value::Null(graphdb_core::NullType::Null));
-                                result_rows.push(new_row);
-                                continue;
-                            }
-                        };
+                        let vid =
+                            match graphdb_core::types::storage_ids::VertexId::try_from(&entity) {
+                                Ok(vid) => vid,
+                                Err(_) => {
+                                    new_row.push(Value::Null(graphdb_core::NullType::Null));
+                                    result_rows.push(new_row);
+                                    continue;
+                                }
+                            };
                         match guard.get_vertex_projected(space_name, &vid, prop_names) {
                             Ok(Some(vertex)) => {
                                 if flat {
@@ -775,14 +773,14 @@ fn matches_value(val: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::storage_ids::VertexId;
-    use graphdb_core::{Tag, Vertex};
     use crate::executor::base::MemoryBudget;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::operators::source_operator::SourceOperator;
     use crate::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
     use crate::storage::StorageWriter;
+    use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::{Tag, Vertex};
     use parking_lot::RwLock;
 
     fn runtime_with_storage(

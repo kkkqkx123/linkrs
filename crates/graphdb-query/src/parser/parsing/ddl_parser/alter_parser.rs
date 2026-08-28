@@ -18,7 +18,9 @@ impl DdlParser {
         ctx.expect_token(TokenKind::Alter)?;
 
         if ctx.check_keyword("FULLTEXT") {
-            return crate::parser::parsing::fulltext_parser::parse_alter_fulltext_index_after_alter(ctx);
+            return crate::parser::parsing::fulltext_parser::parse_alter_fulltext_index_after_alter(
+                ctx,
+            );
         }
 
         if ctx.check_token(TokenKind::User) {

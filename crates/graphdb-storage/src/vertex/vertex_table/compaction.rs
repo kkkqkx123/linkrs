@@ -242,10 +242,10 @@ impl CompactionCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::{DataType, Value};
     use crate::types::StoragePropertyDef;
     use crate::vertex::vertex_table::core::{VertexTable, VertexTableConfig};
     use crate::vertex::VertexSchema;
+    use graphdb_core::{DataType, Value};
 
     fn create_test_schema() -> VertexSchema {
         VertexSchema {

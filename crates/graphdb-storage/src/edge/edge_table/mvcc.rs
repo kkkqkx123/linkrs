@@ -380,10 +380,10 @@ impl MVCCManager {
 mod tests {
     use super::super::super::*;
     use super::*;
-    use graphdb_core::types::EdgeId;
-    use graphdb_core::Value;
     use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
     use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use graphdb_core::types::EdgeId;
+    use graphdb_core::Value;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {

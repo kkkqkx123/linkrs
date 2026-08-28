@@ -1,17 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use graphdb_core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
-use graphdb_core::value::ordered_codec::OrderedCodec;
-use graphdb_core::{StorageError, StorageResult, Value};
-use crate::index::helpers::{
-    effective_index_values, merged_included_columns, vertex_entity_ref,
-};
+use crate::index::helpers::{effective_index_values, merged_included_columns, vertex_entity_ref};
 use crate::index::key_codec::key_builder::normalize_int_value;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
 use crate::index::traits::VertexIndexOps;
 use crate::index::types::{IndexIdentity, IndexRecord};
 use crate::index::{shard_runtime::IndexMaps, IndexDataManagerImpl};
+use graphdb_core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
+use graphdb_core::value::ordered_codec::OrderedCodec;
+use graphdb_core::{StorageError, StorageResult, Value};
 
 fn add_entry(
     per_shard: &mut HashMap<u32, IndexMaps>,

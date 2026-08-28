@@ -1,8 +1,8 @@
+use crate::engine::params::CreateEdgeTypeParams;
+use crate::types::StoragePropertyDef;
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
 use graphdb_core::{StorageError, StorageResult};
-use crate::engine::params::CreateEdgeTypeParams;
-use crate::types::StoragePropertyDef;
 use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,

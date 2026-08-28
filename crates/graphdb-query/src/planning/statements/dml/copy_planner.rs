@@ -7,9 +7,7 @@ use std::sync::Arc;
 use crate::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::ArgumentNode;
-use crate::planning::plan::core::nodes::{
-    CopyFromNode, CopyTarget as PlanCopyTarget, CopyToNode,
-};
+use crate::planning::plan::core::nodes::{CopyFromNode, CopyTarget as PlanCopyTarget, CopyToNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -113,10 +111,10 @@ impl Default for CopyPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::Span;
     use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::{Ast, CopyStmt, CopyTarget as AstCopyTarget};
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::Span;
 
     fn create_copy_stmt(target: AstCopyTarget) -> Ast {
         let stmt = Stmt::Copy(CopyStmt {

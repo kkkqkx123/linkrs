@@ -4,15 +4,15 @@
 
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
+use crate::storage::{
+    AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
+};
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::StatsManager;
 use graphdb_query::executor::streaming::pool::SharedScheduler;
 use graphdb_query::executor::streaming::query_registry::QueryRegistry;
 use graphdb_query::executor::streaming::StreamingQueryResult;
 use graphdb_query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::{
-    AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
-};
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::SyncManager;
@@ -169,7 +169,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
         let handle = tokio::runtime::Handle::current();
         let vector_coordinator = Arc::new(
-            graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+            graphdb_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                backend, handle,
+            ),
         );
 
         // Create pipeline manager with vector coordinator and optional schema manager
@@ -486,7 +488,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         execution: graphdb_query::executor::base::ExecutionResult,
     ) -> CoreResult<QueryResult> {
         let rows_returned = match &execution {
-            graphdb_query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
+            graphdb_query::executor::base::ExecutionResult::DataSet { data, .. } => {
+                data.row_count()
+            }
             _ => 0,
         };
         match execution {

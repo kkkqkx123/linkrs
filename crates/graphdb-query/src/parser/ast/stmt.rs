@@ -324,10 +324,8 @@ impl Stmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ast::vector::{VectorDistance, VectorIndexConfig, VectorMatchCondition};
     use graphdb_core::types::expr::contextual::ContextualExpression;
-    use crate::parser::ast::vector::{
-        VectorDistance, VectorIndexConfig, VectorMatchCondition,
-    };
 
     fn ctx_expr() -> ContextualExpression {
         let expr_context = Arc::new(ExpressionAnalysisContext::new());

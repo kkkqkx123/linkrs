@@ -6,18 +6,18 @@ mod execution;
 mod frontend;
 mod prepared;
 
-use graphdb_core::metadata::index_manager::IndexMetadataManager;
-use graphdb_core::metadata::SchemaManager;
-use graphdb_core::StatsManager;
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
 use crate::executor::streaming::SessionTransactionController;
 use crate::optimizer::OptimizerEngine;
 use crate::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
+use crate::storage::QueryStorage;
+use graphdb_core::metadata::index_manager::IndexMetadataManager;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::StatsManager;
 #[cfg(feature = "fulltext-search")]
 use graphdb_search::manager::FulltextIndexManager;
-use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
 use graphdb_sync::SyncManager;

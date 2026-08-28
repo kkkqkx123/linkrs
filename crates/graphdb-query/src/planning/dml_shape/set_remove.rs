@@ -1,7 +1,7 @@
 //! SET / REMOVE statement shape renderers.
 
-use graphdb_core::Value;
 use crate::parser::ast::{RemoveStmt, SetStmt};
+use graphdb_core::Value;
 
 use super::render_contextual;
 

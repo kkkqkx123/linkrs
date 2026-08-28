@@ -1,12 +1,12 @@
 //! Merge the rules for obtaining neighbors and performing projection operations.
 
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use graphdb_core::Expression;
 
 /// Merge the rules for obtaining neighbors and performing projection operations.
 ///
@@ -131,11 +131,11 @@ impl MergeRule for MergeGetNbrsAndProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::ContextualExpression;
-    use graphdb_core::{Expression, YieldColumn};
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::{Expression, YieldColumn};
 
     #[test]
     fn test_rule_name() {

@@ -1,6 +1,6 @@
+use crate::storage::StorageReader;
 use graphdb_core::types::VertexId;
 use graphdb_core::{Edge, Vertex};
-use crate::storage::StorageReader;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

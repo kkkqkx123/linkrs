@@ -1,11 +1,11 @@
 //! Implementation of aggregate functions
 
+use crate::executor::expression::ExpressionError;
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::Expression;
 use graphdb_core::Value;
-use crate::executor::expression::ExpressionError;
 use serde::{Deserialize, Serialize};
 
 /// Create an AggregateFunction from a string name

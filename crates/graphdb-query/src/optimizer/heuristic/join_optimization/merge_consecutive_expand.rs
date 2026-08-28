@@ -21,7 +21,6 @@
 //! The output of the first ExpandAll feeds into the second
 //! Compatible edge types and directions
 
-use graphdb_core::types::EdgeDirection;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -29,10 +28,9 @@ use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
-use crate::planning::plan::core::nodes::traversal::traversal_node::{
-    ExpandAllNode, TraverseNode,
-};
+use crate::planning::plan::core::nodes::traversal::traversal_node::{ExpandAllNode, TraverseNode};
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::EdgeDirection;
 
 /// Rules for merging consecutive ExpandAll operations into Traverse
 #[derive(Debug)]

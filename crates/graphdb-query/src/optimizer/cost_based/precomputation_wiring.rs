@@ -14,13 +14,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::{Expression, ExpressionMeta};
-use graphdb_core::types::ContextualExpression;
 use crate::optimizer::cost_based::expression_precomputation::{
     ExpressionPrecomputationOptimizer, PrecomputationDecision,
 };
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::{Expression, ExpressionMeta};
+use graphdb_core::types::ContextualExpression;
 
 /// Distinct expressions referenced by the plan tree, keyed by a stable
 /// fingerprint (the Debug rendering of the bound expression).

@@ -3,7 +3,6 @@
 //! Responsible for converting the YIELD clause into an execution plan node.
 //! Support for the YIELD ... WHERE ... syntax
 
-use graphdb_core::YieldColumn;
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
@@ -12,6 +11,7 @@ use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
+use graphdb_core::YieldColumn;
 use std::sync::Arc;
 
 /// Yield info result type alias
@@ -286,12 +286,12 @@ impl Default for YieldClausePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-    use graphdb_core::types::ContextualExpression;
-    use graphdb_core::Expression;
     use crate::parser::ast::Span;
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::ContextualExpression;
+    use graphdb_core::Expression;
     use std::sync::Arc;
 
     #[test]

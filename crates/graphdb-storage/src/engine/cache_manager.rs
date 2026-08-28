@@ -2,13 +2,13 @@
 //!
 //! Manages record cache and memory tracking for the storage engine.
 
-use graphdb_core::types::{LabelId, Timestamp};
 use crate::cache::{
     CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats, SharedRecordCache,
     VertexCacheKey,
 };
 use crate::engine::config::ResourceConfig;
 use crate::engine::resource_budget::{MemoryAccounting, MemoryCategory};
+use graphdb_core::types::{LabelId, Timestamp};
 use std::sync::Arc;
 
 /// Manager for storage caches

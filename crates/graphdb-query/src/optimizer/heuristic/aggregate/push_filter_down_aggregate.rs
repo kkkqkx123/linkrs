@@ -27,10 +27,6 @@
 //! The child nodes of the Filter node are Aggregate nodes.
 //! The Filter criteria do not involve aggregate functions (they only relate to the input columns that are being aggregated).
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::visitor_checkers::AggregateFunctionChecker;
-use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::Expression;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -39,6 +35,10 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::PlanNodeEnum;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::visitor_checkers::AggregateFunctionChecker;
+use graphdb_core::types::operators::AggregateFunction;
+use graphdb_core::Expression;
 
 /// Rules that filter the data before it is aggregated
 #[derive(Debug)]
@@ -293,8 +293,8 @@ impl PushDownRule for PushFilterDownAggregateRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

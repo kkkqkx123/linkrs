@@ -2,11 +2,11 @@
 //!
 //! Plan nodes related to data processing, including Union, Unwind, Dedup, etc.
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_plan_node_with_deps;
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 define_plan_node_with_deps! {
     pub struct UnionNode {
@@ -330,21 +330,19 @@ impl RollUpApplyNode {
     pub fn clone_plan_node(
         &self,
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(
-            Self {
-                id: self.id,
-                left_input: self.left_input.clone(),
-                right_input: self.right_input.clone(),
-                deps: self.deps.clone(),
-                left_input_var: self.left_input_var.clone(),
-                right_input_var: self.right_input_var.clone(),
-                compare_cols: self.compare_cols.clone(),
-                collect_col: self.collect_col.clone(),
-                output_var: self.output_var.clone(),
-                col_names: self.col_names.clone(),
-                column_types: self.column_types.clone(),
-            },
-        )
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(Self {
+            id: self.id,
+            left_input: self.left_input.clone(),
+            right_input: self.right_input.clone(),
+            deps: self.deps.clone(),
+            left_input_var: self.left_input_var.clone(),
+            right_input_var: self.right_input_var.clone(),
+            compare_cols: self.compare_cols.clone(),
+            collect_col: self.collect_col.clone(),
+            output_var: self.output_var.clone(),
+            col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
+        })
     }
 
     pub fn clone_with_new_id(
@@ -353,16 +351,12 @@ impl RollUpApplyNode {
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         let mut cloned = self.clone();
         cloned.id = new_id;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(
-            cloned,
-        )
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(cloned)
     }
 }
 
 // Implement the PlanNode trait for RollUpApplyNode
-impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
-    for RollUpApplyNode
-{
+impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for RollUpApplyNode {
     fn id(&self) -> i64 {
         self.id()
     }
@@ -391,12 +385,8 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
         self.set_col_names(names);
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::RollUpApply(self)
     }
 }
 
@@ -422,9 +412,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonabl
 impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
     for RollUpApplyNode
 {
-    fn input(
-        &self,
-    ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn input(&self) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.left_input
     }
 
@@ -632,20 +620,18 @@ impl PatternApplyNode {
     pub fn clone_plan_node(
         &self,
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(
-            Self {
-                id: self.id,
-                left_input: self.left_input.clone(),
-                right_input: self.right_input.clone(),
-                deps: self.deps.clone(),
-                hash_keys: self.hash_keys.clone(),
-                probe_keys: self.probe_keys.clone(),
-                is_anti_predicate: self.is_anti_predicate,
-                output_var: self.output_var.clone(),
-                col_names: self.col_names.clone(),
-                column_types: self.column_types.clone(),
-            },
-        )
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(Self {
+            id: self.id,
+            left_input: self.left_input.clone(),
+            right_input: self.right_input.clone(),
+            deps: self.deps.clone(),
+            hash_keys: self.hash_keys.clone(),
+            probe_keys: self.probe_keys.clone(),
+            is_anti_predicate: self.is_anti_predicate,
+            output_var: self.output_var.clone(),
+            col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
+        })
     }
 
     pub fn clone_with_new_id(
@@ -654,16 +640,12 @@ impl PatternApplyNode {
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         let mut cloned = self.clone();
         cloned.id = new_id;
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(
-            cloned,
-        )
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(cloned)
     }
 }
 
 // Implement the PlanNode trait for PatternApplyNode
-impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
-    for PatternApplyNode
-{
+impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for PatternApplyNode {
     fn id(&self) -> i64 {
         self.id()
     }
@@ -692,12 +674,8 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
         self.set_col_names(names);
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
-        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(
-            self,
-        )
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::PatternApply(self)
     }
 }
 
@@ -723,9 +701,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonabl
 impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
     for PatternApplyNode
 {
-    fn input(
-        &self,
-    ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn input(&self) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.left_input
     }
 
@@ -932,9 +908,7 @@ impl CorrelatedApplyNode {
 }
 
 // Implement the PlanNode trait for CorrelatedApplyNode
-impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
-    for CorrelatedApplyNode
-{
+impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for CorrelatedApplyNode {
     fn id(&self) -> i64 {
         self.id()
     }
@@ -963,9 +937,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode
         self.set_col_names(names);
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::CorrelatedApply(
             self,
         )
@@ -994,9 +966,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonabl
 impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
     for CorrelatedApplyNode
 {
-    fn input(
-        &self,
-    ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn input(&self) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.left_input
     }
 
@@ -1203,12 +1173,8 @@ impl RemoveNode {
     }
 }
 
-impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
-    for RemoveNode
-{
-    fn input(
-        &self,
-    ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode for RemoveNode {
+    fn input(&self) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.input
     }
 
@@ -1255,9 +1221,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for Re
         self.col_names = names;
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Remove(self)
     }
 }
@@ -1485,16 +1449,12 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode for Ap
         self.set_col_names(names);
     }
 
-    fn into_enum(
-        self,
-    ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::Apply(self)
     }
 }
 
-impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonable
-    for ApplyNode
-{
+impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonable for ApplyNode {
     fn clone_plan_node(
         &self,
     ) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -1511,9 +1471,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::PlanNodeClonabl
     }
 }
 
-impl crate::planning::plan::core::nodes::base::plan_node_traits::BinaryInputNode
-    for ApplyNode
-{
+impl crate::planning::plan::core::nodes::base::plan_node_traits::BinaryInputNode for ApplyNode {
     fn left_input(
         &self,
     ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {

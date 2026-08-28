@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use graphdb_core::error::QueryError;
-use graphdb_core::{NullType, Value};
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -13,6 +11,8 @@ use crate::executor::streaming::plan::materializer::PhysicalPlanMaterializer;
 use crate::executor::streaming::plan::types::PhysicalPlan;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use graphdb_core::error::QueryError;
+use graphdb_core::{NullType, Value};
 
 #[derive(Debug)]
 pub enum ApplyOperatorKind {
@@ -604,7 +604,6 @@ fn keys_match(left: &[Value], right: &[Value]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::ContextualExpression;
     use crate::executor::streaming::operators::base::OperatorBase;
     use crate::executor::streaming::operators::source_operator::{
         SourceOperator, SourceOperatorKind,
@@ -612,6 +611,7 @@ mod tests {
     use crate::executor::streaming::runtime::ExecutionRuntime;
     use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+    use graphdb_core::types::ContextualExpression;
 
     fn scan(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
         let layout = Arc::new(SlotLayout::from_names(&col_names));
@@ -734,7 +734,6 @@ mod tests {
     /// When `condition` is `None` the filter is omitted, so the subtree is
     /// non-empty for every correlation frame.
     fn build_sub_plan(condition: Option<ContextualExpression>) -> Arc<PhysicalPlan> {
-        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use crate::executor::base::ExecutionContext;
         use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
         use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -743,6 +742,7 @@ mod tests {
         use crate::planning::plan::core::nodes::control_flow::ArgumentNode;
         use crate::planning::plan::core::nodes::join::CrossJoinNode;
         use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 
         let mut argument = ArgumentNode::new(-2, "_correlated_apply");
         argument.set_col_names(vec!["id".to_string()]);
@@ -782,8 +782,7 @@ mod tests {
             session_id: None,
             user_name: None,
             query_text: None,
-            transaction:
-                crate::executor::streaming::transaction_scope::TransactionScope::None,
+            transaction: crate::executor::streaming::transaction_scope::TransactionScope::None,
             shared_scheduler: None,
             partition_count: 0,
             arena: None,

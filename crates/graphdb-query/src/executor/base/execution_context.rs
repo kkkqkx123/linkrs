@@ -4,21 +4,21 @@ use std::sync::Arc;
 
 use super::execution_result::ExecutionResult;
 use super::MemoryBudget;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::Value;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::executor::expression::functions::OwnedFunctionRef;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::JoinAlgorithm;
+use crate::storage::QueryStorage;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::Arena;
+use graphdb_core::Value;
 #[cfg(feature = "fulltext-search")]
 use graphdb_search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
 use graphdb_search::tantivy_index::TantivySearchEngine;
-use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
 use graphdb_sync::VectorSyncCoordinator;
-use graphdb_core::Arena;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {

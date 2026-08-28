@@ -9,10 +9,10 @@
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::metadata::SchemaManager;
-    use graphdb_core::types::{IsolationLevel, SpaceInfo, TagInfo};
     use crate::metadata::IndexKey;
     use crate::{EngineType, FulltextConfig, FulltextIndexManager, SearchError};
+    use graphdb_core::metadata::SchemaManager;
+    use graphdb_core::types::{IsolationLevel, SpaceInfo, TagInfo};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;

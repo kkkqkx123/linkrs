@@ -5,12 +5,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb_core::types::BinaryOperator;
-use graphdb_core::types::Expression;
 use crate::optimizer::cost::{CostCalculator, SelectivityEstimator};
 use crate::parser::ast::pattern::{
     EdgePattern, NodePattern, PathElement, PathPattern, Pattern, VariablePattern,
 };
+use graphdb_core::types::BinaryOperator;
+use graphdb_core::types::Expression;
 
 /// Traverse the starting point selector
 #[derive(Debug)]
@@ -327,7 +327,10 @@ impl TraversalStartSelector {
     /// - id(v) == value
     /// - v.id == value
     /// - {id: value}
-    fn has_vid_condition_ctx(&self, expr: &graphdb_core::types::expr::ContextualExpression) -> bool {
+    fn has_vid_condition_ctx(
+        &self,
+        expr: &graphdb_core::types::expr::ContextualExpression,
+    ) -> bool {
         match expr.expression() {
             Some(meta) => self.has_vid_condition(meta.inner()),
             None => false,

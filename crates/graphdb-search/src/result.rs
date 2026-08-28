@@ -1,5 +1,5 @@
-use graphdb_core::Value;
 use chrono::{DateTime, Utc};
+use graphdb_core::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

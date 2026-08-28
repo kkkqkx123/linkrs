@@ -20,8 +20,8 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use graphdb_core::stats::StatsManager;
 use crate::executor::streaming::plan::PhysicalPlan;
+use graphdb_core::stats::StatsManager;
 
 use super::config::{CachePriority, PlanCacheConfig};
 use super::stats::PlanCacheStats;

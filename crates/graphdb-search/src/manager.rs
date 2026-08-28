@@ -3,8 +3,6 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use graphdb_core::metadata::SchemaManager;
-use graphdb_core::stats::StatsManager;
 use crate::config::FulltextConfig;
 use crate::engine::{ConsistencyState, EngineType};
 use crate::error::SearchError;
@@ -12,6 +10,8 @@ use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::stats::StatsManager;
 
 const METADATA_FILE_NAME: &str = "fulltext_metadata.json";
 

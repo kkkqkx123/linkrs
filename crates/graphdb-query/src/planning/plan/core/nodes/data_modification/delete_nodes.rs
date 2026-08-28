@@ -4,8 +4,8 @@
 //! - DeleteVerticesNode/DeleteEdgesNode: ZeroInputNode for standalone DELETE
 //! - PipeDeleteVerticesNode/PipeDeleteEdgesNode: SingleInputNode for pipe-based DELETE
 
-use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::{define_plan_node, define_plan_node_with_deps};
+use graphdb_core::types::expr::contextual::ContextualExpression;
 
 use super::info::{EdgeDeleteInfo, IndexDeleteInfo, TagDeleteInfo, VertexDeleteInfo};
 

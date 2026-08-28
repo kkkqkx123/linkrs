@@ -214,7 +214,9 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         query_id: None,
         isolation_level: None,
         parsed_statement: None,
-     consistency: Default::default(), minimum_lsn: None, };
+        consistency: Default::default(),
+        minimum_lsn: None,
+    };
 
     let mut query_api = session.inner.query_api_mut();
     match query_api.execute(query_str, ctx) {

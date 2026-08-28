@@ -744,10 +744,10 @@ fn test_cross_shard_final_review_no_false_abort() {
     use std::sync::Barrier;
     use std::thread;
 
-    use graphdb_core::types::{CommitLsn, VertexId};
     use crate::participant::{
         TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
     };
+    use graphdb_core::types::{CommitLsn, VertexId};
 
     struct PassThroughSink {
         barrier: Arc<Barrier>,

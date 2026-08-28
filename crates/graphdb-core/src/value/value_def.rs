@@ -190,8 +190,7 @@ impl Value {
     {
         let mut common = DataType::Empty;
         for element in elements {
-            common =
-                crate::type_system::TypeUtils::get_common_type(&common, &element.get_type());
+            common = crate::type_system::TypeUtils::get_common_type(&common, &element.get_type());
             if common == DataType::Empty {
                 break;
             }

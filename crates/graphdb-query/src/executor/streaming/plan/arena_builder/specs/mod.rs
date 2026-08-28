@@ -16,8 +16,8 @@ pub(super) use graph::*;
 pub(super) use join::*;
 pub(super) use source::*;
 
-use graphdb_core::types::expr::Expression;
 use crate::executor::build_error::PlanBuildError;
+use graphdb_core::types::expr::Expression;
 
 /// Convert a [`ContextualExpression`] plan expression into a bare
 /// [`Expression`] for embedding into an operator spec.
