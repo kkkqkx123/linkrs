@@ -54,7 +54,7 @@ pub use fragmentation_stats::FragmentationStats;
 pub use graphdb_core::types::EdgeStrategy;
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
-pub use mutable_csr::{MutableCsr, MutableCsrIterator};
+pub use mutable_csr::{MutableCsr, MutableCsrIterator, MutableCsrRegion};
 pub use property_table::PropertyTable;
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 

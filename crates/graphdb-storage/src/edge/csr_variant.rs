@@ -545,6 +545,38 @@ impl CsrVariant {
             _ => None,
         }
     }
+
+    /// Per-region stats for incremental freeze (Multiple only).
+    pub fn regions_with_ts(
+        &self,
+        region_vertex_count: usize,
+        visible_ts: Option<Timestamp>,
+    ) -> Vec<super::mutable_csr::MutableCsrRegion> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.regions_with_ts(region_vertex_count, visible_ts),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn regions(&self, region_vertex_count: usize) -> Vec<super::mutable_csr::MutableCsrRegion> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.regions(region_vertex_count),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Drain regions for incremental freeze (Multiple only).
+    pub fn drain_regions(
+        &mut self,
+        region_ids: &std::collections::HashSet<u32>,
+        region_vertex_count: usize,
+        ts: Timestamp,
+    ) -> Vec<(u32, super::Nbr, Timestamp)> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.drain_regions(region_ids, region_vertex_count, ts),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types

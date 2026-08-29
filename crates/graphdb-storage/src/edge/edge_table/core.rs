@@ -53,6 +53,18 @@ pub struct EdgeTableConfig {
 
     /// Calibrator configuration for density balancing.
     pub calibrator: CalibratorConfig,
+
+    /// Maximum number of regions frozen per incremental freeze operation.
+    /// `0` means unlimited (full freeze, legacy behavior). With `N > 0`,
+    /// each freeze incrementally freezes at most `N` high-density regions,
+    /// leaving low-density regions in the mutable CSR to reduce per-freeze
+    /// latency. Default 8 balances latency and progress.
+    pub max_regions_per_freeze: usize,
+
+    /// Density threshold for incremental freeze: a region is considered high-density
+    /// when `edge_count / capacity >= threshold`. Calibrator may lower this threshold
+    /// under memory pressure. Default 0.05 (5%).
+    pub freeze_density_threshold: f32,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -107,6 +119,8 @@ impl Default for EdgeTableConfig {
             region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
             version_chain_cap: crate::edge::property_table::DEFAULT_VERSION_CHAIN_CAP,
             calibrator: CalibratorConfig::default(),
+            max_regions_per_freeze: 8,
+            freeze_density_threshold: 0.05,
         }
     }
 }

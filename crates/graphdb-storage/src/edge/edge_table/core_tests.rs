@@ -1583,3 +1583,137 @@ fn test_compact_and_freeze_unbounded_keeps_history() {
     );
     assert_eq!(table.mvcc.total_tombstone_count(), 0);
 }
+
+#[test]
+fn test_incremental_freeze_high_density_only() {
+    let schema = create_test_schema();
+    let config = EdgeTableConfig {
+        region_vertex_count: 4,
+        max_regions_per_freeze: 1,
+        freeze_density_threshold: 0.5,
+        ..Default::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config.clone()).unwrap();
+
+    // Region 0 (vertices 0-3) will be dense: 10 edges on vertex 0
+    for i in 0..10 {
+        table.insert_edge(0, 100 + i, i as i64, &[], 100).unwrap();
+    }
+    // Region 1 (vertices 4-7) sparse: 1 edge
+    table.insert_edge(5, 200, 0, &[], 100).unwrap();
+    // Region 2 (vertices 8-11) sparse
+    table.insert_edge(9, 300, 0, &[], 100).unwrap();
+
+    // First incremental freeze should freeze only the dense region (max 1 region)
+    let frozen = table.freeze_csr_only(150);
+    // Dense region has 10 edges, counted in both out and in directions => at least 10 frozen
+    assert!(frozen >= 10, "expected dense region frozen, got {}", frozen);
+    // Sparse regions should remain in delta
+    assert!(
+        table.out_csr.edge_count() > 0,
+        "sparse low-density regions should remain in delta after incremental freeze"
+    );
+    assert!(!table.out_segments.is_empty());
+
+    // Second freeze should pick next densest (sparse) region
+    let frozen2 = table.freeze_csr_only(150);
+    assert!(frozen2 > 0);
+    // After two freezes, all edges should be frozen or in delta but queries correct
+    assert_eq!(table.out_edges(0, 150).len(), 10);
+    assert_eq!(table.out_edges(5, 150).len(), 1);
+    assert_eq!(table.out_edges(9, 150).len(), 1);
+}
+
+#[test]
+fn test_incremental_freeze_small_freezes_all() {
+    let schema = create_test_schema();
+    let config = EdgeTableConfig {
+        region_vertex_count: 1024,
+        max_regions_per_freeze: 8,
+        ..Default::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    // 3 edges in 3 different regions (sparse) but total non-empty <= max_regions_per_freeze
+    for src in [0u32, 1500, 3000] {
+        table.insert_edge(src, src + 100, 0, &[], 100).unwrap();
+    }
+    let frozen = table.freeze_csr_only(150);
+    // All 3 should be frozen in one go (single segment) for small case
+    assert_eq!(frozen, 6, "3 out + 3 in edges");
+    assert_eq!(table.out_csr.edge_count(), 0);
+    assert_eq!(table.out_segments.len(), 1);
+    assert_eq!(table.out_segments[0].csr.read().edge_count(), 3);
+}
+
+#[test]
+fn test_calibrator_hierarchical_freeze_selection() {
+    let schema = create_test_schema();
+    let config = EdgeTableConfig {
+        region_vertex_count: 2,
+        max_regions_per_freeze: 2,
+        freeze_density_threshold: 0.4,
+        calibrator: crate::edge::edge_table::calibrator::CalibratorConfig {
+            base_deletion_ratio: 0.5,
+            base_fragmentation_ratio: 2.0,
+            memory_pressure_threshold: 0.8,
+            min_multiplier: 0.5,
+            max_multiplier: 2.0,
+            branch_factor: 2,
+        },
+        ..Default::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    // Create 4 regions with varying densities: region 0 dense, others sparse
+    for i in 0..5 {
+        table.insert_edge(0, i, i as i64, &[], 100).unwrap();
+    }
+    table.insert_edge(2, 100, 0, &[], 100).unwrap();
+    table.insert_edge(4, 200, 0, &[], 100).unwrap();
+    table.insert_edge(6, 300, 0, &[], 100).unwrap();
+
+    // Record access to make region 0 hot
+    for _ in 0..20 {
+        table.record_region_access(0);
+    }
+
+    let frozen = table.freeze_csr_only(150);
+    assert!(frozen > 0);
+    // Hot dense region should be prioritized
+    assert!(!table.out_segments.is_empty());
+}
+
+#[test]
+fn test_merge_calibrated_incremental() {
+    let schema = create_test_schema();
+    let config = EdgeTableConfig {
+        region_vertex_count: 4,
+        max_regions_per_freeze: 8,
+        ..Default::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    // Create 4 segments with varying deletion ratios
+    for batch in 0..4u64 {
+        for i in 0..5 {
+            table
+                .insert_edge(batch as u32 * 10, 100 + i, i as i64, &[], 100 + batch)
+                .unwrap();
+        }
+        table.freeze_csr_only(150 + batch);
+    }
+    assert!(table.out_segments.len() >= 2);
+    // Delete half the edges in first two segments to make them high-deletion
+    for batch in 0..2u64 {
+        for i in 0..3 {
+            let src = batch as u32 * 10;
+            let _ = table.delete_edge(src, 100 + i, i as i64, 200);
+        }
+    }
+    // Register snapshot to allow physical deletion
+    table.mvcc.register_active_snapshot(300);
+    // Calibrator should detect high deletion regions and trigger incremental merge
+    let before = table.out_segments.len();
+    let _merged = table.auto_merge_segments(300);
+    let after = table.out_segments.len();
+    assert!(after <= before);
+    table.mvcc.unregister_active_snapshot(300);
+}

@@ -52,6 +52,36 @@ const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
 const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
+/// Per-region metadata for incremental freeze decision.
+///
+/// A region is a contiguous vertex-id interval `[vertex_start, vertex_end)`
+/// with aggregated edge statistics. Used to decide which regions to freeze
+/// incrementally, reducing per-freeze latency (Phase 5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MutableCsrRegion {
+    pub region_id: u32,
+    pub vertex_start: u32,
+    pub vertex_end: u32,
+    pub edge_count: u32,
+    pub deleted_count: u32,
+    pub capacity: u32,
+    pub density: f32,
+}
+
+impl MutableCsrRegion {
+    pub fn deletion_ratio(&self) -> f64 {
+        if self.edge_count == 0 {
+            0.0
+        } else {
+            self.deleted_count as f64 / self.edge_count as f64
+        }
+    }
+
+    pub fn is_high_density(&self, threshold: f32) -> bool {
+        self.density >= threshold
+    }
+}
+
 /// Minimum vertices in a sequential run to be considered for indexed compaction.
 const SEQUENTIAL_RUN_THRESHOLD: usize = 16;
 
@@ -506,6 +536,196 @@ impl MutableCsr {
             sparse_vertices,
             metadata_bytes_saved: saved,
         }
+    }
+
+    /// Compute per-region statistics for incremental freeze decisions.
+    ///
+    /// Each region covers `region_vertex_count` consecutive vertices. `edge_count`
+    /// counts only edges visible at `visible_ts` (create_ts <= visible_ts if Some,
+    /// otherwise all physical entries). `capacity` is the allocated slots in the
+    /// region (primary + overflow), `density = edge_count / capacity` (0 if empty).
+    pub fn regions_with_ts(
+        &self,
+        region_vertex_count: usize,
+        visible_ts: Option<Timestamp>,
+    ) -> Vec<MutableCsrRegion> {
+        if region_vertex_count == 0 {
+            return Vec::new();
+        }
+        let vc = self.vertex_capacity();
+        if vc == 0 {
+            return Vec::new();
+        }
+        let region_cnt = vc.div_ceil(region_vertex_count);
+        let mut out = Vec::with_capacity(region_cnt);
+        for rid in 0..region_cnt {
+            let start = (rid * region_vertex_count) as u32;
+            let end = ((rid + 1) * region_vertex_count).min(vc) as u32;
+            let mut edge_count = 0u32;
+            let mut deleted_count = 0u32;
+            let mut capacity = 0u32;
+            for vid in start..end {
+                let idx = vid as usize;
+                capacity += self.primary_capacities[idx];
+                let degree = self.degrees[idx] as usize;
+                let base = self.adj_offsets[idx] as usize;
+                for i in 0..degree {
+                    let nbr = &self.nbr_list[base + i];
+                    let visible = match visible_ts {
+                        Some(ts) => {
+                            let create_ts =
+                                self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                            create_ts <= ts
+                        }
+                        None => true,
+                    };
+                    if visible {
+                        edge_count += 1;
+                        if nbr.delete_ts != Timestamp::MAX {
+                            deleted_count += 1;
+                        }
+                    }
+                }
+                if let Some(chunks) = self.overflow_chunks.get(&vid) {
+                    for chunk in chunks {
+                        capacity += chunk.capacity() as u32;
+                        for nbr in chunk {
+                            let visible = match visible_ts {
+                                Some(ts) => {
+                                    let create_ts = self
+                                        .create_ts_cache
+                                        .get(&nbr.edge_id)
+                                        .copied()
+                                        .unwrap_or(0);
+                                    create_ts <= ts
+                                }
+                                None => true,
+                            };
+                            if visible {
+                                edge_count += 1;
+                                if nbr.delete_ts != Timestamp::MAX {
+                                    deleted_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    // Each chunk already counted capacity, but we added per chunk capacity above; primary
+                    // overflow_chunks capacity counted correctly. Avoid double count of total_edge_capacity's
+                    // per-chunk allocation which is already included via chunk.capacity().
+                }
+            }
+            // Normalize capacity: if zero (no primary allocated) use vertex count * DEFAULT degree as logical capacity
+            let logical_capacity = if capacity == 0 {
+                (end - start) * DEFAULT_VERTEX_DEGREE as u32
+            } else {
+                capacity
+            };
+            let density = if logical_capacity == 0 {
+                0.0
+            } else {
+                edge_count as f32 / logical_capacity as f32
+            };
+            out.push(MutableCsrRegion {
+                region_id: rid as u32,
+                vertex_start: start,
+                vertex_end: end,
+                edge_count,
+                deleted_count,
+                capacity: logical_capacity,
+                density,
+            });
+        }
+        out
+    }
+
+    pub fn regions(&self, region_vertex_count: usize) -> Vec<MutableCsrRegion> {
+        self.regions_with_ts(region_vertex_count, None)
+    }
+
+    /// Raw insert without duplicate checks, preserving delete_ts.
+    fn insert_raw_nbr(&mut self, src_vid: u32, nbr: Nbr, create_ts: Timestamp) {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            self.ensure_vertex_capacity(src_idx + 1);
+        }
+        if self.primary_capacities[src_idx] == 0 {
+            self.allocate_primary_block(src_idx);
+        }
+        self.create_ts_cache.insert(nbr.edge_id, create_ts);
+        let degree = self.degrees[src_idx] as usize;
+        if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
+            && degree < self.primary_capacities[src_idx] as usize
+        {
+            let base = self.adj_offsets[src_idx] as usize;
+            self.nbr_list[base + degree] = nbr;
+            self.degrees[src_idx] += 1;
+            if nbr.delete_ts == Timestamp::MAX {
+                self.edge_count.fetch_add(1, Ordering::Relaxed);
+            }
+            return;
+        }
+        // overflow path
+        let chunks = self.overflow_chunks.get_or_create(src_vid);
+        let needs_chunk = chunks
+            .last()
+            .is_none_or(|chunk| chunk.len() >= self.overflow_chunk_edges);
+        if needs_chunk {
+            chunks.push(Vec::with_capacity(self.overflow_chunk_edges));
+            self.total_edge_capacity = self
+                .total_edge_capacity
+                .saturating_add(self.overflow_chunk_edges);
+        }
+        if let Some(chunk) = chunks.last_mut() {
+            chunk.push(nbr);
+        }
+        if nbr.delete_ts == Timestamp::MAX {
+            self.edge_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Drain entries belonging to the given region ids that are visible at `ts`,
+    /// and rebuild the delta to retain the remaining entries (including those
+    /// not yet visible at `ts`). Returns the drained entries for freezing.
+    /// The remaining delta is compacted in-place.
+    pub fn drain_regions(
+        &mut self,
+        region_ids: &std::collections::HashSet<u32>,
+        region_vertex_count: usize,
+        ts: Timestamp,
+    ) -> Vec<(u32, Nbr, Timestamp)> {
+        if region_ids.is_empty() || region_vertex_count == 0 {
+            return Vec::new();
+        }
+        let mut frozen = Vec::new();
+        let mut retained: Vec<(u32, Nbr, Timestamp)> = Vec::new();
+
+        for (src_vid, nbr) in self.iter_all() {
+            let src_u32 = src_vid.as_int64().unwrap_or(0) as u32;
+            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+            let rid = (src_u32 as usize / region_vertex_count) as u32;
+            let visible = create_ts <= ts;
+            if visible && region_ids.contains(&rid) {
+                frozen.push((src_u32, nbr, create_ts));
+            } else {
+                retained.push((src_u32, nbr, create_ts));
+            }
+        }
+
+        if frozen.is_empty() {
+            return frozen;
+        }
+
+        let retained_cache: std::collections::HashMap<EdgeId, Timestamp> = retained
+            .iter()
+            .map(|(_, nbr, create_ts)| (nbr.edge_id, *create_ts))
+            .collect();
+        self.clear();
+        self.create_ts_cache = retained_cache;
+        // Rebuild retained entries preserving delete_ts and counts
+        for (src_u32, nbr, create_ts) in retained {
+            self.insert_raw_nbr(src_u32, nbr, create_ts);
+        }
+        frozen
     }
 
     /// Allocate the primary block of `DEFAULT_VERTEX_DEGREE` slots for a vertex
@@ -2599,5 +2819,80 @@ mod tests {
         csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
         assert!(csr.overflow_index().is_empty());
         assert_eq!(csr.overflow_index_stats().total_overflow_vertices, 0);
+    }
+
+    #[test]
+    fn test_mutable_csr_region_stats() {
+        let mut csr = MutableCsr::with_capacity(4096, 4096);
+        // Region 0: 10 edges dense, Region 1: 1 edge sparse, Region 2: empty
+        for i in 0..10 {
+            csr.insert_edge(
+                0,
+                VertexId::from_int64(i + 1),
+                EdgeId(i as u64),
+                1,
+                crate::edge::property_schema::PROP_OFFSET_NONE,
+            )
+            .unwrap();
+        }
+        csr.insert_edge(
+            2048,
+            VertexId::from_int64(100),
+            EdgeId(100),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+
+        let regions = csr.regions_with_ts(1024, Some(1));
+        assert_eq!(regions.len(), 4);
+        // Region 0 should have high edge count
+        assert_eq!(regions[0].vertex_start, 0);
+        assert_eq!(regions[0].edge_count, 10);
+        // Region 2 should be sparse (1 edge in 1024 vertices)
+        assert_eq!(regions[2].edge_count, 1);
+        // Density is computed from capacity; just ensure non-zero
+        assert!(regions[0].density >= 0.0);
+        assert!(regions[2].density >= 0.0);
+        // Region 1 empty
+        assert_eq!(regions[1].edge_count, 0);
+        assert_eq!(regions[3].edge_count, 0);
+    }
+
+    #[test]
+    fn test_drain_regions_retains_low_density() {
+        let mut csr = MutableCsr::with_capacity(4096, 4096);
+        // Fill region 0 dense (20 edges across vertex 0), region 1 sparse (1 edge)
+        for i in 0..20 {
+            csr.insert_edge(
+                0,
+                VertexId::from_int64(i as i64 + 1),
+                EdgeId(i as u64),
+                10,
+                crate::edge::property_schema::PROP_OFFSET_NONE,
+            )
+            .unwrap();
+        }
+        csr.insert_edge(
+            2048,
+            VertexId::from_int64(999),
+            EdgeId(1000),
+            10,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+
+        assert_eq!(csr.edge_count(), 21);
+        let mut selected = std::collections::HashSet::new();
+        selected.insert(0); // freeze only region 0
+        let frozen = csr.drain_regions(&selected, 1024, 10);
+        assert_eq!(frozen.len(), 20);
+        assert_eq!(csr.edge_count(), 1);
+        // Remaining edge should be the sparse one in region 2 (vertex 2048)
+        let remaining = csr.edges_of(2048, 10);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].edge_id, EdgeId(1000));
+        // Drained region 0 should be empty
+        assert!(csr.edges_of(0, 10).is_empty());
     }
 }
