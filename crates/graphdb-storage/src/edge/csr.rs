@@ -160,7 +160,10 @@ impl Csr {
             .collect()
     }
 
-    pub fn from_nbr_entries(entries: &[(u32, Nbr)], vertex_capacity: usize) -> Self {
+    pub fn from_nbr_entries(
+        entries: &[(u32, Nbr, Timestamp)],
+        vertex_capacity: usize,
+    ) -> Self {
         let mut csr = Self::with_capacity(vertex_capacity.max(1), entries.len());
         csr.rebuild_from_nbr_entries(entries, vertex_capacity);
         csr
@@ -170,7 +173,11 @@ impl Csr {
     ///
     /// Counts edges per source vertex directly, avoiding the per-edge
     /// `src_list`/`dst_list`/`edge_ids`/`timestamps` temporary allocations.
-    pub fn rebuild_from_nbr_entries(&mut self, entries: &[(u32, Nbr)], vertex_capacity: usize) {
+    pub fn rebuild_from_nbr_entries(
+        &mut self,
+        entries: &[(u32, Nbr, Timestamp)],
+        vertex_capacity: usize,
+    ) {
         if entries.is_empty() {
             self.offsets.truncate(1);
             self.offsets.fill(0);
@@ -186,7 +193,7 @@ impl Csr {
         let vc = self.vertex_capacity();
 
         let mut counts = vec![0u32; vc];
-        for (src, _) in entries.iter() {
+        for (src, _, _) in entries.iter() {
             let idx = *src as usize;
             if idx < vc {
                 counts[idx] += 1;
@@ -207,7 +214,7 @@ impl Csr {
             ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)),
         );
         let mut current_pos = self.offsets[..vc].to_vec();
-        for (src, nbr) in entries.iter() {
+        for (src, nbr, create_ts) in entries.iter() {
             let idx = *src as usize;
             if idx >= vc {
                 continue;
@@ -215,7 +222,7 @@ impl Csr {
             let pos = current_pos[idx] as usize;
             if pos < self.edges.len() {
                 self.edges[pos] =
-                    ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, nbr.create_ts);
+                    ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, *create_ts);
                 current_pos[idx] += 1;
             }
         }

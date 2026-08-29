@@ -38,6 +38,7 @@ pub use stats::{MergeMetrics, MergeMetricsResult, MergeStats};
 pub use super::{CsrBase, CsrVariant, Nbr};
 
 use crate::cold::{ColdPropertyIndex, ColdSnapshot};
+use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::edge_table::core::EdgeTableConfig;
 use crate::edge::edge_table::snapshot::max_edge_row;
 use crate::persistence::write_header_to;
@@ -477,11 +478,11 @@ impl core::TimeTravelEdgeStore {
             self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
 
         if keep_recent > 0 {
-            let newest_first = |a: &(u32, Nbr), b: &(u32, Nbr)| {
-                b.1.create_ts
-                    .cmp(&a.1.create_ts)
-                    .then_with(|| b.1.edge_id.cmp(&a.1.edge_id))
-            };
+            let newest_first =
+                |a: &(u32, Nbr, Timestamp), b: &(u32, Nbr, Timestamp)| {
+                    b.2.cmp(&a.2)
+                        .then_with(|| b.1.edge_id.cmp(&a.1.edge_id))
+                };
             out_edges.sort_by(newest_first);
             in_edges.sort_by(newest_first);
             let cut = out_edges.len().saturating_sub(keep_recent as usize);
@@ -517,11 +518,11 @@ impl core::TimeTravelEdgeStore {
     pub fn freeze_edges_before(&mut self, ts: Timestamp, keep_recent: u64) -> StorageResult<u64> {
         let mut edges =
             self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
-        edges.sort_by_key(|(_, nbr)| std::cmp::Reverse((nbr.create_ts, nbr.edge_id)));
+        edges.sort_by_key(|(_, nbr, create_ts)| std::cmp::Reverse((*create_ts, nbr.edge_id)));
         edges.truncate(edges.len().saturating_sub(keep_recent as usize));
 
         let mut evicted = 0u64;
-        for (src, nbr) in edges {
+        for (src, nbr, _) in edges {
             let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
             let dst = dst_vid.as_int64().unwrap_or(0) as u32;
             if self.delete_edge(src, dst, rank, ts)? {
@@ -562,7 +563,7 @@ impl core::TimeTravelEdgeStore {
         delta: &CsrVariant,
         segments: &[CsrSegment],
         ts: Timestamp,
-    ) -> StorageResult<Vec<(u32, Nbr)>> {
+    ) -> StorageResult<Vec<(u32, Nbr, Timestamp)>> {
         use snapshot::SnapshotBuilder;
 
         let mut builder = SnapshotBuilder::new();
@@ -581,11 +582,12 @@ impl core::TimeTravelEdgeStore {
             builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
         }
 
-        let delta_edges: Vec<(u32, Nbr)> = delta
+        let delta_edges: Vec<(u32, Nbr, Timestamp)> = delta
             .iter(ts)
             .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                (src_u32, nbr)
+                let create_ts = delta.create_ts_of(nbr.edge_id).unwrap_or(0);
+                (src_u32, nbr, create_ts)
             })
             .collect();
         builder.add_delta_edges(delta_edges, ts, &self.mvcc.tombstones);
@@ -827,6 +829,7 @@ impl core::TimeTravelEdgeStore {
             self.next_edge_id,
             &self.mvcc.tombstones,
             self.mvcc.min_active_snapshot_ts,
+            &self.mvcc.edge_timestamps,
         )?;
         persistence::write_pages_to_file(
             &path.join("meta.bin"),
@@ -926,6 +929,7 @@ impl core::TimeTravelEdgeStore {
         self.next_edge_id = meta.next_edge_id;
         self.mvcc.tombstones = meta.tombstones;
         self.mvcc.min_active_snapshot_ts = meta.min_snapshot_ts;
+        self.mvcc.edge_timestamps = meta.edge_timestamps;
         self.properties
             .set_retention_horizon(self.mvcc.min_active_snapshot_ts);
         self.out_free_space.clear();
@@ -955,6 +959,18 @@ impl core::TimeTravelEdgeStore {
         self.update_calibrator_from_segments();
         self.out_csr.rebuild_overflow_index();
         self.in_csr.rebuild_overflow_index();
+
+        // Rebuild CSR create_ts_cache from persisted edge_timestamps
+        let create_ts_iter = self
+            .mvcc
+            .edge_timestamps
+            .iter()
+            .map(|(&eid, ts)| (eid, ts.create_ts));
+        let create_ts_vec: Vec<_> = create_ts_iter.collect();
+        self.out_csr
+            .rebuild_create_ts_cache(create_ts_vec.iter().copied());
+        self.in_csr
+            .rebuild_create_ts_cache(create_ts_vec.into_iter());
 
         let props_path = path.join("properties.bin");
         self.properties = persistence::load_properties(&props_path)?;

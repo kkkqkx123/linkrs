@@ -3,6 +3,7 @@
 //! Handles flush (write) and load (read) operations with support for
 //! versioning and compression.
 
+use super::mvcc::EdgeTimestamps;
 use super::super::{CsrBase, CsrVariant};
 use super::segment::{CsrSegment, DeletionInfo};
 use crate::edge::EdgeSchema;
@@ -30,6 +31,7 @@ pub(crate) struct EdgeMetadata {
     pub next_edge_id: EdgeId,
     pub tombstones: HashMap<EdgeId, Timestamp>,
     pub min_snapshot_ts: Timestamp,
+    pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
 }
 
 /// Serialize edge table metadata to a buffer
@@ -45,6 +47,7 @@ pub fn flush_metadata(
     next_edge_id: EdgeId,
     tombstones: &HashMap<EdgeId, Timestamp>,
     min_active_snapshot_ts: Timestamp,
+    edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
     buf.extend_from_slice(&label.to_le_bytes());
@@ -71,6 +74,14 @@ pub fn flush_metadata(
         buf.extend_from_slice(&delete_ts.to_le_bytes());
     }
     buf.extend_from_slice(&min_active_snapshot_ts.to_le_bytes());
+
+    // v2: edge_timestamps
+    buf.extend_from_slice(&(edge_timestamps.len() as u64).to_le_bytes());
+    for (edge_id, ts) in edge_timestamps {
+        buf.extend_from_slice(&edge_id.0.to_le_bytes());
+        buf.extend_from_slice(&ts.create_ts.to_le_bytes());
+        buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
+    }
 
     Ok(())
 }
@@ -212,6 +223,32 @@ pub fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     cursor.read_exact(&mut min_snapshot_ts_bytes)?;
     let min_active_snapshot_ts = u64::from_le_bytes(min_snapshot_ts_bytes);
 
+    // edge_timestamps: creation + deletion timestamps per edge
+    let edge_timestamps = if !cursor.is_empty() {
+        let mut et_count_bytes = [0u8; 8];
+        cursor.read_exact(&mut et_count_bytes)?;
+        let et_count = u64::from_le_bytes(et_count_bytes) as usize;
+        let mut edge_timestamps = HashMap::with_capacity(et_count);
+        for _ in 0..et_count {
+            let mut edge_id_bytes = [0u8; 8];
+            cursor.read_exact(&mut edge_id_bytes)?;
+            let mut create_ts_bytes = [0u8; 8];
+            cursor.read_exact(&mut create_ts_bytes)?;
+            let mut delete_ts_bytes = [0u8; 8];
+            cursor.read_exact(&mut delete_ts_bytes)?;
+            edge_timestamps.insert(
+                EdgeId(u64::from_le_bytes(edge_id_bytes)),
+                EdgeTimestamps {
+                    create_ts: u64::from_le_bytes(create_ts_bytes),
+                    delete_ts: u64::from_le_bytes(delete_ts_bytes),
+                },
+            );
+        }
+        edge_timestamps
+    } else {
+        HashMap::new()
+    };
+
     Ok(EdgeMetadata {
         label,
         src_label,
@@ -222,6 +259,7 @@ pub fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
         next_edge_id,
         tombstones,
         min_snapshot_ts: min_active_snapshot_ts,
+        edge_timestamps,
     })
 }
 
@@ -511,7 +549,10 @@ mod tests {
             label_name: "knows".to_string(),
             src_label: 0,
             dst_label: 0,
-            properties: vec![],
+            properties: vec![crate::types::StoragePropertyDef::new(
+                "weight".to_string(),
+                graphdb_core::types::DataType::Double,
+            )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
@@ -655,7 +696,13 @@ mod tests {
 
         for i in 0..50u64 {
             table
-                .insert_edge((i % 10) as u32, (100 + i) as u32, 0, &[], 1000 + i)
+                .insert_edge(
+                    (i % 10) as u32,
+                    (100 + i) as u32,
+                    0,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    1000 + i,
+                )
                 .unwrap();
         }
 
@@ -664,5 +711,75 @@ mod tests {
         let total_bytes = table.segments_total_bytes();
         assert!(total_bytes > 0);
         assert!(total_bytes >= 50 * 20);
+    }
+
+    #[test]
+    fn test_flush_load_preserves_edge_timestamps() {
+        let mut table = create_edge_table();
+
+        table
+            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .unwrap();
+        table
+            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 300)
+            .unwrap();
+
+        // Verify edge_timestamps are populated before flush
+        assert!(table.mvcc.edge_timestamps.len() >= 3);
+
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                temp_dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = create_edge_table();
+        loaded.load(temp_dir.path()).expect("load should succeed");
+
+        // edge_timestamps restored from metadata
+        assert!(loaded.mvcc.edge_timestamps.len() >= 3);
+
+        // CSR create_ts_cache rebuilt from edge_timestamps
+        use crate::edge::csr_trait::MutableCsrTrait;
+        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(0)), Some(100));
+        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(1)), Some(200));
+        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(2)), Some(300));
+    }
+
+    #[test]
+    fn test_flush_load_create_ts_used_by_freeze() {
+        let mut table = create_edge_table();
+
+        // Insert edges at different timestamps
+        table
+            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                temp_dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = create_edge_table();
+        loaded.load(temp_dir.path()).expect("load should succeed");
+
+        // Freeze at ts=150: only edge created at 100 should be included in segment
+        loaded.freeze_csr_only(150);
+
+        // After freeze, the segment should have correct create_ts_min
+        assert!(!loaded.out_segments.is_empty());
+        let seg = &loaded.out_segments[0];
+        assert_eq!(seg.create_ts_min, 100);
     }
 }

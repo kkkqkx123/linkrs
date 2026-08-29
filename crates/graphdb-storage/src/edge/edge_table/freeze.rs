@@ -7,6 +7,7 @@
 use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
+use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::CsrVariant;
 use graphdb_core::types::Timestamp;
 
@@ -118,10 +119,11 @@ impl TimeTravelEdgeStore {
         delta.rebuild_overflow_index();
         let entries: Vec<_> = delta
             .iter_all()
-            .filter(|(_, nbr)| nbr.create_ts <= ts)
+            .filter(|(_, nbr)| delta.create_ts_of(nbr.edge_id).unwrap_or(0) <= ts)
             .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                (src_u32, nbr)
+                let create_ts = delta.create_ts_of(nbr.edge_id).unwrap_or(0);
+                (src_u32, nbr, create_ts)
             })
             .collect();
 
@@ -137,19 +139,19 @@ impl TimeTravelEdgeStore {
         // mirroring the merge path.
         let max_row = entries
             .iter()
-            .map(|(src, _)| *src as usize)
+            .map(|(src, _, _)| *src as usize)
             .max()
             .unwrap_or(0);
         let effective_capacity = max_row.saturating_add(1);
 
         let create_ts_min = entries
             .iter()
-            .map(|(_, nbr)| nbr.create_ts)
+            .map(|(_, _, create_ts)| *create_ts)
             .min()
             .unwrap_or(0);
         let create_ts_max = entries
             .iter()
-            .map(|(_, nbr)| nbr.create_ts)
+            .map(|(_, _, create_ts)| *create_ts)
             .max()
             .unwrap_or(0);
 
@@ -164,7 +166,7 @@ impl TimeTravelEdgeStore {
         let mut deleted_count = 0u32;
         let (delete_ts_min, delete_ts_max) = entries
             .iter()
-            .filter_map(|(_, nbr)| {
+            .filter_map(|(_, nbr, _)| {
                 if nbr.delete_ts != Timestamp::MAX {
                     deleted_count += 1;
                     return Some(nbr.delete_ts);
@@ -182,7 +184,7 @@ impl TimeTravelEdgeStore {
         let mut segment = CsrSegment::new(csr, create_ts_min, create_ts_max, deletion_info);
 
         if frozen >= SEPARATE_EDGE_ID_STORAGE_THRESHOLD {
-            segment.edge_ids = Some(entries.iter().map(|(_, nbr)| nbr.edge_id).collect());
+            segment.edge_ids = Some(entries.iter().map(|(_, nbr, _)| nbr.edge_id).collect());
         }
 
         if region_vertex_count > 0 {

@@ -40,7 +40,7 @@ pub mod property_table;
 pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId, INVALID_TIMESTAMP};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
 
 pub use csr::Csr;
@@ -220,36 +220,32 @@ impl EdgeSchema {
 pub struct Nbr {
     pub neighbor: VertexId,
     pub edge_id: EdgeId,
-    pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
 }
 
 impl Nbr {
-    pub fn new(neighbor: VertexId, edge_id: EdgeId, create_ts: Timestamp) -> Self {
+    pub fn new(neighbor: VertexId, edge_id: EdgeId) -> Self {
         Self {
             neighbor,
             edge_id,
-            create_ts,
             delete_ts: Timestamp::MAX,
         }
     }
 
-    pub fn with_delete_ts(
+    pub fn with_timestamps(
         neighbor: VertexId,
         edge_id: EdgeId,
-        create_ts: Timestamp,
         delete_ts: Timestamp,
     ) -> Self {
         Self {
             neighbor,
             edge_id,
-            create_ts,
             delete_ts,
         }
     }
 
-    pub fn is_valid_at(&self, ts: Timestamp) -> bool {
-        self.create_ts <= ts && ts < self.delete_ts
+    pub fn is_alive_at(&self, ts: Timestamp, create_ts: Timestamp) -> bool {
+        create_ts <= ts && ts < self.delete_ts
     }
 }
 

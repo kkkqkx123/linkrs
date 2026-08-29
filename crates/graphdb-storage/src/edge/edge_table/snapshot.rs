@@ -15,8 +15,8 @@ pub(crate) use super::super::edge_table::remap::remap_immutable_csr;
 /// Truncated CSR row space: max edge-bearing row + 1 (Ladybug
 /// `getMaxOffsetWithRels()+1` semantics). Falls back to `fallback` when no
 /// edges survive at the snapshot timestamp.
-pub(crate) fn max_edge_row(edges: &[(u32, Nbr)], fallback: usize) -> usize {
-    let max_row = edges.iter().map(|(src, _)| *src).max();
+pub(crate) fn max_edge_row(edges: &[(u32, Nbr, Timestamp)], fallback: usize) -> usize {
+    let max_row = edges.iter().map(|(src, _, _)| *src).max();
     match max_row {
         Some(row) => (row as usize).saturating_add(1),
         None => fallback,
@@ -55,7 +55,7 @@ impl ExportedEdgeSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp))
+            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
             .collect()
     }
 
@@ -66,7 +66,7 @@ impl ExportedEdgeSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp))
+            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
             .collect()
     }
 
@@ -74,7 +74,7 @@ impl ExportedEdgeSnapshot {
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp))
+            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
     }
 
     /// Check if an edge exists in this snapshot
@@ -105,8 +105,8 @@ impl ExportedEdgeSnapshot {
 
 /// Snapshot builder supporting MVCC filtering
 pub struct SnapshotBuilder {
-    /// Dedup map: (src_vid, edge_id) -> (src_vid, nbr)
-    edge_map: HashMap<(u32, EdgeId), (u32, Nbr)>,
+    /// Dedup map: (src_vid, edge_id) -> (src_vid, nbr, create_ts)
+    edge_map: HashMap<(u32, EdgeId), (u32, Nbr, Timestamp)>,
 }
 
 impl SnapshotBuilder {
@@ -150,20 +150,21 @@ impl SnapshotBuilder {
             }
 
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id, immutable_nbr.timestamp);
-            self.edge_map.insert((src_u32, edge_id), (src_u32, nbr));
+            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+            self.edge_map
+                .insert((src_u32, edge_id), (src_u32, nbr, immutable_nbr.timestamp));
         }
     }
 
     /// Add edges from mutable CSR delta
     pub fn add_delta_edges(
         &mut self,
-        delta_edges: Vec<(u32, Nbr)>,
+        delta_edges: Vec<(u32, Nbr, Timestamp)>,
         ts: Timestamp,
         tombstones: &HashMap<EdgeId, Timestamp>,
     ) {
-        for (src_u32, nbr) in delta_edges {
-            if nbr.create_ts > ts {
+        for (src_u32, nbr, create_ts) in delta_edges {
+            if create_ts > ts {
                 continue;
             }
 
@@ -173,19 +174,20 @@ impl SnapshotBuilder {
                 }
             }
 
-            self.edge_map.insert((src_u32, nbr.edge_id), (src_u32, nbr));
+            self.edge_map
+                .insert((src_u32, nbr.edge_id), (src_u32, nbr, create_ts));
         }
     }
 
     /// Build CSR from collected edges
-    pub fn build_csr(edges: Vec<(u32, Nbr)>, vertex_capacity: usize) -> StorageResult<Csr> {
+    pub fn build_csr(edges: Vec<(u32, Nbr, Timestamp)>, vertex_capacity: usize) -> StorageResult<Csr> {
         Ok(Csr::from_nbr_entries(&edges, vertex_capacity))
     }
 
     /// Get collected edges as sorted vector
-    pub fn edges(&self) -> Vec<(u32, Nbr)> {
+    pub fn edges(&self) -> Vec<(u32, Nbr, Timestamp)> {
         let mut edges: Vec<_> = self.edge_map.values().cloned().collect();
-        edges.sort_by_key(|(src, _)| *src);
+        edges.sort_by_key(|(src, _, _)| *src);
         edges
     }
 }

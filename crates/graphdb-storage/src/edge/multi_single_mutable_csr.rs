@@ -15,6 +15,7 @@
 //! The maximum edges per vertex is fixed at creation time and cannot be changed.
 //! This allows for predictable memory layout and cache-friendly access patterns.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,7 +23,7 @@ use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::{
-    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID, INVALID_TIMESTAMP,
+    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
 };
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
@@ -37,6 +38,7 @@ pub struct MultiSingleMutableCsr {
     edges_per_vertex: usize,
     /// Current count of active edges per vertex
     counts: Vec<u32>,
+    create_ts_cache: HashMap<EdgeId, Timestamp>,
     /// Total edge count
     edge_count: AtomicU64,
 }
@@ -47,6 +49,7 @@ impl Clone for MultiSingleMutableCsr {
             edges: self.edges.clone(),
             edges_per_vertex: self.edges_per_vertex,
             counts: self.counts.clone(),
+            create_ts_cache: self.create_ts_cache.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
         }
     }
@@ -73,16 +76,16 @@ impl MultiSingleMutableCsr {
 
         Self {
             edges: vec![
-                Nbr::with_delete_ts(
+                Nbr::with_timestamps(
                     VertexId::from_int64(0),
                     INVALID_EDGE_ID,
-                    INVALID_TIMESTAMP,
                     0,
                 );
                 vertex_cap * edges_per
             ],
             edges_per_vertex: edges_per,
             counts: vec![0u32; vertex_cap],
+            create_ts_cache: HashMap::new(),
             edge_count: AtomicU64::new(0),
         }
     }
@@ -100,13 +103,13 @@ impl MultiSingleMutableCsr {
     }
 
     pub fn clear(&mut self) {
-        self.edges.fill(Nbr::with_delete_ts(
+        self.edges.fill(Nbr::with_timestamps(
             VertexId::from_int64(0),
             INVALID_EDGE_ID,
-            INVALID_TIMESTAMP,
             0,
         ));
         self.counts.fill(0);
+        self.create_ts_cache.clear();
         self.edge_count.store(0, Ordering::Relaxed);
     }
 
@@ -117,10 +120,9 @@ impl MultiSingleMutableCsr {
 
         let additional = new_vertex_capacity - self.vertex_capacity();
         self.edges.extend(std::iter::repeat_n(
-            Nbr::with_delete_ts(
+            Nbr::with_timestamps(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                INVALID_TIMESTAMP,
                 0,
             ),
             additional * self.edges_per_vertex,
@@ -183,7 +185,6 @@ impl CsrBase for MultiSingleMutableCsr {
         for nbr in &self.edges {
             data.extend(nbr.neighbor.as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
-            data.extend(nbr.create_ts.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
 
@@ -231,13 +232,11 @@ impl CsrBase for MultiSingleMutableCsr {
             offset += len;
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
-            let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.edges.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
                 edge_id,
-                create_ts,
                 delete_ts,
             });
         }
@@ -272,8 +271,10 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         // Check if edge already exists
         if let Some(slot) = self.get_slot_for_dst(src_vid, dst) {
             // Update existing edge if timestamp is newer
-            if ts > self.edges[slot].create_ts {
-                self.edges[slot] = Nbr::new(dst, edge_id, ts);
+            let existing_create_ts = self.create_ts_cache.get(&self.edges[slot].edge_id).copied().unwrap_or(0);
+            if ts > existing_create_ts {
+                self.create_ts_cache.insert(edge_id, ts);
+                self.edges[slot] = Nbr::new(dst, edge_id);
                 return Ok(());
             }
             return Err(StorageError::edge_already_exists(format!(
@@ -284,7 +285,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
 
         // Try to insert in empty slot
         if let Some(slot) = self.find_empty_slot(src_vid) {
-            self.edges[slot] = Nbr::new(dst, edge_id, ts);
+            self.create_ts_cache.insert(edge_id, ts);
+            self.edges[slot] = Nbr::new(dst, edge_id);
             self.counts[src_vid as usize] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
@@ -372,7 +374,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         if let Some(slot) = self.get_slot_for_dst(src_vid, dst) {
             let nbr = self.edges[slot];
-            if nbr.is_valid_at(ts) {
+            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+            if nbr.is_alive_at(ts, create_ts) {
                 return Some(nbr);
             }
         }
@@ -389,7 +392,10 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
 
         self.edges[base..base + count]
             .iter()
-            .filter(|nbr| nbr.is_valid_at(ts))
+            .filter(|nbr| {
+                let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                nbr.is_alive_at(ts, create_ts)
+            })
             .copied()
             .collect()
     }
@@ -426,7 +432,17 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     fn used_memory_size(&self) -> usize {
         let edges_size = self.edges.len() * std::mem::size_of::<Nbr>();
         let counts_size = self.counts.len() * std::mem::size_of::<u32>();
-        edges_size + counts_size + std::mem::size_of::<Self>()
+        let cache_size = self.create_ts_cache.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
+        edges_size + counts_size + cache_size + std::mem::size_of::<Self>()
+    }
+
+    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.create_ts_cache.get(&edge_id).copied()
+    }
+
+    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+        self.create_ts_cache.clear();
+        self.create_ts_cache.extend(iter);
     }
 }
 
@@ -485,7 +501,8 @@ impl<'a> Iterator for MultiSingleMutableCsrIterator<'a> {
                 let nbr = self.csr.edges[base + self.edge_idx];
                 self.edge_idx += 1;
 
-                if self.include_deleted || nbr.is_valid_at(self.ts) {
+                let create_ts = self.csr.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                if self.include_deleted || nbr.is_alive_at(self.ts, create_ts) {
                     return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                 }
             }

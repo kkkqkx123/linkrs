@@ -5,6 +5,7 @@
 //! closest fitting buffer for the next segment.
 
 use super::super::{Csr, Nbr};
+use graphdb_core::types::Timestamp;
 
 /// Tracks free segment slots grouped by an upper-bound capacity class.
 #[derive(Debug, Default)]
@@ -107,7 +108,7 @@ impl SegmentFreeList {
     }
 
     /// Build a CSR using a reusable buffer when one is available.
-    pub fn build_csr(&mut self, entries: &[(u32, Nbr)], vertex_capacity: usize) -> Csr {
+    pub fn build_csr(&mut self, entries: &[(u32, Nbr, Timestamp)], vertex_capacity: usize) -> Csr {
         let required_capacity = Csr::required_memory_size(vertex_capacity, entries.len());
         let mut csr = self
             .take_reusable_csr(required_capacity)
@@ -145,7 +146,7 @@ mod tests {
 
     #[test]
     fn recycled_csr_is_reused_for_segment_building() {
-        let entries = vec![(0, Nbr::new(VertexId::from_int64(1), EdgeId(1), 1))];
+        let entries = vec![(0, Nbr::new(VertexId::from_int64(1), EdgeId(1)), 1u64)];
         let mut free_list = SegmentFreeList::new();
         let original = Csr::from_nbr_entries(&entries, 4);
         free_list.recycle_csr(original);

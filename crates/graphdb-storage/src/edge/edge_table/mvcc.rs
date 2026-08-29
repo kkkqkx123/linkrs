@@ -17,8 +17,37 @@ use std::collections::HashMap;
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
 const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
+/// Per-edge creation and deletion timestamps, managed centrally by MVCCManager.
+///
+/// This replaces the inline `create_ts`/`delete_ts` fields that were previously
+/// stored in each `Nbr` entry, eliminating the three-layer MVCC separation.
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeTimestamps {
+    pub create_ts: Timestamp,
+    pub delete_ts: Timestamp,
+}
+
+impl EdgeTimestamps {
+    pub fn new(create_ts: Timestamp) -> Self {
+        Self {
+            create_ts,
+            delete_ts: Timestamp::MAX,
+        }
+    }
+
+    pub fn is_alive_at(&self, ts: Timestamp) -> bool {
+        self.create_ts <= ts && ts < self.delete_ts
+    }
+}
+
 /// MVCC and snapshot management for EdgeTable
+///
+/// Single authoritative source for edge visibility. All MVCC decisions
+/// (CSR delta, frozen segments, property table) delegate to this manager.
 pub struct MVCCManager {
+    /// Per-edge creation and deletion timestamps. Centralized MVCC state
+    /// that replaces inline timestamps in Nbr and PropertyTable rows.
+    pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
     /// Authoritative tombstone table (hot layer). Every deletion, regardless
     /// of path (hot CSR inline delete, frozen segment, delta freeze, physical
     /// compaction), is recorded here exactly once, keyed by edge id with the
@@ -58,6 +87,7 @@ impl MVCCManager {
     /// Create a new MVCC manager
     pub fn new() -> Self {
         Self {
+            edge_timestamps: HashMap::new(),
             tombstones: HashMap::new(),
             cold_tombstones: Vec::new(),
             cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
@@ -373,6 +403,71 @@ impl MVCCManager {
     #[cfg(test)]
     pub fn active_snapshot_count(&self) -> usize {
         self.active_snapshots.values().sum()
+    }
+
+    // ── Per-edge timestamp management (centralized MVCC) ──
+
+    /// Record edge creation. Called on insert_edge to register the edge's
+    /// creation timestamp in the centralized MVCC store.
+    pub fn record_creation(&mut self, edge_id: EdgeId, create_ts: Timestamp) {
+        self.edge_timestamps
+            .insert(edge_id, EdgeTimestamps::new(create_ts));
+    }
+
+    /// Record edge deletion (logical). Called on delete_edge to set the
+    /// edge's deletion timestamp. Also records the tombstone for frozen
+    /// segment visibility.
+    pub fn record_edge_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
+        if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {
+            ts.delete_ts = ts.delete_ts.min(delete_ts);
+        }
+        self.record_deletion(edge_id, delete_ts);
+    }
+
+    /// Check if an edge is visible at a given timestamp.
+    /// Combines creation/deletion timestamp check with tombstone check.
+    /// This is the single entry point for all MVCC visibility decisions.
+    pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
+        // Check per-edge timestamps
+        if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
+            if !ts_info.is_alive_at(ts) {
+                return false;
+            }
+        }
+        // Also check tombstone layer (for frozen segments and promoted deletions)
+        !self.is_tombstoned(edge_id, ts)
+    }
+
+    /// Get the creation timestamp of an edge, if known.
+    pub fn creation_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.edge_timestamps.get(&edge_id).map(|ts| ts.create_ts)
+    }
+
+    /// Get the deletion timestamp of an edge, if deleted.
+    pub fn deletion_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.edge_timestamps
+            .get(&edge_id)
+            .filter(|ts| ts.delete_ts != Timestamp::MAX)
+            .map(|ts| ts.delete_ts)
+    }
+
+    /// Check if an edge has been deleted (tombstoned or has delete_ts < MAX).
+    pub fn is_edge_deleted(&self, edge_id: EdgeId) -> bool {
+        if let Some(ts) = self.edge_timestamps.get(&edge_id) {
+            return ts.delete_ts != Timestamp::MAX;
+        }
+        // Also check tombstone layers
+        self.tombstones.contains_key(&edge_id)
+            || self.cold_bloom_filter.might_contain(edge_id.0)
+                && self
+                    .cold_tombstones
+                    .binary_search_by_key(&edge_id, |&(id, _)| id)
+                    .is_ok()
+    }
+
+    /// Remove edge timestamps. Called during hard-delete or compaction cleanup.
+    pub fn remove_edge_timestamps(&mut self, edge_id: EdgeId) {
+        self.edge_timestamps.remove(&edge_id);
     }
 }
 

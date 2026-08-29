@@ -15,6 +15,7 @@
 //! Each vertex maintains a mapping from label to (start, size) ranges within the nbr_list.
 //! Labels are stored in a sorted, compact format for O(log K) lookups.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -42,6 +43,7 @@ pub struct LabeledMutableCsr {
     /// Label ranges per vertex: nbr_list indices are divided by label
     label_ranges: Vec<Vec<LabelRange>>,
     degrees: Vec<u32>,
+    create_ts_cache: HashMap<EdgeId, Timestamp>,
     edge_count: AtomicU64,
 }
 
@@ -51,6 +53,7 @@ impl Clone for LabeledMutableCsr {
             nbr_list: self.nbr_list.clone(),
             label_ranges: self.label_ranges.clone(),
             degrees: self.degrees.clone(),
+            create_ts_cache: self.create_ts_cache.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
         }
     }
@@ -76,6 +79,7 @@ impl LabeledMutableCsr {
             nbr_list: Vec::new(),
             label_ranges: vec![Vec::new(); vertex_cap],
             degrees: vec![0u32; vertex_cap],
+            create_ts_cache: HashMap::new(),
             edge_count: AtomicU64::new(0),
         }
     }
@@ -92,6 +96,7 @@ impl LabeledMutableCsr {
         self.nbr_list.clear();
         self.label_ranges.iter_mut().for_each(|v| v.clear());
         self.degrees.iter_mut().for_each(|d| *d = 0);
+        self.create_ts_cache.clear();
         self.edge_count.store(0, Ordering::Relaxed);
     }
 
@@ -132,7 +137,7 @@ impl LabeledMutableCsr {
 
             // Check for duplicate
             for nbr in &self.nbr_list[start..end] {
-                if nbr.neighbor == dst && nbr.is_valid_at(ts) {
+                if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
                     return Err(StorageError::edge_already_exists(format!(
                         "{} -> {:?}",
                         src_vid, dst
@@ -141,12 +146,14 @@ impl LabeledMutableCsr {
             }
 
             // Append to end of label range
-            self.nbr_list.push(Nbr::new(dst, edge_id, ts));
+            self.create_ts_cache.insert(edge_id, ts);
+            self.nbr_list.push(Nbr::new(dst, edge_id));
             ranges[idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
-            self.nbr_list.push(Nbr::new(dst, edge_id, ts));
+            self.create_ts_cache.insert(edge_id, ts);
+            self.nbr_list.push(Nbr::new(dst, edge_id));
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -180,7 +187,6 @@ impl CsrBase for LabeledMutableCsr {
         for nbr in &self.nbr_list {
             data.extend(nbr.neighbor.as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
-            data.extend(nbr.create_ts.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
 
@@ -229,13 +235,11 @@ impl CsrBase for LabeledMutableCsr {
             offset += len;
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
-            let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.nbr_list.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
                 edge_id,
-                create_ts,
                 delete_ts,
             });
         }
@@ -384,7 +388,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             let start = lr.offset as usize;
 
             for nbr in &self.nbr_list[start..end] {
-                if nbr.neighbor == dst && nbr.is_valid_at(ts) {
+                let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                if nbr.neighbor == dst && nbr.is_alive_at(ts, create_ts) {
                     return Some(*nbr);
                 }
             }
@@ -405,7 +410,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             let start = lr.offset as usize;
 
             for nbr in &self.nbr_list[start..end] {
-                if nbr.is_valid_at(ts) {
+                let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                if nbr.is_alive_at(ts, create_ts) {
                     result.push(*nbr);
                 }
             }
@@ -468,7 +474,17 @@ impl MutableCsrTrait for LabeledMutableCsr {
             .map(|v| v.len() * std::mem::size_of::<LabelRange>())
             .sum::<usize>();
         let degrees_size = self.degrees.len() * std::mem::size_of::<u32>();
-        nbr_size + ranges_size + degrees_size + std::mem::size_of::<Self>()
+        let cache_size = self.create_ts_cache.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
+        nbr_size + ranges_size + degrees_size + cache_size + std::mem::size_of::<Self>()
+    }
+
+    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.create_ts_cache.get(&edge_id).copied()
+    }
+
+    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+        self.create_ts_cache.clear();
+        self.create_ts_cache.extend(iter);
     }
 }
 
@@ -539,7 +555,8 @@ impl<'a> Iterator for LabeledMutableCsrIterator<'a> {
                 while self.edge_idx < (range.count as usize) {
                     let nbr = self.csr.nbr_list[start + self.edge_idx];
                     self.edge_idx += 1;
-                    if self.include_deleted || nbr.is_valid_at(self.ts) {
+                    let create_ts = self.csr.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                    if self.include_deleted || nbr.is_alive_at(self.ts, create_ts) {
                         return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                     }
                 }

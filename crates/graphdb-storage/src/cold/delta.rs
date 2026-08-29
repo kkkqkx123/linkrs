@@ -436,7 +436,7 @@ impl ColdSnapshot {
             .collect();
 
         let mut properties = self.properties().clone();
-        let mut out_entries: Vec<(u32, Nbr)> = Vec::new();
+        let mut out_entries: Vec<(u32, Nbr, Timestamp)> = Vec::new();
 
         // Base edges minus removals, with property updates applied.
         let base_cap = self.vertex_capacity();
@@ -447,13 +447,13 @@ impl ColdSnapshot {
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let nbr = Nbr::new(e.neighbor, e.edge_id, e.timestamp);
+                let nbr = Nbr::new(e.neighbor, e.edge_id);
                 if let Some(update) = updates.get(&key) {
                     if let Some(offset) = properties.get_offset_by_edge_id(nbr.edge_id) {
                         properties.update(offset, &update.properties, delta.delta_ts)?;
                     }
                 }
-                out_entries.push((src_u32, nbr));
+                out_entries.push((src_u32, nbr, e.timestamp));
             }
         }
 
@@ -464,15 +464,16 @@ impl ColdSnapshot {
             };
             out_entries.push((
                 edge.src_internal,
-                Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp),
+                Nbr::new(edge.neighbor, edge.edge_id),
+                edge.timestamp,
             ));
         }
 
         // Rebuild both directions: in-CSR rows are the dst endpoints with the
         // encoded src endpoints as neighbors.
-        let mut in_rows: Vec<(u32, Nbr)> = Vec::with_capacity(out_entries.len());
+        let mut in_rows: Vec<(u32, Nbr, Timestamp)> = Vec::with_capacity(out_entries.len());
         let mut max_row = self.vertex_capacity();
-        for (src, nbr) in &out_entries {
+        for (src, nbr, create_ts) in &out_entries {
             max_row = max_row.max(*src as usize + 1);
             let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
             if let Some(dst) = dst_vid.as_int64() {
@@ -481,7 +482,8 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::new(dst_key, nbr.edge_id, nbr.create_ts),
+                    Nbr::new(dst_key, nbr.edge_id),
+                    *create_ts,
                 ));
             }
         }

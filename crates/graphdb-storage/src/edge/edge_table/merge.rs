@@ -414,7 +414,7 @@ fn merge_adaptive_impl(
 
     to_merge.sort();
 
-    let mut merged_entries = Vec::new();
+    let mut merged_entries: Vec<(u32, Nbr, Timestamp)> = Vec::new();
     let mut min_create_ts = Timestamp::MAX;
     let mut max_create_ts = 0u64;
     let mut merged_deletion_info = DeletionInfo::NoDeletes;
@@ -429,8 +429,8 @@ fn merge_adaptive_impl(
         for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
-            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id, immutable_nbr.timestamp);
-            merged_entries.push((src_u32, nbr));
+            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+            merged_entries.push((src_u32, nbr, immutable_nbr.timestamp));
         }
 
         to_remove.push(*idx);
@@ -439,7 +439,7 @@ fn merge_adaptive_impl(
     if !merged_entries.is_empty() {
         let vertex_capacity = merged_entries
             .iter()
-            .map(|(src, _)| *src as usize + 1)
+            .map(|(src, _, _)| *src as usize + 1)
             .max()
             .unwrap_or(1024)
             .max(1024);
@@ -482,7 +482,7 @@ pub fn merge_in_place_with_free_space(
     }
 
     let mut merged = Vec::new();
-    let mut current_entries = Vec::new();
+    let mut current_entries: Vec<(u32, Nbr, Timestamp)> = Vec::new();
     let mut total_edges = 0u64;
     let mut current_create_ts_min = segments[0].create_ts_min;
     let mut current_create_ts_max = segments[0].create_ts_max;
@@ -512,7 +512,7 @@ pub fn merge_in_place_with_free_space(
             if !current_entries.is_empty() {
                 let vertex_capacity = current_entries
                     .iter()
-                    .map(|(src, _)| *src as usize + 1)
+                    .map(|(src, _, _)| *src as usize + 1)
                     .max()
                     .unwrap_or(1024)
                     .max(1024);
@@ -540,7 +540,7 @@ pub fn merge_in_place_with_free_space(
     if !current_entries.is_empty() {
         let vertex_capacity = current_entries
             .iter()
-            .map(|(src, _)| *src as usize + 1)
+            .map(|(src, _, _)| *src as usize + 1)
             .max()
             .unwrap_or(1024)
             .max(1024);
@@ -657,12 +657,12 @@ pub fn merge_in_place_physical_with_free_space(
     }
 }
 
-fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr)>) {
+fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr, Timestamp)>) {
     for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
         let src_u32 = src.as_int64().unwrap_or(0) as u32;
         let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-        let nbr = Nbr::new(immutable_nbr.neighbor, edge_id, immutable_nbr.timestamp);
-        entries.push((src_u32, nbr));
+        let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+        entries.push((src_u32, nbr, immutable_nbr.timestamp));
     }
 }
 

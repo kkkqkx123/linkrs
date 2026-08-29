@@ -435,7 +435,7 @@ impl TimeTravelEdgeStore {
                 if edge.neighbor == dst && edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        return Some(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
+                        return Some(Nbr::new(edge.neighbor, edge_id));
                     }
                 }
             }
@@ -499,7 +499,7 @@ impl TimeTravelEdgeStore {
                 if edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        edges.push(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
+                        edges.push(Nbr::new(edge.neighbor, edge_id));
                     }
                 }
             }
@@ -660,6 +660,11 @@ impl TimeTravelEdgeStore {
 
         let edge_id = self.next_edge_id.fetch_add();
 
+        // Record edge creation in the centralized MVCC store.
+        // This is the authoritative source for edge visibility; the inline
+        // timestamps in Nbr are a local cache for MutableCsr operations.
+        self.mvcc.record_creation(edge_id, ts);
+
         if self.has_edge(src, dst, rank, ts) {
             self.properties.delete_by_edge_id(edge_id);
             return Err(StorageError::edge_already_exists(format!(
@@ -753,6 +758,9 @@ impl TimeTravelEdgeStore {
                 return Ok(false);
             }
 
+            // Record deletion in the centralized MVCC store.
+            self.mvcc.record_edge_deletion(edge_id, ts);
+
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
             let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
@@ -824,6 +832,8 @@ impl TimeTravelEdgeStore {
                 self.out_csr.revert_delete_by_offset(src, oe_offset, ts);
                 return Ok(false);
             }
+            // Record deletion in the centralized MVCC store.
+            self.mvcc.record_edge_deletion(nbr.edge_id, ts);
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
             let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
@@ -854,6 +864,12 @@ impl TimeTravelEdgeStore {
             // regains its original properties after the undo.
             let dst_key = Self::edge_endpoint_key(dst, rank);
             if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
+                // Restore edge visibility in the centralized MVCC store
+                // and remove the tombstone so the edge is visible again.
+                if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&nbr.edge_id) {
+                    ts_info.delete_ts = Timestamp::MAX;
+                }
+                self.mvcc.remove_deletion(nbr.edge_id);
                 self.properties.revert_deletion_by_edge_id(nbr.edge_id);
             }
             return Ok(true);
@@ -873,6 +889,10 @@ impl TimeTravelEdgeStore {
             _ => return Ok(false),
         }
         self.mvcc.remove_deletion(nbr.edge_id);
+        // Restore edge visibility in the centralized MVCC store.
+        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&nbr.edge_id) {
+            ts_info.delete_ts = Timestamp::MAX;
+        }
         // The cached current snapshot still excludes this edge; rebuild lazily.
         self.snapshot_dirty = true;
         self.properties.revert_deletion_by_edge_id(nbr.edge_id);
@@ -902,7 +922,7 @@ impl TimeTravelEdgeStore {
             for (position, edge) in positioned_edges {
                 if edge.neighbor == dst {
                     let edge_id = segment.recover_edge_id(&edge, position);
-                    return Some(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
+                    return Some(Nbr::new(edge.neighbor, edge_id));
                 }
             }
         }
@@ -1388,6 +1408,11 @@ impl TimeTravelEdgeStore {
             .map(|segment| segment.csr.read().used_memory_size())
             .sum::<usize>();
         total += self.mvcc.total_tombstone_count() * std::mem::size_of::<(EdgeId, Timestamp)>();
+        total += self
+            .mvcc
+            .edge_timestamps
+            .len()
+            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<super::mvcc::EdgeTimestamps>());
         total += self.properties.used_memory_size();
 
         // Account for property_index_cache
@@ -1543,7 +1568,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp));
+                    result.push(Nbr::new(edge.neighbor, edge.edge_id));
                 }
             }
         }
@@ -1577,7 +1602,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp));
+                    result.push(Nbr::new(edge.neighbor, edge.edge_id));
                 }
             }
         }
@@ -1849,7 +1874,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     {
                         records.push(table.edge_record_from_nbr(
                             src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp),
+                            Nbr::new(edge.neighbor, edge.edge_id),
                             ts,
                         ));
 

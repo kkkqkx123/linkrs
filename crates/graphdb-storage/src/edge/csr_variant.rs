@@ -405,6 +405,26 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Labeled(csr) => csr.used_memory_size(),
         }
     }
+
+    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        match self {
+            CsrVariant::None { .. } => None,
+            CsrVariant::Multiple(csr) => csr.create_ts_of(edge_id),
+            CsrVariant::Single(csr) => csr.create_ts_of(edge_id),
+            CsrVariant::MultiSingle(csr) => csr.create_ts_of(edge_id),
+            CsrVariant::Labeled(csr) => csr.create_ts_of(edge_id),
+        }
+    }
+
+    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+        match self {
+            CsrVariant::None { .. } => {}
+            CsrVariant::Multiple(csr) => csr.rebuild_create_ts_cache(iter),
+            CsrVariant::Single(csr) => csr.rebuild_create_ts_cache(iter),
+            CsrVariant::MultiSingle(csr) => csr.rebuild_create_ts_cache(iter),
+            CsrVariant::Labeled(csr) => csr.rebuild_create_ts_cache(iter),
+        }
+    }
 }
 
 impl CsrVariant {

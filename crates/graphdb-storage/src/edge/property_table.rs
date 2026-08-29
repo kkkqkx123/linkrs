@@ -521,7 +521,7 @@ impl PropertyTable {
     pub(crate) fn is_row_visible(
         &self,
         row_idx: usize,
-        offset: u32,
+        _offset: u32,
         query_ts: Option<Timestamp>,
     ) -> bool {
         let create_ts = match self.row_create_ts.get(row_idx) {
@@ -535,15 +535,14 @@ impl PropertyTable {
         if ts < create_ts {
             return false;
         }
-        // Check tombstone (row-level deletion)
+        // Check row-level soft-delete. This tracks the property row's own
+        // lifecycle (used for free_list slot recycling). Edge-level MVCC
+        // visibility is checked separately by the caller via MVCCManager.
         if let Some(Some(delete_ts)) = self.row_delete_ts.get(row_idx) {
             if ts >= *delete_ts {
                 return false;
             }
         }
-        // Also check manager for cases where row_delete_ts not yet synced
-        // (production manager check mirrors row_delete_ts)
-        let _ = offset;
         true
     }
 

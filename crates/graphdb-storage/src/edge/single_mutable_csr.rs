@@ -39,13 +39,14 @@
 //!    consider a new MultiSingleMutableCsr variant (under design).
 //! 3. Ensure timestamp ordering at the upper layer (WAL, transaction log).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::persistence::read_u64_le;
 use graphdb_core::{StorageError, StorageResult};
 
 use super::{
-    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID, INVALID_TIMESTAMP,
+    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
 };
 
 fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
@@ -79,6 +80,7 @@ const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
+    create_ts_cache: HashMap<EdgeId, Timestamp>,
     edge_count: AtomicU64,
 }
 
@@ -86,6 +88,7 @@ impl Clone for SingleMutableCsr {
     fn clone(&self) -> Self {
         Self {
             nbr_list: self.nbr_list.clone(),
+            create_ts_cache: self.create_ts_cache.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
         }
     }
@@ -108,10 +111,9 @@ impl SingleMutableCsr {
     pub fn with_capacity(vertex_capacity: usize) -> Self {
         let vertex_cap = vertex_capacity.max(1);
         let nbr_list = vec![
-            Nbr::with_delete_ts(
+            Nbr::with_timestamps(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                INVALID_TIMESTAMP,
                 0,
             );
             vertex_cap
@@ -119,6 +121,7 @@ impl SingleMutableCsr {
 
         Self {
             nbr_list,
+            create_ts_cache: HashMap::new(),
             edge_count: AtomicU64::new(0),
         }
     }
@@ -138,10 +141,9 @@ impl SingleMutableCsr {
 
         let additional = new_vertex_capacity - self.vertex_capacity();
         self.nbr_list.extend(std::iter::repeat_n(
-            Nbr::with_delete_ts(
+            Nbr::with_timestamps(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                INVALID_TIMESTAMP,
                 0,
             ),
             additional,
@@ -172,18 +174,22 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Reject if there's an active edge with newer or equal timestamp
-        if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
-            return Err(StorageError::conflict(format!(
-                "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
-                src, ts, nbr.create_ts
-            )));
+        if nbr.delete_ts == Timestamp::MAX {
+            let existing_create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+            if ts <= existing_create_ts {
+                return Err(StorageError::conflict(format!(
+                    "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
+                    src, ts, existing_create_ts
+                )));
+            }
         }
 
         let was_empty = nbr.delete_ts < Timestamp::MAX;
         nbr.neighbor = dst;
         nbr.edge_id = edge_id;
-        nbr.create_ts = ts;
         nbr.delete_ts = Timestamp::MAX;
+
+        self.create_ts_cache.insert(edge_id, ts);
 
         if was_empty {
             self.edge_count.fetch_add(1, Ordering::Relaxed);
@@ -212,7 +218,8 @@ impl SingleMutableCsr {
             return Ok(false);
         }
 
-        if nbr.create_ts > ts {
+        let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+        if create_ts > ts {
             return Ok(false);
         }
 
@@ -234,7 +241,12 @@ impl SingleMutableCsr {
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.neighbor != dst || nbr.delete_ts < Timestamp::MAX || nbr.create_ts > ts {
+        if nbr.neighbor != dst || nbr.delete_ts < Timestamp::MAX {
+            return false;
+        }
+
+        let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+        if create_ts > ts {
             return false;
         }
 
@@ -252,7 +264,8 @@ impl SingleMutableCsr {
 
         let nbr = &self.nbr_list[src_idx];
 
-        if !nbr.is_valid_at(ts) {
+        let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+        if !nbr.is_alive_at(ts, create_ts) {
             return None;
         }
 
@@ -307,7 +320,8 @@ impl SingleMutableCsr {
 
         let nbr = &self.nbr_list[src_idx];
 
-        if !nbr.is_valid_at(ts) {
+        let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+        if !nbr.is_alive_at(ts, create_ts) {
             return Vec::new();
         }
 
@@ -323,7 +337,8 @@ impl SingleMutableCsr {
 
         let nbr = &self.nbr_list[src_idx];
 
-        if nbr.is_valid_at(ts) {
+        let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+        if nbr.is_alive_at(ts, create_ts) {
             Some(*nbr)
         } else {
             None
@@ -332,13 +347,13 @@ impl SingleMutableCsr {
 
     pub fn clear(&mut self) {
         for nbr in &mut self.nbr_list {
-            *nbr = Nbr::with_delete_ts(
+            *nbr = Nbr::with_timestamps(
                 VertexId::from_int64(0),
                 INVALID_EDGE_ID,
-                INVALID_TIMESTAMP,
                 0,
             );
         }
+        self.create_ts_cache.clear();
         self.edge_count.store(0, Ordering::Relaxed);
     }
 
@@ -356,7 +371,6 @@ impl SingleMutableCsr {
         for nbr in &self.nbr_list {
             write_vertex_id(&mut result, nbr.neighbor);
             result.extend_from_slice(&nbr.edge_id.to_le_bytes());
-            result.extend_from_slice(&nbr.create_ts.to_le_bytes());
             result.extend_from_slice(&nbr.delete_ts.to_le_bytes());
         }
 
@@ -364,7 +378,9 @@ impl SingleMutableCsr {
     }
 
     pub fn used_memory_size(&self) -> usize {
-        self.nbr_list.len() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
+        self.nbr_list.len() * std::mem::size_of::<Nbr>()
+            + self.create_ts_cache.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>())
+            + std::mem::size_of::<Self>()
     }
 
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
@@ -382,18 +398,20 @@ impl SingleMutableCsr {
         while offset < data.len() {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
-            let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
-            nbr_list.push(Nbr::with_delete_ts(
+            let edge_id = EdgeId(raw_edge_id);
+            // create_ts is no longer stored inline; initialize cache with 0
+            // (will be populated externally if needed)
+            nbr_list.push(Nbr::with_timestamps(
                 neighbor,
-                EdgeId(raw_edge_id),
-                create_ts,
+                edge_id,
                 delete_ts,
             ));
         }
 
         self.nbr_list = nbr_list;
+        self.create_ts_cache.clear();
         self.edge_count.store(edge_count, Ordering::Relaxed);
 
         Ok(())
@@ -527,6 +545,15 @@ impl MutableCsrTrait for SingleMutableCsr {
 
     fn used_memory_size(&self) -> usize {
         SingleMutableCsr::used_memory_size(self)
+    }
+
+    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.create_ts_cache.get(&edge_id).copied()
+    }
+
+    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+        self.create_ts_cache.clear();
+        self.create_ts_cache.extend(iter);
     }
 }
 

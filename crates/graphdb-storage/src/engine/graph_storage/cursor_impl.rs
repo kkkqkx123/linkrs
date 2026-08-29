@@ -949,7 +949,6 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
         let nbr = Nbr::new(
             edge.neighbor,
             edge.edge_id,
-            edge.timestamp,
         );
 
         // Same decode-once / pre-filter discipline as the mutable scan.

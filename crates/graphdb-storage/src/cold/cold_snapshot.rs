@@ -668,7 +668,7 @@ impl ColdSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id))
             .collect()
     }
 
@@ -676,14 +676,14 @@ impl ColdSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id))
             .collect()
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.timestamp))
+            .map(|e| Nbr::new(e.neighbor, e.edge_id))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -694,7 +694,7 @@ impl ColdSnapshot {
         self.out_csr.edges_of(src).iter().find_map(|e| {
             let (decoded, _) = TimeTravelEdgeStore::decode_edge_endpoint(e.neighbor);
             if decoded.as_int64() == Some(dst as i64) {
-                Some(Nbr::new(e.neighbor, e.edge_id, e.timestamp))
+                Some(Nbr::new(e.neighbor, e.edge_id))
             } else {
                 None
             }
@@ -718,7 +718,7 @@ impl ColdSnapshot {
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
-                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp),
+                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id),
                     rank,
                     properties: None,
                 });
@@ -1086,7 +1086,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
     }
 
     // Expand dictionary references back into ImmutableNbr values.
-    let mut entries: Vec<(u32, Nbr)> = Vec::with_capacity(edge_count);
+    let mut entries: Vec<(u32, Nbr, Timestamp)> = Vec::with_capacity(edge_count);
     for v in 0..capacity {
         let start = offsets[v] as usize;
         let end = offsets[v + 1] as usize;
@@ -1100,7 +1100,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
             let neighbor = *dict
                 .get(dict_id as usize)
                 .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
-            entries.push((v as u32, Nbr::new(neighbor, edge_id, ts)));
+            entries.push((v as u32, Nbr::new(neighbor, edge_id), ts));
         }
     }
     Ok(Csr::from_nbr_entries(&entries, capacity))

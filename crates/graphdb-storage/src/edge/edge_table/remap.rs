@@ -86,7 +86,8 @@ fn remap_variant(
         overflow_chunk_edges,
     )?;
     for (src, nbr) in &new_entries {
-        csr.insert_edge(*src, nbr.neighbor, nbr.edge_id, nbr.create_ts)?;
+        let create_ts = old.create_ts_of(nbr.edge_id).unwrap_or(0);
+        csr.insert_edge(*src, nbr.neighbor, nbr.edge_id, create_ts)?;
         if nbr.delete_ts != Timestamp::MAX {
             let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
         }
@@ -102,13 +103,13 @@ fn remap_segment_csr(
     row_mapping: Option<&HashMap<u32, u32>>,
     neighbor_mapping: Option<&HashMap<u32, u32>>,
 ) -> StorageResult<()> {
-    let entries: Vec<(u32, Nbr)> = segment
+    let entries: Vec<(u32, Nbr, Timestamp)> = segment
         .csr
         .read()
         .iter()
         .map(|(src, nbr)| {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (src_u32, Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp))
+            (src_u32, Nbr::new(nbr.neighbor, nbr.edge_id), nbr.timestamp)
         })
         .collect();
 
@@ -118,7 +119,7 @@ fn remap_segment_csr(
 
     let mut max_row = 0u32;
     let mut new_entries = Vec::with_capacity(entries.len());
-    for (src, nbr) in entries {
+    for (src, nbr, create_ts) in entries {
         let new_src = remapped_row(src, row_mapping);
         let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
         max_row = max_row.max(new_src);
@@ -128,6 +129,7 @@ fn remap_segment_csr(
                 neighbor: new_neighbor,
                 ..nbr
             },
+            create_ts,
         ));
     }
 
@@ -238,7 +240,11 @@ pub(crate) fn remap_immutable_csr(
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let new_src = remapped_row(src_u32, row_mapping);
             let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
-            (new_src, Nbr::new(new_neighbor, nbr.edge_id, nbr.timestamp))
+            (
+                new_src,
+                Nbr::new(new_neighbor, nbr.edge_id),
+                nbr.timestamp,
+            )
         })
         .collect();
 
@@ -246,7 +252,7 @@ pub(crate) fn remap_immutable_csr(
         return Ok(Csr::new());
     }
 
-    let max_row = entries.iter().map(|(src, _)| *src).max().unwrap_or(0);
+    let max_row = entries.iter().map(|(src, _, _)| *src).max().unwrap_or(0);
     let capacity = (max_row as usize).saturating_add(1);
     Ok(Csr::from_nbr_entries(&entries, capacity))
 }

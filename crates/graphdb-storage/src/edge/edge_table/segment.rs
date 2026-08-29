@@ -522,7 +522,7 @@ impl CsrSegment {
     pub fn rebuild_regions_from_entries(
         &mut self,
         region_vertex_count: usize,
-        entries: &[(u32, super::super::Nbr)],
+        entries: &[(u32, super::super::Nbr, Timestamp)],
     ) {
         if region_vertex_count == 0 {
             self.regions.clear();
@@ -555,7 +555,7 @@ impl CsrSegment {
         let mut deleted_counts = vec![0u32; region_cnt];
         let mut del_mins = vec![Timestamp::MAX; region_cnt];
         let mut del_maxs = vec![0u64; region_cnt];
-        for (src, nbr) in entries {
+        for (src, nbr, _) in entries {
             let rid = (*src as usize / region_vertex_count).min(region_cnt - 1);
             edge_counts[rid] += 1;
             if nbr.delete_ts != Timestamp::MAX {

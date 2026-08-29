@@ -704,7 +704,7 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
     let lsn = lsn.ok_or_else(|| {
         StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
     })?;
-    if format_version != Some(CHECKPOINT_FORMAT_VERSION as u64) {
+    if format_version != Some(CHECKPOINT_FORMAT_VERSION) {
         return Err(StorageError::deserialize_error(format!(
             "Unsupported checkpoint format version: {:?}",
             format_version
@@ -778,7 +778,7 @@ mod tests {
 
         let metadata_path = checkpoint_path.join("checkpoint.meta");
         let mut file = fs::File::create(metadata_path)?;
-        writeln!(file, "format_version=2")?;
+        writeln!(file, "format_version={}", CHECKPOINT_FORMAT_VERSION)?;
         writeln!(file, "checkpoint_id={}", checkpoint_id)?;
         writeln!(file, "wal_lsn={}", wal_lsn.as_u64())?;
 
