@@ -146,7 +146,8 @@ mod tests {
 
     #[test]
     fn recycled_csr_is_reused_for_segment_building() {
-        let entries = vec![(0, Nbr::new(VertexId::from_int64(1), EdgeId(1)), 1u64)];
+        let (ep_vid, ep_rank) = VertexId::from_int64(1).decode_edge_endpoint();
+        let entries = vec![(0, Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, ep_rank, EdgeId(1)), 1u64)];
         let mut free_list = SegmentFreeList::new();
         let original = Csr::from_nbr_entries(&entries, 4);
         free_list.recycle_csr(original);

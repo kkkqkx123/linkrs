@@ -432,10 +432,10 @@ impl TimeTravelEdgeStore {
                 .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
 
             for (position, edge) in positioned_edges {
-                if edge.neighbor == dst && edge.timestamp <= ts {
+                if edge.to_vertex_id() == dst && edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        return Some(Nbr::new(edge.neighbor, edge_id));
+                        return Some(Nbr::new(edge.endpoint, edge.rank, edge_id));
                     }
                 }
             }
@@ -499,7 +499,7 @@ impl TimeTravelEdgeStore {
                 if edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        edges.push(Nbr::new(edge.neighbor, edge_id));
+                        edges.push(Nbr::new(edge.endpoint, edge.rank, edge_id));
                     }
                 }
             }
@@ -561,7 +561,8 @@ impl TimeTravelEdgeStore {
     }
 
     fn edge_record_from_nbr(&self, src: u32, nbr: Nbr, query_ts: Timestamp) -> EdgeRecord {
-        let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
+        let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+        let rank = nbr.rank;
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
@@ -920,9 +921,9 @@ impl TimeTravelEdgeStore {
                 .try_optimistic_read(|csr| csr.edges_of_with_position(src))
                 .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
             for (position, edge) in positioned_edges {
-                if edge.neighbor == dst {
+                if edge.to_vertex_id() == dst {
                     let edge_id = segment.recover_edge_id(&edge, position);
-                    return Some(Nbr::new(edge.neighbor, edge_id));
+                    return Some(Nbr::new(edge.endpoint, edge.rank, edge_id));
                 }
             }
         }
@@ -963,7 +964,8 @@ impl TimeTravelEdgeStore {
 
         nbrs.into_iter()
             .map(|nbr| {
-                let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
+                let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+                let rank = nbr.rank;
                 let properties = self
                     .properties
                     .get_by_edge_id(nbr.edge_id, Some(ts))
@@ -1012,7 +1014,8 @@ impl TimeTravelEdgeStore {
 
         nbrs.into_iter()
             .map(|nbr| {
-                let (src_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
+                let src_vid = VertexId::from_int64(nbr.endpoint as i64);
+                let rank = nbr.rank;
                 let properties = self
                     .properties
                     .get_by_edge_id(nbr.edge_id, Some(ts))
@@ -1568,7 +1571,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.neighbor, edge.edge_id));
+                    result.push(Nbr::new(edge.endpoint, edge.rank, edge.edge_id));
                 }
             }
         }
@@ -1602,7 +1605,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.neighbor, edge.edge_id));
+                    result.push(Nbr::new(edge.endpoint, edge.rank, edge.edge_id));
                 }
             }
         }
@@ -1874,7 +1877,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     {
                         records.push(table.edge_record_from_nbr(
                             src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::new(edge.neighbor, edge.edge_id),
+                            Nbr::new(edge.endpoint, edge.rank, edge.edge_id),
                             ts,
                         ));
 

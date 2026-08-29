@@ -325,6 +325,36 @@ impl VertexId {
     pub const fn const_default() -> Self {
         Self::new()
     }
+
+    /// Encode an edge endpoint as `(endpoint: u32, rank: i64)` into a 16-byte VertexId.
+    ///
+    /// Format: `[endpoint as i64 big-endian 8 bytes][rank big-endian 8 bytes]`.
+    /// This is the canonical encoding used by the CSR layer to store neighbor keys.
+    pub fn edge_endpoint_key(endpoint: u32, rank: i64) -> Self {
+        let mut data = [0u8; VERTEX_ID_MAX_SIZE];
+        data[..8].copy_from_slice(&(endpoint as i64).to_be_bytes());
+        data[8..16].copy_from_slice(&rank.to_be_bytes());
+        VertexId { data, len: 16 }
+    }
+
+    /// Decode an edge endpoint key back to `(endpoint_vertex_id, rank)`.
+    ///
+    /// Returns `(VertexId, i64)` where the VertexId represents the endpoint
+    /// (typically as an i64-encoded integer vertex ID).
+    pub fn decode_edge_endpoint(&self) -> (Self, i64) {
+        let bytes = self.as_bytes();
+        let mut buf = [0u8; 16];
+        let copy_len = bytes.len().min(16);
+        buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        let mut endpoint_bytes = [0u8; 8];
+        endpoint_bytes.copy_from_slice(&buf[..8]);
+        let mut rank_bytes = [0u8; 8];
+        rank_bytes.copy_from_slice(&buf[8..16]);
+        (
+            VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),
+            i64::from_be_bytes(rank_bytes),
+        )
+    }
 }
 
 impl fmt::Display for VertexId {

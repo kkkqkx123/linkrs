@@ -146,11 +146,11 @@ impl ColdDelta {
         for src in 0..base_cap {
             let src_u32 = src as u32;
             for nbr in base.out_csr().edges_of(src_u32) {
-                let key = (src_u32, nbr.neighbor);
+                let key = (src_u32, nbr.to_vertex_id());
                 match latest_map.get(&key) {
                     None => delta.removed.push(DeltaRemovedEdge {
                         src_internal: src_u32,
-                        neighbor: nbr.neighbor,
+                        neighbor: nbr.to_vertex_id(),
                     }),
                     Some(latest_nbr) => {
                         // Property payloads may change in place at the same
@@ -166,7 +166,7 @@ impl ColdDelta {
                         if base_props != latest_props {
                             delta.property_updates.push(DeltaPropertyUpdate {
                                 src_internal: src_u32,
-                                neighbor: nbr.neighbor,
+                                neighbor: nbr.to_vertex_id(),
                                 properties: latest_props,
                             });
                         }
@@ -180,7 +180,7 @@ impl ColdDelta {
         for src in 0..latest_cap {
             let src_u32 = src as u32;
             for nbr in latest.out_csr().edges_of(src_u32) {
-                let key = (src_u32, nbr.neighbor);
+                let key = (src_u32, nbr.to_vertex_id());
                 if base_map.contains_key(&key) {
                     continue;
                 }
@@ -190,7 +190,7 @@ impl ColdDelta {
                     .unwrap_or_default();
                 delta.added.push(DeltaAddedEdge {
                     src_internal: src_u32,
-                    neighbor: nbr.neighbor,
+                    neighbor: nbr.to_vertex_id(),
                     edge_id: nbr.edge_id,
                     timestamp: nbr.timestamp,
                     properties,
@@ -387,7 +387,7 @@ impl ColdDelta {
         for src in 0..cap {
             let src_u32 = src as u32;
             for nbr in snapshot.out_csr().edges_of(src_u32) {
-                index.insert((src_u32, nbr.neighbor), *nbr);
+                index.insert((src_u32, nbr.to_vertex_id()), *nbr);
             }
         }
         index
@@ -443,11 +443,11 @@ impl ColdSnapshot {
         for src in 0..base_cap {
             let src_u32 = src as u32;
             for e in self.out_csr().edges_of(src_u32) {
-                let key = (src_u32, e.neighbor);
+                let key = (src_u32, e.to_vertex_id());
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let nbr = Nbr::new(e.neighbor, e.edge_id);
+                let nbr = Nbr::new(e.endpoint, e.rank, e.edge_id);
                 if let Some(update) = updates.get(&key) {
                     if let Some(offset) = properties.get_offset_by_edge_id(nbr.edge_id) {
                         properties.update(offset, &update.properties, delta.delta_ts)?;
@@ -464,7 +464,10 @@ impl ColdSnapshot {
             };
             out_entries.push((
                 edge.src_internal,
-                Nbr::new(edge.neighbor, edge.edge_id),
+                {
+                    let (ep_vid, rank) = edge.neighbor.decode_edge_endpoint();
+                    Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, rank, edge.edge_id)
+                },
                 edge.timestamp,
             ));
         }
@@ -475,14 +478,15 @@ impl ColdSnapshot {
         let mut max_row = self.vertex_capacity();
         for (src, nbr, create_ts) in &out_entries {
             max_row = max_row.max(*src as usize + 1);
-            let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+            let (dst_vid, rank) = (nbr.to_vertex_id(), nbr.rank);
             if let Some(dst) = dst_vid.as_int64() {
                 let dst_key = TimeTravelEdgeStore::edge_endpoint_key(*src, rank);
+                let (dst_ep_vid, dst_rank) = dst_key.decode_edge_endpoint();
                 let dst_row = dst as u32;
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::new(dst_key, nbr.edge_id),
+                    Nbr::new(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id),
                     *create_ts,
                 ));
             }
@@ -747,7 +751,7 @@ mod tests {
         assert_eq!(loaded, delta);
         assert_eq!(loaded.added.len(), 1);
         assert_eq!(loaded.added[0].src_internal, 0);
-        let (dst, _) = TimeTravelEdgeStore::decode_edge_endpoint(loaded.added[0].neighbor);
+        let (dst, _) = loaded.added[0].neighbor.decode_edge_endpoint();
         assert_eq!(dst, graphdb_core::types::VertexId::from_int64(2));
 
         // Corrupted payload must fail CRC verification.

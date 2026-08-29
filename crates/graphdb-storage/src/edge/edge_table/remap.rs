@@ -67,12 +67,14 @@ fn remap_variant(
     let mut new_entries = Vec::with_capacity(entries.len());
     for (src, nbr) in entries {
         let new_src = remapped_row(src, row_mapping);
-        let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
+        let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
+        let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
         max_row = max_row.max(new_src);
         new_entries.push((
             new_src,
             Nbr {
-                neighbor: new_neighbor,
+                endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
+                rank: ep_rank,
                 ..nbr
             },
         ));
@@ -87,7 +89,7 @@ fn remap_variant(
     )?;
     for (src, nbr) in &new_entries {
         let create_ts = old.create_ts_of(nbr.edge_id).unwrap_or(0);
-        csr.insert_edge(*src, nbr.neighbor, nbr.edge_id, create_ts)?;
+        csr.insert_edge(*src, nbr.to_vertex_id(), nbr.edge_id, create_ts)?;
         if nbr.delete_ts != Timestamp::MAX {
             let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
         }
@@ -109,7 +111,7 @@ fn remap_segment_csr(
         .iter()
         .map(|(src, nbr)| {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (src_u32, Nbr::new(nbr.neighbor, nbr.edge_id), nbr.timestamp)
+            (src_u32, Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id), nbr.timestamp)
         })
         .collect();
 
@@ -121,12 +123,14 @@ fn remap_segment_csr(
     let mut new_entries = Vec::with_capacity(entries.len());
     for (src, nbr, create_ts) in entries {
         let new_src = remapped_row(src, row_mapping);
-        let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
+        let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
+        let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
         max_row = max_row.max(new_src);
         new_entries.push((
             new_src,
             Nbr {
-                neighbor: new_neighbor,
+                endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
+                rank: ep_rank,
                 ..nbr
             },
             create_ts,
@@ -239,10 +243,11 @@ pub(crate) fn remap_immutable_csr(
         .map(|(src, nbr)| {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let new_src = remapped_row(src_u32, row_mapping);
-            let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
+            let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
+            let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
             (
                 new_src,
-                Nbr::new(new_neighbor, nbr.edge_id),
+                Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, ep_rank, nbr.edge_id),
                 nbr.timestamp,
             )
         })

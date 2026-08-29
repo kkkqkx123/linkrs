@@ -55,7 +55,7 @@ impl ExportedEdgeSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
+            .map(|edge| Nbr::new(edge.endpoint, edge.rank, edge.edge_id))
             .collect()
     }
 
@@ -66,7 +66,7 @@ impl ExportedEdgeSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
+            .map(|edge| Nbr::new(edge.endpoint, edge.rank, edge.edge_id))
             .collect()
     }
 
@@ -74,7 +74,7 @@ impl ExportedEdgeSnapshot {
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id))
+            .map(|edge| Nbr::new(edge.endpoint, edge.rank, edge.edge_id))
     }
 
     /// Check if an edge exists in this snapshot
@@ -150,7 +150,7 @@ impl SnapshotBuilder {
             }
 
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+            let nbr = Nbr::new(immutable_nbr.endpoint, immutable_nbr.rank, edge_id);
             self.edge_map
                 .insert((src_u32, edge_id), (src_u32, nbr, immutable_nbr.timestamp));
         }

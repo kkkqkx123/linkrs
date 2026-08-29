@@ -136,8 +136,10 @@ impl LabeledMutableCsr {
             let start = lr.offset as usize;
 
             // Check for duplicate
+            let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+            let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
             for nbr in &self.nbr_list[start..end] {
-                if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX {
                     return Err(StorageError::edge_already_exists(format!(
                         "{} -> {:?}",
                         src_vid, dst
@@ -147,13 +149,15 @@ impl LabeledMutableCsr {
 
             // Append to end of label range
             self.create_ts_cache.insert(edge_id, ts);
-            self.nbr_list.push(Nbr::new(dst, edge_id));
+            let (endpoint_vid, rank) = dst.decode_edge_endpoint();
+            self.nbr_list.push(Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id));
             ranges[idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
             self.create_ts_cache.insert(edge_id, ts);
-            self.nbr_list.push(Nbr::new(dst, edge_id));
+            let (endpoint_vid, rank) = dst.decode_edge_endpoint();
+            self.nbr_list.push(Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id));
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -185,7 +189,7 @@ impl CsrBase for LabeledMutableCsr {
         // Write nbr_list
         data.extend((self.nbr_list.len() as u64).to_le_bytes());
         for nbr in &self.nbr_list {
-            data.extend(nbr.neighbor.as_bytes());
+            data.extend(nbr.to_vertex_id().as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
@@ -237,8 +241,11 @@ impl CsrBase for LabeledMutableCsr {
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
             let delete_ts = read_u64_le(data, &mut offset)?;
 
+            let decoded = VertexId::from_bytes(neighbor_bytes);
+            let (endpoint_vid, rank) = decoded.decode_edge_endpoint();
             self.nbr_list.push(Nbr {
-                neighbor: VertexId::from_bytes(neighbor_bytes),
+                endpoint: endpoint_vid.as_int64().unwrap_or(0) as u32,
+                rank,
                 edge_id,
                 delete_ts,
             });
@@ -316,13 +323,15 @@ impl MutableCsrTrait for LabeledMutableCsr {
             return false;
         }
 
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let ranges = &self.label_ranges[src_vid as usize];
         for lr in ranges {
             let end = (lr.offset + lr.count) as usize;
             let start = lr.offset as usize;
 
             for nbr in &mut self.nbr_list[start..end] {
-                if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX {
                     nbr.delete_ts = ts;
                     return true;
                 }
@@ -382,6 +391,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             return None;
         }
 
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let ranges = &self.label_ranges[src_vid as usize];
         for lr in ranges {
             let end = (lr.offset + lr.count) as usize;
@@ -389,7 +400,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
 
             for nbr in &self.nbr_list[start..end] {
                 let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                if nbr.neighbor == dst && nbr.is_alive_at(ts, create_ts) {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.is_alive_at(ts, create_ts) {
                     return Some(*nbr);
                 }
             }

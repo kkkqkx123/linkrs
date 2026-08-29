@@ -523,7 +523,8 @@ impl core::TimeTravelEdgeStore {
 
         let mut evicted = 0u64;
         for (src, nbr, _) in edges {
-            let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
+            let dst_vid = nbr.to_vertex_id();
+            let rank = nbr.rank;
             let dst = dst_vid.as_int64().unwrap_or(0) as u32;
             if self.delete_edge(src, dst, rank, ts)? {
                 evicted += 1;

@@ -11,30 +11,29 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::{CsrBase, EdgeId, ImmutableNbr, Nbr, Timestamp, VertexId};
 
-fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
-    let bytes = id.as_bytes();
-    out.push(bytes.len() as u8);
-    out.extend_from_slice(bytes);
+fn write_endpoint_rank(out: &mut Vec<u8>, endpoint: u32, rank: i64) {
+    out.extend_from_slice(&endpoint.to_le_bytes());
+    out.extend_from_slice(&rank.to_le_bytes());
 }
 
-fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
-    if *offset >= data.len() {
+fn read_endpoint_rank(data: &[u8], offset: &mut usize) -> StorageResult<(u32, i64)> {
+    if data.len().saturating_sub(*offset) < 12 {
         return Err(StorageError::deserialize_error(
-            "CSR data too short for vertex id length",
+            "CSR data too short for endpoint/rank pair",
         ));
     }
 
-    let len = data[*offset] as usize;
-    *offset += 1;
-    if data.len().saturating_sub(*offset) < len {
-        return Err(StorageError::deserialize_error(
-            "CSR data too short for vertex id bytes",
-        ));
-    }
+    let mut buf4 = [0u8; 4];
+    buf4.copy_from_slice(&data[*offset..*offset + 4]);
+    let endpoint = u32::from_le_bytes(buf4);
+    *offset += 4;
 
-    let id = VertexId::from_bytes(data[*offset..*offset + len].to_vec());
-    *offset += len;
-    Ok(id)
+    let mut buf8 = [0u8; 8];
+    buf8.copy_from_slice(&data[*offset..*offset + 8]);
+    let rank = i64::from_le_bytes(buf8);
+    *offset += 8;
+
+    Ok((endpoint, rank))
 }
 
 /// Immutable CSR with contiguous storage
@@ -131,8 +130,12 @@ impl Csr {
 
     /// Get a specific edge
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<&ImmutableNbr> {
+        let (dst_vertex, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_vertex.as_int64().unwrap_or(0) as u32;
         let edges = self.edges_of(src);
-        edges.iter().find(|e| e.neighbor == dst)
+        edges
+            .iter()
+            .find(|e| e.endpoint == dst_ep && e.rank == dst_rank)
     }
 
     /// Get edges with their CSR positions for position-based EdgeId mapping.
@@ -211,7 +214,7 @@ impl Csr {
         self.edges.clear();
         self.edges.resize(
             cumsum as usize,
-            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)),
+            ImmutableNbr::new(0, 0, EdgeId(0)),
         );
         let mut current_pos = self.offsets[..vc].to_vec();
         for (src, nbr, create_ts) in entries.iter() {
@@ -222,7 +225,7 @@ impl Csr {
             let pos = current_pos[idx] as usize;
             if pos < self.edges.len() {
                 self.edges[pos] =
-                    ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, *create_ts);
+                    ImmutableNbr::with_timestamp(nbr.endpoint, nbr.rank, nbr.edge_id, *create_ts);
                 current_pos[idx] += 1;
             }
         }
@@ -253,7 +256,7 @@ impl Csr {
 
         let mut edges = Vec::with_capacity(total);
         if total > 0 {
-            edges.resize(total, ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)));
+            edges.resize(total, ImmutableNbr::new(0, 0, EdgeId(0)));
         }
 
         if total > 0 {
@@ -316,7 +319,7 @@ impl Csr {
         self.edges.clear();
         self.edges.resize(
             src_list.len(),
-            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)),
+            ImmutableNbr::new(0, 0, EdgeId(0)),
         );
         let mut current_pos = self.offsets.clone();
         for i in 0..src_list.len() {
@@ -324,8 +327,11 @@ impl Csr {
             if src < current_pos.len() - 1 {
                 let pos = current_pos[src] as usize;
                 if pos < self.edges.len() {
+                    let (endpoint_vertex, rank) = dst_list[i].decode_edge_endpoint();
+                    let endpoint = endpoint_vertex.as_int64().unwrap_or(0) as u32;
                     self.edges[pos] = ImmutableNbr::with_timestamp(
-                        dst_list[i],
+                        endpoint,
+                        rank,
                         edge_ids[i],
                         timestamps[i],
                     );
@@ -356,7 +362,7 @@ impl Csr {
 
         result.extend_from_slice(&(self.edges.len() as u64).to_le_bytes());
         for edge in &self.edges {
-            write_vertex_id(&mut result, edge.neighbor);
+            write_endpoint_rank(&mut result, edge.endpoint, edge.rank);
             result.extend_from_slice(&edge.edge_id.to_le_bytes());
             result.extend_from_slice(&edge.timestamp.to_le_bytes());
         }
@@ -386,12 +392,13 @@ impl Csr {
 
         let mut edges = Vec::with_capacity(edges_len);
         for _ in 0..edges_len {
-            let neighbor = read_vertex_id(data, &mut offset)?;
+            let (endpoint, rank) = read_endpoint_rank(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let timestamp = read_u64_le(data, &mut offset)?;
 
             edges.push(ImmutableNbr::with_timestamp(
-                neighbor,
+                endpoint,
+                rank,
                 EdgeId(raw_edge_id),
                 timestamp,
             ));

@@ -177,7 +177,7 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
                     }
                     let pos_out = current_pos[vid] as usize;
                     edges[pos_out] =
-                        ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, nbr.timestamp);
+                        ImmutableNbr::with_timestamp(nbr.endpoint, nbr.rank, nbr.edge_id, nbr.timestamp);
                     current_pos[vid] += 1;
                     if collect_edge_ids {
                         merged_edge_ids.push(edge_id);
@@ -429,7 +429,7 @@ fn merge_adaptive_impl(
         for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
-            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+            let nbr = Nbr::new(immutable_nbr.endpoint, immutable_nbr.rank, edge_id);
             merged_entries.push((src_u32, nbr, immutable_nbr.timestamp));
         }
 
@@ -661,7 +661,7 @@ fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr, Tim
     for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
         let src_u32 = src.as_int64().unwrap_or(0) as u32;
         let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-        let nbr = Nbr::new(immutable_nbr.neighbor, edge_id);
+        let nbr = Nbr::new(immutable_nbr.endpoint, immutable_nbr.rank, edge_id);
         entries.push((src_u32, nbr, immutable_nbr.timestamp));
     }
 }

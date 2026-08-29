@@ -65,8 +65,8 @@ impl ColdPropertyIndex {
         for src in 0..cap {
             let src_u32 = src as u32;
             for nbr in exported.out_csr.edges_of(src_u32) {
-                let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
+                let dst_internal = nbr.endpoint;
+                let rank = nbr.rank;
                 let Some(props) = exported.properties.read_properties_by_edge_id(nbr.edge_id) else {
                     continue;
                 };
@@ -668,7 +668,7 @@ impl ColdSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
             .collect()
     }
 
@@ -676,14 +676,14 @@ impl ColdSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|e| Nbr::new(e.neighbor, e.edge_id))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
             .collect()
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|e| Nbr::new(e.neighbor, e.edge_id))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -692,9 +692,9 @@ impl ColdSnapshot {
     /// lookup decodes each neighbor before comparing with `dst`.
     pub fn get_edge_to_dst(&self, src: u32, dst: u32) -> Option<Nbr> {
         self.out_csr.edges_of(src).iter().find_map(|e| {
-            let (decoded, _) = TimeTravelEdgeStore::decode_edge_endpoint(e.neighbor);
+            let decoded = VertexId::from_int64(e.endpoint as i64);
             if decoded.as_int64() == Some(dst as i64) {
-                Some(Nbr::new(e.neighbor, e.edge_id))
+                Some(Nbr::new(e.endpoint, e.rank, e.edge_id))
             } else {
                 None
             }
@@ -714,11 +714,12 @@ impl ColdSnapshot {
             }
             let src_u32 = src as u32;
             for nbr in self.out_csr.edges_of(src_u32) {
-                let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+                let rank = nbr.rank;
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
-                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id),
+                    nbr: Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id),
                     rank,
                     properties: None,
                 });
@@ -751,7 +752,7 @@ impl ColdSnapshot {
         src_vid: VertexId,
         dst_vid: VertexId,
     ) -> EdgeRecord {
-        let (_, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+        let rank = nbr.rank;
         let properties = self
             .properties
             .read_properties_by_edge_id(nbr.edge_id)
@@ -984,12 +985,13 @@ fn encode_csr_dict(csr: &Csr) -> Vec<u8> {
     let mut edges: Vec<(u32, EdgeId, Timestamp)> = Vec::with_capacity(edge_count as usize);
     for v in 0..capacity {
         for nbr in csr.edges_of(v as u32) {
-            let id = match dict_ids.get(&nbr.neighbor) {
+            let nbr_vid = nbr.to_vertex_id();
+            let id = match dict_ids.get(&nbr_vid) {
                 Some(&id) => id,
                 None => {
                     let id = dict.len() as u32;
-                    dict.push(nbr.neighbor);
-                    dict_ids.insert(nbr.neighbor, id);
+                    dict.push(nbr_vid);
+                    dict_ids.insert(nbr_vid, id);
                     id
                 }
             };
@@ -1100,7 +1102,8 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
             let neighbor = *dict
                 .get(dict_id as usize)
                 .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
-            entries.push((v as u32, Nbr::new(neighbor, edge_id), ts));
+            let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
+            entries.push((v as u32, Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id), ts));
         }
     }
     Ok(Csr::from_nbr_entries(&entries, capacity))
@@ -1280,7 +1283,8 @@ mod tests {
         let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
 
         let nbr = snapshot.get_edge_to_dst(0, 1).expect("edge 0->1 exists");
-        let (decoded_dst, decoded_rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+        let decoded_dst = VertexId::from_int64(nbr.endpoint as i64);
+        let decoded_rank = nbr.rank;
         assert_eq!(decoded_dst, VertexId::from_int64(1));
         assert_eq!(decoded_rank, 7);
         assert!(snapshot.get_edge_to_dst(0, 99).is_none());
@@ -1651,8 +1655,8 @@ mod tests {
         assert_eq!(roundtrip.edges_of(50).len(), 5);
         // Endpoint bytes survive the dict round-trip.
         assert_eq!(
-            roundtrip.edges_of(0)[0].neighbor,
-            csr.edges_of(0)[0].neighbor
+            roundtrip.edges_of(0)[0].to_vertex_id(),
+            csr.edges_of(0)[0].to_vertex_id()
         );
     }
 

@@ -216,57 +216,109 @@ impl EdgeSchema {
     }
 }
 
+/// Compact CSR edge entry.
+///
+/// Stores the neighbor as a packed `(endpoint: u32, rank: i64)` pair instead of a
+/// full [`VertexId`] (33 bytes). This reduces per-edge overhead from 41 to 20 bytes
+/// in the mutable CSR, and from 49 to 20 bytes in the immutable CSR.
+///
+/// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
+/// edge multiplicity index (typically 0 for simple edges).
+///
+/// Use [`Nbr::to_vertex_id`] to reconstruct the full `VertexId` at the API boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Nbr {
-    pub neighbor: VertexId,
+    pub endpoint: u32,
+    pub rank: i64,
     pub edge_id: EdgeId,
     pub delete_ts: Timestamp,
 }
 
 impl Nbr {
-    pub fn new(neighbor: VertexId, edge_id: EdgeId) -> Self {
+    /// Create a new alive edge (delete_ts = MAX means "not deleted").
+    pub fn new(endpoint: u32, rank: i64, edge_id: EdgeId) -> Self {
         Self {
-            neighbor,
+            endpoint,
+            rank,
             edge_id,
             delete_ts: Timestamp::MAX,
         }
     }
 
+    /// Create with explicit delete timestamp.
     pub fn with_timestamps(
-        neighbor: VertexId,
+        endpoint: u32,
+        rank: i64,
         edge_id: EdgeId,
         delete_ts: Timestamp,
     ) -> Self {
         Self {
-            neighbor,
+            endpoint,
+            rank,
             edge_id,
             delete_ts,
         }
     }
 
+    /// Check if this edge is alive at the given timestamp.
+    /// An edge is alive when: create_ts <= ts AND ts < delete_ts.
     pub fn is_alive_at(&self, ts: Timestamp, create_ts: Timestamp) -> bool {
         create_ts <= ts && ts < self.delete_ts
     }
+
+    /// Reconstruct the full `VertexId` from the packed `(endpoint, rank)` pair.
+    ///
+    /// The result is a 16-byte VertexId encoding `(endpoint as i64, rank)` in
+    /// big-endian, matching the format produced by
+    /// `EdgeTable::edge_endpoint_key`.
+    #[inline]
+    pub fn to_vertex_id(&self) -> VertexId {
+        VertexId::edge_endpoint_key(self.endpoint, self.rank)
+    }
+
+    /// Decode the full `VertexId` from this entry and return `(vertex_id, rank)`.
+    #[inline]
+    pub fn decode_endpoint(&self) -> (VertexId, i64) {
+        (self.to_vertex_id(), self.rank)
+    }
 }
 
+/// Compact immutable CSR edge entry (frozen segments).
+///
+/// Like [`Nbr`], stores the neighbor as a packed `(endpoint: u32, rank: i64)`
+/// pair. The `timestamp` field records the creation timestamp (used for
+/// time-travel queries on frozen CSR data).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImmutableNbr {
-    pub neighbor: VertexId,
+    pub endpoint: u32,
+    pub rank: i64,
     pub edge_id: EdgeId,
     pub timestamp: Timestamp,
 }
 
 impl ImmutableNbr {
-    pub fn new(neighbor: VertexId, edge_id: EdgeId) -> Self {
-        Self::with_timestamp(neighbor, edge_id, 0)
+    pub fn new(endpoint: u32, rank: i64, edge_id: EdgeId) -> Self {
+        Self::with_timestamp(endpoint, rank, edge_id, 0)
     }
 
-    pub fn with_timestamp(neighbor: VertexId, edge_id: EdgeId, timestamp: Timestamp) -> Self {
+    pub fn with_timestamp(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        timestamp: Timestamp,
+    ) -> Self {
         Self {
-            neighbor,
+            endpoint,
+            rank,
             edge_id,
             timestamp,
         }
+    }
+
+    /// Reconstruct the full `VertexId` from the packed `(endpoint, rank)` pair.
+    #[inline]
+    pub fn to_vertex_id(&self) -> VertexId {
+        VertexId::edge_endpoint_key(self.endpoint, self.rank)
     }
 }
 

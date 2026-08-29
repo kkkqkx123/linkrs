@@ -638,9 +638,9 @@ fn append_cold_node_edges(
                     continue;
                 };
                 for nbr in snapshot.get_out_edges(internal) {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                    let dst_internal = dst_internal_vid.as_int64().unwrap_or(0) as u32;
+                    let rank = nbr.rank;
+                    let dst_internal = nbr.endpoint;
+                    let dst_internal_vid = VertexId::from_int64(dst_internal as i64);
                     let dst_ext =
                         external_id_string(ctx, dst_label, dst_internal, &dst_internal_vid, ts);
                     if dedup.insert((*node_id, vid_from_str(&dst_ext), rank)) {
@@ -656,9 +656,9 @@ fn append_cold_node_edges(
                     continue;
                 };
                 for nbr in snapshot.get_in_edges(internal) {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                    let src_internal = src_internal_vid.as_int64().unwrap_or(0) as u32;
+                    let rank = nbr.rank;
+                    let src_internal = nbr.endpoint;
+                    let src_internal_vid = VertexId::from_int64(src_internal as i64);
                     let src_ext =
                         external_id_string(ctx, src_label, src_internal, &src_internal_vid, ts);
                     if dedup.insert((vid_from_str(&src_ext), *node_id, rank)) {
@@ -672,9 +672,9 @@ fn append_cold_node_edges(
             EdgeDirection::Both => {
                 if let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) {
                     for nbr in snapshot.get_out_edges(internal) {
-                        let (dst_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                        let dst_internal = dst_internal_vid.as_int64().unwrap_or(0) as u32;
+                        let rank = nbr.rank;
+                        let dst_internal = nbr.endpoint;
+                        let dst_internal_vid = VertexId::from_int64(dst_internal as i64);
                         let dst_ext =
                             external_id_string(ctx, dst_label, dst_internal, &dst_internal_vid, ts);
                         if dedup.insert((*node_id, vid_from_str(&dst_ext), rank)) {
@@ -688,9 +688,9 @@ fn append_cold_node_edges(
                 }
                 if let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) {
                     for nbr in snapshot.get_in_edges(internal) {
-                        let (src_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                        let src_internal = src_internal_vid.as_int64().unwrap_or(0) as u32;
+                        let rank = nbr.rank;
+                        let src_internal = nbr.endpoint;
+                        let src_internal_vid = VertexId::from_int64(src_internal as i64);
                         let src_ext =
                             external_id_string(ctx, src_label, src_internal, &src_internal_vid, ts);
                         if dedup.insert((vid_from_str(&src_ext), *node_id, rank)) {
@@ -886,8 +886,8 @@ fn append_hot_neighbors(
                 ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         let dst_internal = dst_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -909,8 +909,8 @@ fn append_hot_neighbors(
                 ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         let src_internal = src_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -932,8 +932,8 @@ fn append_hot_neighbors(
                 ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         let dst_internal = dst_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -953,8 +953,8 @@ fn append_hot_neighbors(
                 ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         let src_internal = src_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -1007,8 +1007,8 @@ fn append_cold_neighbors(
                     continue;
                 };
                 for nbr in snapshot.get_out_edges(src_internal) {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         let dst_internal = dst_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -1030,8 +1030,8 @@ fn append_cold_neighbors(
                     continue;
                 };
                 for nbr in snapshot.get_in_edges(dst_internal) {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         let src_internal = src_internal as u32;
                         if unique((src_internal, dst_internal, rank)) {
@@ -1050,8 +1050,8 @@ fn append_cold_neighbors(
             EdgeDirection::Both => {
                 if let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) {
                     for nbr in snapshot.get_out_edges(src_internal) {
-                        let (dst_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let rank = nbr.rank;
+                        let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                         if let Some(dst_internal) = dst_internal_vid.as_int64() {
                             let dst_internal = dst_internal as u32;
                             if unique((src_internal, dst_internal, rank)) {
@@ -1069,8 +1069,8 @@ fn append_cold_neighbors(
                 }
                 if let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) {
                     for nbr in snapshot.get_in_edges(dst_internal) {
-                        let (src_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let rank = nbr.rank;
+                        let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                         if let Some(src_internal) = src_internal_vid.as_int64() {
                             let src_internal = src_internal as u32;
                             if unique((src_internal, dst_internal, rank)) {
@@ -1110,8 +1110,8 @@ fn count_hot_neighbors(
                 ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
@@ -1123,8 +1123,8 @@ fn count_hot_neighbors(
                 ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
@@ -1136,8 +1136,8 @@ fn count_hot_neighbors(
                 ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
@@ -1147,8 +1147,8 @@ fn count_hot_neighbors(
                 ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
             {
                 for nbr in nbrs {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
@@ -1182,8 +1182,8 @@ fn count_cold_neighbors(
                     continue;
                 };
                 for nbr in snapshot.get_out_edges(src_internal) {
-                    let (dst_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
@@ -1195,8 +1195,8 @@ fn count_cold_neighbors(
                     continue;
                 };
                 for nbr in snapshot.get_in_edges(dst_internal) {
-                    let (src_internal_vid, rank) =
-                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    let rank = nbr.rank;
+                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
@@ -1205,8 +1205,8 @@ fn count_cold_neighbors(
             EdgeDirection::Both => {
                 if let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) {
                     for nbr in snapshot.get_out_edges(src_internal) {
-                        let (dst_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let rank = nbr.rank;
+                        let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                         if let Some(dst_internal) = dst_internal_vid.as_int64() {
                             seen.insert((src_internal, dst_internal as u32, rank));
                         }
@@ -1214,8 +1214,8 @@ fn count_cold_neighbors(
                 }
                 if let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) {
                     for nbr in snapshot.get_in_edges(dst_internal) {
-                        let (src_internal_vid, rank) =
-                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let rank = nbr.rank;
+                        let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                         if let Some(src_internal) = src_internal_vid.as_int64() {
                             seen.insert((src_internal as u32, dst_internal, rank));
                         }
@@ -1659,7 +1659,8 @@ fn cold_index_entry_to_edge(
     let src_vid = VertexId::from_int64(entry.src_internal as i64);
     let dst_vid = VertexId::from_int64(entry.dst_internal as i64);
     let nbr = Nbr::new(
-        TimeTravelEdgeStore::edge_endpoint_key(entry.dst_internal, entry.rank),
+        entry.dst_internal,
+        entry.rank,
         EdgeId(0),
     );
     let record = snapshot.nbr_to_edge_record(&nbr, src_vid, dst_vid);

@@ -22,44 +22,21 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
 
-fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
-    let bytes = id.as_bytes();
-    out.push(bytes.len() as u8);
-    out.extend_from_slice(bytes);
-}
-
-fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
-    if *offset >= data.len() {
-        return Err(StorageError::deserialize_error(
-            "CSR data too short for vertex id length",
-        ));
-    }
-
-    let len = data[*offset] as usize;
-    *offset += 1;
-    if data.len().saturating_sub(*offset) < len {
-        return Err(StorageError::deserialize_error(
-            "CSR data too short for vertex id bytes",
-        ));
-    }
-
-    let id = VertexId::from_bytes(data[*offset..*offset + len].to_vec());
-    *offset += len;
-    Ok(id)
-}
-
 fn write_nbr(out: &mut Vec<u8>, nbr: &Nbr) {
-    write_vertex_id(out, nbr.neighbor);
+    out.extend_from_slice(&nbr.endpoint.to_le_bytes());
+    out.extend_from_slice(&nbr.rank.to_le_bytes());
     out.extend_from_slice(&nbr.edge_id.to_le_bytes());
     out.extend_from_slice(&nbr.delete_ts.to_le_bytes());
 }
 
 fn read_nbr(data: &[u8], offset: &mut usize) -> StorageResult<Nbr> {
-    let neighbor = read_vertex_id(data, offset)?;
+    let endpoint = read_u32_le(data, offset)?;
+    let rank = read_u64_le(data, offset)? as i64;
     let raw_edge_id = read_u64_le(data, offset)?;
     let delete_ts = read_u64_le(data, offset)?;
     Ok(Nbr::with_timestamps(
-        neighbor,
+        endpoint,
+        rank,
         EdgeId(raw_edge_id),
         delete_ts,
     ))
@@ -69,7 +46,7 @@ const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGE_CAPACITY: usize = 4096;
 const DEFAULT_VERTEX_DEGREE: usize = 4;
 const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
-const MUTABLE_CSR_FORMAT_VERSION: u32 = 1;
+const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 /// Minimum vertices in a sequential run to be considered for indexed compaction.
@@ -362,7 +339,7 @@ impl MutableCsr {
         let block_offset = self.nbr_list.len();
         self.nbr_list.resize(
             block_offset + DEFAULT_VERTEX_DEGREE,
-            Nbr::new(VertexId::from_int64(0), EdgeId(0)),
+            Nbr::new(0, 0, EdgeId(0)),
         );
         self.adj_offsets[src_idx] = block_offset as u32;
         self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
@@ -395,6 +372,9 @@ impl MutableCsr {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+
         let src_idx = src_vid as usize;
 
         if src_idx >= self.vertex_capacity() {
@@ -411,7 +391,7 @@ impl MutableCsr {
         let base = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &self.nbr_list[base + i];
-            if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
+            if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.delete_ts == Timestamp::MAX {
                 return Err(StorageError::edge_already_exists(format!(
                     "{} -> {:?}",
                     src_vid, dst
@@ -421,7 +401,7 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for nbr in chunk {
-                    if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
+                    if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.delete_ts == Timestamp::MAX {
                         return Err(StorageError::edge_already_exists(format!(
                             "{} -> {:?}",
                             src_vid, dst
@@ -438,13 +418,13 @@ impl MutableCsr {
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
             && degree < self.primary_capacities[src_idx] as usize
         {
-            self.nbr_list[base + degree] = Nbr::new(dst, edge_id);
+            self.nbr_list[base + degree] = Nbr::new(decoded_endpoint, decoded_rank, edge_id);
             self.degrees[src_idx] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
 
-        self.append_overflow(src_vid, Nbr::new(dst, edge_id));
+        self.append_overflow(src_vid, Nbr::new(decoded_endpoint, decoded_rank, edge_id));
         self.edge_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -463,13 +443,15 @@ impl MutableCsr {
     }
 
     fn scan_overflow_for_dst(&self, src_vid: u32, dst: VertexId) -> Vec<(usize, usize)> {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
         let mut result = Vec::new();
         let Some(chunks) = self.overflow_chunks.get(&src_vid) else {
             return result;
         };
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             for (edge_idx, nbr) in chunk.iter().enumerate() {
-                if nbr.neighbor == dst {
+                if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
                     result.push((chunk_idx, edge_idx));
                 }
             }
@@ -550,6 +532,8 @@ impl MutableCsr {
 
     /// Delete edge by destination vertex
     pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return false;
@@ -562,7 +546,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
-            if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
+            if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.delete_ts == Timestamp::MAX {
                 let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
@@ -798,6 +782,8 @@ impl MutableCsr {
 
     /// Get a specific edge
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;
@@ -809,7 +795,7 @@ impl MutableCsr {
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
             let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-            if nbr.neighbor == dst && nbr.is_alive_at(ts, create_ts) {
+            if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.is_alive_at(ts, create_ts) {
                 return Some(*nbr);
             }
         }
@@ -819,7 +805,7 @@ impl MutableCsr {
             for chunk in chunks {
                 for nbr in chunk {
                     let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                    if nbr.neighbor == dst && nbr.is_alive_at(ts, create_ts) {
+                    if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.is_alive_at(ts, create_ts) {
                         return Some(*nbr);
                     }
                 }
@@ -1096,7 +1082,7 @@ impl MutableCsr {
             if remaining > 0 {
                 new_nbr_list.resize(
                     new_nbr_list.len() + remaining,
-                    Nbr::new(VertexId::from_int64(0), EdgeId(0)),
+                    Nbr::new(0, 0, EdgeId(0)),
                 );
             }
         }
@@ -1961,11 +1947,11 @@ mod tests {
             .unwrap();
 
         // Test iter_edges_of yields same neighbors as edges_of without allocation
-        let iter_neighbors: Vec<_> = csr.iter_edges_of(0u32, 1).map(|nbr| nbr.neighbor).collect();
+        let iter_neighbors: Vec<_> = csr.iter_edges_of(0u32, 1).map(|nbr| nbr.to_vertex_id()).collect();
         let vec_neighbors: Vec<_> = csr
             .edges_of(0u32, 1)
             .iter()
-            .map(|nbr| nbr.neighbor)
+            .map(|nbr| nbr.to_vertex_id())
             .collect();
 
         assert_eq!(iter_neighbors.len(), vec_neighbors.len());

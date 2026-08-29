@@ -76,11 +76,7 @@ impl MultiSingleMutableCsr {
 
         Self {
             edges: vec![
-                Nbr::with_timestamps(
-                    VertexId::from_int64(0),
-                    INVALID_EDGE_ID,
-                    0,
-                );
+                Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
                 vertex_cap * edges_per
             ],
             edges_per_vertex: edges_per,
@@ -103,11 +99,7 @@ impl MultiSingleMutableCsr {
     }
 
     pub fn clear(&mut self) {
-        self.edges.fill(Nbr::with_timestamps(
-            VertexId::from_int64(0),
-            INVALID_EDGE_ID,
-            0,
-        ));
+        self.edges.fill(Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0));
         self.counts.fill(0);
         self.create_ts_cache.clear();
         self.edge_count.store(0, Ordering::Relaxed);
@@ -120,11 +112,7 @@ impl MultiSingleMutableCsr {
 
         let additional = new_vertex_capacity - self.vertex_capacity();
         self.edges.extend(std::iter::repeat_n(
-            Nbr::with_timestamps(
-                VertexId::from_int64(0),
-                INVALID_EDGE_ID,
-                0,
-            ),
+            Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0),
             additional * self.edges_per_vertex,
         ));
         self.counts.extend(std::iter::repeat_n(0, additional));
@@ -139,11 +127,13 @@ impl MultiSingleMutableCsr {
             return None;
         }
 
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let base = self.vertex_offset(src_vid);
         let count = self.counts[src_vid as usize] as usize;
 
         for i in 0..count {
-            if self.edges[base + i].neighbor == dst {
+            if self.edges[base + i].endpoint == dst_ep && self.edges[base + i].rank == dst_rank {
                 return Some(base + i);
             }
         }
@@ -183,7 +173,7 @@ impl CsrBase for MultiSingleMutableCsr {
         // Write edges array
         data.extend((self.edges.len() as u64).to_le_bytes());
         for nbr in &self.edges {
-            data.extend(nbr.neighbor.as_bytes());
+            data.extend(nbr.to_vertex_id().as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
         }
@@ -234,8 +224,11 @@ impl CsrBase for MultiSingleMutableCsr {
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
             let delete_ts = read_u64_le(data, &mut offset)?;
 
+            let decoded = VertexId::from_bytes(neighbor_bytes);
+            let (endpoint_vid, rank) = decoded.decode_edge_endpoint();
             self.edges.push(Nbr {
-                neighbor: VertexId::from_bytes(neighbor_bytes),
+                endpoint: endpoint_vid.as_int64().unwrap_or(0) as u32,
+                rank,
                 edge_id,
                 delete_ts,
             });
@@ -274,7 +267,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
             let existing_create_ts = self.create_ts_cache.get(&self.edges[slot].edge_id).copied().unwrap_or(0);
             if ts > existing_create_ts {
                 self.create_ts_cache.insert(edge_id, ts);
-                self.edges[slot] = Nbr::new(dst, edge_id);
+                let (endpoint_vid, rank) = dst.decode_edge_endpoint();
+                self.edges[slot] = Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id);
                 return Ok(());
             }
             return Err(StorageError::edge_already_exists(format!(
@@ -286,7 +280,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         // Try to insert in empty slot
         if let Some(slot) = self.find_empty_slot(src_vid) {
             self.create_ts_cache.insert(edge_id, ts);
-            self.edges[slot] = Nbr::new(dst, edge_id);
+            let (endpoint_vid, rank) = dst.decode_edge_endpoint();
+            self.edges[slot] = Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id);
             self.counts[src_vid as usize] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());

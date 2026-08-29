@@ -111,11 +111,7 @@ impl SingleMutableCsr {
     pub fn with_capacity(vertex_capacity: usize) -> Self {
         let vertex_cap = vertex_capacity.max(1);
         let nbr_list = vec![
-            Nbr::with_timestamps(
-                VertexId::from_int64(0),
-                INVALID_EDGE_ID,
-                0,
-            );
+            Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
             vertex_cap
         ];
 
@@ -141,11 +137,7 @@ impl SingleMutableCsr {
 
         let additional = new_vertex_capacity - self.vertex_capacity();
         self.nbr_list.extend(std::iter::repeat_n(
-            Nbr::with_timestamps(
-                VertexId::from_int64(0),
-                INVALID_EDGE_ID,
-                0,
-            ),
+            Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0),
             additional,
         ));
     }
@@ -185,7 +177,9 @@ impl SingleMutableCsr {
         }
 
         let was_empty = nbr.delete_ts < Timestamp::MAX;
-        nbr.neighbor = dst;
+        let (endpoint_vid, rank) = dst.decode_edge_endpoint();
+        nbr.endpoint = endpoint_vid.as_int64().unwrap_or(0) as u32;
+        nbr.rank = rank;
         nbr.edge_id = edge_id;
         nbr.delete_ts = Timestamp::MAX;
 
@@ -239,9 +233,11 @@ impl SingleMutableCsr {
             return false;
         }
 
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.neighbor != dst || nbr.delete_ts < Timestamp::MAX {
+        if nbr.endpoint != dst_ep || nbr.rank != dst_rank || nbr.delete_ts < Timestamp::MAX {
             return false;
         }
 
@@ -262,6 +258,8 @@ impl SingleMutableCsr {
             return None;
         }
 
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let nbr = &self.nbr_list[src_idx];
 
         let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
@@ -269,7 +267,7 @@ impl SingleMutableCsr {
             return None;
         }
 
-        if nbr.neighbor == dst {
+        if nbr.endpoint == dst_ep && nbr.rank == dst_rank {
             Some(*nbr)
         } else {
             None
@@ -347,11 +345,7 @@ impl SingleMutableCsr {
 
     pub fn clear(&mut self) {
         for nbr in &mut self.nbr_list {
-            *nbr = Nbr::with_timestamps(
-                VertexId::from_int64(0),
-                INVALID_EDGE_ID,
-                0,
-            );
+            *nbr = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
         }
         self.create_ts_cache.clear();
         self.edge_count.store(0, Ordering::Relaxed);
@@ -369,7 +363,7 @@ impl SingleMutableCsr {
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
 
         for nbr in &self.nbr_list {
-            write_vertex_id(&mut result, nbr.neighbor);
+            write_vertex_id(&mut result, nbr.to_vertex_id());
             result.extend_from_slice(&nbr.edge_id.to_le_bytes());
             result.extend_from_slice(&nbr.delete_ts.to_le_bytes());
         }
@@ -401,10 +395,12 @@ impl SingleMutableCsr {
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             let edge_id = EdgeId(raw_edge_id);
+            let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
             // create_ts is no longer stored inline; initialize cache with 0
             // (will be populated externally if needed)
             nbr_list.push(Nbr::with_timestamps(
-                neighbor,
+                endpoint_vid.as_int64().unwrap_or(0) as u32,
+                rank,
                 edge_id,
                 delete_ts,
             ));

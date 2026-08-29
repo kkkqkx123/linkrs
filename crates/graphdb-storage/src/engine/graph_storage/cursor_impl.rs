@@ -947,7 +947,8 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
         }
 
         let nbr = Nbr::new(
-            edge.neighbor,
+            edge.endpoint,
+            edge.rank,
             edge.edge_id,
         );
 
@@ -1024,7 +1025,8 @@ struct EdgeCandidate {
 
 fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
     let src_internal = args.src_vid.as_int64().unwrap_or(0) as u32;
-    let (dst_vid, rank) = decode_endpoint(args.nbr.neighbor);
+    let rank = args.nbr.rank;
+    let dst_vid = VertexId::from_int64(args.nbr.endpoint as i64);
 
     let src_vid = VertexId::from_int64(src_internal as i64);
     let props: HashMap<String, Value> = args.props.into_iter().collect();
@@ -1314,8 +1316,9 @@ impl EdgeCursor for ColdEdgeCursor {
             let nbr = self.row_edges[self.row_idx];
             self.row_idx += 1;
 
-            let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-            let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
+            let rank = nbr.rank;
+            let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+            let dst_internal = nbr.endpoint;
             let src_vid = VertexId::from_int64(src_internal as i64);
             // Predicates are evaluated on the full property set before the
             // projection narrows it (pure pre-filter).
