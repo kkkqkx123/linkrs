@@ -559,8 +559,8 @@ impl VertexTable {
         meta_cursor: &mut &[u8],
     ) -> StorageResult<()> {
         use crate::encoding::{
-            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleBoolColumn,
-            RleIntColumn,
+            AlpColumn, BitPackedIntColumn, ConstantColumn, DictionaryColumn, FsstColumn,
+            RleBoolColumn, RleIntColumn,
         };
 
         match encoding_type {
@@ -603,6 +603,13 @@ impl VertexTable {
                     return Err(StorageError::column_not_found(name.to_string()));
                 };
                 column.apply_alp_from_meta(col)?;
+            }
+            EncodingType::Constant => {
+                let col = ConstantColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_constant_from_meta(col)?;
             }
             EncodingType::None => {}
         }

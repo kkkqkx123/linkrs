@@ -3,7 +3,7 @@
 //! Analyzes column data characteristics to choose the optimal encoding.
 //! Thresholds are configurable via `EncodingThresholds`.
 
-use crate::encoding::EncodingType;
+use crate::encoding::{ConstantColumn, EncodingType};
 use graphdb_core::{DataType, Value};
 
 /// Configurable thresholds for encoding selection.
@@ -205,6 +205,9 @@ impl EncodingSelector {
         data_type: &DataType,
         values: &[Option<Value>],
     ) -> EncodingType {
+        if ConstantColumn::should_use(values) {
+            return EncodingType::Constant;
+        }
         match data_type {
             DataType::Bool => self.select_for_booleans(values),
             DataType::SmallInt | DataType::Int | DataType::BigInt => {

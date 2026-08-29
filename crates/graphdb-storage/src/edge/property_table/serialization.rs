@@ -144,7 +144,7 @@ impl PropertyTable {
 
         // Edge map
         result.extend_from_slice(&(self.edge_prop_map.len() as u32).to_le_bytes());
-        for (&edge_id, &offset) in &self.edge_prop_map {
+        for (edge_id, offset) in &self.edge_prop_map {
             result.extend_from_slice(&edge_id.as_u64().to_le_bytes());
             result.extend_from_slice(&offset.to_le_bytes());
         }
@@ -349,10 +349,11 @@ impl PropertyTable {
                 .load_column_from_raw(&name, col_data, offsets, bitmap_raw, bitmap_len)?;
             // Apply encoding if any
             if let Some((enc_t, meta_bytes)) = enc_meta {
-                let mut cur = &meta_bytes[..];
-                // Skip first byte type code already consumed? Meta already without type byte
-                // The serialization wrote meta without type prefix? It wrote meta_buf from serialize_meta which includes internal format but not type byte.
-                // For reconstruction we need to call appropriate loader.
+                let mut cur = if !meta_bytes.is_empty() && meta_bytes[0] == enc_t.to_u8() {
+                    &meta_bytes[1..]
+                } else {
+                    &meta_bytes[..]
+                };
                 let col = self.column_store.get_column_mut(&name).unwrap();
                 match enc_t {
                     EncodingType::Fsst => {
@@ -381,6 +382,10 @@ impl PropertyTable {
                     EncodingType::Alp => {
                         let c = crate::encoding::AlpColumn::deserialize_meta(&mut cur)?;
                         col.apply_alp_from_meta(c)?;
+                    }
+                    EncodingType::Constant => {
+                        let c = crate::encoding::ConstantColumn::deserialize_meta(&mut cur)?;
+                        col.apply_constant_from_meta(c)?;
                     }
                     EncodingType::None => {}
                 }
@@ -488,7 +493,7 @@ impl PropertyTable {
             offset += 8;
             let prop_offset = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
-            self.edge_prop_map.insert(edge_id, prop_offset);
+            self.insert_mapping(edge_id, prop_offset);
         }
 
         // Rebuild tombstones

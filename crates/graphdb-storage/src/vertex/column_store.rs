@@ -9,7 +9,7 @@
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
 use graphdb_core::types::Timestamp;
-use graphdb_core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
+use graphdb_core::value::{DateTimeValue, DateValue, Geography, TimeValue, VectorValue};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::column_stats::ColumnStats;
@@ -552,12 +552,56 @@ fn ensure_bitmap_len(bitmap: &mut BitVec<u8, Lsb0>, min_len: usize) {
 }
 
 /// Rough heap footprint of a `Value`'s payload (used for MVCC memory
-/// accounting of retained version chains). Non-string payloads are counted
-/// by the fixed `Value`/`VersionEntry` sizes.
+/// accounting of retained version chains). For heap-allocated types, we
+/// estimate the payload size based on the inner data structure.
 fn value_payload_bytes(value: &Value) -> usize {
     match value {
         Value::String(s) => s.len(),
-        _ => 0,
+        Value::FixedString(s) => s.len(),
+        Value::Blob(b) => b.len(),
+        Value::List(l) => l.len() * std::mem::size_of::<Value>(),
+        Value::Map(m) => {
+            m.len() * (std::mem::size_of::<Value>() * 2) // key + value per entry
+        }
+        Value::Set(s) => s.len() * std::mem::size_of::<Value>(),
+        Value::Geography(geo) => {
+            // Geography contains coordinate data; estimate based on point count
+            match geo {
+                Geography::Point(_) => 24,      // 2 x f64 + srid
+                Geography::LineString(ls) => ls.points.len() * 24,
+                Geography::Polygon(pg) => {
+                    pg.exterior.points.len() * 24
+                        + pg.holes.iter().map(|r| r.points.len() * 24).sum::<usize>()
+                }
+                Geography::MultiPoint(mp) => mp.points.len() * 24,
+                Geography::MultiLineString(ml) => {
+                    ml.linestrings.iter().map(|ls| ls.points.len() * 24).sum::<usize>()
+                }
+                Geography::MultiPolygon(mpg) => {
+                    mpg.polygons.iter().map(|pg| {
+                        pg.exterior.points.len() * 24
+                            + pg.holes.iter().map(|r| r.points.len() * 24).sum::<usize>()
+                    }).sum::<usize>()
+                }
+            }
+        }
+        Value::Vector(v) => match v {
+            VectorValue::Dense(data) => data.len() * std::mem::size_of::<f32>(),
+            VectorValue::Sparse { indices, values } => {
+                indices.len() * std::mem::size_of::<u32>() + values.len() * std::mem::size_of::<f32>()
+            }
+        },
+        Value::Json(j) => j.as_str().len(),
+        Value::JsonB(j) => j.estimated_size(),
+        Value::DataSet(ds) => {
+            ds.col_names.len() * ds.rows.len() * 8 // rough estimate
+        }
+        Value::Struct(sv) => sv.fields.len() * std::mem::size_of::<Value>(),
+        Value::Array(av) => av.values.len() * std::mem::size_of::<Value>(),
+        Value::Vertex(_) => 64,   // fixed-size vertex record
+        Value::Edge(_) => 64,     // fixed-size edge record
+        Value::Path(p) => p.len() * 32, // per-hop estimate
+        _ => 0, // fixed-width types (Bool, Int, Float, etc.) have no heap payload
     }
 }
 
@@ -948,6 +992,16 @@ pub(crate) fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+/// Statistics for MVCC version chains of a column.
+#[derive(Debug, Clone, Copy)]
+pub struct VersionChainStats {
+    pub total_rows: usize,
+    pub total_entries: usize,
+    pub max_len: usize,
+    pub avg_len: f64,
+    pub memory_bytes: usize,
+}
+
 /// Conservative min/max bounds over the non-null values of one chunk.
 #[derive(Debug, Clone, Default)]
 pub struct ZoneBounds {
@@ -1113,6 +1167,30 @@ impl Column {
             removed += before - chain.len();
         }
         removed
+    }
+
+    /// Incremental garbage-collect: process at most `batch_size` rows per call.
+    /// Returns `(removed_entries, has_more_work)`.
+    ///
+    /// This avoids long blocking of writes during GC by processing rows in
+    /// batches. Call repeatedly until `has_more_work` returns `false`.
+    pub fn gc_versions_incremental(
+        &mut self,
+        min_active_snapshot_ts: Timestamp,
+        batch_size: usize,
+    ) -> (usize, bool) {
+        let mut removed = 0;
+        let mut processed = 0;
+        for chain in &mut self.version_chains {
+            if processed >= batch_size {
+                return (removed, true);
+            }
+            let before = chain.len();
+            chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
+            removed += before - chain.len();
+            processed += 1;
+        }
+        (removed, false)
     }
 
     /// Snapshot the MVCC metadata of `from` into `to` (used by table
@@ -1526,6 +1604,24 @@ impl Column {
         Ok(())
     }
 
+    pub fn apply_constant_encoding(&mut self) -> StorageResult<()> {
+        use crate::encoding::ConstantColumn;
+
+        let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            values.push(self.get(i));
+        }
+        if !ConstantColumn::should_use(&values) {
+            return Err(StorageError::invalid_operation(
+                "Constant encoding requires all values to be identical".to_string(),
+            ));
+        }
+        let first = values.first().cloned().unwrap_or(None);
+        let col = ConstantColumn::new(first, self.len());
+        self.encoding = ColumnEncoding::Constant(col);
+        Ok(())
+    }
+
     pub fn apply_alp_encoding(&mut self) -> StorageResult<()> {
         use crate::encoding::AlpColumn;
 
@@ -1600,11 +1696,56 @@ impl Column {
         Ok(())
     }
 
+    pub fn apply_constant_from_meta(
+        &mut self,
+        col: crate::encoding::ConstantColumn,
+    ) -> StorageResult<()> {
+        let encoded_len = col.len();
+        self.encoding = ColumnEncoding::Constant(col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
         self.version_chains
             .get(row_idx)
             .map(|c| c.len())
             .unwrap_or(0)
+    }
+
+    pub fn version_chain_stats(&self) -> VersionChainStats {
+        let total_rows = self.version_chains.len();
+        let total_entries: usize = self.version_chains.iter().map(|c| c.len()).sum();
+        let max_len = self
+            .version_chains
+            .iter()
+            .map(|c| c.len())
+            .max()
+            .unwrap_or(0);
+        let avg_len = if total_rows > 0 {
+            total_entries as f64 / total_rows as f64
+        } else {
+            0.0
+        };
+        let memory_bytes = self
+            .version_chains
+            .iter()
+            .map(|chain| {
+                chain.len() * std::mem::size_of::<VersionEntry>()
+                    + chain
+                        .iter()
+                        .map(|e| e.value.as_ref().map(value_payload_bytes).unwrap_or(0))
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+            + self.row_start_ts.len() * std::mem::size_of::<Timestamp>();
+        VersionChainStats {
+            total_rows,
+            total_entries,
+            max_len,
+            avg_len,
+            memory_bytes,
+        }
     }
 
     pub fn fold_oldest(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
@@ -1614,6 +1755,10 @@ impl Column {
         let Some(chain) = self.version_chains.get_mut(row_idx) else {
             return;
         };
+        // Fold from the front: merge the second-newest entry into the newest,
+        // preserving the most recent value while extending its visible time
+        // range. This maintains the expected interval-merge semantics where
+        // recent history stays exact and oldest intervals are folded.
         while chain.len() > cap {
             if chain.len() < 2 {
                 break;
@@ -1630,7 +1775,6 @@ impl Column {
             if chain[0].end_ts < second.end_ts {
                 chain[0].end_ts = second.end_ts;
             }
-            // Keep the older value, drop the younger one
             let _ = second;
         }
     }
@@ -1893,6 +2037,33 @@ impl ColumnStore {
         }
     }
 
+    /// Aggregate version-chain statistics across all columns.
+    pub fn version_chain_stats(&self) -> VersionChainStats {
+        let mut total_rows = 0usize;
+        let mut total_entries = 0usize;
+        let mut max_len = 0usize;
+        let mut memory_bytes = 0usize;
+        for col in &self.columns {
+            let stats = col.version_chain_stats();
+            total_rows = total_rows.max(stats.total_rows);
+            total_entries += stats.total_entries;
+            max_len = max_len.max(stats.max_len);
+            memory_bytes += stats.memory_bytes;
+        }
+        let avg_len = if total_rows > 0 {
+            total_entries as f64 / total_rows as f64
+        } else {
+            0.0
+        };
+        VersionChainStats {
+            total_rows,
+            total_entries,
+            max_len,
+            avg_len,
+            memory_bytes,
+        }
+    }
+
     /// Garbage-collect version chains across all columns, returning the total
     /// number of before-images removed.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
@@ -1901,6 +2072,41 @@ impl ColumnStore {
             removed += col.gc_versions(min_active_snapshot_ts);
         }
         removed
+    }
+
+    /// Incremental garbage-collect: process at most `batch_size` rows per call.
+    /// Returns `(removed_entries, has_more_work)`.
+    ///
+    /// This avoids long blocking of writes during GC by processing rows in
+    /// batches. Call repeatedly until `has_more_work` returns `false`.
+    pub fn gc_versions_incremental(
+        &mut self,
+        min_active_snapshot_ts: Timestamp,
+        batch_size: usize,
+    ) -> (usize, bool) {
+        let mut total_removed = 0;
+        let mut has_more = false;
+        for col in &mut self.columns {
+            let (removed, more) = col.gc_versions_incremental(min_active_snapshot_ts, batch_size);
+            total_removed += removed;
+            if more {
+                has_more = true;
+                break; // Stop after first column that needs more work
+            }
+        }
+        (total_removed, has_more)
+    }
+
+    /// Fold oldest version-chain entries for a single row across all columns.
+    /// Delegates to each column's [`Column::fold_oldest`] with the given cap
+    /// and retention horizon.
+    pub fn fold_oldest_for_row(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
+        if cap == 0 {
+            return;
+        }
+        for col in &mut self.columns {
+            col.fold_oldest(row_idx, cap, horizon);
+        }
     }
 
     /// Copy the MVCC row state (current version timestamp + version chain)
@@ -2045,6 +2251,9 @@ impl ColumnStore {
             }
             EncodingType::Alp => {
                 col.apply_alp_encoding()?;
+            }
+            EncodingType::Constant => {
+                col.apply_constant_encoding()?;
             }
             EncodingType::None => {}
         }

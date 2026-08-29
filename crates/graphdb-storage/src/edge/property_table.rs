@@ -213,11 +213,37 @@ pub struct PropertyTable {
     free_list: Vec<u32>,
     tombstones_manager: TieredTombstoneManager<u32>,
     value_index: PropertyValueIndex,
-    edge_prop_map: HashMap<EdgeId, u32>,
+    edge_prop_map: Vec<(EdgeId, u32)>,
     version_chain_cap: usize,
     retention_horizon: Timestamp,
     column_store: ColumnStore,
     zone_maps: HashMap<String, Vec<ColumnStats>>,
+}
+
+impl PropertyTable {
+    fn find_offset(&self, edge_id: &EdgeId) -> Option<u32> {
+        self.edge_prop_map
+            .binary_search_by_key(edge_id, |(id, _)| *id)
+            .ok()
+            .map(|idx| self.edge_prop_map[idx].1)
+    }
+
+    fn insert_mapping(&mut self, edge_id: EdgeId, offset: u32) {
+        match self
+            .edge_prop_map
+            .binary_search_by_key(&edge_id, |(id, _)| *id)
+        {
+            Ok(idx) => self.edge_prop_map[idx].1 = offset,
+            Err(idx) => self.edge_prop_map.insert(idx, (edge_id, offset)),
+        }
+    }
+
+    fn remove_mapping(&mut self, edge_id: &EdgeId) -> Option<u32> {
+        self.edge_prop_map
+            .binary_search_by_key(edge_id, |(id, _)| *id)
+            .ok()
+            .map(|idx| self.edge_prop_map.remove(idx).1)
+    }
 }
 
 pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
@@ -253,7 +279,7 @@ impl PropertyTable {
             free_list: Vec::new(),
             tombstones_manager: TieredTombstoneManager::new(10_000),
             value_index: PropertyValueIndex::new(),
-            edge_prop_map: HashMap::new(),
+            edge_prop_map: Vec::new(),
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
             retention_horizon: Timestamp::MAX,
             column_store: ColumnStore::new(),
@@ -271,7 +297,7 @@ impl PropertyTable {
             free_list: Vec::with_capacity(capacity / 10),
             tombstones_manager: TieredTombstoneManager::new(10_000),
             value_index: PropertyValueIndex::new(),
-            edge_prop_map: HashMap::with_capacity(capacity),
+            edge_prop_map: Vec::with_capacity(capacity),
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
             retention_horizon: Timestamp::MAX,
             column_store: ColumnStore::with_capacity(capacity),
@@ -417,13 +443,13 @@ impl PropertyTable {
     ) -> StorageResult<u32> {
         let offset = self.insert(values, create_ts)?;
         if offset != 0 {
-            self.edge_prop_map.insert(edge_id, offset);
+            self.insert_mapping(edge_id, offset);
         }
         Ok(offset)
     }
 
     pub fn get_offset_by_edge_id(&self, edge_id: EdgeId) -> Option<u32> {
-        self.edge_prop_map.get(&edge_id).copied()
+        self.find_offset(&edge_id)
     }
 
     pub fn get_by_edge_id(
@@ -431,30 +457,30 @@ impl PropertyTable {
         edge_id: EdgeId,
         query_ts: Option<Timestamp>,
     ) -> Option<Vec<(String, Option<Value>)>> {
-        let offset = *self.edge_prop_map.get(&edge_id)?;
+        let offset = self.find_offset(&edge_id)?;
         self.get(offset, query_ts)
     }
 
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
-        let offset = *self.edge_prop_map.get(&edge_id)?;
+        let offset = self.find_offset(&edge_id)?;
         self.read_properties(offset)
     }
 
     pub fn mark_deleted_by_edge_id(&mut self, edge_id: EdgeId, ts: Timestamp) -> StorageResult<()> {
-        if let Some(&offset) = self.edge_prop_map.get(&edge_id) {
+        if let Some(offset) = self.find_offset(&edge_id) {
             self.mark_deleted(offset, ts)?;
         }
         Ok(())
     }
 
     pub fn delete_by_edge_id(&mut self, edge_id: EdgeId) {
-        if let Some(offset) = self.edge_prop_map.remove(&edge_id) {
+        if let Some(offset) = self.remove_mapping(&edge_id) {
             self.delete(offset);
         }
     }
 
     pub fn revert_deletion_by_edge_id(&mut self, edge_id: EdgeId) {
-        if let Some(&offset) = self.edge_prop_map.get(&edge_id) {
+        if let Some(offset) = self.find_offset(&edge_id) {
             self.revert_deletion(offset);
         }
     }
@@ -692,8 +718,7 @@ impl PropertyTable {
         total += self.free_list.capacity() * std::mem::size_of::<u32>();
         total += self.value_index.entry_count()
             * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
-        total += self.edge_prop_map.capacity()
-            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
+        total += self.edge_prop_map.capacity() * std::mem::size_of::<(EdgeId, u32)>();
         total += self.column_store.memory_size();
         total += self
             .zone_maps
@@ -722,6 +747,10 @@ impl PropertyTable {
             free_list_size: self.free_list.len(),
             reclaimable_bytes,
         }
+    }
+
+    pub fn version_chain_stats(&self) -> crate::vertex::column_store::VersionChainStats {
+        self.column_store.version_chain_stats()
     }
 
     /// Check if schema is suitable for fast path operations:

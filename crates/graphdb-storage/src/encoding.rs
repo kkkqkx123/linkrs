@@ -10,6 +10,7 @@
 
 pub mod alp;
 pub mod bitpacking;
+pub mod constant;
 pub mod dictionary;
 pub mod fsst;
 pub mod rle;
@@ -21,6 +22,7 @@ use graphdb_core::{DataType, StorageResult, Value};
 
 pub use alp::AlpColumn;
 pub use bitpacking::BitPackedIntColumn;
+pub use constant::ConstantColumn;
 pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
@@ -35,6 +37,7 @@ pub enum EncodingType {
     BitPacking,
     Fsst,
     Alp,
+    Constant,
 }
 
 impl EncodingType {
@@ -46,6 +49,7 @@ impl EncodingType {
             EncodingType::BitPacking => 3,
             EncodingType::Fsst => 4,
             EncodingType::Alp => 5,
+            EncodingType::Constant => 6,
         }
     }
 
@@ -56,6 +60,7 @@ impl EncodingType {
             3 => EncodingType::BitPacking,
             4 => EncodingType::Fsst,
             5 => EncodingType::Alp,
+            6 => EncodingType::Constant,
             _ => EncodingType::None,
         }
     }
@@ -71,6 +76,7 @@ pub enum ColumnEncoding {
     RleBool(RleBoolColumn),
     BitPacked(BitPackedIntColumn),
     Alp(AlpColumn),
+    Constant(ConstantColumn),
 }
 
 impl ColumnEncoding {
@@ -82,6 +88,7 @@ impl ColumnEncoding {
             Self::RleInt(_) | Self::RleBool(_) => EncodingType::Rle,
             Self::BitPacked(_) => EncodingType::BitPacking,
             Self::Alp(_) => EncodingType::Alp,
+            Self::Constant(_) => EncodingType::Constant,
         }
     }
 
@@ -94,6 +101,7 @@ impl ColumnEncoding {
             Self::RleBool(col) => col.get(row_idx),
             Self::BitPacked(col) => col.get(row_idx),
             Self::Alp(col) => col.get_value(row_idx),
+            Self::Constant(col) => col.get(row_idx),
         }
     }
 
@@ -106,6 +114,7 @@ impl ColumnEncoding {
             Self::RleBool(col) => col.len(),
             Self::BitPacked(col) => col.len(),
             Self::Alp(col) => col.len(),
+            Self::Constant(col) => col.len(),
         }
     }
 
@@ -118,6 +127,7 @@ impl ColumnEncoding {
             Self::RleBool(col) => col.memory_usage(),
             Self::BitPacked(col) => col.memory_usage(),
             Self::Alp(col) => col.memory_usage(),
+            Self::Constant(col) => col.memory_usage(),
         }
     }
 
@@ -137,6 +147,7 @@ impl ColumnEncoding {
             Self::RleBool(col) => written += col.serialize_meta(writer)?,
             Self::BitPacked(col) => written += col.serialize_meta(writer)?,
             Self::Alp(col) => written += col.serialize_meta(writer)?,
+            Self::Constant(col) => written += col.serialize_meta(writer)?,
             Self::None => {}
         }
         Ok(written)
@@ -195,6 +206,10 @@ impl ColumnEncoding {
                     _ => None,
                 });
                 col.set(row_idx, float_val)?;
+                Ok(())
+            }
+            Self::Constant(col) => {
+                col.set(row_idx, value)?;
                 Ok(())
             }
         }

@@ -27,12 +27,20 @@ use graphdb_core::{StorageError, StorageResult, Value};
 #[derive(Debug, Clone)]
 pub struct VertexTableConfig {
     pub initial_capacity: usize,
+    /// Maximum version chain length per row before folding oldest entries.
+    /// Set to 0 to disable folding (unlimited chain growth).
+    pub version_chain_cap: usize,
+    /// Retention horizon for version chain folding. Entries older than this
+    /// timestamp may be folded. Use `Timestamp::MAX` to fold regardless of age.
+    pub retention_horizon: Timestamp,
 }
 
 impl Default for VertexTableConfig {
     fn default() -> Self {
         Self {
             initial_capacity: 4096,
+            version_chain_cap: 64,
+            retention_horizon: Timestamp::MAX,
         }
     }
 }
@@ -69,6 +77,10 @@ pub struct VertexTable {
     /// detect when a column's compression ratio degrades and recommend
     /// re-evaluating the encoding choice.
     pub(super) encoding_selector: EncodingSelector,
+    /// Maximum version chain length per row before folding oldest entries.
+    pub(super) version_chain_cap: usize,
+    /// Retention horizon for version chain folding.
+    pub(super) retention_horizon: Timestamp,
 }
 
 impl VertexTable {
@@ -111,6 +123,8 @@ impl VertexTable {
                 handle_counter: 0,
             },
             encoding_selector: EncodingSelector::default(),
+            version_chain_cap: config.version_chain_cap,
+            retention_horizon: config.retention_horizon,
         }
     }
 
@@ -176,6 +190,11 @@ impl VertexTable {
             self.timestamps.insert(internal_id, ts);
             self.columns
                 .set_versioned(internal_id as usize, &converted, ts)?;
+            self.columns.fold_oldest_for_row(
+                internal_id as usize,
+                self.version_chain_cap,
+                self.retention_horizon,
+            );
             return Ok(internal_id);
         }
 
@@ -183,6 +202,11 @@ impl VertexTable {
         self.timestamps.insert(internal_id, ts);
         self.columns
             .set_versioned(internal_id as usize, &converted, ts)?;
+        self.columns.fold_oldest_for_row(
+            internal_id as usize,
+            self.version_chain_cap,
+            self.retention_horizon,
+        );
 
         Ok(internal_id)
     }
@@ -372,7 +396,13 @@ impl VertexTable {
             col_name,
             Some(&converted_value),
             ts,
-        )
+        )?;
+        self.columns.fold_oldest_for_row(
+            internal_id as usize,
+            self.version_chain_cap,
+            self.retention_horizon,
+        );
+        Ok(())
     }
 
     pub fn update_property_by_id(
@@ -405,7 +435,13 @@ impl VertexTable {
             .columns
             .get_column_by_id_mut(col_id)
             .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
-        col.set_versioned(internal_id as usize, Some(&converted_value), ts)
+        col.set_versioned(internal_id as usize, Some(&converted_value), ts)?;
+        self.columns.fold_oldest_for_row(
+            internal_id as usize,
+            self.version_chain_cap,
+            self.retention_horizon,
+        );
+        Ok(())
     }
 
     pub fn delete(&mut self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
@@ -786,6 +822,22 @@ impl VertexTable {
         let _active_count = self.active_snapshot_count();
 
         Ok(count)
+    }
+
+    /// Incremental garbage collection: process at most `batch_size` rows per call.
+    /// Returns `(version_entries_removed, has_more_work)`.
+    ///
+    /// This is a non-blocking alternative to [`gc`](Self::gc) that processes
+    /// version chains in batches. Call repeatedly until `has_more_work` returns
+    /// `false`. Only handles version-chain GC; vertex deletion and compaction
+    /// should be done via a full `gc()` pass when safe.
+    pub fn gc_incremental(
+        &mut self,
+        min_ts: Timestamp,
+        batch_size: usize,
+    ) -> (usize, bool) {
+        self.columns
+            .gc_versions_incremental(min_ts, batch_size)
     }
 
     /// Compact timestamps independently of id_indexer and columns.
