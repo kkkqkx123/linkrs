@@ -1658,10 +1658,11 @@ fn cold_index_entry_to_edge(
 ) -> Edge {
     let src_vid = VertexId::from_int64(entry.src_internal as i64);
     let dst_vid = VertexId::from_int64(entry.dst_internal as i64);
-    let nbr = Nbr::new(
+    let nbr = Nbr::with_prop_offset(
         entry.dst_internal,
         entry.rank,
         EdgeId(0),
+        crate::edge::property_schema::PROP_OFFSET_NONE,
     );
     let record = snapshot.nbr_to_edge_record(&nbr, src_vid, dst_vid);
     let src_ext = external_id_string(ctx, src_label, entry.src_internal, &src_vid, ts);

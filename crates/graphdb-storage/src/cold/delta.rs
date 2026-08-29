@@ -447,7 +447,7 @@ impl ColdSnapshot {
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let nbr = Nbr::new(e.endpoint, e.rank, e.edge_id);
+                let nbr = Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset);
                 if let Some(update) = updates.get(&key) {
                     if let Some(offset) = properties.get_offset_by_edge_id(nbr.edge_id) {
                         properties.update(offset, &update.properties, delta.delta_ts)?;
@@ -466,7 +466,7 @@ impl ColdSnapshot {
                 edge.src_internal,
                 {
                     let (ep_vid, rank) = edge.neighbor.decode_edge_endpoint();
-                    Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, rank, edge.edge_id)
+                    Nbr::with_prop_offset(ep_vid.as_int64().unwrap_or(0) as u32, rank, edge.edge_id, crate::edge::property_schema::PROP_OFFSET_NONE)
                 },
                 edge.timestamp,
             ));
@@ -486,7 +486,7 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::new(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id),
+                    Nbr::with_prop_offset(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id, nbr.prop_offset),
                     *create_ts,
                 ));
             }

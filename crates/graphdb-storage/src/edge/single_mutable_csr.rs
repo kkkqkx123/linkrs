@@ -156,6 +156,7 @@ impl SingleMutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
+        prop_offset: u32,
     ) -> StorageResult<()> {
         let src_idx = src as usize;
 
@@ -182,6 +183,7 @@ impl SingleMutableCsr {
         nbr.rank = rank;
         nbr.edge_id = edge_id;
         nbr.delete_ts = Timestamp::MAX;
+        nbr.prop_offset = prop_offset;
 
         self.create_ts_cache.insert(edge_id, ts);
 
@@ -507,8 +509,9 @@ impl MutableCsrTrait for SingleMutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
+        prop_offset: u32,
     ) -> StorageResult<()> {
-        SingleMutableCsr::insert_edge(self, src, dst, edge_id, ts)
+        SingleMutableCsr::insert_edge(self, src, dst, edge_id, ts, prop_offset)
     }
 
     fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -561,12 +564,12 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99)
+            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99, crate::edge::property_schema::PROP_OFFSET_NONE)
             .is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101)
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 1);
@@ -577,11 +580,11 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100)
+        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 100)
+        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
 
         let data = csr1.dump();

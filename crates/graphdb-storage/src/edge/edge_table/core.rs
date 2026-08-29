@@ -435,7 +435,7 @@ impl TimeTravelEdgeStore {
                 if edge.to_vertex_id() == dst && edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        return Some(Nbr::new(edge.endpoint, edge.rank, edge_id));
+                        return Some(Nbr::with_prop_offset(edge.endpoint, edge.rank, edge_id, edge.prop_offset));
                     }
                 }
             }
@@ -499,7 +499,7 @@ impl TimeTravelEdgeStore {
                 if edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        edges.push(Nbr::new(edge.endpoint, edge.rank, edge_id));
+                        edges.push(Nbr::with_prop_offset(edge.endpoint, edge.rank, edge_id, edge.prop_offset));
                     }
                 }
             }
@@ -563,11 +563,24 @@ impl TimeTravelEdgeStore {
     fn edge_record_from_nbr(&self, src: u32, nbr: Nbr, query_ts: Timestamp) -> EdgeRecord {
         let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
         let rank = nbr.rank;
+        let properties = if nbr.prop_offset != crate::edge::property_schema::PROP_OFFSET_NONE {
+            self.properties
+                .get_by_prop_offset(nbr.prop_offset, Some(query_ts))
+                .map(|props| {
+                    props
+                        .into_iter()
+                        .filter_map(|(k, v)| v.map(|v| (k, v)))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            self.properties_for_edge_id(nbr.edge_id, query_ts)
+        };
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
             rank,
-            properties: self.properties_for_edge_id(nbr.edge_id, query_ts),
+            properties,
         }
     }
 
@@ -674,19 +687,20 @@ impl TimeTravelEdgeStore {
             )));
         }
 
+        let mut prop_offset = crate::edge::property_schema::PROP_OFFSET_NONE;
         if !converted_values.is_empty() {
-            self.properties
+            prop_offset = self.properties
                 .insert_with_edge_id(edge_id, &converted_values, ts)?;
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
+        if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts, prop_offset) {
             self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
-        if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
+        if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts, prop_offset) {
             // Roll back the out-direction insertion physically so no
             // tombstone residue remains; fall back to logical deletion if
             // the entry cannot be located (e.g. strategy mismatch).
@@ -923,7 +937,7 @@ impl TimeTravelEdgeStore {
             for (position, edge) in positioned_edges {
                 if edge.to_vertex_id() == dst {
                     let edge_id = segment.recover_edge_id(&edge, position);
-                    return Some(Nbr::new(edge.endpoint, edge.rank, edge_id));
+                    return Some(Nbr::with_prop_offset(edge.endpoint, edge.rank, edge_id, edge.prop_offset));
                 }
             }
         }
@@ -1571,7 +1585,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.endpoint, edge.rank, edge.edge_id));
+                    result.push(Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset));
                 }
             }
         }
@@ -1605,7 +1619,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(edge.endpoint, edge.rank, edge.edge_id));
+                    result.push(Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset));
                 }
             }
         }
@@ -1877,7 +1891,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     {
                         records.push(table.edge_record_from_nbr(
                             src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::new(edge.endpoint, edge.rank, edge.edge_id),
+                            Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset),
                             ts,
                         ));
 

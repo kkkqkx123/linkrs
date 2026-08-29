@@ -518,6 +518,65 @@ impl PropertyTable {
         Some(self.column_store.get_at_ts(row_idx, ts))
     }
 
+    /// Read properties by row index directly, bypassing the EdgeId → offset
+    /// HashMap indirection. This is the fast path used when the CSR entry
+    /// already carries the `prop_offset` (Phase 3 optimization).
+    pub fn get_by_row_index(
+        &self,
+        row_idx: usize,
+        query_ts: Option<Timestamp>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
+        if row_idx >= self.row_create_ts.len() {
+            return None;
+        }
+        let create_ts = *self.row_create_ts.get(row_idx)?;
+        if create_ts == 0 {
+            return None;
+        }
+        let ts = query_ts.unwrap_or(Timestamp::MAX);
+        if ts < create_ts {
+            return None;
+        }
+        if let Some(Some(delete_ts)) = self.row_delete_ts.get(row_idx) {
+            if ts >= *delete_ts {
+                return None;
+            }
+        }
+        Some(self.column_store.get_at_ts(row_idx, ts))
+    }
+
+    /// Read non-None property values by row index directly.
+    pub fn read_properties_by_row_index(&self, row_idx: usize) -> Option<Vec<(String, Value)>> {
+        let props = self.get_by_row_index(row_idx, None)?;
+        let result: Vec<(String, Value)> = props
+            .into_iter()
+            .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
+            .collect();
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Read properties by the `prop_offset` carried in a CSR entry.
+    /// Converts offset → row_index internally. Returns None if the offset
+    /// is [`PROP_OFFSET_NONE`] or the row is not visible at `query_ts`.
+    pub fn get_by_prop_offset(
+        &self,
+        prop_offset: u32,
+        query_ts: Option<Timestamp>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
+        let row_idx = prop_offset_to_index(prop_offset)?;
+        self.get_by_row_index(row_idx, query_ts)
+    }
+
+    /// Read non-None property values by the `prop_offset` carried in a CSR entry.
+    pub fn read_properties_by_prop_offset(&self, prop_offset: u32) -> Option<Vec<(String, Value)>> {
+        let row_idx = prop_offset_to_index(prop_offset)?;
+        self.read_properties_by_row_index(row_idx)
+    }
+
     pub(crate) fn is_row_visible(
         &self,
         row_idx: usize,

@@ -39,6 +39,7 @@ pub mod property_schema;
 pub mod property_table;
 pub mod single_mutable_csr;
 
+use property_schema::PROP_OFFSET_NONE;
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
@@ -225,6 +226,11 @@ impl EdgeSchema {
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).
 ///
+/// `prop_offset` is the PropertyTable row offset for this edge's properties.
+/// Storing it here enables direct property access from CSR scan results
+/// without the HashMap\<EdgeId, offset\> indirection (Phase 3 optimization).
+/// A value of [`PROP_OFFSET_NONE`] (0) means no properties are associated.
+///
 /// Use [`Nbr::to_vertex_id`] to reconstruct the full `VertexId` at the API boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Nbr {
@@ -232,6 +238,7 @@ pub struct Nbr {
     pub rank: i64,
     pub edge_id: EdgeId,
     pub delete_ts: Timestamp,
+    pub prop_offset: u32,
 }
 
 impl Nbr {
@@ -242,6 +249,23 @@ impl Nbr {
             rank,
             edge_id,
             delete_ts: Timestamp::MAX,
+            prop_offset: PROP_OFFSET_NONE,
+        }
+    }
+
+    /// Create a new alive edge with an associated property offset.
+    pub fn with_prop_offset(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        prop_offset: u32,
+    ) -> Self {
+        Self {
+            endpoint,
+            rank,
+            edge_id,
+            delete_ts: Timestamp::MAX,
+            prop_offset,
         }
     }
 
@@ -257,6 +281,24 @@ impl Nbr {
             rank,
             edge_id,
             delete_ts,
+            prop_offset: PROP_OFFSET_NONE,
+        }
+    }
+
+    /// Create with explicit delete timestamp and property offset.
+    pub fn with_timestamps_and_prop(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        delete_ts: Timestamp,
+        prop_offset: u32,
+    ) -> Self {
+        Self {
+            endpoint,
+            rank,
+            edge_id,
+            delete_ts,
+            prop_offset,
         }
     }
 
@@ -288,12 +330,16 @@ impl Nbr {
 /// Like [`Nbr`], stores the neighbor as a packed `(endpoint: u32, rank: i64)`
 /// pair. The `timestamp` field records the creation timestamp (used for
 /// time-travel queries on frozen CSR data).
+///
+/// `prop_offset` is the PropertyTable row offset for this edge's properties,
+/// enabling direct property access without HashMap indirection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImmutableNbr {
     pub endpoint: u32,
     pub rank: i64,
     pub edge_id: EdgeId,
     pub timestamp: Timestamp,
+    pub prop_offset: u32,
 }
 
 impl ImmutableNbr {
@@ -312,6 +358,24 @@ impl ImmutableNbr {
             rank,
             edge_id,
             timestamp,
+            prop_offset: PROP_OFFSET_NONE,
+        }
+    }
+
+    /// Create with explicit property offset.
+    pub fn with_timestamp_and_prop(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        timestamp: Timestamp,
+        prop_offset: u32,
+    ) -> Self {
+        Self {
+            endpoint,
+            rank,
+            edge_id,
+            timestamp,
+            prop_offset,
         }
     }
 

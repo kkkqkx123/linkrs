@@ -118,6 +118,7 @@ impl LabeledMutableCsr {
         edge_id: EdgeId,
         label: LabelId,
         ts: Timestamp,
+        prop_offset: u32,
     ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
             let min_capacity = src_vid as usize + 1;
@@ -150,14 +151,14 @@ impl LabeledMutableCsr {
             // Append to end of label range
             self.create_ts_cache.insert(edge_id, ts);
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.nbr_list.push(Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id));
+            self.nbr_list.push(Nbr::with_prop_offset(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id, prop_offset));
             ranges[idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
             self.create_ts_cache.insert(edge_id, ts);
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.nbr_list.push(Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id));
+            self.nbr_list.push(Nbr::with_prop_offset(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id, prop_offset));
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -248,6 +249,7 @@ impl CsrBase for LabeledMutableCsr {
                 rank,
                 edge_id,
                 delete_ts,
+                prop_offset: crate::edge::property_schema::PROP_OFFSET_NONE,
             });
         }
 
@@ -288,10 +290,11 @@ impl MutableCsrTrait for LabeledMutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
+        prop_offset: u32,
     ) -> StorageResult<()> {
         // For labeled CSR, we need the label information.
         // Since we don't have it in the basic interface, we treat all edges as label 0.
-        self.insert_edge_with_label(src_vid, dst, edge_id, 0, ts)
+        self.insert_edge_with_label(src_vid, dst, edge_id, 0, ts, prop_offset)
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -596,9 +599,9 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges with implicit label 0
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
 
         assert_eq!(csr.edge_count(), 2);
@@ -616,9 +619,9 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10)
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20)
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
 
         // Query at different timestamps
@@ -639,13 +642,13 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(5, 100);
 
         // Insert multiple edges across vertices
-        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1)
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1)
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1)
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
-        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1)
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
             .unwrap();
 
         // Iterate and collect
@@ -667,11 +670,12 @@ mod tests {
         for src in 0..5 {
             for dst in 0..3 {
                 let edge_id = (src * 3 + dst) as u64;
-                csr.insert_edge(
+                  csr.insert_edge(
                     src,
                     VertexId::from_int64(100 + dst as i64),
                     EdgeId(edge_id),
                     1,
+                    crate::edge::property_schema::PROP_OFFSET_NONE,
                 )
                 .unwrap();
             }

@@ -668,7 +668,7 @@ impl ColdSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
+            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
             .collect()
     }
 
@@ -676,14 +676,14 @@ impl ColdSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
+            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
             .collect()
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
+            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -694,7 +694,7 @@ impl ColdSnapshot {
         self.out_csr.edges_of(src).iter().find_map(|e| {
             let decoded = VertexId::from_int64(e.endpoint as i64);
             if decoded.as_int64() == Some(dst as i64) {
-                Some(Nbr::new(e.endpoint, e.rank, e.edge_id))
+                Some(Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
             } else {
                 None
             }
@@ -719,7 +719,7 @@ impl ColdSnapshot {
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
-                    nbr: Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id),
+                    nbr: Nbr::with_prop_offset(nbr.endpoint, nbr.rank, nbr.edge_id, nbr.prop_offset),
                     rank,
                     properties: None,
                 });
@@ -1103,7 +1103,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
                 .get(dict_id as usize)
                 .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
             let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
-            entries.push((v as u32, Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id), ts));
+            entries.push((v as u32, Nbr::with_prop_offset(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id, crate::edge::property_schema::PROP_OFFSET_NONE), ts));
         }
     }
     Ok(Csr::from_nbr_entries(&entries, capacity))

@@ -225,7 +225,7 @@ impl Csr {
             let pos = current_pos[idx] as usize;
             if pos < self.edges.len() {
                 self.edges[pos] =
-                    ImmutableNbr::with_timestamp(nbr.endpoint, nbr.rank, nbr.edge_id, *create_ts);
+                    ImmutableNbr::with_timestamp_and_prop(nbr.endpoint, nbr.rank, nbr.edge_id, *create_ts, nbr.prop_offset);
                 current_pos[idx] += 1;
             }
         }

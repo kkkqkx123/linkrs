@@ -89,7 +89,7 @@ fn remap_variant(
     )?;
     for (src, nbr) in &new_entries {
         let create_ts = old.create_ts_of(nbr.edge_id).unwrap_or(0);
-        csr.insert_edge(*src, nbr.to_vertex_id(), nbr.edge_id, create_ts)?;
+        csr.insert_edge(*src, nbr.to_vertex_id(), nbr.edge_id, create_ts, nbr.prop_offset)?;
         if nbr.delete_ts != Timestamp::MAX {
             let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
         }
@@ -111,7 +111,7 @@ fn remap_segment_csr(
         .iter()
         .map(|(src, nbr)| {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (src_u32, Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id), nbr.timestamp)
+            (src_u32, Nbr::with_prop_offset(nbr.endpoint, nbr.rank, nbr.edge_id, nbr.prop_offset), nbr.timestamp)
         })
         .collect();
 
@@ -247,7 +247,7 @@ pub(crate) fn remap_immutable_csr(
             let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
             (
                 new_src,
-                Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, ep_rank, nbr.edge_id),
+                Nbr::with_prop_offset(ep_vid.as_int64().unwrap_or(0) as u32, ep_rank, nbr.edge_id, nbr.prop_offset),
                 nbr.timestamp,
             )
         })

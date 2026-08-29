@@ -6,6 +6,7 @@
 use graphdb_core::StorageResult;
 
 use super::{EdgeId, Nbr, Timestamp, VertexId};
+use crate::edge::property_schema::PROP_OFFSET_NONE;
 
 pub trait CsrBase: std::fmt::Debug + Send + Sync {
     fn vertex_capacity(&self) -> usize;
@@ -20,6 +21,10 @@ pub trait CsrBase: std::fmt::Debug + Send + Sync {
 pub trait MutableCsrTrait: CsrBase {
     /// Insert an edge.
     ///
+    /// `prop_offset` is the PropertyTable row offset for this edge's properties.
+    /// Storing it in the CSR entry enables direct property access from scan
+    /// results without the HashMap\<EdgeId, offset\> indirection.
+    ///
     /// Returns `Ok(())` on success, or an error explaining why insertion failed:
     ///
     /// - `MutableCsr`: checks for duplicate (neighbor + valid timestamp) across primary and overflow,
@@ -33,6 +38,7 @@ pub trait MutableCsrTrait: CsrBase {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
+        prop_offset: u32,
     ) -> StorageResult<()>;
 
     /// Delete an edge by edge_id.
