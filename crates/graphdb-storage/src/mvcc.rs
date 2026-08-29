@@ -213,11 +213,6 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     ///
     /// Returns true if the deletion timestamp <= query timestamp.
     /// Checks hot layer first (O(1)), then cold layer (O(log n)).
-    ///
-    /// Read-side API of the tiered structure; production visibility goes
-    /// through the row records, this accessor is what the unit tests use to
-    /// verify promotion/GC behaviour across both layers.
-    #[cfg(test)]
     #[inline]
     pub fn is_tombstoned(&self, key: T, ts: Timestamp) -> bool {
         // Hot layer lookup (O(1))

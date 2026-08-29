@@ -1599,6 +1599,70 @@ impl Column {
         self.inner_mut().resize(encoded_len);
         Ok(())
     }
+
+    pub fn version_chain_len(&self, row_idx: usize) -> usize {
+        self.version_chains.get(row_idx).map(|c| c.len()).unwrap_or(0)
+    }
+
+    pub fn fold_oldest(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
+        if cap == 0 {
+            return;
+        }
+        let Some(chain) = self.version_chains.get_mut(row_idx) else {
+            return;
+        };
+        while chain.len() > cap {
+            if chain.len() < 2 {
+                break;
+            }
+            let can_fold_horizon = if horizon == Timestamp::MAX {
+                true
+            } else {
+                chain[1].end_ts <= horizon
+            };
+            if !can_fold_horizon {
+                break;
+            }
+            let second = chain.remove(1);
+            if chain[0].end_ts < second.end_ts {
+                chain[0].end_ts = second.end_ts;
+            }
+            // Keep the older value, drop the younger one
+            let _ = second;
+        }
+    }
+
+    pub fn clear_row_version_chains(&mut self, row_idx: usize) {
+        if row_idx < self.version_chains.len() {
+            self.version_chains[row_idx].clear();
+        }
+        if row_idx < self.row_start_ts.len() {
+            self.row_start_ts[row_idx] = 0;
+        }
+    }
+
+    pub fn row_start_ts_vec(&self) -> &Vec<Timestamp> {
+        &self.row_start_ts
+    }
+
+    pub fn set_row_start_ts(&mut self, v: Vec<Timestamp>) {
+        self.row_start_ts = v;
+        // Ensure version_chains matches length
+        if self.version_chains.len() < self.row_start_ts.len() {
+            self.version_chains.resize(self.row_start_ts.len(), Vec::new());
+        }
+    }
+
+    pub fn version_chains_ref(&self) -> &Vec<Vec<VersionEntry>> {
+        &self.version_chains
+    }
+
+    pub fn set_version_chains(&mut self, v: Vec<Vec<VersionEntry>>) {
+        self.version_chains = v;
+        if self.row_start_ts.len() < self.version_chains.len() {
+            self.row_start_ts.resize(self.version_chains.len(), 0);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1914,6 +1978,16 @@ impl ColumnStore {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    pub fn columns_mut(&mut self) -> &mut [Column] {
+        &mut self.columns
+    }
+
+    pub fn clear_row_version_chains(&mut self, row_idx: usize) {
+        for col in &mut self.columns {
+            col.clear_row_version_chains(row_idx);
+        }
     }
 
     pub fn load_column_from_raw(
