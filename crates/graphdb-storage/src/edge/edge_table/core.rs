@@ -1016,16 +1016,19 @@ impl TimeTravelEdgeStore {
             .map(|nbr| {
                 let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
-                let properties = self
-                    .properties
-                    .get_by_edge_id(nbr.edge_id, Some(ts))
-                    .map(|props| {
-                        props
-                            .into_iter()
-                            .filter_map(|(k, v)| v.map(|v| (k, v)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let properties = if nbr.prop_offset != crate::edge::property_schema::PROP_OFFSET_NONE {
+                    self.properties
+                        .get_by_prop_offset(nbr.prop_offset, Some(ts))
+                        .map(|props| {
+                            props
+                                .into_iter()
+                                .filter_map(|(k, v)| v.map(|v| (k, v)))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.properties_for_edge_id(nbr.edge_id, ts)
+                };
 
                 EdgeRecord {
                     src_vid: VertexId::from_int64(src as i64),
@@ -1066,16 +1069,19 @@ impl TimeTravelEdgeStore {
             .map(|nbr| {
                 let src_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
-                let properties = self
-                    .properties
-                    .get_by_edge_id(nbr.edge_id, Some(ts))
-                    .map(|props| {
-                        props
-                            .into_iter()
-                            .filter_map(|(k, v)| v.map(|v| (k, v)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let properties = if nbr.prop_offset != crate::edge::property_schema::PROP_OFFSET_NONE {
+                    self.properties
+                        .get_by_prop_offset(nbr.prop_offset, Some(ts))
+                        .map(|props| {
+                            props
+                                .into_iter()
+                                .filter_map(|(k, v)| v.map(|v| (k, v)))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.properties_for_edge_id(nbr.edge_id, ts)
+                };
 
                 EdgeRecord {
                     src_vid,

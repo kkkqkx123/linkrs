@@ -347,6 +347,9 @@ impl Csr {
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
+        // Format version (u32) —adds prop_offset per edge.
+        result.extend_from_slice(&2u32.to_le_bytes());
+
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
 
         result.extend_from_slice(&(self.offsets.len() as u64).to_le_bytes());
@@ -359,6 +362,7 @@ impl Csr {
             write_endpoint_rank(&mut result, edge.endpoint, edge.rank);
             result.extend_from_slice(&edge.edge_id.to_le_bytes());
             result.extend_from_slice(&edge.timestamp.to_le_bytes());
+            result.extend_from_slice(&edge.prop_offset.to_le_bytes());
         }
 
         result
@@ -374,7 +378,20 @@ impl Csr {
 
         let mut offset = 0usize;
 
-        let edge_count = read_u64_le(data, &mut offset)?;
+        // Read format version (u32). Version 1 has no version prefix and starts
+        // directly with edge_count (u64). Version 2+ writes a u32 version first.
+        let (format_version, edge_count) = {
+            let first_u32 = read_u32_le(data, &mut offset)?;
+            if first_u32 <= 2 {
+                // New format: first u32 is the format version.
+                (first_u32, read_u64_le(data, &mut offset)?)
+            } else {
+                // Old format (version 1, no prefix): first 8 bytes are edge_count.
+                offset = 0; // rewind — first_u32 was actually the low half of edge_count
+                (1u32, read_u64_le(data, &mut offset)?)
+            }
+        };
+
         let offsets_len = read_u64_le(data, &mut offset)? as usize;
 
         let mut offsets = Vec::with_capacity(offsets_len);
@@ -390,11 +407,18 @@ impl Csr {
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let timestamp = read_u64_le(data, &mut offset)?;
 
-            edges.push(ImmutableNbr::with_timestamp(
+            let prop_offset = if format_version >= 2 {
+                read_u32_le(data, &mut offset)?
+            } else {
+                crate::edge::property_schema::PROP_OFFSET_NONE
+            };
+
+            edges.push(ImmutableNbr::with_timestamp_and_prop(
                 endpoint,
                 rank,
                 EdgeId(raw_edge_id),
                 timestamp,
+                prop_offset,
             ));
         }
 
