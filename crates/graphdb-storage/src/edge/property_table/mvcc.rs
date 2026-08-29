@@ -51,10 +51,6 @@ impl PropertyTable {
         Ok(())
     }
 
-    pub(super) fn is_visible_at(&self, row_idx: usize, offset: u32, query_ts: Timestamp) -> bool {
-        self.is_row_visible(row_idx, offset, Some(query_ts))
-    }
-
     pub(super) fn check_write_conflict(
         &self,
         row_idx: usize,

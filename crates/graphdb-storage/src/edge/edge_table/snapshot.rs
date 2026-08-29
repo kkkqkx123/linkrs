@@ -113,6 +113,12 @@ pub struct SnapshotBuilder {
     edge_map: HashMap<(u32, EdgeId), (u32, Nbr, Timestamp)>,
 }
 
+impl Default for SnapshotBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SnapshotBuilder {
     /// Create a new snapshot builder
     pub fn new() -> Self {

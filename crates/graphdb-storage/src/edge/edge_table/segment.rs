@@ -141,6 +141,12 @@ pub struct SegmentVersion {
     pub checksum: u32,
 }
 
+impl Default for SegmentVersion {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SegmentVersion {
     /// Create a new segment version
     pub fn new() -> Self {

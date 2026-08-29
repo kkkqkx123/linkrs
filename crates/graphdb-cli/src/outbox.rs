@@ -76,7 +76,6 @@ pub enum OutboxCommand {
 
 /// HTTP client extensions for outbox operations.
 pub mod client_ext {
-    use super::*;
     use crate::client::HttpClient;
     use crate::utils::error::{CliError, Result};
 

@@ -68,6 +68,12 @@ impl fmt::Debug for LabeledMutableCsr {
     }
 }
 
+impl Default for LabeledMutableCsr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LabeledMutableCsr {
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_VERTEX_CAPACITY, DEFAULT_EDGE_CAPACITY)

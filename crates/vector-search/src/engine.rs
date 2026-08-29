@@ -868,321 +868,6 @@ fn sweep_hnsw(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{DistanceMetric, FilterCondition, Payload, VectorFilter};
-
-    fn config(dim: usize) -> CollectionConfig {
-        CollectionConfig::new(dim, DistanceMetric::Cosine)
-    }
-
-    fn point(id: u64, dim: usize) -> VectorPoint {
-        VectorPoint::new(
-            id,
-            (0..dim)
-                .map(|i| ((id as usize * 31 + i) % 100) as f32 / 100.0)
-                .collect(),
-        )
-    }
-
-    fn point_with_color(id: u64, dim: usize, color: &str) -> VectorPoint {
-        let mut payload: Payload = HashMap::new();
-        payload.insert("color".to_string(), serde_json::json!(color));
-        VectorPoint::new(id, (0..dim).map(|_| 0.5).collect()).with_payload(payload)
-    }
-
-    fn engine() -> LocalVectorEngine {
-        let dir = tempfile::tempdir().unwrap();
-        LocalVectorEngine::open(dir.path().join("vec")).unwrap()
-    }
-
-    #[test]
-    fn test_deletes_schedule_background_compaction() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("vec");
-        let engine = LocalVectorEngine::open(&root).unwrap();
-        engine.create_collection("col", &config(4)).unwrap();
-        for i in 0..10u64 {
-            engine.upsert("col", point(i, 4)).unwrap();
-        }
-        // 3/10 live-slot ratio crosses the 20% threshold: the mutation path
-        // must enqueue a background compaction without blocking.
-        engine.delete("col", "0").unwrap();
-        engine.delete("col", "1").unwrap();
-        engine.delete("col", "2").unwrap();
-
-        let store = engine.store("col").unwrap();
-        assert!(store.needs_compaction());
-
-        // The maintenance worker drains the queue promptly; poll briefly so
-        // the test does not depend on exact thread scheduling.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while store.meta().tombstone_count > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert_eq!(store.meta().tombstone_count, 0, "background compaction ran");
-        assert_eq!(store.count(), 7);
-    }
-
-    #[test]
-    fn test_create_open_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("vec");
-        {
-            let engine = LocalVectorEngine::open(&root).unwrap();
-            engine.create_collection("col_a", &config(4)).unwrap();
-            engine.upsert("col_a", point(1, 4)).unwrap();
-            engine.upsert("col_a", point(2, 4)).unwrap();
-            assert_eq!(engine.count("col_a").unwrap(), 2);
-        }
-        let reopened = LocalVectorEngine::open(&root).unwrap();
-        assert!(reopened.collection_exists("col_a"));
-        assert_eq!(reopened.count("col_a").unwrap(), 2);
-        let got = reopened.get("col_a", "1").unwrap().unwrap();
-        assert_eq!(got.vector, point(1, 4).vector);
-        assert!(reopened.get("col_a", "99").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_create_duplicate_fails() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        let err = engine.create_collection("col", &config(4)).unwrap_err();
-        assert!(matches!(err, VectorSearchError::CollectionAlreadyExists(_)));
-    }
-
-    #[test]
-    fn test_invalid_collection_name() {
-        let engine = engine();
-        let err = engine.create_collection("a/b", &config(4)).unwrap_err();
-        assert!(matches!(err, VectorSearchError::InvalidCollectionName(_)));
-        let err = engine.create_collection("", &config(4)).unwrap_err();
-        assert!(matches!(err, VectorSearchError::InvalidCollectionName(_)));
-    }
-
-    #[test]
-    fn test_delete_collection() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("vec");
-        {
-            let engine = LocalVectorEngine::open(&root).unwrap();
-            engine.create_collection("col", &config(4)).unwrap();
-            engine.upsert("col", point(1, 4)).unwrap();
-            engine.delete_collection("col").unwrap();
-            assert!(!engine.collection_exists("col"));
-        }
-        let reopened = LocalVectorEngine::open(&root).unwrap();
-        assert!(!reopened.collection_exists("col"));
-    }
-
-    #[test]
-    fn test_delete_collection_missing() {
-        let engine = engine();
-        let err = engine.delete_collection("nope").unwrap_err();
-        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
-    }
-
-    #[test]
-    fn test_collection_config_and_info() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        let cfg = engine.collection_config("col").unwrap().unwrap();
-        assert_eq!(cfg.vector_size, 4);
-        assert_eq!(cfg.distance, DistanceMetric::Cosine);
-        assert!(engine.collection_config("nope").unwrap().is_none());
-
-        engine.upsert("col", point(1, 4)).unwrap();
-        let info = engine.collection_info("col").unwrap();
-        assert_eq!(info.name, "col");
-        assert_eq!(info.points_count, 1);
-        assert_eq!(info.vector_count, 1);
-        assert_eq!(info.segments_count, 1);
-        assert_eq!(info.status, CollectionStatus::Green);
-    }
-
-    #[test]
-    fn test_search_returns_topk() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        engine.upsert("col", point(1, 4)).unwrap();
-        engine.upsert("col", point(2, 4)).unwrap();
-        engine.upsert("col", point(3, 4)).unwrap();
-
-        let results = engine
-            .search("col", &SearchQuery::new(vec![0.0; 4], 2).with_payload(true))
-            .unwrap();
-        assert_eq!(results.len(), 2);
-        assert!(
-            results[0].score >= results[1].score,
-            "results sorted descending: {:?}",
-            results
-        );
-    }
-
-    #[test]
-    fn test_search_dimension_mismatch() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        engine.upsert("col", point(1, 4)).unwrap();
-        let err = engine
-            .search("col", &SearchQuery::new(vec![1.0, 2.0], 1))
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            VectorSearchError::InvalidVectorDimension {
-                expected: 4,
-                actual: 2
-            }
-        ));
-    }
-
-    #[test]
-    fn test_delete_by_id() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        engine.upsert("col", point(1, 4)).unwrap();
-        engine.upsert("col", point(2, 4)).unwrap();
-        engine.delete("col", "1").unwrap();
-        assert_eq!(engine.count("col").unwrap(), 1);
-        assert!(engine.get("col", "1").unwrap().is_none());
-        engine.delete("col", "99").unwrap();
-        assert_eq!(engine.count("col").unwrap(), 1);
-    }
-
-    #[test]
-    fn test_delete_by_filter() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        engine.upsert("col", point_with_color(1, 4, "red")).unwrap();
-        engine
-            .upsert("col", point_with_color(2, 4, "blue"))
-            .unwrap();
-        engine.upsert("col", point_with_color(3, 4, "red")).unwrap();
-        assert_eq!(engine.count("col").unwrap(), 3);
-
-        let filter = VectorFilter::new().must(FilterCondition::match_value("color", "red"));
-        let deleted = engine.delete_by_filter("col", &filter).unwrap();
-        assert_eq!(deleted, 2);
-        assert_eq!(engine.count("col").unwrap(), 1);
-        assert!(engine.get("col", "2").unwrap().is_some());
-        assert!(engine.get("col", "1").unwrap().is_none());
-        assert!(engine.get("col", "3").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_delete_by_filter_no_match() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        engine.upsert("col", point(1, 4)).unwrap();
-        let filter = VectorFilter::new().must(FilterCondition::match_value("color", "red"));
-        assert_eq!(engine.delete_by_filter("col", &filter).unwrap(), 0);
-        assert_eq!(engine.count("col").unwrap(), 1);
-    }
-
-    #[test]
-    fn test_apply_txn_multi_collection() {
-        let engine = engine();
-        engine.create_collection("col_b", &config(4)).unwrap();
-        engine.create_collection("col_a", &config(4)).unwrap();
-
-        let ops = vec![
-            TxnOp::Upsert {
-                collection: "col_b".to_string(),
-                point: point(1, 4),
-            },
-            TxnOp::Upsert {
-                collection: "col_a".to_string(),
-                point: point(2, 4),
-            },
-            TxnOp::Delete {
-                collection: "col_a".to_string(),
-                point_id: "42".to_string(),
-            },
-        ];
-        engine.apply_txn(7, ops).unwrap();
-
-        assert_eq!(engine.count("col_a").unwrap(), 1);
-        assert_eq!(engine.count("col_b").unwrap(), 1);
-        assert!(engine.get("col_b", "1").unwrap().is_some());
-
-        // Replaying the same txn id is idempotent.
-        engine
-            .apply_txn(
-                7,
-                vec![TxnOp::Upsert {
-                    collection: "col_a".to_string(),
-                    point: point(2, 4),
-                }],
-            )
-            .unwrap();
-        assert_eq!(engine.count("col_a").unwrap(), 1);
-    }
-
-    #[test]
-    fn test_apply_txn_unknown_collection() {
-        let engine = engine();
-        let err = engine
-            .apply_txn(
-                1,
-                vec![TxnOp::Upsert {
-                    collection: "nope".to_string(),
-                    point: point(1, 4),
-                }],
-            )
-            .unwrap_err();
-        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
-    }
-
-    #[test]
-    fn test_apply_txn_validates_dimension() {
-        let engine = engine();
-        engine.create_collection("col", &config(4)).unwrap();
-        let err = engine
-            .apply_txn(
-                1,
-                vec![TxnOp::Upsert {
-                    collection: "col".to_string(),
-                    point: VectorPoint::new(1u64, vec![1.0, 2.0]),
-                }],
-            )
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            VectorSearchError::InvalidVectorDimension {
-                expected: 4,
-                actual: 2
-            }
-        ));
-        assert_eq!(engine.count("col").unwrap(), 0);
-    }
-
-    #[test]
-    fn test_wal_recovery_after_mutation() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("vec");
-        {
-            let engine = LocalVectorEngine::open(&root).unwrap();
-            engine.create_collection("col", &config(4)).unwrap();
-            engine
-                .apply_txn(
-                    3,
-                    vec![TxnOp::Upsert {
-                        collection: "col".to_string(),
-                        point: point(1, 4),
-                    }],
-                )
-                .unwrap();
-            engine.upsert("col", point(2, 4)).unwrap();
-            engine.delete("col", "2").unwrap();
-        }
-        let reopened = LocalVectorEngine::open(&root).unwrap();
-        assert_eq!(reopened.count("col").unwrap(), 1);
-        assert!(reopened.get("col", "1").unwrap().is_some());
-        assert!(reopened.get("col", "2").unwrap().is_none());
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Unified async VectorEngine trait
 // ---------------------------------------------------------------------------
@@ -1601,5 +1286,320 @@ impl VectorEngine for LocalVectorEngine {
     async fn count(&self, collection: &str) -> EngineResult<u64> {
         let collection = collection.to_string();
         tokio::task::block_in_place(|| self.count(&collection)).map_err(VectorEngineError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{DistanceMetric, FilterCondition, Payload, VectorFilter};
+
+    fn config(dim: usize) -> CollectionConfig {
+        CollectionConfig::new(dim, DistanceMetric::Cosine)
+    }
+
+    fn point(id: u64, dim: usize) -> VectorPoint {
+        VectorPoint::new(
+            id,
+            (0..dim)
+                .map(|i| ((id as usize * 31 + i) % 100) as f32 / 100.0)
+                .collect(),
+        )
+    }
+
+    fn point_with_color(id: u64, dim: usize, color: &str) -> VectorPoint {
+        let mut payload: Payload = HashMap::new();
+        payload.insert("color".to_string(), serde_json::json!(color));
+        VectorPoint::new(id, (0..dim).map(|_| 0.5).collect()).with_payload(payload)
+    }
+
+    fn engine() -> LocalVectorEngine {
+        let dir = tempfile::tempdir().unwrap();
+        LocalVectorEngine::open(dir.path().join("vec")).unwrap()
+    }
+
+    #[test]
+    fn test_deletes_schedule_background_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        let engine = LocalVectorEngine::open(&root).unwrap();
+        engine.create_collection("col", &config(4)).unwrap();
+        for i in 0..10u64 {
+            engine.upsert("col", point(i, 4)).unwrap();
+        }
+        // 3/10 live-slot ratio crosses the 20% threshold: the mutation path
+        // must enqueue a background compaction without blocking.
+        engine.delete("col", "0").unwrap();
+        engine.delete("col", "1").unwrap();
+        engine.delete("col", "2").unwrap();
+
+        let store = engine.store("col").unwrap();
+        assert!(store.needs_compaction());
+
+        // The maintenance worker drains the queue promptly; poll briefly so
+        // the test does not depend on exact thread scheduling.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.meta().tombstone_count > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(store.meta().tombstone_count, 0, "background compaction ran");
+        assert_eq!(store.count(), 7);
+    }
+
+    #[test]
+    fn test_create_open_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        {
+            let engine = LocalVectorEngine::open(&root).unwrap();
+            engine.create_collection("col_a", &config(4)).unwrap();
+            engine.upsert("col_a", point(1, 4)).unwrap();
+            engine.upsert("col_a", point(2, 4)).unwrap();
+            assert_eq!(engine.count("col_a").unwrap(), 2);
+        }
+        let reopened = LocalVectorEngine::open(&root).unwrap();
+        assert!(reopened.collection_exists("col_a"));
+        assert_eq!(reopened.count("col_a").unwrap(), 2);
+        let got = reopened.get("col_a", "1").unwrap().unwrap();
+        assert_eq!(got.vector, point(1, 4).vector);
+        assert!(reopened.get("col_a", "99").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_create_duplicate_fails() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        let err = engine.create_collection("col", &config(4)).unwrap_err();
+        assert!(matches!(err, VectorSearchError::CollectionAlreadyExists(_)));
+    }
+
+    #[test]
+    fn test_invalid_collection_name() {
+        let engine = engine();
+        let err = engine.create_collection("a/b", &config(4)).unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidCollectionName(_)));
+        let err = engine.create_collection("", &config(4)).unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidCollectionName(_)));
+    }
+
+    #[test]
+    fn test_delete_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        {
+            let engine = LocalVectorEngine::open(&root).unwrap();
+            engine.create_collection("col", &config(4)).unwrap();
+            engine.upsert("col", point(1, 4)).unwrap();
+            engine.delete_collection("col").unwrap();
+            assert!(!engine.collection_exists("col"));
+        }
+        let reopened = LocalVectorEngine::open(&root).unwrap();
+        assert!(!reopened.collection_exists("col"));
+    }
+
+    #[test]
+    fn test_delete_collection_missing() {
+        let engine = engine();
+        let err = engine.delete_collection("nope").unwrap_err();
+        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
+    }
+
+    #[test]
+    fn test_collection_config_and_info() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        let cfg = engine.collection_config("col").unwrap().unwrap();
+        assert_eq!(cfg.vector_size, 4);
+        assert_eq!(cfg.distance, DistanceMetric::Cosine);
+        assert!(engine.collection_config("nope").unwrap().is_none());
+
+        engine.upsert("col", point(1, 4)).unwrap();
+        let info = engine.collection_info("col").unwrap();
+        assert_eq!(info.name, "col");
+        assert_eq!(info.points_count, 1);
+        assert_eq!(info.vector_count, 1);
+        assert_eq!(info.segments_count, 1);
+        assert_eq!(info.status, CollectionStatus::Green);
+    }
+
+    #[test]
+    fn test_search_returns_topk() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        engine.upsert("col", point(1, 4)).unwrap();
+        engine.upsert("col", point(2, 4)).unwrap();
+        engine.upsert("col", point(3, 4)).unwrap();
+
+        let results = engine
+            .search("col", &SearchQuery::new(vec![0.0; 4], 2).with_payload(true))
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(
+            results[0].score >= results[1].score,
+            "results sorted descending: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_search_dimension_mismatch() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        engine.upsert("col", point(1, 4)).unwrap();
+        let err = engine
+            .search("col", &SearchQuery::new(vec![1.0, 2.0], 1))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            VectorSearchError::InvalidVectorDimension {
+                expected: 4,
+                actual: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn test_delete_by_id() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        engine.upsert("col", point(1, 4)).unwrap();
+        engine.upsert("col", point(2, 4)).unwrap();
+        engine.delete("col", "1").unwrap();
+        assert_eq!(engine.count("col").unwrap(), 1);
+        assert!(engine.get("col", "1").unwrap().is_none());
+        engine.delete("col", "99").unwrap();
+        assert_eq!(engine.count("col").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_delete_by_filter() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        engine.upsert("col", point_with_color(1, 4, "red")).unwrap();
+        engine
+            .upsert("col", point_with_color(2, 4, "blue"))
+            .unwrap();
+        engine.upsert("col", point_with_color(3, 4, "red")).unwrap();
+        assert_eq!(engine.count("col").unwrap(), 3);
+
+        let filter = VectorFilter::new().must(FilterCondition::match_value("color", "red"));
+        let deleted = engine.delete_by_filter("col", &filter).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(engine.count("col").unwrap(), 1);
+        assert!(engine.get("col", "2").unwrap().is_some());
+        assert!(engine.get("col", "1").unwrap().is_none());
+        assert!(engine.get("col", "3").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_by_filter_no_match() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        engine.upsert("col", point(1, 4)).unwrap();
+        let filter = VectorFilter::new().must(FilterCondition::match_value("color", "red"));
+        assert_eq!(engine.delete_by_filter("col", &filter).unwrap(), 0);
+        assert_eq!(engine.count("col").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_apply_txn_multi_collection() {
+        let engine = engine();
+        engine.create_collection("col_b", &config(4)).unwrap();
+        engine.create_collection("col_a", &config(4)).unwrap();
+
+        let ops = vec![
+            TxnOp::Upsert {
+                collection: "col_b".to_string(),
+                point: point(1, 4),
+            },
+            TxnOp::Upsert {
+                collection: "col_a".to_string(),
+                point: point(2, 4),
+            },
+            TxnOp::Delete {
+                collection: "col_a".to_string(),
+                point_id: "42".to_string(),
+            },
+        ];
+        engine.apply_txn(7, ops).unwrap();
+
+        assert_eq!(engine.count("col_a").unwrap(), 1);
+        assert_eq!(engine.count("col_b").unwrap(), 1);
+        assert!(engine.get("col_b", "1").unwrap().is_some());
+
+        // Replaying the same txn id is idempotent.
+        engine
+            .apply_txn(
+                7,
+                vec![TxnOp::Upsert {
+                    collection: "col_a".to_string(),
+                    point: point(2, 4),
+                }],
+            )
+            .unwrap();
+        assert_eq!(engine.count("col_a").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_apply_txn_unknown_collection() {
+        let engine = engine();
+        let err = engine
+            .apply_txn(
+                1,
+                vec![TxnOp::Upsert {
+                    collection: "nope".to_string(),
+                    point: point(1, 4),
+                }],
+            )
+            .unwrap_err();
+        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
+    }
+
+    #[test]
+    fn test_apply_txn_validates_dimension() {
+        let engine = engine();
+        engine.create_collection("col", &config(4)).unwrap();
+        let err = engine
+            .apply_txn(
+                1,
+                vec![TxnOp::Upsert {
+                    collection: "col".to_string(),
+                    point: VectorPoint::new(1u64, vec![1.0, 2.0]),
+                }],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            VectorSearchError::InvalidVectorDimension {
+                expected: 4,
+                actual: 2
+            }
+        ));
+        assert_eq!(engine.count("col").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_wal_recovery_after_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        {
+            let engine = LocalVectorEngine::open(&root).unwrap();
+            engine.create_collection("col", &config(4)).unwrap();
+            engine
+                .apply_txn(
+                    3,
+                    vec![TxnOp::Upsert {
+                        collection: "col".to_string(),
+                        point: point(1, 4),
+                    }],
+                )
+                .unwrap();
+            engine.upsert("col", point(2, 4)).unwrap();
+            engine.delete("col", "2").unwrap();
+        }
+        let reopened = LocalVectorEngine::open(&root).unwrap();
+        assert_eq!(reopened.count("col").unwrap(), 1);
+        assert!(reopened.get("col", "1").unwrap().is_some());
+        assert!(reopened.get("col", "2").unwrap().is_none());
     }
 }

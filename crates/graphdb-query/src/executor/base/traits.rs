@@ -11,6 +11,7 @@
 //! concrete backend.
 
 use std::fmt::Debug;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use std::sync::Arc;
 
 /// Search provider type enumeration

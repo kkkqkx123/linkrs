@@ -164,7 +164,7 @@ pub fn serialize_properties(properties: &PropertyTable, buf: &mut Vec<u8>) -> St
 }
 
 /// Load metadata from file cursor
-pub fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
+pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     let mut label_bytes = [0u8; 4];
     cursor.read_exact(&mut label_bytes)?;
     let label = u32::from_le_bytes(label_bytes);

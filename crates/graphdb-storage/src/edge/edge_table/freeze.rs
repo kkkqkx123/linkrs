@@ -12,6 +12,13 @@ use crate::edge::CsrVariant;
 use graphdb_core::types::Timestamp;
 use std::collections::HashSet;
 
+/// Configuration for incremental freeze operations.
+pub(crate) struct FreezeConfig {
+    pub region_vertex_count: usize,
+    pub max_regions_per_freeze: usize,
+    pub freeze_density_threshold: f32,
+}
+
 impl TimeTravelEdgeStore {
     /// Freeze CSR only (convert mutable delta to immutable segment).
     ///
@@ -51,15 +58,18 @@ impl TimeTravelEdgeStore {
         let out_segments_before = self.out_segments.len();
         let out_result =
             if self.config.region_vertex_count > 0 && self.config.max_regions_per_freeze > 0 {
+                let freeze_config = FreezeConfig {
+                    region_vertex_count: self.config.region_vertex_count,
+                    max_regions_per_freeze: self.config.max_regions_per_freeze,
+                    freeze_density_threshold: self.config.freeze_density_threshold,
+                };
                 Self::freeze_delta_incremental(
                     &mut self.out_csr,
                     &mut self.out_segments,
                     &mut self.out_free_space,
                     ts,
-                    self.config.region_vertex_count,
                     &self.calibrator,
-                    self.config.max_regions_per_freeze,
-                    self.config.freeze_density_threshold,
+                    &freeze_config,
                 )
             } else {
                 Self::freeze_delta(
@@ -76,15 +86,18 @@ impl TimeTravelEdgeStore {
         let in_segments_before = self.in_segments.len();
         let in_result =
             if self.config.region_vertex_count > 0 && self.config.max_regions_per_freeze > 0 {
+                let freeze_config = FreezeConfig {
+                    region_vertex_count: self.config.region_vertex_count,
+                    max_regions_per_freeze: self.config.max_regions_per_freeze,
+                    freeze_density_threshold: self.config.freeze_density_threshold,
+                };
                 Self::freeze_delta_incremental(
                     &mut self.in_csr,
                     &mut self.in_segments,
                     &mut self.in_free_space,
                     ts,
-                    self.config.region_vertex_count,
                     &self.calibrator,
-                    self.config.max_regions_per_freeze,
-                    self.config.freeze_density_threshold,
+                    &freeze_config,
                 )
             } else {
                 Self::freeze_delta(
@@ -237,14 +250,12 @@ impl TimeTravelEdgeStore {
     /// redistribution) otherwise per-leaf decisions apply.
     pub(crate) fn select_regions_to_freeze(
         delta: &CsrVariant,
-        region_vertex_count: usize,
         ts: Timestamp,
         calibrator: &super::calibrator::CalibratorTree,
-        max_regions_per_freeze: usize,
-        freeze_density_threshold: f32,
+        config: &FreezeConfig,
     ) -> HashSet<u32> {
         // Only Multiple variant supports region-aware incremental freeze
-        let regions = delta.regions_with_ts(region_vertex_count, Some(ts));
+        let regions = delta.regions_with_ts(config.region_vertex_count, Some(ts));
         if regions.is_empty() {
             return HashSet::new();
         }
@@ -255,13 +266,13 @@ impl TimeTravelEdgeStore {
         }
         // Fast path: small number of non-empty regions — freeze all to guarantee progress
         // and keep single-segment behavior for small tests.
-        if max_regions_per_freeze == 0 || non_empty.len() <= max_regions_per_freeze {
+        if config.max_regions_per_freeze == 0 || non_empty.len() <= config.max_regions_per_freeze {
             // Check calibrator effective threshold to decide if we should still be selective.
             // For small datasets we freeze all non-empty regions unless they are extremely sparse
             // and calibrator indicates no pressure.
             let calibrated_threshold = calibrator.calibrated_threshold();
             let effective_density_threshold =
-                (freeze_density_threshold as f64 * calibrated_threshold.multiplier) as f32;
+                (config.freeze_density_threshold as f64 * calibrated_threshold.multiplier) as f32;
             // If effective threshold is very low (<0.001) we already freeze all; otherwise
             // still check density to retain truly empty-ish regions.
             // For test compatibility, when non_empty <= max_regions, we freeze all that meet
@@ -279,7 +290,7 @@ impl TimeTravelEdgeStore {
             // If none selected due to very low density but we have edges, freeze the densest
             // up to max_regions to ensure progress, but for small case freeze all.
             if selected.is_empty() {
-                if non_empty.len() <= max_regions_per_freeze || max_regions_per_freeze == 0 {
+                if non_empty.len() <= config.max_regions_per_freeze || config.max_regions_per_freeze == 0 {
                     for r in non_empty {
                         selected.insert(r.region_id);
                     }
@@ -289,7 +300,7 @@ impl TimeTravelEdgeStore {
                         selected.insert(r.region_id);
                     }
                 }
-            } else if selected.len() < non_empty.len() && non_empty.len() <= max_regions_per_freeze
+            } else if selected.len() < non_empty.len() && non_empty.len() <= config.max_regions_per_freeze
             {
                 // All non-empty should be frozen for small case to preserve single-freeze semantics
                 // unless explicitly filtered by density. For correctness we ensure at least
@@ -307,7 +318,7 @@ impl TimeTravelEdgeStore {
         // Large case: selective incremental freeze
         let calibrated_threshold = calibrator.calibrated_threshold();
         let effective_density_threshold =
-            (freeze_density_threshold as f64 * calibrated_threshold.multiplier) as f32;
+            (config.freeze_density_threshold as f64 * calibrated_threshold.multiplier) as f32;
         let mut selected = HashSet::new();
         for r in &non_empty {
             let high_density = r.density >= effective_density_threshold;
@@ -332,7 +343,7 @@ impl TimeTravelEdgeStore {
             return non_empty.into_iter().map(|r| r.region_id).collect();
         }
         // Cap by max_regions_per_freeze: keep highest density regions
-        if max_regions_per_freeze > 0 && selected.len() > max_regions_per_freeze {
+        if config.max_regions_per_freeze > 0 && selected.len() > config.max_regions_per_freeze {
             let mut selected_vec: Vec<u32> = selected.into_iter().collect();
             // Sort by density descending
             selected_vec.sort_by(|a, b| {
@@ -348,7 +359,7 @@ impl TimeTravelEdgeStore {
                     .unwrap_or(0.0);
                 db.partial_cmp(&da).unwrap()
             });
-            selected_vec.truncate(max_regions_per_freeze);
+            selected_vec.truncate(config.max_regions_per_freeze);
             selected = selected_vec.into_iter().collect();
         }
 
@@ -393,24 +404,20 @@ impl TimeTravelEdgeStore {
         segments: &mut Vec<CsrSegment>,
         free_space: &mut super::free_space::SegmentFreeList,
         ts: Timestamp,
-        region_vertex_count: usize,
         calibrator: &super::calibrator::CalibratorTree,
-        max_regions_per_freeze: usize,
-        freeze_density_threshold: f32,
+        config: &FreezeConfig,
     ) -> merge::FreezeDeltaResult {
         // Non-Multiple variants have no region-aware overflow; fallback to full freeze
         if !matches!(delta, CsrVariant::Multiple(_)) {
-            return Self::freeze_delta(delta, segments, free_space, ts, region_vertex_count);
+            return Self::freeze_delta(delta, segments, free_space, ts, config.region_vertex_count);
         }
         delta.rebuild_overflow_index();
         // Decide which regions to freeze
         let selected = Self::select_regions_to_freeze(
             delta,
-            region_vertex_count,
             ts,
             calibrator,
-            max_regions_per_freeze,
-            freeze_density_threshold,
+            config,
         );
 
         // If no incremental selection (e.g. other CSR variant or empty), fallback to full
@@ -420,7 +427,7 @@ impl TimeTravelEdgeStore {
                 .iter_all()
                 .any(|(_, nbr)| delta.create_ts_of(nbr.edge_id).unwrap_or(0) <= ts);
             if has_visible {
-                return Self::freeze_delta(delta, segments, free_space, ts, region_vertex_count);
+                return Self::freeze_delta(delta, segments, free_space, ts, config.region_vertex_count);
             } else {
                 delta.clear();
                 return merge::FreezeDeltaResult { frozen_count: 0 };
@@ -428,7 +435,7 @@ impl TimeTravelEdgeStore {
         }
 
         // Drain selected regions from delta
-        let frozen_entries = delta.drain_regions(&selected, region_vertex_count, ts);
+        let frozen_entries = delta.drain_regions(&selected, config.region_vertex_count, ts);
         if frozen_entries.is_empty() {
             return merge::FreezeDeltaResult { frozen_count: 0 };
         }
@@ -481,8 +488,8 @@ impl TimeTravelEdgeStore {
                     .collect(),
             );
         }
-        if region_vertex_count > 0 {
-            segment.rebuild_regions_from_entries(region_vertex_count, &frozen_entries);
+        if config.region_vertex_count > 0 {
+            segment.rebuild_regions_from_entries(config.region_vertex_count, &frozen_entries);
         }
         segments.push(segment);
 

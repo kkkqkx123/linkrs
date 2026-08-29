@@ -1655,6 +1655,7 @@ impl SyncManager {
                 "SQLite outbox is not configured".to_string(),
             ));
         };
+        #[allow(unused_mut)]
         let mut diagnostics = self.execute_sync(|| async {
             outbox
                 .diagnostics()
@@ -2303,6 +2304,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     hash & (i64::MAX as u64)
 }
 
+#[cfg(feature = "vector")]
 fn format_vector_point_id(vertex_id: &graphdb_core::Value, tag: &str, field: &str) -> String {
     let raw = format!("{}", vertex_id);
     // Escape the delimiter '#' and the escape char '%' inside the vertex id

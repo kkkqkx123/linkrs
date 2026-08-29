@@ -102,7 +102,9 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
                 valid += 1;
             }
 
-            counts[vid] += valid;
+            if vid < counts.len() {
+                counts[vid] += valid;
+            }
             remaining_deleted_count += del_count;
             remaining_del_min = remaining_del_min.min(del_min);
             remaining_del_max = remaining_del_max.max(del_max);
@@ -126,8 +128,8 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
     };
 
     let mut total_valid = 0u32;
-    for i in 0..max_vertex {
-        total_valid += counts[i];
+    for count in counts.iter().take(max_vertex) {
+        total_valid += count;
     }
 
     if total_valid == 0 {
@@ -175,17 +177,21 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
                             }
                         }
                     }
-                    let pos_out = current_pos[vid] as usize;
-                    edges[pos_out] = ImmutableNbr::with_timestamp_and_prop(
-                        nbr.endpoint,
-                        nbr.rank,
-                        nbr.edge_id,
-                        nbr.timestamp,
-                        nbr.prop_offset,
-                    );
-                    current_pos[vid] += 1;
-                    if collect_edge_ids {
-                        merged_edge_ids.push(edge_id);
+                    if vid < current_pos.len() {
+                        let pos_out = current_pos[vid] as usize;
+                        if pos_out < edges.len() {
+                            edges[pos_out] = ImmutableNbr::with_timestamp_and_prop(
+                                nbr.endpoint,
+                                nbr.rank,
+                                nbr.edge_id,
+                                nbr.timestamp,
+                                nbr.prop_offset,
+                            );
+                            current_pos[vid] += 1;
+                            if collect_edge_ids {
+                                merged_edge_ids.push(edge_id);
+                            }
+                        }
                     }
                 }
             }

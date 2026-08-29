@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::cold::{ColdIndexEntry, ColdSnapshot};
-use crate::edge::edge_table::core::TimeTravelEdgeStore;
+
 use crate::edge::{EdgeRecord, EdgeStore, Nbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::params::EdgeOperationParams;

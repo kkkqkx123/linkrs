@@ -45,9 +45,7 @@ impl DensityStats {
     }
 
     pub fn space_efficiency(&self) -> f64 {
-        if self.edge_count == 0 {
-            1.0
-        } else if self.fragmented_capacity == 0 {
+        if self.edge_count == 0 || self.fragmented_capacity == 0 {
             1.0
         } else {
             1.0 - (self.fragmented_capacity as f64

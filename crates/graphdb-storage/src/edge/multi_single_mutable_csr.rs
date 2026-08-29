@@ -63,6 +63,12 @@ impl fmt::Debug for MultiSingleMutableCsr {
     }
 }
 
+impl Default for MultiSingleMutableCsr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultiSingleMutableCsr {
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_VERTEX_CAPACITY, DEFAULT_EDGES_PER_VERTEX)

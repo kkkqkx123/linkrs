@@ -12,7 +12,6 @@ use std::path::Path;
 use crate::compression::CompressionType;
 use crate::encoding::EncodingType;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
-use crate::vertex::IdKey;
 use graphdb_core::{StorageError, StorageResult};
 
 use super::core::VertexTable;
@@ -189,16 +188,9 @@ impl VertexTable {
             StorageError::io_error(format!("Failed to write id_indexer header: {}", e))
         })?;
 
-        let count = self.id_indexer.len() as u32;
-        payload.extend_from_slice(&count.to_le_bytes());
-
-        let mut key_buf = Vec::new();
-        for (key, id) in self.id_indexer.iter() {
-            payload.extend_from_slice(&id.to_le_bytes());
-            key.write_to(&mut key_buf);
-            payload.extend_from_slice(&(key_buf.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&key_buf);
-        }
+        // Use the new serialize method for cleaner code
+        let index_data = self.id_indexer.serialize();
+        payload.extend_from_slice(&index_data);
 
         let page_size = crate::compression::DEFAULT_PAGE_SIZE;
         let total_rows = self.id_indexer.len() as u32;
@@ -402,39 +394,18 @@ impl VertexTable {
             }
         }
 
-        let mut count_bytes = [0u8; 4];
-        cursor.read_exact(&mut count_bytes)?;
-        let count = u32::from_le_bytes(count_bytes) as usize;
+        // Use the new deserialize method
+        let remaining = cursor;
+        let indexer = crate::vertex::IdIndexer::deserialize(remaining)?;
+        self.id_indexer = indexer;
 
-        self.id_indexer.clear();
-
-        for _ in 0..count {
-            let mut id_bytes = [0u8; 4];
-            cursor.read_exact(&mut id_bytes)?;
-            let internal_id = u32::from_le_bytes(id_bytes);
-
-            let mut key_len_bytes = [0u8; 4];
-            cursor.read_exact(&mut key_len_bytes)?;
-            let key_bytes = take_bytes(
-                &mut cursor,
-                u32::from_le_bytes(key_len_bytes),
-                "vertex id key",
-            )?;
-            let key = IdKey::from_bytes(&key_bytes)?;
-
-            self.id_indexer.set_at(internal_id, key);
-        }
-
-        if total_rows != count as u32 {
+        // Verify total_rows
+        if total_rows != self.id_indexer.len() as u32 {
             return Err(StorageError::deserialize_error(format!(
                 "id_indexer total_rows mismatch: header={}, actual={}",
-                total_rows, count
+                total_rows,
+                self.id_indexer.len()
             )));
-        }
-        if !cursor.is_empty() {
-            return Err(StorageError::deserialize_error(
-                "trailing bytes in vertex id index",
-            ));
         }
 
         Ok(())

@@ -198,41 +198,6 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     pub fn is_empty(&self) -> bool {
         self.hot_tombstones.is_empty() && self.cold_tombstones.is_empty()
     }
-
-    /// Get hot layer size
-    ///
-    /// Production code no longer persists the tombstone count; this accessor
-    /// exists only for the unit tests that verify hot-layer promotion/GC.
-    #[cfg(test)]
-    #[inline]
-    pub fn hot_len(&self) -> usize {
-        self.hot_tombstones.len()
-    }
-
-    /// Check if a key is tombstoned (deleted) at the given timestamp
-    ///
-    /// Returns true if the deletion timestamp <= query timestamp.
-    /// Checks hot layer first (O(1)), then cold layer (O(log n)).
-    #[inline]
-    pub fn is_tombstoned(&self, key: T, ts: Timestamp) -> bool {
-        // Hot layer lookup (O(1))
-        if let Some(&delete_ts) = self.hot_tombstones.get(&key) {
-            return delete_ts <= ts;
-        }
-
-        // Cold layer lookup (O(log n) binary search)
-        match self.cold_tombstones.binary_search_by_key(&key, |e| e.key) {
-            Ok(idx) => self.cold_tombstones[idx].delete_ts <= ts,
-            Err(_) => false,
-        }
-    }
-
-    /// Get cold layer size (layer-distribution diagnostics / tests)
-    #[cfg(test)]
-    #[inline]
-    pub fn cold_len(&self) -> usize {
-        self.cold_tombstones.len()
-    }
 }
 
 #[cfg(test)]
@@ -244,17 +209,6 @@ mod tests {
         let handle = SnapshotHandle::new(100, 1);
         assert_eq!(handle.ts, 100);
         assert_eq!(handle.id, 1);
-    }
-
-    #[test]
-    fn test_tiered_tombstone_manager_basic() {
-        let mut mgr = TieredTombstoneManager::new(100);
-
-        // Add a tombstone
-        mgr.add_tombstone(1u32, 50);
-        assert!(mgr.is_tombstoned(1u32, 50));
-        assert!(mgr.is_tombstoned(1u32, 100));
-        assert!(!mgr.is_tombstoned(1u32, 40));
     }
 
     #[test]
@@ -272,85 +226,6 @@ mod tests {
             total_removed += removed;
         }
         assert_eq!(total_removed, 100);
-    }
-
-    #[test]
-    fn test_tiered_tombstone_hot_layer() {
-        let mut mgr = TieredTombstoneManager::new(10);
-
-        // Fill hot layer
-        for i in 0..5 {
-            mgr.add_tombstone(i, 100);
-        }
-
-        assert_eq!(mgr.hot_len(), 5);
-        assert_eq!(mgr.cold_len(), 0);
-
-        // Verify all are in hot layer
-        for i in 0..5 {
-            assert!(mgr.is_tombstoned(i, 100));
-        }
-    }
-
-    #[test]
-    fn test_tiered_tombstone_promotion() {
-        let mut mgr = TieredTombstoneManager::new(10);
-
-        // Add enough entries to trigger promotion (threshold = 15)
-        for i in 0..20 {
-            mgr.add_tombstone(i, 100 + i as Timestamp);
-        }
-
-        // After promotion, should have both hot and cold
-        assert!(mgr.hot_len() > 0);
-        assert!(mgr.cold_len() > 0);
-        assert_eq!(mgr.hot_len() + mgr.cold_len(), 20);
-
-        // All entries should still be queryable
-        for i in 0..20 {
-            assert!(mgr.is_tombstoned(i, 100 + i as Timestamp + 1));
-        }
-    }
-
-    #[test]
-    fn test_tiered_tombstone_gc() {
-        let mut mgr = TieredTombstoneManager::new(10);
-
-        // Add tombstones at different times
-        for i in 0..10 {
-            mgr.add_tombstone(i, 50 + i as Timestamp);
-        }
-
-        // GC everything with delete_ts < 55 (entries 0-4)
-        let removed = mgr.gc(55);
-        assert_eq!(removed, 5);
-
-        // Old entries should not be found
-        assert!(!mgr.is_tombstoned(0u32, 100));
-        assert!(!mgr.is_tombstoned(4u32, 100));
-
-        // New entries should still be found
-        assert!(mgr.is_tombstoned(5u32, 100));
-        assert!(mgr.is_tombstoned(9u32, 100));
-    }
-
-    #[test]
-    fn test_tiered_tombstone_binary_search() {
-        let mut mgr = TieredTombstoneManager::new(5);
-
-        // Add entries that will be promoted to cold
-        for i in 0..10 {
-            mgr.add_tombstone(i * 100, 100);
-        }
-
-        // All should be queryable via binary search
-        for i in 0..10 {
-            assert!(mgr.is_tombstoned(i * 100, 100));
-        }
-
-        // Non-existent keys should return false
-        assert!(!mgr.is_tombstoned(50u32, 100));
-        assert!(!mgr.is_tombstoned(150u32, 100));
     }
 
     #[test]

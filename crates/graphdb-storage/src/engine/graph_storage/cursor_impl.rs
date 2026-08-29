@@ -1063,20 +1063,7 @@ fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Tim
     }
 }
 
-fn decode_endpoint(key: VertexId) -> (VertexId, i64) {
-    let bytes = key.as_bytes();
-    if bytes.len() != 16 {
-        return (key, 0);
-    }
-    let mut endpoint_bytes = [0u8; 8];
-    endpoint_bytes.copy_from_slice(&bytes[..8]);
-    let mut rank_bytes = [0u8; 8];
-    rank_bytes.copy_from_slice(&bytes[8..16]);
-    (
-        VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),
-        i64::from_be_bytes(rank_bytes),
-    )
-}
+
 
 /// Decode edge properties keeping projected columns plus any extra columns
 /// required by pushed scan predicates.

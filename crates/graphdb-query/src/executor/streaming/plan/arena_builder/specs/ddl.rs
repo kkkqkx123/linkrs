@@ -813,7 +813,7 @@ fn resolve_param_to_vector(
         graphdb_core::Value::List(list) => list
             .iter()
             .map(|v| match v {
-                graphdb_core::Value::Float(f) => Ok(*f as f32),
+                graphdb_core::Value::Float(f) => Ok(*f),
                 graphdb_core::Value::Int(i) => Ok(*i as f32),
                 graphdb_core::Value::Double(d) => Ok(*d as f32),
                 _ => Err(PlanBuildError::capability(

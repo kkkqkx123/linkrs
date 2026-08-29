@@ -120,12 +120,12 @@ impl PropertyValueIndex {
     ) {
         self.clear();
         let free_set: HashSet<u32> = free_list.iter().copied().collect();
-        for row_idx in 0..row_create_ts.len() {
+        for (row_idx, create_ts) in row_create_ts.iter().enumerate() {
             let offset = prop_index_to_offset(row_idx);
             if free_set.contains(&offset) {
                 continue;
             }
-            if row_create_ts[row_idx] == 0 {
+            if *create_ts == 0 {
                 continue;
             }
             if row_delete_ts.get(row_idx).and_then(|v| *v).is_some() {
@@ -604,15 +604,6 @@ impl PropertyTable {
         true
     }
 
-    pub(crate) fn is_tombstoned_at(&self, offset: u32, ts: Timestamp) -> bool {
-        if let Some(row_idx) = prop_offset_to_index(offset) {
-            if let Some(Some(delete_ts)) = self.row_delete_ts.get(row_idx) {
-                return ts >= *delete_ts;
-            }
-        }
-        false
-    }
-
     pub fn set_property(
         &mut self,
         offset: u32,
@@ -747,17 +738,6 @@ impl PropertyTable {
                     | DataType::Double
             )
         })
-    }
-
-    pub(crate) fn ensure_row_meta(&mut self, n: usize) {
-        if self.row_create_ts.len() < n {
-            self.row_create_ts.resize(n, 0);
-            self.row_delete_ts.resize(n, None);
-        }
-    }
-
-    pub(crate) fn clear_row_version_chains(&mut self, row_idx: usize) {
-        self.column_store.clear_row_version_chains(row_idx);
     }
 
     pub(crate) fn fold_oldest_versions(&mut self, row_idx: usize) {

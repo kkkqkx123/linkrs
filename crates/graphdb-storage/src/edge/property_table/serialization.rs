@@ -510,16 +510,4 @@ impl PropertyTable {
 
         Ok(())
     }
-
-    pub(super) fn data_type_byte_size(dt: &DataType) -> Option<usize> {
-        match dt {
-            DataType::Bool => Some(1),
-            DataType::SmallInt => Some(2),
-            DataType::Int => Some(4),
-            DataType::BigInt => Some(8),
-            DataType::Float => Some(4),
-            DataType::Double => Some(8),
-            _ => None,
-        }
-    }
 }

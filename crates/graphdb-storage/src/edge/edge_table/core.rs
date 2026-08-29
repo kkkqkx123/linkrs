@@ -361,9 +361,7 @@ impl TimeTravelEdgeStore {
             std::collections::HashMap::new();
         for seg in &self.out_segments {
             for meta in &seg.regions {
-                let entry = agg
-                    .entry(meta.region_id)
-                    .or_insert_with(DensityStats::default);
+                let entry = agg.entry(meta.region_id).or_default();
                 entry.edge_count += meta.edge_count as u64;
                 entry.deleted_count += meta.deleted_count as u64;
                 entry.fragmented_capacity += meta.estimated_bytes as u64;

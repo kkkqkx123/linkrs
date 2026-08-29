@@ -318,7 +318,7 @@ mod tests {
         store.put(0, Some(&payload(&[("a", json!(1))]))).unwrap();
         store.put(0, Some(&payload(&[("b", json!(2))]))).unwrap();
         let got = store.get(0).unwrap().unwrap();
-        assert!(got.get("a").is_none());
+        assert!(!got.contains_key("a"));
         assert_eq!(got.get("b"), Some(&json!(2)));
     }
 

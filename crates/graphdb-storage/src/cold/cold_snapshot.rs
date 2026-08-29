@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-use crate::edge::edge_table::core::TimeTravelEdgeStore;
+
 use crate::edge::edge_table::remap::remap_immutable_csr;
 use crate::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};

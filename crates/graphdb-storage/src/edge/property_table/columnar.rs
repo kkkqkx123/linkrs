@@ -119,8 +119,6 @@ impl PropertyTable {
         offset: u32,
         query_ts: Option<Timestamp>,
     ) -> Option<Vec<(String, Option<Value>)>> {
-        // Fixed-size fast path now delegates to column store directly.
-        // Keep the name for back-compat; no separate row deserialization.
         self.get(offset, query_ts)
     }
 

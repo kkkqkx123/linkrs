@@ -579,10 +579,6 @@ impl ShardRuntime {
         let rev_base = self.base_reverse.load();
         write_chunked_index_checkpoint(&rev_dir, &rev_base)?;
 
-        // Remove legacy files if they exist
-        let _ = std::fs::remove_file(self.checkpoint_file.join("forward_index.bin"));
-        let _ = std::fs::remove_file(self.checkpoint_file.join("reverse_index.bin"));
-
         self.dirty.store(false, Ordering::Release);
         Ok(())
     }

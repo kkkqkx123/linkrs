@@ -142,19 +142,8 @@ impl PropertyTable {
             let mut keep = true;
             if let Some(lo) = lower {
                 if let Some(ref max) = stats.max_value {
-                    let cmp = max.cmp(lo);
-                    if cmp == std::cmp::Ordering::Less
-                        || (cmp == std::cmp::Ordering::Equal && !include_upper && max == lo)
-                    {
-                        if max < lo {
-                            keep = false;
-                        } else if !include_lower && max == lo {
-                        }
-                    }
-                    if !keep {
-                        if max < lo || (!include_lower && max == lo) {
-                            keep = false;
-                        }
+                    if max < lo || (!include_lower && max == lo) {
+                        keep = false;
                     }
                 }
             }

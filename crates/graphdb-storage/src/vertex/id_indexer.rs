@@ -236,12 +236,6 @@ impl IdManager {
         self.live_ids.iter().copied().collect()
     }
 
-    pub fn clear(&mut self) {
-        self.key_to_id.clear();
-        self.keys.clear();
-        self.live_ids.clear();
-    }
-
     pub fn compact(&mut self) -> StorageResult<HashMap<u32, u32>> {
         let entries: Vec<(u32, IdKey)> = self
             .key_to_id
@@ -312,6 +306,62 @@ impl IdManager {
 
     pub fn memory_size(&self) -> usize {
         self.memory_usage() + std::mem::size_of::<Self>()
+    }
+
+    /// Serialize the index to bytes for persistence.
+    ///
+    /// Format:
+    /// - count: u32 (number of entries)
+    /// - for each entry:
+    ///   - internal_id: u32
+    ///   - key_len: u32
+    ///   - key_bytes: [u8; key_len]
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let count = self.key_to_id.len() as u32;
+        buf.extend_from_slice(&count.to_le_bytes());
+
+        let mut key_buf = Vec::new();
+        for (idx, key_opt) in self.keys.iter().enumerate() {
+            if let Some(key) = key_opt {
+                buf.extend_from_slice(&(idx as u32).to_le_bytes());
+                key.write_to(&mut key_buf);
+                buf.extend_from_slice(&(key_buf.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&key_buf);
+            }
+        }
+
+        buf
+    }
+
+    /// Deserialize from bytes, rebuilding the index.
+    pub fn deserialize(data: &[u8]) -> StorageResult<Self> {
+        use std::io::Read;
+
+        let mut cursor = data;
+        let mut count_bytes = [0u8; 4];
+        cursor.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+
+        let mut manager = Self::with_config(IdIndexerConfig::default());
+        manager.reserve(count);
+
+        for _ in 0..count {
+            let mut id_bytes = [0u8; 4];
+            cursor.read_exact(&mut id_bytes)?;
+            let internal_id = u32::from_le_bytes(id_bytes);
+
+            let mut key_len_bytes = [0u8; 4];
+            cursor.read_exact(&mut key_len_bytes)?;
+            let key_len = u32::from_le_bytes(key_len_bytes) as usize;
+            let mut key_bytes = vec![0u8; key_len];
+            cursor.read_exact(&mut key_bytes)?;
+
+            let key = IdKey::from_bytes(&key_bytes)?;
+            manager.set_at(internal_id, key);
+        }
+
+        Ok(manager)
     }
 }
 
@@ -398,11 +448,6 @@ impl IdIndexer {
         self.manager.lock().live_ids()
     }
 
-    pub fn clear(&self) {
-        let mut manager = self.manager.lock();
-        manager.clear();
-    }
-
     pub fn memory_size(&self) -> usize {
         let manager = self.manager.lock();
         manager.memory_size() + std::mem::size_of::<Self>()
@@ -413,9 +458,18 @@ impl IdIndexer {
         manager.compact()
     }
 
-    pub fn set_at(&self, index: u32, key: IdKey) {
-        let mut manager = self.manager.lock();
-        manager.set_at(index, key);
+    /// Serialize the index to bytes for persistence.
+    pub fn serialize(&self) -> Vec<u8> {
+        let manager = self.manager.lock();
+        manager.serialize()
+    }
+
+    /// Deserialize from bytes, rebuilding the index.
+    pub fn deserialize(data: &[u8]) -> StorageResult<Self> {
+        let manager = IdManager::deserialize(data)?;
+        Ok(Self {
+            manager: Arc::new(Mutex::new(manager)),
+        })
     }
 }
 
@@ -621,5 +675,130 @@ mod tests {
         assert_eq!(indexer.len(), 2);
 
         assert_eq!(indexer.get_index(&IdKey::Text("v2".to_string())), None);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_string_ids() {
+        let indexer = IdIndexer::new();
+
+        indexer.insert(IdKey::Text("vertex1".to_string())).unwrap();
+        indexer.insert(IdKey::Text("vertex2".to_string())).unwrap();
+        indexer.insert(IdKey::Text("vertex3".to_string())).unwrap();
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 3);
+        assert_eq!(
+            deserialized.get_index(&IdKey::Text("vertex1".to_string())),
+            Some(0)
+        );
+        assert_eq!(
+            deserialized.get_index(&IdKey::Text("vertex2".to_string())),
+            Some(1)
+        );
+        assert_eq!(
+            deserialized.get_index(&IdKey::Text("vertex3".to_string())),
+            Some(2)
+        );
+        assert_eq!(
+            deserialized.get_key(0),
+            Some(IdKey::Text("vertex1".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_serialize_deserialize_int_ids() {
+        let indexer = IdIndexer::new();
+
+        indexer.insert(IdKey::Int(100)).unwrap();
+        indexer.insert(IdKey::Int(200)).unwrap();
+        indexer.insert(IdKey::Int(300)).unwrap();
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 3);
+        assert_eq!(deserialized.get_index(&IdKey::Int(100)), Some(0));
+        assert_eq!(deserialized.get_index(&IdKey::Int(200)), Some(1));
+        assert_eq!(deserialized.get_index(&IdKey::Int(300)), Some(2));
+        assert_eq!(deserialized.get_key(0), Some(IdKey::Int(100)));
+    }
+
+    #[test]
+    fn test_serialize_deserialize_mixed_ids() {
+        let indexer = IdIndexer::new();
+
+        indexer.insert(IdKey::Int(100)).unwrap();
+        indexer.insert(IdKey::Text("vertex1".to_string())).unwrap();
+        indexer.insert(IdKey::Int(200)).unwrap();
+        indexer.insert(IdKey::Text("vertex2".to_string())).unwrap();
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 4);
+        assert_eq!(deserialized.get_index(&IdKey::Int(100)), Some(0));
+        assert_eq!(
+            deserialized.get_index(&IdKey::Text("vertex1".to_string())),
+            Some(1)
+        );
+        assert_eq!(deserialized.get_index(&IdKey::Int(200)), Some(2));
+        assert_eq!(
+            deserialized.get_index(&IdKey::Text("vertex2".to_string())),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn test_serialize_deserialize_empty() {
+        let indexer = IdIndexer::new();
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 0);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_with_deletions() {
+        let indexer = IdIndexer::new();
+
+        indexer.insert(IdKey::Int(1)).unwrap();
+        indexer.insert(IdKey::Int(2)).unwrap();
+        indexer.insert(IdKey::Int(3)).unwrap();
+        indexer.insert(IdKey::Int(4)).unwrap();
+        indexer.insert(IdKey::Int(5)).unwrap();
+
+        indexer.remove(&IdKey::Int(2));
+        indexer.remove(&IdKey::Int(4));
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 3);
+        assert_eq!(deserialized.get_index(&IdKey::Int(1)), Some(0));
+        assert_eq!(deserialized.get_index(&IdKey::Int(2)), None);
+        assert_eq!(deserialized.get_index(&IdKey::Int(3)), Some(2));
+        assert_eq!(deserialized.get_index(&IdKey::Int(4)), None);
+        assert_eq!(deserialized.get_index(&IdKey::Int(5)), Some(4));
+    }
+
+    #[test]
+    fn test_serialize_deserialize_large_dataset() {
+        let indexer = IdIndexer::new();
+
+        for i in 0..1000 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+
+        let data = indexer.serialize();
+        let deserialized = IdIndexer::deserialize(&data).unwrap();
+
+        assert_eq!(deserialized.len(), 1000);
+
+        for i in 0..1000 {
+            assert_eq!(deserialized.get_index(&IdKey::Int(i)), Some(i as u32));
+        }
     }
 }
