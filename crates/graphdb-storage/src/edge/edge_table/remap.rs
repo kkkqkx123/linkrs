@@ -88,7 +88,7 @@ fn remap_variant(
         overflow_chunk_edges,
     )?;
     for (src, nbr) in &new_entries {
-        let create_ts = old.create_ts_of(nbr.edge_id).unwrap_or(0);
+        let create_ts = nbr.create_ts;
         csr.insert_edge(
             *src,
             nbr.to_vertex_id(),

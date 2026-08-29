@@ -744,7 +744,7 @@ mod tests {
         // edge_timestamps restored from metadata
         assert!(loaded.mvcc.edge_timestamps.len() >= 3);
 
-        // CSR create_ts_cache rebuilt from edge_timestamps
+        // CSR create_ts stored inline in Nbr entries after load
         use crate::edge::csr_trait::MutableCsrTrait;
         assert_eq!(
             loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(0)),

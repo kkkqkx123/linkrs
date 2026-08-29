@@ -864,7 +864,7 @@ fn scan_mutable(args: ScanArgs) {
         // projection. Filtering happens before offset/limit accounting.
         let mut properties = decode_edge_properties(
             args.store,
-            nbr.edge_id,
+            nbr.prop_offset,
             args.projection,
             args.predicate_columns,
         );
@@ -951,7 +951,7 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
         // Same decode-once / pre-filter discipline as the mutable scan.
         let mut properties = decode_edge_properties(
             args.store,
-            nbr.edge_id,
+            nbr.prop_offset,
             args.projection,
             args.predicate_columns,
         );
@@ -1069,13 +1069,13 @@ fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Tim
 /// required by pushed scan predicates.
 fn decode_edge_properties(
     store: &TimeTravelEdgeStore,
-    edge_id: EdgeId,
+    prop_offset: u32,
     projection: &Option<Vec<String>>,
     predicate_columns: &[String],
 ) -> Vec<(String, Value)> {
     store
         .properties
-        .get_by_edge_id(edge_id, None)
+        .get(prop_offset, None)
         .map(|props| {
             props
                 .into_iter()

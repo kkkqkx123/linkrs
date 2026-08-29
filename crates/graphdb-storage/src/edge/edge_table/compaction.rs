@@ -182,60 +182,48 @@ impl TimeTravelEdgeStore {
     pub fn compact_properties(&mut self, ts: Timestamp) {
         let mut valid_offsets = std::collections::HashSet::new();
 
-        // Collect valid edge_ids from out CSR delta, then resolve to offsets
+        // Collect valid prop_offsets from out CSR delta
         for (_, nbr) in self.out_csr.iter(ts) {
-            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                valid_offsets.insert(offset);
-            }
+            valid_offsets.insert(nbr.prop_offset);
         }
 
-        // Collect valid edge_ids from out segments, then resolve to offsets
+        // Collect valid prop_offsets from out segments
         for segment in &self.out_segments {
             let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
-                        if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                            valid_offsets.insert(offset);
-                        }
+                        valid_offsets.insert(nbr.prop_offset);
                     }
                 }
             } else {
                 // All regions clean: no tombstone check needed
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts {
-                        if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                            valid_offsets.insert(offset);
-                        }
+                        valid_offsets.insert(nbr.prop_offset);
                     }
                 }
             }
         }
 
-        // Collect valid edge_ids from in CSR delta, then resolve to offsets
+        // Collect valid prop_offsets from in CSR delta
         for (_, nbr) in self.in_csr.iter(ts) {
-            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                valid_offsets.insert(offset);
-            }
+            valid_offsets.insert(nbr.prop_offset);
         }
 
-        // Collect valid edge_ids from in segments, then resolve to offsets
+        // Collect valid prop_offsets from in segments
         for segment in &self.in_segments {
             let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
-                        if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                            valid_offsets.insert(offset);
-                        }
+                        valid_offsets.insert(nbr.prop_offset);
                     }
                 }
             } else {
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts {
-                        if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                            valid_offsets.insert(offset);
-                        }
+                        valid_offsets.insert(nbr.prop_offset);
                     }
                 }
             }

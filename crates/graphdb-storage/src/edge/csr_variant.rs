@@ -417,13 +417,13 @@ impl MutableCsrTrait for CsrVariant {
         }
     }
 
-    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+    fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
         match self {
             CsrVariant::None { .. } => {}
-            CsrVariant::Multiple(csr) => csr.rebuild_create_ts_cache(iter),
-            CsrVariant::Single(csr) => csr.rebuild_create_ts_cache(iter),
-            CsrVariant::MultiSingle(csr) => csr.rebuild_create_ts_cache(iter),
-            CsrVariant::Labeled(csr) => csr.rebuild_create_ts_cache(iter),
+            CsrVariant::Multiple(csr) => csr.rebuild_create_ts(iter),
+            CsrVariant::Single(csr) => csr.rebuild_create_ts(iter),
+            CsrVariant::MultiSingle(csr) => csr.rebuild_create_ts(iter),
+            CsrVariant::Labeled(csr) => csr.rebuild_create_ts(iter),
         }
     }
 }

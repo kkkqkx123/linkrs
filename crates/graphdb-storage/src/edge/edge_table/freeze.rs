@@ -7,7 +7,6 @@
 use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::CsrVariant;
 use graphdb_core::types::Timestamp;
 use std::collections::HashSet;
@@ -161,10 +160,10 @@ impl TimeTravelEdgeStore {
         delta.rebuild_overflow_index();
         let entries: Vec<_> = delta
             .iter_all()
-            .filter(|(_, nbr)| delta.create_ts_of(nbr.edge_id).unwrap_or(0) <= ts)
+            .filter(|(_, nbr)| nbr.create_ts <= ts)
             .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                let create_ts = delta.create_ts_of(nbr.edge_id).unwrap_or(0);
+                let create_ts = nbr.create_ts;
                 (src_u32, nbr, create_ts)
             })
             .collect();
@@ -425,7 +424,7 @@ impl TimeTravelEdgeStore {
             // Check if there are any visible entries at all — if so, fallback to full freeze
             let has_visible = delta
                 .iter_all()
-                .any(|(_, nbr)| delta.create_ts_of(nbr.edge_id).unwrap_or(0) <= ts);
+                .any(|(_, nbr)| nbr.create_ts <= ts);
             if has_visible {
                 return Self::freeze_delta(delta, segments, free_space, ts, config.region_vertex_count);
             } else {

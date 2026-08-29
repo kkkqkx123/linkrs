@@ -67,7 +67,7 @@ impl ColdPropertyIndex {
             for nbr in exported.out_csr.edges_of(src_u32) {
                 let dst_internal = nbr.endpoint;
                 let rank = nbr.rank;
-                let Some(props) = exported.properties.read_properties_by_edge_id(nbr.edge_id)
+                let Some(props) = exported.properties.read_properties(nbr.prop_offset)
                 else {
                     continue;
                 };
@@ -766,7 +766,7 @@ impl ColdSnapshot {
         let rank = nbr.rank;
         let properties = self
             .properties
-            .read_properties_by_edge_id(nbr.edge_id)
+            .read_properties(nbr.prop_offset)
             .unwrap_or_default();
         EdgeRecord {
             src_vid,
@@ -1721,7 +1721,7 @@ mod tests {
         let nbr = loaded.get_out_edges(10)[0];
         let props = loaded
             .properties()
-            .read_properties_by_edge_id(nbr.edge_id)
+            .read_properties(nbr.prop_offset)
             .unwrap();
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].1, Value::string("repeated-pattern-3"));

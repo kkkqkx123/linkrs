@@ -157,11 +157,11 @@ impl ColdDelta {
                         // offset, so compare the values, not the offsets.
                         let base_props = base
                             .properties()
-                            .read_properties_by_edge_id(nbr.edge_id)
+                            .read_properties(nbr.prop_offset)
                             .unwrap_or_default();
                         let latest_props = latest
                             .properties()
-                            .read_properties_by_edge_id(latest_nbr.edge_id)
+                            .read_properties(latest_nbr.prop_offset)
                             .unwrap_or_default();
                         if base_props != latest_props {
                             delta.property_updates.push(DeltaPropertyUpdate {
@@ -186,7 +186,7 @@ impl ColdDelta {
                 }
                 let properties = latest
                     .properties()
-                    .read_properties_by_edge_id(nbr.edge_id)
+                    .read_properties(nbr.prop_offset)
                     .unwrap_or_default();
                 delta.added.push(DeltaAddedEdge {
                     src_internal: src_u32,
@@ -449,9 +449,7 @@ impl ColdSnapshot {
                 }
                 let nbr = Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset);
                 if let Some(update) = updates.get(&key) {
-                    if let Some(offset) = properties.get_offset_by_edge_id(nbr.edge_id) {
-                        properties.update(offset, &update.properties, delta.delta_ts)?;
-                    }
+                    properties.update(nbr.prop_offset, &update.properties, delta.delta_ts)?;
                 }
                 out_entries.push((src_u32, nbr, e.timestamp));
             }
@@ -459,8 +457,9 @@ impl ColdSnapshot {
 
         // Added edges: properties go into the merged table, offsets remapped.
         for edge in &delta.added {
+            let mut prop_offset = crate::edge::property_schema::PROP_OFFSET_NONE;
             if !edge.properties.is_empty() {
-                properties.insert_with_edge_id(edge.edge_id, &edge.properties, edge.timestamp)?;
+                prop_offset = properties.insert(&edge.properties, edge.timestamp)?;
             };
             out_entries.push((
                 edge.src_internal,
@@ -470,7 +469,7 @@ impl ColdSnapshot {
                         ep_vid.as_int64().unwrap_or(0) as u32,
                         rank,
                         edge.edge_id,
-                        crate::edge::property_schema::PROP_OFFSET_NONE,
+                        prop_offset,
                     )
                 },
                 edge.timestamp,
@@ -731,7 +730,7 @@ mod tests {
             .expect("0->1 must survive update");
         let props = merged
             .properties()
-            .read_properties_by_edge_id(nbr.edge_id)
+            .read_properties(nbr.prop_offset)
             .unwrap();
         assert!(props.contains(&("weight".to_string(), Value::Double(1.5))));
         // 0->2 removed

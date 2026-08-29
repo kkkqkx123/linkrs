@@ -226,6 +226,9 @@ impl EdgeSchema {
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).
 ///
+/// `create_ts` is the creation timestamp for MVCC visibility checks.
+/// `delete_ts` is the deletion timestamp (`Timestamp::MAX` means alive).
+///
 /// `prop_offset` is the PropertyTable row offset for this edge's properties.
 /// Storing it here enables direct property access from CSR scan results
 /// without the HashMap\<EdgeId, offset\> indirection (Phase 3 optimization).
@@ -237,6 +240,7 @@ pub struct Nbr {
     pub endpoint: u32,
     pub rank: i64,
     pub edge_id: EdgeId,
+    pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
     pub prop_offset: u32,
 }
@@ -248,6 +252,7 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
+            create_ts: 0,
             delete_ts: Timestamp::MAX,
             prop_offset: PROP_OFFSET_NONE,
         }
@@ -259,6 +264,42 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
+            create_ts: 0,
+            delete_ts: Timestamp::MAX,
+            prop_offset,
+        }
+    }
+
+    /// Create with explicit create timestamp.
+    pub fn with_create_ts(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+    ) -> Self {
+        Self {
+            endpoint,
+            rank,
+            edge_id,
+            create_ts,
+            delete_ts: Timestamp::MAX,
+            prop_offset: PROP_OFFSET_NONE,
+        }
+    }
+
+    /// Create with explicit create timestamp and property offset.
+    pub fn with_create_ts_and_prop(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+        prop_offset: u32,
+    ) -> Self {
+        Self {
+            endpoint,
+            rank,
+            edge_id,
+            create_ts,
             delete_ts: Timestamp::MAX,
             prop_offset,
         }
@@ -275,6 +316,7 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
+            create_ts: 0,
             delete_ts,
             prop_offset: PROP_OFFSET_NONE,
         }
@@ -292,6 +334,7 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
+            create_ts: 0,
             delete_ts,
             prop_offset,
         }
@@ -299,8 +342,9 @@ impl Nbr {
 
     /// Check if this edge is alive at the given timestamp.
     /// An edge is alive when: create_ts <= ts AND ts < delete_ts.
-    pub fn is_alive_at(&self, ts: Timestamp, create_ts: Timestamp) -> bool {
-        create_ts <= ts && ts < self.delete_ts
+    #[inline]
+    pub fn is_alive_at(&self, ts: Timestamp) -> bool {
+        self.create_ts <= ts && ts < self.delete_ts
     }
 
     /// Reconstruct the full `VertexId` from the packed `(endpoint, rank)` pair.

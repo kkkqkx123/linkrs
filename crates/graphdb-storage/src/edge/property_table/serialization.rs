@@ -142,13 +142,6 @@ impl PropertyTable {
             }
         }
 
-        // Edge map
-        result.extend_from_slice(&(self.edge_prop_map.len() as u32).to_le_bytes());
-        for (edge_id, offset) in &self.edge_prop_map {
-            result.extend_from_slice(&edge_id.as_u64().to_le_bytes());
-            result.extend_from_slice(&offset.to_le_bytes());
-        }
-
         let checksum = crc32fast::hash(&result[checksum_pos + 4..]);
         result[checksum_pos..checksum_pos + 4].copy_from_slice(&checksum.to_le_bytes());
         result
@@ -478,22 +471,6 @@ impl PropertyTable {
         }
         if self.zone_maps.is_empty() && !self.row_create_ts.is_empty() {
             self.rebuild_zone_maps();
-        }
-
-        // Edge map
-        self.edge_prop_map.clear();
-        let map_len = read_u32_le(data, &mut offset)? as usize;
-        for _ in 0..map_len {
-            if offset + 12 > data.len() {
-                return Err(StorageError::deserialize_error("unexpected end of data"));
-            }
-            let edge_id = EdgeId(u64::from_le_bytes(
-                data[offset..offset + 8].try_into().unwrap(),
-            ));
-            offset += 8;
-            let prop_offset = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-            offset += 4;
-            self.insert_mapping(edge_id, prop_offset);
         }
 
         // Rebuild tombstones

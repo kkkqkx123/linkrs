@@ -586,18 +586,18 @@ impl TimeTravelEdgeStore {
         let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
         let rank = nbr.rank;
         let properties = if nbr.prop_offset != crate::edge::property_schema::PROP_OFFSET_NONE {
-            self.properties
-                .get_by_prop_offset(nbr.prop_offset, Some(query_ts))
-                .map(|props| {
-                    props
-                        .into_iter()
-                        .filter_map(|(k, v)| v.map(|v| (k, v)))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            self.properties_for_edge_id(nbr.edge_id, query_ts)
-        };
+                    self.properties
+                        .get_by_prop_offset(nbr.prop_offset, Some(query_ts))
+                        .map(|props| {
+                            props
+                                .into_iter()
+                                .filter_map(|(k, v)| v.map(|v| (k, v)))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.properties_for_edge_id(nbr.prop_offset, query_ts)
+                };
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
@@ -606,9 +606,9 @@ impl TimeTravelEdgeStore {
         }
     }
 
-    fn properties_for_edge_id(&self, edge_id: EdgeId, query_ts: Timestamp) -> Vec<(String, Value)> {
+    fn properties_for_edge_id(&self, prop_offset: u32, query_ts: Timestamp) -> Vec<(String, Value)> {
         self.properties
-            .get_by_edge_id(edge_id, Some(query_ts))
+            .get(prop_offset, Some(query_ts))
             .map(|props| {
                 props
                     .into_iter()
@@ -702,7 +702,6 @@ impl TimeTravelEdgeStore {
         self.mvcc.record_creation(edge_id, ts);
 
         if self.has_edge(src, dst, rank, ts) {
-            self.properties.delete_by_edge_id(edge_id);
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {}@{}",
                 src, dst, rank
@@ -713,7 +712,7 @@ impl TimeTravelEdgeStore {
         if !converted_values.is_empty() {
             prop_offset = self
                 .properties
-                .insert_with_edge_id(edge_id, &converted_values, ts)?;
+                .insert(&converted_values, ts)?;
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
@@ -722,7 +721,6 @@ impl TimeTravelEdgeStore {
             .out_csr
             .insert_edge(src, dst_key, edge_id, ts, prop_offset)
         {
-            self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
@@ -736,7 +734,6 @@ impl TimeTravelEdgeStore {
             if !self.out_csr.remove_edge(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
-            self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
@@ -807,7 +804,7 @@ impl TimeTravelEdgeStore {
 
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
-            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
+            let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
@@ -827,7 +824,7 @@ impl TimeTravelEdgeStore {
             self.snapshot_dirty = true;
             // Mark the property record deleted so it can be reclaimed by
             // compact_properties (it filters via mvcc.is_tombstoned).
-            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
+            let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
@@ -880,7 +877,7 @@ impl TimeTravelEdgeStore {
             self.mvcc.record_edge_deletion(nbr.edge_id, ts);
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
-            let _ = self.properties.mark_deleted_by_edge_id(nbr.edge_id, ts);
+            let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -914,7 +911,7 @@ impl TimeTravelEdgeStore {
                     ts_info.delete_ts = Timestamp::MAX;
                 }
                 self.mvcc.remove_deletion(nbr.edge_id);
-                self.properties.revert_deletion_by_edge_id(nbr.edge_id);
+                self.properties.revert_deletion(nbr.prop_offset);
             }
             return Ok(true);
         }
@@ -939,10 +936,10 @@ impl TimeTravelEdgeStore {
         }
         // The cached current snapshot still excludes this edge; rebuild lazily.
         self.snapshot_dirty = true;
-        self.properties.revert_deletion_by_edge_id(nbr.edge_id);
+        self.properties.revert_deletion(nbr.prop_offset);
         // Re-index the restored properties when the property index is active
         // (the delete path removed them).
-        let restored = self.properties_for_edge_id(nbr.edge_id, ts);
+        let restored = self.properties_for_edge_id(nbr.prop_offset, ts);
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in restored {
                 let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
@@ -993,7 +990,7 @@ impl TimeTravelEdgeStore {
             dst_key,
             ts,
         )?;
-        let properties = self.properties_for_edge_id(nbr.edge_id, ts);
+        let properties = self.properties_for_edge_id(nbr.prop_offset, ts);
 
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
@@ -1025,7 +1022,7 @@ impl TimeTravelEdgeStore {
                         })
                         .unwrap_or_default()
                 } else {
-                    self.properties_for_edge_id(nbr.edge_id, ts)
+                    self.properties_for_edge_id(nbr.prop_offset, ts)
                 };
 
                 EdgeRecord {
@@ -1078,7 +1075,7 @@ impl TimeTravelEdgeStore {
                         })
                         .unwrap_or_default()
                 } else {
-                    self.properties_for_edge_id(nbr.edge_id, ts)
+                    self.properties_for_edge_id(nbr.prop_offset, ts)
                 };
 
                 EdgeRecord {
@@ -1333,10 +1330,8 @@ impl TimeTravelEdgeStore {
             dst_key,
             ts,
         ) {
-            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                self.properties
-                    .set_property(offset, prop_name, Some(value.clone()), ts)?;
-            }
+            self.properties
+                .set_property(nbr.prop_offset, prop_name, Some(value.clone()), ts)?;
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -1361,14 +1356,12 @@ impl TimeTravelEdgeStore {
             dst_key,
             params.ts,
         ) {
-            if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
-                self.properties.set_property_by_id(
-                    offset,
-                    PropertyId(params.prop_id),
-                    Some(params.value.clone()),
-                    params.ts,
-                )?;
-            }
+            self.properties.set_property_by_id(
+                nbr.prop_offset,
+                PropertyId(params.prop_id),
+                Some(params.value.clone()),
+                params.ts,
+            )?;
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(

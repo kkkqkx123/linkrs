@@ -38,7 +38,6 @@ pub use stats::{MergeMetrics, MergeMetricsResult, MergeStats};
 pub use super::{CsrBase, CsrVariant, Nbr};
 
 use crate::cold::{ColdPropertyIndex, ColdSnapshot};
-use crate::edge::csr_trait::MutableCsrTrait;
 use crate::edge::edge_table::core::EdgeTableConfig;
 use crate::edge::edge_table::snapshot::max_edge_row;
 use crate::persistence::write_header_to;
@@ -585,7 +584,7 @@ impl core::TimeTravelEdgeStore {
             .iter(ts)
             .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                let create_ts = delta.create_ts_of(nbr.edge_id).unwrap_or(0);
+                let create_ts = nbr.create_ts;
                 (src_u32, nbr, create_ts)
             })
             .collect();
@@ -959,7 +958,8 @@ impl core::TimeTravelEdgeStore {
         self.out_csr.rebuild_overflow_index();
         self.in_csr.rebuild_overflow_index();
 
-        // Rebuild CSR create_ts_cache from persisted edge_timestamps
+        // Rebuild inline create_ts from persisted edge_timestamps
+        use crate::edge::csr_trait::MutableCsrTrait;
         let create_ts_iter = self
             .mvcc
             .edge_timestamps
@@ -967,9 +967,9 @@ impl core::TimeTravelEdgeStore {
             .map(|(&eid, ts)| (eid, ts.create_ts));
         let create_ts_vec: Vec<_> = create_ts_iter.collect();
         self.out_csr
-            .rebuild_create_ts_cache(create_ts_vec.iter().copied());
+            .rebuild_create_ts(create_ts_vec.iter().copied());
         self.in_csr
-            .rebuild_create_ts_cache(create_ts_vec.into_iter());
+            .rebuild_create_ts(create_ts_vec.into_iter());
 
         let props_path = path.join("properties.bin");
         self.properties = persistence::load_properties(&props_path)?;

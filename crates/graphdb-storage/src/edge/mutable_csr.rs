@@ -398,8 +398,6 @@ pub struct MutableCsr {
     overflow_chunk_edges: usize,
     overflow_index: OverflowIndex,
 
-    create_ts_cache: HashMap<EdgeId, Timestamp>,
-
     edge_count: AtomicU64,
     total_edge_capacity: usize,
 }
@@ -414,7 +412,6 @@ impl Clone for MutableCsr {
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
             overflow_index: self.overflow_index.clone(),
-            create_ts_cache: self.create_ts_cache.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
             total_edge_capacity: self.total_edge_capacity,
         }
@@ -460,7 +457,6 @@ impl MutableCsr {
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
             overflow_index: OverflowIndex::new(),
-            create_ts_cache: HashMap::new(),
             edge_count: AtomicU64::new(0),
             total_edge_capacity: 0,
         }
@@ -572,11 +568,7 @@ impl MutableCsr {
                 for i in 0..degree {
                     let nbr = &self.nbr_list[base + i];
                     let visible = match visible_ts {
-                        Some(ts) => {
-                            let create_ts =
-                                self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                            create_ts <= ts
-                        }
+                        Some(ts) => nbr.create_ts <= ts,
                         None => true,
                     };
                     if visible {
@@ -591,14 +583,7 @@ impl MutableCsr {
                         capacity += chunk.capacity() as u32;
                         for nbr in chunk {
                             let visible = match visible_ts {
-                                Some(ts) => {
-                                    let create_ts = self
-                                        .create_ts_cache
-                                        .get(&nbr.edge_id)
-                                        .copied()
-                                        .unwrap_or(0);
-                                    create_ts <= ts
-                                }
+                                Some(ts) => nbr.create_ts <= ts,
                                 None => true,
                             };
                             if visible {
@@ -643,7 +628,7 @@ impl MutableCsr {
     }
 
     /// Raw insert without duplicate checks, preserving delete_ts.
-    fn insert_raw_nbr(&mut self, src_vid: u32, nbr: Nbr, create_ts: Timestamp) {
+    fn insert_raw_nbr(&mut self, src_vid: u32, nbr: Nbr) {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             self.ensure_vertex_capacity(src_idx + 1);
@@ -651,7 +636,6 @@ impl MutableCsr {
         if self.primary_capacities[src_idx] == 0 {
             self.allocate_primary_block(src_idx);
         }
-        self.create_ts_cache.insert(nbr.edge_id, create_ts);
         let degree = self.degrees[src_idx] as usize;
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
             && degree < self.primary_capacities[src_idx] as usize
@@ -701,7 +685,7 @@ impl MutableCsr {
 
         for (src_vid, nbr) in self.iter_all() {
             let src_u32 = src_vid.as_int64().unwrap_or(0) as u32;
-            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+            let create_ts = nbr.create_ts;
             let rid = (src_u32 as usize / region_vertex_count) as u32;
             let visible = create_ts <= ts;
             if visible && region_ids.contains(&rid) {
@@ -715,15 +699,10 @@ impl MutableCsr {
             return frozen;
         }
 
-        let retained_cache: std::collections::HashMap<EdgeId, Timestamp> = retained
-            .iter()
-            .map(|(_, nbr, create_ts)| (nbr.edge_id, *create_ts))
-            .collect();
         self.clear();
-        self.create_ts_cache = retained_cache;
         // Rebuild retained entries preserving delete_ts and counts
-        for (src_u32, nbr, create_ts) in retained {
-            self.insert_raw_nbr(src_u32, nbr, create_ts);
+        for (src_u32, nbr, _create_ts) in retained {
+            self.insert_raw_nbr(src_u32, nbr);
         }
         frozen
     }
@@ -813,24 +792,20 @@ impl MutableCsr {
             }
         }
 
-        // Record create_ts in cache before writing the Nbr
-        self.create_ts_cache.insert(edge_id, ts);
+        // Record create_ts in the Nbr before writing
+        let nbr_with_ts = Nbr::with_create_ts_and_prop(decoded_endpoint, decoded_rank, edge_id, ts, prop_offset);
 
         // Write to primary if space available and overflow not yet allocated
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
             && degree < self.primary_capacities[src_idx] as usize
         {
-            self.nbr_list[base + degree] =
-                Nbr::with_prop_offset(decoded_endpoint, decoded_rank, edge_id, prop_offset);
+            self.nbr_list[base + degree] = nbr_with_ts;
             self.degrees[src_idx] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
 
-        self.append_overflow(
-            src_vid,
-            Nbr::with_prop_offset(decoded_endpoint, decoded_rank, edge_id, prop_offset),
-        );
+        self.append_overflow(src_vid, nbr_with_ts);
         self.edge_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -899,7 +874,7 @@ impl MutableCsr {
                     // Idempotent re-delete at the same timestamp.
                     return Ok(false);
                 }
-                let create_ts = self.create_ts_cache.get(&edge_id).copied().unwrap_or(0);
+                let create_ts = nbr.create_ts;
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
@@ -923,7 +898,7 @@ impl MutableCsr {
                     }
                     return Ok(false);
                 }
-                let create_ts = self.create_ts_cache.get(&edge_id).copied().unwrap_or(0);
+                let create_ts = nbr.create_ts;
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
@@ -956,7 +931,7 @@ impl MutableCsr {
                 && nbr.rank == decoded_rank
                 && nbr.delete_ts == Timestamp::MAX
             {
-                let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                let create_ts = nbr.create_ts;
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
@@ -971,7 +946,7 @@ impl MutableCsr {
             for (chunk_idx, edge_idx) in indices {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
                 if nbr.delete_ts == Timestamp::MAX {
-                    let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                    let create_ts = nbr.create_ts;
                     if create_ts <= ts {
                         nbr.delete_ts = ts;
                         self.edge_count.fetch_sub(1, Ordering::Relaxed);
@@ -998,7 +973,7 @@ impl MutableCsr {
         }
         let nbr = &mut self.nbr_list[idx];
         if nbr.delete_ts == Timestamp::MAX {
-            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+            let create_ts = nbr.create_ts;
             if create_ts <= ts {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
@@ -1137,8 +1112,7 @@ impl MutableCsr {
 
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
-            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-            if nbr.is_alive_at(ts, create_ts) {
+            if nbr.is_alive_at(ts) {
                 result.push(*nbr);
             }
         }
@@ -1146,8 +1120,7 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for nbr in chunk {
-                    let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                    if nbr.is_alive_at(ts, create_ts) {
+                    if nbr.is_alive_at(ts) {
                         result.push(*nbr);
                     }
                 }
@@ -1168,8 +1141,7 @@ impl MutableCsr {
         let mut count = 0;
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
-            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-            if nbr.is_alive_at(ts, create_ts) {
+            if nbr.is_alive_at(ts) {
                 count += 1;
             }
         }
@@ -1182,10 +1154,7 @@ impl MutableCsr {
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|nbr| {
-                let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                nbr.is_alive_at(ts, create_ts)
-            })
+            .filter(|nbr| nbr.is_alive_at(ts))
             .count()
     }
 
@@ -1203,10 +1172,9 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
-            let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
             if nbr.endpoint == decoded_endpoint
                 && nbr.rank == decoded_rank
-                && nbr.is_alive_at(ts, create_ts)
+                && nbr.is_alive_at(ts)
             {
                 return Some(*nbr);
             }
@@ -1216,10 +1184,9 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for nbr in chunk {
-                    let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
                     if nbr.endpoint == decoded_endpoint
                         && nbr.rank == decoded_rank
-                        && nbr.is_alive_at(ts, create_ts)
+                        && nbr.is_alive_at(ts)
                     {
                         return Some(*nbr);
                     }
@@ -1648,14 +1615,15 @@ impl MutableCsr {
     pub fn used_memory_size(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
         active_edges * std::mem::size_of::<Nbr>()
-            + self.create_ts_cache.len()
-                * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>())
             + std::mem::size_of::<Self>()
     }
 
     /// Look up the creation timestamp for an edge.
     pub fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.create_ts_cache.get(&edge_id).copied()
+        self.nbr_list
+            .iter()
+            .find(|nbr| nbr.edge_id == edge_id)
+            .map(|nbr| nbr.create_ts)
     }
 
     /// Compute fragmentation ratio: nbr_list.len() / active_edges
@@ -1762,13 +1730,7 @@ impl<'a> Iterator for VertexEdgesIter<'a> {
         while self.primary_idx < self.primary_end {
             let nbr = &self.csr.nbr_list[self.primary_idx];
             self.primary_idx += 1;
-            let create_ts = self
-                .csr
-                .create_ts_cache
-                .get(&nbr.edge_id)
-                .copied()
-                .unwrap_or(0);
-            if nbr.is_alive_at(self.ts, create_ts) {
+            if nbr.is_alive_at(self.ts) {
                 return Some(nbr);
             }
         }
@@ -1779,13 +1741,7 @@ impl<'a> Iterator for VertexEdgesIter<'a> {
                 while self.overflow_edge_idx < chunk.len() {
                     let nbr = &chunk[self.overflow_edge_idx];
                     self.overflow_edge_idx += 1;
-                    let create_ts = self
-                        .csr
-                        .create_ts_cache
-                        .get(&nbr.edge_id)
-                        .copied()
-                        .unwrap_or(0);
-                    if nbr.is_alive_at(self.ts, create_ts) {
+                    if nbr.is_alive_at(self.ts) {
                         return Some(nbr);
                     }
                 }
@@ -1861,13 +1817,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
                 while self.current_edge < degree {
                     let nbr = self.csr.nbr_list[offset + self.current_edge];
                     self.current_edge += 1;
-                    let create_ts = self
-                        .csr
-                        .create_ts_cache
-                        .get(&nbr.edge_id)
-                        .copied()
-                        .unwrap_or(0);
-                    if self.include_deleted || nbr.is_alive_at(self.ts, create_ts) {
+                    if self.include_deleted || nbr.is_alive_at(self.ts) {
                         return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                     }
                 }
@@ -1882,13 +1832,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
                     while self.overflow_edge_idx < chunk.len() {
                         let nbr = chunk[self.overflow_edge_idx];
                         self.overflow_edge_idx += 1;
-                        let create_ts = self
-                            .csr
-                            .create_ts_cache
-                            .get(&nbr.edge_id)
-                            .copied()
-                            .unwrap_or(0);
-                        if self.include_deleted || nbr.is_alive_at(self.ts, create_ts) {
+                        if self.include_deleted || nbr.is_alive_at(self.ts) {
                             return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                         }
                     }
@@ -1982,9 +1926,22 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::create_ts_of(self, edge_id)
     }
 
-    fn rebuild_create_ts_cache(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
-        self.create_ts_cache.clear();
-        self.create_ts_cache.extend(iter);
+    fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
+        let mut map: std::collections::HashMap<EdgeId, Timestamp> = iter.collect();
+        for nbr in self.nbr_list.iter_mut() {
+            if let Some(ts) = map.remove(&nbr.edge_id) {
+                nbr.create_ts = ts;
+            }
+        }
+        for (_, chunks) in self.overflow_chunks.iter_mut() {
+            for chunk in chunks.iter_mut() {
+                for nbr in chunk.iter_mut() {
+                    if let Some(ts) = map.remove(&nbr.edge_id) {
+                        nbr.create_ts = ts;
+                    }
+                }
+            }
+        }
     }
 }
 
