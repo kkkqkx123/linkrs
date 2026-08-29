@@ -489,6 +489,41 @@ impl CsrVariant {
             _ => self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed),
         }
     }
+
+    pub fn compact_regions_with_ts_reporting_calibrated(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        region_vertex_count: usize,
+        calibrated_deletion_ratio: Option<f64>,
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.compact_regions_with_ts_reporting_calibrated(
+                cutoff,
+                reserve_ratio,
+                on_edge_removed,
+                region_vertex_count,
+                calibrated_deletion_ratio,
+            ),
+            _ => self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed),
+        }
+    }
+
+    /// Rebuild overflow index for sequential detection (Multiple strategy only).
+    pub fn rebuild_overflow_index(&mut self) {
+        if let CsrVariant::Multiple(csr) = self {
+            csr.rebuild_overflow_index();
+        }
+    }
+
+    /// Overflow index stats (if Multiple).
+    pub fn overflow_index_stats(&self) -> Option<super::mutable_csr::OverflowIndexStats> {
+        match self {
+            CsrVariant::Multiple(csr) => Some(csr.overflow_index_stats()),
+            _ => None,
+        }
+    }
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types

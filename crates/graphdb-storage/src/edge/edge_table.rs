@@ -12,6 +12,7 @@
 //! - `persistence`: Serialization (flush/load)
 //! - `stats`: Statistics structures (metrics, observability)
 
+pub mod calibrator;
 pub mod compaction;
 pub mod core;
 pub mod free_space;
@@ -336,6 +337,23 @@ impl EdgeStore {
         self.0.deletion_stats()
     }
 
+    pub fn calibrated_threshold(&self) -> super::edge_table::calibrator::CalibratedThreshold {
+        self.0.calibrated_threshold()
+    }
+
+    pub fn should_trigger_compaction_calibrated(&self) -> bool {
+        self.0.should_trigger_compaction_calibrated()
+    }
+
+    pub fn overflow_index_stats(&self) -> Option<super::mutable_csr::OverflowIndexStats> {
+        self.0.out_csr.overflow_index_stats()
+    }
+
+    pub fn rebuild_overflow_index(&mut self) {
+        self.0.out_csr.rebuild_overflow_index();
+        self.0.in_csr.rebuild_overflow_index();
+    }
+
     pub fn validate_segment_integrity(&self) -> usize {
         self.0.validate_segment_integrity()
     }
@@ -609,6 +627,7 @@ impl core::TimeTravelEdgeStore {
             self.rebuild_segment_indices();
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
+            self.update_calibrator_from_segments();
         }
         total_reduced
     }
@@ -644,6 +663,7 @@ impl core::TimeTravelEdgeStore {
             self.rebuild_segment_indices();
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
+            self.update_calibrator_from_segments();
         }
         total_reduced
     }
@@ -677,6 +697,7 @@ impl core::TimeTravelEdgeStore {
             self.rebuild_segment_indices();
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
+            self.update_calibrator_from_segments();
         }
 
         MergeMetricsResult {
@@ -767,6 +788,7 @@ impl core::TimeTravelEdgeStore {
             self.rebuild_segment_indices();
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
+            self.update_calibrator_from_segments();
         }
 
         MergeMetricsResult {
@@ -933,6 +955,10 @@ impl core::TimeTravelEdgeStore {
                 }
             }
         }
+        // Rebuild calibrator and overflow index after load
+        self.update_calibrator_from_segments();
+        self.out_csr.rebuild_overflow_index();
+        self.in_csr.rebuild_overflow_index();
 
         let props_path = path.join("properties.bin");
         self.properties = persistence::load_properties(&props_path)?;

@@ -100,6 +100,7 @@ impl TimeTravelEdgeStore {
         {
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
+            self.update_calibrator_from_segments();
         }
 
         total_frozen
@@ -113,6 +114,8 @@ impl TimeTravelEdgeStore {
         ts: Timestamp,
         region_vertex_count: usize,
     ) -> merge::FreezeDeltaResult {
+        // Refresh overflow index before freeze for observability and sequential run detection.
+        delta.rebuild_overflow_index();
         let entries: Vec<_> = delta
             .iter_all()
             .filter(|(_, nbr)| nbr.create_ts <= ts)

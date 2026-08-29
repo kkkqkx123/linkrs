@@ -86,12 +86,7 @@ fn remap_variant(
         overflow_chunk_edges,
     )?;
     for (src, nbr) in &new_entries {
-        csr.insert_edge(
-            *src,
-            nbr.neighbor,
-            nbr.edge_id,
-            nbr.create_ts,
-        )?;
+        csr.insert_edge(*src, nbr.neighbor, nbr.edge_id, nbr.create_ts)?;
         if nbr.delete_ts != Timestamp::MAX {
             let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
         }
@@ -113,10 +108,7 @@ fn remap_segment_csr(
         .iter()
         .map(|(src, nbr)| {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (
-                src_u32,
-                Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp),
-            )
+            (src_u32, Nbr::new(nbr.neighbor, nbr.edge_id, nbr.timestamp))
         })
         .collect();
 
@@ -246,10 +238,7 @@ pub(crate) fn remap_immutable_csr(
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let new_src = remapped_row(src_u32, row_mapping);
             let new_neighbor = remap_endpoint_key(nbr.neighbor, neighbor_mapping);
-            (
-                new_src,
-                Nbr::new(new_neighbor, nbr.edge_id, nbr.timestamp),
-            )
+            (new_src, Nbr::new(new_neighbor, nbr.edge_id, nbr.timestamp))
         })
         .collect();
 

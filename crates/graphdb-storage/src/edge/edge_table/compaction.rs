@@ -42,12 +42,18 @@ impl TimeTravelEdgeStore {
     pub fn compact_csr_only(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
         let cutoff = self.mvcc.effective_retention_bound();
         let region_n = self.config.region_vertex_count;
+        let calibrated = if self.calibrator.region_count() > 0 {
+            Some(self.calibrated_threshold().effective_deletion_ratio())
+        } else {
+            None
+        };
         let removed_out = if region_n > 0 {
-            self.out_csr.compact_regions_with_ts_reporting(
+            self.out_csr.compact_regions_with_ts_reporting_calibrated(
                 cutoff,
                 reserve_ratio,
                 &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
                 region_n,
+                calibrated,
             )
         } else {
             self.out_csr.compact_with_ts_reporting(
@@ -57,11 +63,12 @@ impl TimeTravelEdgeStore {
             )
         };
         let removed_in = if region_n > 0 {
-            self.in_csr.compact_regions_with_ts_reporting(
+            self.in_csr.compact_regions_with_ts_reporting_calibrated(
                 cutoff,
                 reserve_ratio,
                 &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
                 region_n,
+                calibrated,
             )
         } else {
             self.in_csr.compact_with_ts_reporting(
@@ -70,6 +77,10 @@ impl TimeTravelEdgeStore {
                 &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
             )
         };
+        if removed_out + removed_in > 0 {
+            self.out_csr.rebuild_overflow_index();
+            self.in_csr.rebuild_overflow_index();
+        }
         removed_out + removed_in
     }
 
@@ -85,17 +96,24 @@ impl TimeTravelEdgeStore {
         let out_wasted = self.out_csr.wasted_bytes_estimate();
         let in_wasted = self.in_csr.wasted_bytes_estimate();
         let region_n = self.config.region_vertex_count;
+        let calibrated = if self.calibrator.region_count() > 0 {
+            Some(self.calibrated_threshold().effective_deletion_ratio())
+        } else {
+            None
+        };
+        let effective_threshold = calibrated.map(|r| r as f32).unwrap_or(threshold);
         if out_stats
             .as_ref()
-            .is_some_and(|s| s.should_compact(threshold))
-            || self.out_csr.fragmentation_ratio() >= threshold
+            .is_some_and(|s| s.should_compact(effective_threshold))
+            || self.out_csr.fragmentation_ratio() >= effective_threshold
         {
             if region_n > 0 {
-                self.out_csr.compact_regions_with_ts_reporting(
+                self.out_csr.compact_regions_with_ts_reporting_calibrated(
                     cutoff,
                     RESERVE_RATIO,
                     &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
                     region_n,
+                    calibrated,
                 );
             } else {
                 self.out_csr.compact_with_ts_reporting(
@@ -116,15 +134,16 @@ impl TimeTravelEdgeStore {
         }
         if in_stats
             .as_ref()
-            .is_some_and(|s| s.should_compact(threshold))
-            || self.in_csr.fragmentation_ratio() >= threshold
+            .is_some_and(|s| s.should_compact(effective_threshold))
+            || self.in_csr.fragmentation_ratio() >= effective_threshold
         {
             if region_n > 0 {
-                self.in_csr.compact_regions_with_ts_reporting(
+                self.in_csr.compact_regions_with_ts_reporting_calibrated(
                     cutoff,
                     RESERVE_RATIO,
                     &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
                     region_n,
+                    calibrated,
                 );
             } else {
                 self.in_csr.compact_with_ts_reporting(
@@ -175,9 +194,7 @@ impl TimeTravelEdgeStore {
             let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts
-                        && !self.mvcc.is_tombstoned(nbr.edge_id, ts)
-                    {
+                    if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
                         if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
                             valid_offsets.insert(offset);
                         }
@@ -207,9 +224,7 @@ impl TimeTravelEdgeStore {
             let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts
-                        && !self.mvcc.is_tombstoned(nbr.edge_id, ts)
-                    {
+                    if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
                         if let Some(offset) = self.properties.get_offset_by_edge_id(nbr.edge_id) {
                             valid_offsets.insert(offset);
                         }

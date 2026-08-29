@@ -4,6 +4,7 @@
 //! querying, property management, and basic maintenance operations.
 
 use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
+use super::calibrator::{CalibratedThreshold, CalibratorConfig, CalibratorTree, DensityStats};
 use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
@@ -49,6 +50,9 @@ pub struct EdgeTableConfig {
     /// Upper bound on the per-row before-image version chain length in the
     /// property table. `0` disables the bound (unbounded history).
     pub version_chain_cap: usize,
+
+    /// Calibrator configuration for density balancing.
+    pub calibrator: CalibratorConfig,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -102,6 +106,7 @@ impl Default for EdgeTableConfig {
             auto_maintenance: AutoMaintenanceConfig::default(),
             region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
             version_chain_cap: crate::edge::property_table::DEFAULT_VERSION_CHAIN_CAP,
+            calibrator: CalibratorConfig::default(),
         }
     }
 }
@@ -173,6 +178,9 @@ pub struct TimeTravelEdgeStore {
     /// Snapshot timestamp used by the last automatic GC run. Used to avoid
     /// re-running GC when `min_active_snapshot_ts` has not advanced.
     pub last_gc_min_snapshot_ts: Timestamp,
+
+    /// Calibrator tree for density-aware compaction thresholds.
+    pub calibrator: CalibratorTree,
 }
 
 impl TimeTravelEdgeStore {
@@ -218,6 +226,24 @@ impl TimeTravelEdgeStore {
             property_index_cache.insert(prop.name.clone(), idx);
         }
 
+        let mut calibrator_config = config.calibrator.clone();
+        // Sync base deletion ratio with auto_maintenance threshold when explicitly set
+        if config.auto_maintenance.deletion_compact_ratio > 0.0 {
+            calibrator_config.base_deletion_ratio = config.auto_maintenance.deletion_compact_ratio;
+        }
+        // Initial region count from vertex capacity.
+        let initial_region_count = if config.region_vertex_count > 0 {
+            config
+                .initial_vertex_capacity
+                .div_ceil(config.region_vertex_count)
+        } else {
+            0
+        };
+        let calibrator = if initial_region_count > 0 {
+            CalibratorTree::with_region_count(initial_region_count, calibrator_config)
+        } else {
+            CalibratorTree::new(calibrator_config)
+        };
         Ok(Self {
             label: label_id,
             label_name,
@@ -248,6 +274,7 @@ impl TimeTravelEdgeStore {
             property_index: None,
             maintenance_serial: 0,
             last_gc_min_snapshot_ts: 0,
+            calibrator,
         })
     }
 
@@ -282,6 +309,84 @@ impl TimeTravelEdgeStore {
 
     pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_core::stats::StatsManager>) {
         self.stats_manager = Some(stats);
+    }
+
+    // ── Calibrator accessors and helpers ──
+
+    pub fn calibrator(&self) -> &CalibratorTree {
+        &self.calibrator
+    }
+
+    pub fn calibrator_mut(&mut self) -> &mut CalibratorTree {
+        &mut self.calibrator
+    }
+
+    pub fn calibrated_threshold(&self) -> CalibratedThreshold {
+        self.calibrator.calibrated_threshold()
+    }
+
+    /// Update calibrator density stats from current segment region metadata.
+    pub fn update_calibrator_from_segments(&mut self) {
+        let region_n = self.config.region_vertex_count;
+        if region_n == 0 {
+            return;
+        }
+        let vc = self
+            .out_segments
+            .iter()
+            .map(|s| s.csr.read().vertex_capacity())
+            .max()
+            .unwrap_or(self.out_csr.vertex_capacity());
+        let region_count = if vc == 0 { 0 } else { vc.div_ceil(region_n) };
+        if region_count == 0 {
+            return;
+        }
+        self.calibrator.ensure_region_count(region_count);
+        // Aggregate across all out segments per region.
+        let mut agg: std::collections::HashMap<u32, DensityStats> =
+            std::collections::HashMap::new();
+        for seg in &self.out_segments {
+            for meta in &seg.regions {
+                let entry = agg
+                    .entry(meta.region_id)
+                    .or_insert_with(DensityStats::default);
+                entry.edge_count += meta.edge_count as u64;
+                entry.deleted_count += meta.deleted_count as u64;
+                entry.fragmented_capacity += meta.estimated_bytes as u64;
+                entry.last_compact_ts = entry
+                    .last_compact_ts
+                    .max(meta.deletion_info.all_deleted_before(0) as u64);
+            }
+        }
+        // Also account for in_segments for completeness (in-direction calibrator could be separate,
+        // but we share a single tree for out-direction as primary).
+        for (rid, stats) in agg {
+            self.calibrator.update_region_stats(rid, stats);
+        }
+    }
+
+    pub fn record_region_access(&self, vid: u32) {
+        let region_n = self.config.region_vertex_count;
+        if region_n == 0 {
+            return;
+        }
+        let rid = (vid as usize / region_n) as u32;
+        self.calibrator.record_access(rid);
+    }
+
+    pub fn should_trigger_compaction_calibrated(&self) -> bool {
+        let total_edges = self.edge_count();
+        let total_tombstones = self.mvcc.total_tombstone_count() as u64;
+        self.calibrator
+            .should_trigger_compaction(total_edges, total_tombstones)
+    }
+
+    pub fn set_calibrator_memory_pressure(&mut self, ratio: f64) {
+        self.calibrator.set_memory_pressure(ratio);
+    }
+
+    pub fn set_calibrator_query_latency(&mut self, latency_us: u64) {
+        self.calibrator.set_query_latency_p99(latency_us);
     }
 
     fn base_get_edge(
@@ -341,11 +446,7 @@ impl TimeTravelEdgeStore {
                 if edge.neighbor == dst && edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        return Some(Nbr::new(
-                            edge.neighbor,
-                            edge_id,
-                            edge.timestamp,
-                        ));
+                        return Some(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
                     }
                 }
             }
@@ -409,11 +510,7 @@ impl TimeTravelEdgeStore {
                 if edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        edges.push(Nbr::new(
-                            edge.neighbor,
-                            edge_id,
-                            edge.timestamp,
-                        ));
+                        edges.push(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
                     }
                 }
             }
@@ -583,23 +680,18 @@ impl TimeTravelEdgeStore {
         }
 
         if !converted_values.is_empty() {
-            self.properties.insert_with_edge_id(edge_id, &converted_values, ts)?;
+            self.properties
+                .insert_with_edge_id(edge_id, &converted_values, ts)?;
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        if let Err(e) = self
-            .out_csr
-            .insert_edge(src, dst_key, edge_id, ts)
-        {
+        if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
             self.properties.delete_by_edge_id(edge_id);
             return Err(e);
         }
 
-        if let Err(e) = self
-            .in_csr
-            .insert_edge(dst, src_key, edge_id, ts)
-        {
+        if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
             // Roll back the out-direction insertion physically so no
             // tombstone residue remains; fall back to logical deletion if
             // the entry cannot be located (e.g. strategy mismatch).
@@ -614,6 +706,19 @@ impl TimeTravelEdgeStore {
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in &converted_values {
                 let _ = index.insert(prop_name, prop_value, src, dst, rank, self.label, ts);
+            }
+        }
+
+        // Ensure calibrator covers new vertex capacity
+        if self.config.region_vertex_count > 0 {
+            let region_n = self.config.region_vertex_count;
+            let vc = self
+                .out_csr
+                .vertex_capacity()
+                .max(self.in_csr.vertex_capacity());
+            let rc = if vc == 0 { 0 } else { vc.div_ceil(region_n) };
+            if rc > self.calibrator.region_count() {
+                self.calibrator.ensure_region_count(rc);
             }
         }
 
@@ -808,11 +913,7 @@ impl TimeTravelEdgeStore {
             for (position, edge) in positioned_edges {
                 if edge.neighbor == dst {
                     let edge_id = segment.recover_edge_id(&edge, position);
-                    return Some(Nbr::new(
-                        edge.neighbor,
-                        edge_id,
-                        edge.timestamp,
-                    ));
+                    return Some(Nbr::new(edge.neighbor, edge_id, edge.timestamp));
                 }
             }
         }
@@ -823,6 +924,7 @@ impl TimeTravelEdgeStore {
         if !self.is_open {
             return None;
         }
+        self.record_region_access(src);
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let nbr = self.merged_get_edge(
@@ -853,7 +955,8 @@ impl TimeTravelEdgeStore {
         nbrs.into_iter()
             .map(|nbr| {
                 let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
-                let properties = self.properties
+                let properties = self
+                    .properties
                     .get_by_edge_id(nbr.edge_id, Some(ts))
                     .map(|props| {
                         props
@@ -876,6 +979,7 @@ impl TimeTravelEdgeStore {
     /// Raw out-edge neighbors of `src` (MVCC-merged, snapshot-consistent) with
     /// no property decoding.  Destination endpoint is encoded in `nbr.neighbor`.
     pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
+        self.record_region_access(src);
         if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some() {
             // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
             self.merged_edges_of_current(&self.out_csr, src)
@@ -900,7 +1004,8 @@ impl TimeTravelEdgeStore {
         nbrs.into_iter()
             .map(|nbr| {
                 let (src_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
-                let properties = self.properties
+                let properties = self
+                    .properties
                     .get_by_edge_id(nbr.edge_id, Some(ts))
                     .map(|props| {
                         props
@@ -923,6 +1028,7 @@ impl TimeTravelEdgeStore {
     /// Raw in-edge neighbors of `dst` (MVCC-merged, snapshot-consistent) with
     /// no property decoding.  Source endpoint is encoded in `nbr.neighbor`.
     pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
+        self.record_region_access(dst);
         if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
             self.merged_edges_of_current_in(&self.in_csr, dst)
         } else {
@@ -940,6 +1046,7 @@ impl TimeTravelEdgeStore {
         if !self.is_open {
             return false;
         }
+        self.record_region_access(src);
         let dst_key = Self::edge_endpoint_key(dst, rank);
         self.merged_get_edge(
             &self.out_csr,
@@ -1447,11 +1554,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(
-                        edge.neighbor,
-                        edge.edge_id,
-                        edge.timestamp,
-                    ));
+                    result.push(Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp));
                 }
             }
         }
@@ -1485,11 +1588,7 @@ impl TimeTravelEdgeStore {
                 if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
                     && seen.insert(edge.edge_id)
                 {
-                    result.push(Nbr::new(
-                        edge.neighbor,
-                        edge.edge_id,
-                        edge.timestamp,
-                    ));
+                    result.push(Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp));
                 }
             }
         }
@@ -1598,6 +1697,7 @@ impl TimeTravelEdgeStore {
         // segments is high. Edges are physically dropped only when a bounded
         // `min_active_snapshot_ts` exists (no snapshot can observe them);
         // without snapshots the merge keeps every edge.
+        // Use calibrated threshold when calibrator has data, else fall back to static config.
         if cfg.deletion_compact_ratio > 0.0 {
             let del_stats = self.deletion_stats();
             let density = if del_stats.total_frozen_edges == 0 {
@@ -1605,7 +1705,19 @@ impl TimeTravelEdgeStore {
             } else {
                 self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
             };
-            if density >= cfg.deletion_compact_ratio {
+            // Update calibrator memory pressure estimate from current usage.
+            if self.config.max_mutable_csr_bytes > 0 {
+                let pressure = (self.estimate_memory_usage() as f64
+                    / self.config.max_mutable_csr_bytes as f64)
+                    .clamp(0.0, 1.0);
+                self.calibrator.set_memory_pressure(pressure);
+            }
+            let effective_ratio = if self.calibrator.region_count() > 0 {
+                self.calibrated_threshold().effective_deletion_ratio()
+            } else {
+                cfg.deletion_compact_ratio
+            };
+            if density >= effective_ratio {
                 let bound = self.mvcc.effective_retention_bound();
                 let merge_threshold = CompactConfig::default()
                     .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
@@ -1748,11 +1860,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     {
                         records.push(table.edge_record_from_nbr(
                             src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::new(
-                                edge.neighbor,
-                                edge.edge_id,
-                                edge.timestamp,
-                            ),
+                            Nbr::new(edge.neighbor, edge.edge_id, edge.timestamp),
                             ts,
                         ));
 

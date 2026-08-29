@@ -4,7 +4,7 @@ pub mod cold;
 pub(crate) mod column_stats;
 pub(crate) mod compression;
 pub(crate) mod cursor;
-pub(crate) mod edge;
+pub mod edge;
 pub(crate) mod encoding;
 pub(crate) mod engine;
 pub(crate) mod index;

@@ -6,9 +6,9 @@
 //! - In-place: balances time-gaps and size constraints
 //! - Aggressive: size-only, used when segment limit exceeded
 
-use super::super::{CsrBase, EdgeId, Nbr};
+use super::super::{Csr, CsrBase, EdgeId, ImmutableNbr, Nbr};
 use super::free_space::SegmentFreeList;
-use super::segment::{CsrSegment, DeletionInfo};
+use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use super::stats::DirectionMergeMetrics;
 use graphdb_core::types::Timestamp;
 
@@ -45,7 +45,6 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
     sorted_indices.sort_by(|a, b| b.cmp(a));
     let merge_count = sorted_indices.len();
 
-    let mut merged_entries = Vec::new();
     let mut min_create_ts = Timestamp::MAX;
     let mut max_create_ts = 0u64;
     let mut merged_deletion_info = DeletionInfo::NoDeletes;
@@ -58,100 +57,157 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
         let seg = &segments[*idx];
         min_create_ts = min_create_ts.min(seg.create_ts_min);
         max_create_ts = max_create_ts.max(seg.create_ts_max);
-
-        for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
-            let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
-
-            if let Some(min_ts) = min_active_snapshot_ts {
-                match edge_delete_ts(edge_id) {
-                    // Deleted at or before the oldest active snapshot: no
-                    // snapshot can observe this edge, drop it physically.
-                    Some(delete_ts) if delete_ts <= min_ts => {
-                        physically_deleted_count += 1;
-                        continue;
-                    }
-                    // Deleted but still observable by some active snapshot:
-                    // keep the entry and track the remaining deletion info.
-                    Some(delete_ts) => {
-                        remaining_deleted_count += 1;
-                        remaining_del_min = remaining_del_min.min(delete_ts);
-                        remaining_del_max = remaining_del_max.max(delete_ts);
-                    }
-                    None => {}
-                }
-            }
-
-            let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let nbr = Nbr::new(
-                immutable_nbr.neighbor,
-                edge_id,
-                immutable_nbr.timestamp,
-            );
-            merged_entries.push((src_u32, nbr));
-        }
-
         merged_deletion_info = merged_deletion_info.merge(&seg.deletion_info);
     }
 
-    if !merged_entries.is_empty() {
-        let vertex_capacity = merged_entries
-            .iter()
-            .map(|(src, _)| *src as usize + 1)
-            .max()
-            .unwrap_or(1024)
-            .max(1024);
+    let apply_deletion_filter = min_active_snapshot_ts.is_some();
+    let retention_bound = min_active_snapshot_ts.unwrap_or(Timestamp::MAX);
 
-        // Rebuild deletion info from the deletions that remain observable;
-        // subtracting from the merged segment-level info was the source of
-        // the whole-segment misdeletion.
-        let final_deletion_info = if min_active_snapshot_ts.is_some() {
-            if physically_deleted_count > 0 {
-                log::debug!(
-                    "Physical deletion removed {} edges older than the min active snapshot",
-                    physically_deleted_count
-                );
-            }
-            DeletionInfo::with_count(
-                remaining_del_min,
-                remaining_del_max,
-                remaining_deleted_count,
-            )
-        } else {
-            merged_deletion_info
-        };
-
-        let removed_segments: Vec<_> = sorted_indices
-            .into_iter()
-            .map(|idx| segments.remove(idx))
-            .collect();
-        for segment in removed_segments {
-            free_space.recycle_csr(segment.into_csr());
-        }
-
-        let merged_csr = free_space.build_csr(&merged_entries, vertex_capacity);
-        let merged_segment = CsrSegment::with_creation_ts(
-            merged_csr,
-            min_create_ts,
-            max_create_ts,
-            final_deletion_info,
-            current_ts,
-        );
-
-        segments.push(merged_segment);
-        merge_count
-    } else {
-        // Every edge of the group was physically dropped: no merged segment
-        // is produced, but the source segments must still be removed and
-        // recycled, otherwise fully-dead segments would linger forever.
-        let removed_segments: Vec<_> = sorted_indices
-            .into_iter()
-            .map(|idx| segments.remove(idx))
-            .collect();
-        for segment in removed_segments {
-            free_space.recycle_csr(segment.into_csr());
-        }
-        0
+    let mut max_vertex = 0usize;
+    for idx in &sorted_indices {
+        let csr = segments[*idx].csr.read();
+        max_vertex = max_vertex.max(csr.vertex_capacity());
     }
+    max_vertex = max_vertex.max(1024);
+    let mut counts = vec![0u32; max_vertex];
+
+    for idx in &sorted_indices {
+        let seg = &segments[*idx];
+        let csr = seg.csr.read();
+        let seg_vc = csr.vertex_capacity();
+
+        for vid in 0..seg_vc {
+            let edges = csr.edges_of(vid as u32);
+            if edges.is_empty() {
+                continue;
+            }
+            let mut valid = 0u32;
+            let mut del_min = Timestamp::MAX;
+            let mut del_max = 0u64;
+            let mut del_count = 0u32;
+
+            for (pos, nbr) in edges.iter().enumerate() {
+                let edge_id = seg.recover_edge_id(nbr, pos);
+                if apply_deletion_filter {
+                    if let Some(delete_ts) = edge_delete_ts(edge_id) {
+                        if delete_ts <= retention_bound {
+                            physically_deleted_count += 1;
+                            continue;
+                        }
+                        del_count += 1;
+                        del_min = del_min.min(delete_ts);
+                        del_max = del_max.max(delete_ts);
+                    }
+                }
+                valid += 1;
+            }
+
+            counts[vid] += valid;
+            remaining_deleted_count += del_count;
+            remaining_del_min = remaining_del_min.min(del_min);
+            remaining_del_max = remaining_del_max.max(del_max);
+        }
+    }
+
+    let final_deletion_info = if apply_deletion_filter {
+        if physically_deleted_count > 0 {
+            log::debug!(
+                "Physical deletion removed {} edges older than the min active snapshot",
+                physically_deleted_count
+            );
+        }
+        DeletionInfo::with_count(
+            remaining_del_min,
+            remaining_del_max,
+            remaining_deleted_count,
+        )
+    } else {
+        merged_deletion_info
+    };
+
+    let mut total_valid = 0u32;
+    for i in 0..max_vertex {
+        total_valid += counts[i];
+    }
+
+    if total_valid == 0 {
+        let removed_segments: Vec<_> = sorted_indices
+            .into_iter()
+            .map(|idx| segments.remove(idx))
+            .collect();
+        for segment in removed_segments {
+            free_space.recycle_csr(segment.into_csr());
+        }
+        return 0;
+    }
+
+    let total_valid = total_valid as usize;
+
+    let mut merged_csr = free_space
+        .take_reusable_csr(Csr::required_memory_size(max_vertex, total_valid))
+        .unwrap_or_default();
+
+    let mut merged_edge_ids: Vec<EdgeId> = Vec::new();
+    let collect_edge_ids = total_valid >= SEPARATE_EDGE_ID_STORAGE_THRESHOLD;
+    if collect_edge_ids {
+        merged_edge_ids.reserve_exact(total_valid);
+    }
+
+    merged_csr.rebuild_with_counts(&counts, |offsets, edges| {
+        let mut current_pos = offsets[..max_vertex].to_vec();
+
+        for idx in &sorted_indices {
+            let seg = &segments[*idx];
+            let csr_r = seg.csr.read();
+            let seg_vc = csr_r.vertex_capacity();
+
+            for vid in 0..seg_vc {
+                let segment_edges = csr_r.edges_of(vid as u32);
+                if segment_edges.is_empty() {
+                    continue;
+                }
+                for (pos, nbr) in segment_edges.iter().enumerate() {
+                    let edge_id = seg.recover_edge_id(nbr, pos);
+                    if apply_deletion_filter {
+                        if let Some(delete_ts) = edge_delete_ts(edge_id) {
+                            if delete_ts <= retention_bound {
+                                continue;
+                            }
+                        }
+                    }
+                    let pos_out = current_pos[vid] as usize;
+                    edges[pos_out] =
+                        ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, nbr.timestamp);
+                    current_pos[vid] += 1;
+                    if collect_edge_ids {
+                        merged_edge_ids.push(edge_id);
+                    }
+                }
+            }
+        }
+    });
+
+    let removed_segments: Vec<_> = sorted_indices
+        .into_iter()
+        .map(|idx| segments.remove(idx))
+        .collect();
+    for segment in removed_segments {
+        free_space.recycle_csr(segment.into_csr());
+    }
+
+    let mut merged_segment = CsrSegment::with_creation_ts(
+        merged_csr,
+        min_create_ts,
+        max_create_ts,
+        final_deletion_info,
+        current_ts,
+    );
+    if collect_edge_ids {
+        merged_segment.edge_ids = Some(merged_edge_ids);
+    }
+    segments.push(merged_segment);
+
+    merge_count
 }
 
 /// Region-aware wrapper: same as `merge_selected_segments_with_deletion_filter_with_free_space`
@@ -373,11 +429,7 @@ fn merge_adaptive_impl(
         for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
-            let nbr = Nbr::new(
-                immutable_nbr.neighbor,
-                edge_id,
-                immutable_nbr.timestamp,
-            );
+            let nbr = Nbr::new(immutable_nbr.neighbor, edge_id, immutable_nbr.timestamp);
             merged_entries.push((src_u32, nbr));
         }
 
@@ -609,11 +661,7 @@ fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr)>) {
     for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
         let src_u32 = src.as_int64().unwrap_or(0) as u32;
         let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-        let nbr = Nbr::new(
-            immutable_nbr.neighbor,
-            edge_id,
-            immutable_nbr.timestamp,
-        );
+        let nbr = Nbr::new(immutable_nbr.neighbor, edge_id, immutable_nbr.timestamp);
         entries.push((src_u32, nbr));
     }
 }

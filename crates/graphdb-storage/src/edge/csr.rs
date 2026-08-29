@@ -167,6 +167,9 @@ impl Csr {
     }
 
     /// Rebuild CSR contents while retaining existing vector allocations when possible.
+    ///
+    /// Counts edges per source vertex directly, avoiding the per-edge
+    /// `src_list`/`dst_list`/`edge_ids`/`timestamps` temporary allocations.
     pub fn rebuild_from_nbr_entries(&mut self, entries: &[(u32, Nbr)], vertex_capacity: usize) {
         if entries.is_empty() {
             self.offsets.truncate(1);
@@ -180,16 +183,79 @@ impl Csr {
             self.resize(vertex_capacity.max(1));
         }
 
-        let src_list: Vec<_> = entries.iter().map(|(src, _)| *src).collect();
-        let dst_list: Vec<_> = entries.iter().map(|(_, nbr)| nbr.neighbor).collect();
-        let edge_ids: Vec<_> = entries.iter().map(|(_, nbr)| nbr.edge_id).collect();
-        let timestamps: Vec<_> = entries.iter().map(|(_, nbr)| nbr.create_ts).collect();
-        self.batch_put_edges_with_timestamps(
-            &src_list,
-            &dst_list,
-            &edge_ids,
-            &timestamps,
+        let vc = self.vertex_capacity();
+
+        let mut counts = vec![0u32; vc];
+        for (src, _) in entries.iter() {
+            let idx = *src as usize;
+            if idx < vc {
+                counts[idx] += 1;
+            }
+        }
+
+        self.offsets.resize(vc + 1, 0);
+        let mut cumsum = 0u32;
+        for i in 0..vc {
+            self.offsets[i] = cumsum;
+            cumsum += counts[i];
+        }
+        self.offsets[vc] = cumsum;
+
+        self.edges.clear();
+        self.edges.resize(
+            cumsum as usize,
+            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)),
         );
+        let mut current_pos = self.offsets[..vc].to_vec();
+        for (src, nbr) in entries.iter() {
+            let idx = *src as usize;
+            if idx >= vc {
+                continue;
+            }
+            let pos = current_pos[idx] as usize;
+            if pos < self.edges.len() {
+                self.edges[pos] =
+                    ImmutableNbr::with_timestamp(nbr.neighbor, nbr.edge_id, nbr.create_ts);
+                current_pos[idx] += 1;
+            }
+        }
+
+        self.edge_count.store(cumsum as u64, Ordering::Relaxed);
+    }
+
+    /// Rebuild the CSR in-place from per-vertex edge counts.
+    ///
+    /// `counts[i]` must be the number of valid edges for vertex `i`; their
+    /// sum must equal the final edge count. The `fill` closure is invoked
+    /// with the offsets array and the edge array; it is responsible for
+    /// writing each edge in source order.
+    pub fn rebuild_with_counts(
+        &mut self,
+        counts: &[u32],
+        fill: impl FnOnce(&[u32], &mut [ImmutableNbr]),
+    ) {
+        let vc = counts.len();
+        let mut offsets = vec![0u32; vc + 1];
+        let mut cumsum = 0u32;
+        for i in 0..vc {
+            offsets[i] = cumsum;
+            cumsum += counts[i];
+        }
+        offsets[vc] = cumsum;
+        let total = cumsum as usize;
+
+        let mut edges = Vec::with_capacity(total);
+        if total > 0 {
+            edges.resize(total, ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0)));
+        }
+
+        if total > 0 {
+            fill(&offsets, &mut edges);
+        }
+
+        self.offsets = offsets;
+        self.edges = edges;
+        self.edge_count.store(total as u64, Ordering::Relaxed);
     }
 
     /// Estimate the allocation needed for a CSR with the given dimensions.

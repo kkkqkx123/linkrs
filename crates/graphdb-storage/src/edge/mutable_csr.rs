@@ -75,6 +75,122 @@ const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
 const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
+/// Minimum vertices in a sequential run to be considered for indexed compaction.
+const SEQUENTIAL_RUN_THRESHOLD: usize = 16;
+
+/// Sequential overflow run: contiguous vertex range with uniform chunk count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SequentialRun {
+    pub start_vid: u32,
+    pub vertex_count: u32,
+    pub chunk_count: usize,
+}
+
+/// Optimized overflow chunk index for sequential vertex ranges.
+#[derive(Debug, Clone, Default)]
+pub struct OverflowIndex {
+    sequential_runs: Vec<SequentialRun>,
+}
+
+impl OverflowIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn sequential_runs(&self) -> &[SequentialRun] {
+        &self.sequential_runs
+    }
+
+    pub fn len(&self) -> usize {
+        self.sequential_runs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sequential_runs.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.sequential_runs.clear();
+    }
+
+    /// Check if a vertex belongs to any sequential run.
+    pub fn is_sequential(&self, vid: u32) -> bool {
+        self.sequential_runs
+            .iter()
+            .any(|run| vid >= run.start_vid && vid < run.start_vid + run.vertex_count)
+    }
+
+    /// Find the sequential run containing `vid`, if any.
+    pub fn find_run(&self, vid: u32) -> Option<&SequentialRun> {
+        self.sequential_runs
+            .iter()
+            .find(|run| vid >= run.start_vid && vid < run.start_vid + run.vertex_count)
+    }
+
+    /// Build index from overflow_chunks map.
+    pub fn rebuild_from_chunks(chunks: &HashMap<u32, Vec<Vec<Nbr>>>) -> Self {
+        if chunks.is_empty() {
+            return Self::default();
+        }
+        let mut vertices: Vec<(u32, usize)> =
+            chunks.iter().map(|(vid, v)| (*vid, v.len())).collect();
+        vertices.sort_by_key(|(vid, _)| *vid);
+
+        let mut runs = Vec::new();
+        let mut i = 0usize;
+        while i < vertices.len() {
+            let (vid, chunk_count) = vertices[i];
+            let mut run_length = 1usize;
+            while i + run_length < vertices.len() {
+                let (next_vid, next_count) = vertices[i + run_length];
+                if next_vid != vid + run_length as u32 || next_count != chunk_count {
+                    break;
+                }
+                run_length += 1;
+            }
+            if run_length >= SEQUENTIAL_RUN_THRESHOLD {
+                runs.push(SequentialRun {
+                    start_vid: vid,
+                    vertex_count: run_length as u32,
+                    chunk_count,
+                });
+                i += run_length;
+            } else {
+                i += 1;
+            }
+        }
+        Self {
+            sequential_runs: runs,
+        }
+    }
+
+    /// Memory savings estimate for overflow metadata (in bytes).
+    pub fn metadata_bytes_saved(&self, total_overflow_vertices: usize) -> usize {
+        if self.sequential_runs.is_empty() {
+            return 0;
+        }
+        let sequential_vertices: usize = self
+            .sequential_runs
+            .iter()
+            .map(|r| r.vertex_count as usize)
+            .sum();
+        let sparse_vertices = total_overflow_vertices.saturating_sub(sequential_vertices);
+        let before = total_overflow_vertices * (4 + 24);
+        let after = sparse_vertices * (4 + 24) + self.sequential_runs.len() * 12;
+        before.saturating_sub(after)
+    }
+}
+
+/// Statistics for overflow index.
+#[derive(Debug, Clone, Copy)]
+pub struct OverflowIndexStats {
+    pub total_overflow_vertices: usize,
+    pub sequential_runs: usize,
+    pub sequential_vertices: usize,
+    pub sparse_vertices: usize,
+    pub metadata_bytes_saved: usize,
+}
+
 /// Mutable CSR graph structure with two-level storage.
 ///
 /// # Layout
@@ -101,6 +217,7 @@ pub struct MutableCsr {
 
     overflow_chunks: HashMap<u32, Vec<Vec<Nbr>>>,
     overflow_chunk_edges: usize,
+    overflow_index: OverflowIndex,
 
     edge_count: AtomicU64,
     total_edge_capacity: usize,
@@ -115,6 +232,7 @@ impl Clone for MutableCsr {
             primary_capacities: self.primary_capacities.clone(),
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
+            overflow_index: self.overflow_index.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
             total_edge_capacity: self.total_edge_capacity,
         }
@@ -159,6 +277,7 @@ impl MutableCsr {
             primary_capacities: vec![0; vertex_cap],
             overflow_chunks: HashMap::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
+            overflow_index: OverflowIndex::new(),
             edge_count: AtomicU64::new(0),
             total_edge_capacity: 0,
         }
@@ -190,6 +309,49 @@ impl MutableCsr {
             let new_capacity =
                 ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
             self.resize(new_capacity);
+        }
+    }
+
+    // ── Overflow Index (Sequential CSR Index) ──
+
+    /// Rebuild overflow index, detecting sequential runs of vertices with uniform chunk counts.
+    pub fn rebuild_overflow_index(&mut self) {
+        self.overflow_index = OverflowIndex::rebuild_from_chunks(&self.overflow_chunks);
+    }
+
+    /// Get overflow chunks for a vertex, transparent to sequential index.
+    pub fn get_overflow_chunks(&self, vid: u32) -> Option<&Vec<Vec<Nbr>>> {
+        self.overflow_chunks.get(&vid)
+    }
+
+    /// Access the overflow index metadata.
+    pub fn overflow_index(&self) -> &OverflowIndex {
+        &self.overflow_index
+    }
+
+    /// Check if a vertex belongs to a sequential run.
+    pub fn is_overflow_sequential(&self, vid: u32) -> bool {
+        self.overflow_index.is_sequential(vid)
+    }
+
+    /// Overflow index statistics.
+    pub fn overflow_index_stats(&self) -> OverflowIndexStats {
+        let total = self.overflow_chunks.len();
+        let sequential_runs = self.overflow_index.len();
+        let sequential_vertices: usize = self
+            .overflow_index
+            .sequential_runs
+            .iter()
+            .map(|r| r.vertex_count as usize)
+            .sum();
+        let sparse_vertices = total.saturating_sub(sequential_vertices);
+        let saved = self.overflow_index.metadata_bytes_saved(total);
+        OverflowIndexStats {
+            total_overflow_vertices: total,
+            sequential_runs,
+            sequential_vertices,
+            sparse_vertices,
+            metadata_bytes_saved: saved,
         }
     }
 
@@ -650,6 +812,7 @@ impl MutableCsr {
             *degree = 0;
         }
         self.overflow_chunks.clear();
+        self.overflow_index.clear();
         self.total_edge_capacity = self
             .primary_capacities
             .iter()
@@ -799,6 +962,7 @@ impl MutableCsr {
         self.degrees = degrees;
         self.primary_capacities = primary_capacities;
         self.overflow_chunks = overflow_chunks;
+        self.overflow_index = OverflowIndex::rebuild_from_chunks(&self.overflow_chunks);
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
@@ -921,6 +1085,7 @@ impl MutableCsr {
         self.total_edge_capacity = new_total_edge_capacity;
 
         self.overflow_chunks = HashMap::new();
+        self.overflow_index.clear();
 
         removed_count
     }
@@ -935,6 +1100,28 @@ impl MutableCsr {
         reserve_ratio: f32,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
         region_vertex_count: usize,
+    ) -> usize {
+        self.compact_regions_with_ts_reporting_calibrated(
+            cutoff,
+            reserve_ratio,
+            on_edge_removed,
+            region_vertex_count,
+            None,
+        )
+    }
+
+    /// Region-aware compact with calibrated deletion threshold.
+    ///
+    /// When `calibrated_deletion_ratio` is Some, a region is considered dirty
+    /// only when its deletion ratio meets the calibrated threshold; otherwise
+    /// any reclaimable deletion makes the region dirty (legacy behavior).
+    pub fn compact_regions_with_ts_reporting_calibrated(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        region_vertex_count: usize,
+        calibrated_deletion_ratio: Option<f64>,
     ) -> usize {
         if region_vertex_count == 0 {
             return self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
@@ -951,38 +1138,72 @@ impl MutableCsr {
         for rid in 0..region_cnt {
             let start_v = rid * region_vertex_count;
             let end_v = ((rid + 1) * region_vertex_count).min(vc);
-            let mut has_reclaimable = false;
-            for vid in start_v..end_v {
-                let degree = self.degrees[vid] as usize;
-                let off = self.adj_offsets[vid] as usize;
-                for i in 0..degree {
-                    let nbr = &self.nbr_list[off + i];
-                    if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                        has_reclaimable = true;
-                        break;
+            let mut dirty = false;
+            if let Some(threshold) = calibrated_deletion_ratio {
+                let mut total_in_region = 0usize;
+                let mut deleted_in_region = 0usize;
+                for vid in start_v..end_v {
+                    let degree = self.degrees[vid] as usize;
+                    let off = self.adj_offsets[vid] as usize;
+                    for i in 0..degree {
+                        total_in_region += 1;
+                        let nbr = &self.nbr_list[off + i];
+                        if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                            deleted_in_region += 1;
+                        }
                     }
-                }
-                if has_reclaimable {
-                    break;
-                }
-                if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
-                    for chunk in chunks {
-                        for nbr in chunk {
-                            if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                                has_reclaimable = true;
-                                break;
+                    if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
+                        for chunk in chunks {
+                            for nbr in chunk {
+                                total_in_region += 1;
+                                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                                    deleted_in_region += 1;
+                                }
                             }
                         }
-                        if has_reclaimable {
+                    }
+                }
+                if total_in_region > 0 {
+                    let ratio = deleted_in_region as f64 / total_in_region as f64;
+                    if ratio >= threshold {
+                        dirty = true;
+                    }
+                }
+            } else {
+                let mut has_reclaimable = false;
+                for vid in start_v..end_v {
+                    let degree = self.degrees[vid] as usize;
+                    let off = self.adj_offsets[vid] as usize;
+                    for i in 0..degree {
+                        let nbr = &self.nbr_list[off + i];
+                        if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                            has_reclaimable = true;
                             break;
                         }
                     }
+                    if has_reclaimable {
+                        break;
+                    }
+                    if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
+                        for chunk in chunks {
+                            for nbr in chunk {
+                                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                                    has_reclaimable = true;
+                                    break;
+                                }
+                            }
+                            if has_reclaimable {
+                                break;
+                            }
+                        }
+                    }
+                    if has_reclaimable {
+                        break;
+                    }
                 }
-                if has_reclaimable {
-                    break;
-                }
+                dirty = has_reclaimable;
             }
-            if has_reclaimable {
+            if dirty {
                 dirty_regions += 1;
             }
         }
@@ -1734,5 +1955,107 @@ mod tests {
         // At ts=3, all three are visible (but second is deleted)
         let edges_ts3: Vec<_> = csr.iter_edges_of(0u32, 3).collect();
         assert_eq!(edges_ts3.len(), 2);
+    }
+
+    #[test]
+    fn test_overflow_index_sequential_run_detection() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        // Create 20 vertices (0..20) each with exactly 2 overflow chunk allocations
+        // Primary capacity is 4, so after 4 edges primary full, next edges go to overflow.
+        // With chunk size 2, inserting 8 edges per vertex -> 4 primary + 4 overflow (2 chunks)
+        for vid in 0..20u32 {
+            for i in 0..8 {
+                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
+                    .unwrap();
+            }
+        }
+        csr.rebuild_overflow_index();
+        let stats = csr.overflow_index_stats();
+        assert_eq!(stats.sequential_runs, 1);
+        assert_eq!(stats.sequential_vertices, 20);
+        assert_eq!(stats.sparse_vertices, 0);
+        // Verify sequential check
+        assert!(csr.is_overflow_sequential(5));
+        assert!(csr.is_overflow_sequential(19));
+        let runs = csr.overflow_index().sequential_runs();
+        assert_eq!(runs[0].start_vid, 0);
+        assert_eq!(runs[0].vertex_count, 20);
+        assert_eq!(runs[0].chunk_count, 2);
+    }
+
+    #[test]
+    fn test_overflow_index_sparse_fallback() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        // 5 vertices with same pattern (< threshold) -> no sequential run
+        for vid in 0..5u32 {
+            for i in 0..6 {
+                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
+                    .unwrap();
+            }
+        }
+        // Add vertices with different chunk counts (non-uniform)
+        for vid in 10..15u32 {
+            let chunk_cnt = if vid % 2 == 0 { 1 } else { 2 };
+            let edges_needed = 4 + chunk_cnt * 2;
+            for i in 0..edges_needed {
+                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+                csr.insert_edge(vid, dst, EdgeId(1000 + vid as u64 * 10 + i as u64), 1)
+                    .unwrap();
+            }
+        }
+        csr.rebuild_overflow_index();
+        let stats = csr.overflow_index_stats();
+        // 5 vertices <16 threshold -> no run, mixed chunk counts -> no run
+        assert_eq!(stats.sequential_runs, 0);
+        assert!(!csr.is_overflow_sequential(0));
+        // Sparse lookup still works
+        assert!(csr.get_overflow_chunks(0).is_some());
+        assert!(csr.get_overflow_chunks(10).is_some());
+        assert!(csr.get_overflow_chunks(999).is_none());
+    }
+
+    #[test]
+    fn test_overflow_index_get_chunks_transparent() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        for vid in 0..20u32 {
+            for i in 0..6 {
+                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
+                    .unwrap();
+            }
+        }
+        csr.rebuild_overflow_index();
+        // All chunks should still be accessible via get_overflow_chunks
+        for vid in 0..20u32 {
+            let chunks = csr.get_overflow_chunks(vid).expect("should have overflow");
+            assert_eq!(chunks.len(), 1); // 2 overflow edges -> 1 chunk of size 2
+            assert_eq!(chunks[0].len(), 2);
+        }
+        // Verify edges_of still works for sequential vertices
+        for vid in 0..20u32 {
+            let edges = csr.edges_of(vid, 1);
+            assert_eq!(edges.len(), 6);
+        }
+    }
+
+    #[test]
+    fn test_overflow_index_rebuild_after_compact() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        for vid in 0..20u32 {
+            for i in 0..8 {
+                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
+                    .unwrap();
+            }
+        }
+        csr.rebuild_overflow_index();
+        assert_eq!(csr.overflow_index_stats().sequential_runs, 1);
+        // Compact merges overflow back into primary, should clear index
+        let mut removed = Vec::new();
+        csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
+        assert!(csr.overflow_index().is_empty());
+        assert_eq!(csr.overflow_index_stats().total_overflow_vertices, 0);
     }
 }
