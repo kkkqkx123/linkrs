@@ -91,7 +91,7 @@ struct CheckpointFileEntry {
     checksum: u32,
 }
 
-const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+pub(crate) const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]
 pub struct CheckpointInfo {

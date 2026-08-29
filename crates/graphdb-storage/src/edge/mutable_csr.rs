@@ -72,7 +72,7 @@ const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGE_CAPACITY: usize = 4096;
 const DEFAULT_VERTEX_DEGREE: usize = 4;
 const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
-const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
+const MUTABLE_CSR_FORMAT_VERSION: u32 = 1;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 /// Minimum vertices in a sequential run to be considered for indexed compaction.

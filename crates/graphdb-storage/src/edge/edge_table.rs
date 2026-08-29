@@ -341,10 +341,6 @@ impl EdgeStore {
         self.0.calibrated_threshold()
     }
 
-    pub fn should_trigger_compaction_calibrated(&self) -> bool {
-        self.0.should_trigger_compaction_calibrated()
-    }
-
     pub fn overflow_index_stats(&self) -> Option<super::mutable_csr::OverflowIndexStats> {
         self.0.out_csr.overflow_index_stats()
     }

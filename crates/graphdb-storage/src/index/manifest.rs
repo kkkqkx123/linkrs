@@ -10,7 +10,7 @@ use crate::cursor::PartitionSelector;
 use graphdb_core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-const MANIFEST_FORMAT_VERSION: u16 = 3;
+const MANIFEST_FORMAT_VERSION: u16 = 1;
 
 // ── Crash-safe generation rebuild state machine ──
 

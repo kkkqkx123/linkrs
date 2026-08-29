@@ -374,19 +374,8 @@ impl TimeTravelEdgeStore {
         self.calibrator.record_access(rid);
     }
 
-    pub fn should_trigger_compaction_calibrated(&self) -> bool {
-        let total_edges = self.edge_count();
-        let total_tombstones = self.mvcc.total_tombstone_count() as u64;
-        self.calibrator
-            .should_trigger_compaction(total_edges, total_tombstones)
-    }
-
     pub fn set_calibrator_memory_pressure(&mut self, ratio: f64) {
         self.calibrator.set_memory_pressure(ratio);
-    }
-
-    pub fn set_calibrator_query_latency(&mut self, latency_us: u64) {
-        self.calibrator.set_query_latency_p99(latency_us);
     }
 
     fn base_get_edge(

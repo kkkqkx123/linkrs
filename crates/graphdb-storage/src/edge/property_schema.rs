@@ -4,7 +4,6 @@
 //! These types are separated from the table implementation for better modularity.
 
 use crate::encoding::EncodingType;
-use graphdb_core::types::Timestamp;
 use graphdb_core::DataType;
 
 /// Sentinel value meaning "no properties"
@@ -57,38 +56,6 @@ impl PropertySchema {
     }
 }
 
-/// Property record with version tracking
-/// Supports MVCC-based time-travel queries and garbage collection
-#[derive(Debug, Clone)]
-pub struct PropertyRecord {
-    pub data: Vec<u8>,
-    pub create_ts: Timestamp,
-    pub delete_ts: Option<Timestamp>,
-}
-
-impl PropertyRecord {
-    pub fn new(data: Vec<u8>, create_ts: Timestamp) -> Self {
-        Self {
-            data,
-            create_ts,
-            delete_ts: None,
-        }
-    }
-
-    /// Check if this record is visible at the given timestamp
-    pub fn is_visible_at(&self, query_ts: Timestamp) -> bool {
-        if self.create_ts > query_ts {
-            return false;
-        }
-        if let Some(del_ts) = self.delete_ts {
-            if query_ts >= del_ts {
-                return false;
-            }
-        }
-        true
-    }
-}
-
 /// Statistics about property table fragmentation and compaction.
 ///
 /// Tracks fragmentation metrics to help decide when to perform compaction
@@ -117,7 +84,6 @@ pub struct PropertyCompactionStats {
     /// Size of the free list (reusable slots)
     pub free_list_size: usize,
     /// Estimated bytes that could be recovered through compaction
-    /// Includes both deleted record data and PropertyRecord metadata
     pub reclaimable_bytes: usize,
 }
 
@@ -144,7 +110,6 @@ impl PropertyCompactionStats {
     ///
     /// This combines both metrics for a more robust decision.
     pub fn should_compact(&self, fragmentation_threshold: f64) -> bool {
-        // Trigger if record fragmentation ratio is high
         let record_fragmentation = if self.total_records == 0 {
             0.0
         } else {
@@ -155,13 +120,11 @@ impl PropertyCompactionStats {
             return true;
         }
 
-        // Also trigger if reclaimable bytes are significant
-        // (e.g., > 20% of what we could save if we compacted)
-        // This handles the case where many small records are deleted
         if self.live_records > 0 && self.reclaimable_bytes > 0 {
-            // If reclaimable bytes exceed 50% of total table size, compact
+            // Estimate per-record overhead in columnar layout (row metadata: create_ts + delete_ts + free_list slot)
+            const ESTIMATED_BYTES_PER_RECORD: usize = 32;
             let total_size =
-                self.live_records * std::mem::size_of::<PropertyRecord>() + self.reclaimable_bytes;
+                self.live_records * ESTIMATED_BYTES_PER_RECORD + self.reclaimable_bytes;
             if total_size > 0 && (self.reclaimable_bytes as f64 / total_size as f64) > 0.5 {
                 return true;
             }

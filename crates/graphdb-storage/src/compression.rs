@@ -18,7 +18,7 @@ pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
 pub const MAX_PAGE_SIZE: usize = 64 * 1024 * 1024;
 pub const PAGE_MAGIC: [u8; 4] = *b"PGZC";
 pub const COLUMN_FILE_MAGIC: [u8; 8] = *b"GRPHDCOL";
-pub const COLUMN_FILE_VERSION: u16 = 2;
+pub const COLUMN_FILE_VERSION: u16 = 1;
 
 const COMPRESSION_MARKER_NONE: u8 = 0x00;
 const COMPRESSION_MARKER_ZSTD: u8 = 0x01;

@@ -22,7 +22,7 @@ use crate::vertex::column_store::ColumnStore;
 use graphdb_core::types::EdgeId;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{
-    data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
+    data_type_from_info, DataType, StorageError, StorageResult, TypeCodecError,
     TypeInfo, Value,
 };
 
@@ -34,18 +34,14 @@ mod zone_map;
 
 /// Current on-disk layout version: columnar-only (ColumnStore per property) +
 /// zone maps + per-column encodings + row Create/Delete metadata.
-/// v4 was columnar dual-write (row blob + column store); v5 drops the row
-/// blob and persists column data directly. v4 files are no longer readable
-/// and must be re-imported.
-const PROPERTY_TABLE_VERSION: u8 = 5;
+const PROPERTY_TABLE_VERSION: u8 = 1;
 
 /// Rows per zone-map chunk. Zone maps store min/max/ndv/null_count per chunk
 /// for predicate pushdown (skip chunks whose zone cannot contain the predicate).
 pub const ZONE_MAP_CHUNK_SIZE: usize = 1024;
 
 pub use super::property_schema::{
-    prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertyRecord,
-    PropertySchema,
+    prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertySchema,
 };
 
 /// A single projected row: optional list of `(column_name, optional_value)` pairs.
@@ -136,7 +132,6 @@ impl PropertyValueIndex {
             if row_delete_ts.get(row_idx).and_then(|v| *v).is_some() {
                 continue;
             }
-            // Assemble current row via column store (live view)
             let mut props = Vec::new();
             for schema_entry in schema {
                 if let Some(col) = column_store.get_column(&schema_entry.name) {
@@ -148,22 +143,6 @@ impl PropertyValueIndex {
             }
             for (name, val) in &props {
                 self.insert(name, val.as_ref(), offset);
-            }
-        }
-    }
-
-    /// Legacy rebuild from row records — kept for migration tests only.
-    pub fn rebuild(&mut self, schema: &[PropertySchema], records: &[Option<PropertyRecord>]) {
-        self.clear();
-        for (row_idx, record_opt) in records.iter().enumerate() {
-            let Some(record) = record_opt else { continue };
-            if record.delete_ts.is_some() {
-                continue;
-            }
-            let offset = prop_index_to_offset(row_idx);
-            let props = deserialize_row_raw(schema, &record.data);
-            for (name, val) in props {
-                self.insert(&name, val.as_ref(), offset);
             }
         }
     }
@@ -197,80 +176,6 @@ fn encode_value_for_index(value: Option<&Value>) -> Vec<u8> {
             }
             buf
         }
-    }
-}
-
-fn deserialize_row_raw(schema: &[PropertySchema], data: &[u8]) -> Vec<(String, Option<Value>)> {
-    let mut cursor = Cursor::new(data);
-    let mut result = Vec::new();
-    for schema_entry in schema {
-        let mut null_marker = [0u8; 1];
-        if cursor.read_exact(&mut null_marker).is_err() {
-            result.push((schema_entry.name.clone(), None));
-            continue;
-        }
-        if null_marker[0] == 0 {
-            result.push((schema_entry.name.clone(), None));
-        } else {
-            let value = deserialize_value_from_cursor(&mut cursor, &schema_entry.data_type);
-            result.push((schema_entry.name.clone(), value));
-        }
-    }
-    result
-}
-
-fn deserialize_value_from_cursor(
-    cursor: &mut Cursor<&[u8]>,
-    data_type: &DataType,
-) -> Option<Value> {
-    match data_type {
-        DataType::Bool => {
-            let mut b = [0u8; 1];
-            cursor.read_exact(&mut b).ok()?;
-            Some(Value::Bool(b[0] != 0))
-        }
-        DataType::SmallInt => {
-            let mut buf = [0u8; 2];
-            cursor.read_exact(&mut buf).ok()?;
-            Some(Value::SmallInt(i16::from_le_bytes(buf)))
-        }
-        DataType::Int => {
-            let mut buf = [0u8; 4];
-            cursor.read_exact(&mut buf).ok()?;
-            Some(Value::Int(i32::from_le_bytes(buf)))
-        }
-        DataType::BigInt => {
-            let mut buf = [0u8; 8];
-            cursor.read_exact(&mut buf).ok()?;
-            Some(Value::BigInt(i64::from_le_bytes(buf)))
-        }
-        DataType::Float => {
-            let mut buf = [0u8; 4];
-            cursor.read_exact(&mut buf).ok()?;
-            Some(Value::Float(f32::from_le_bytes(buf)))
-        }
-        DataType::Double => {
-            let mut buf = [0u8; 8];
-            cursor.read_exact(&mut buf).ok()?;
-            Some(Value::Double(f64::from_le_bytes(buf)))
-        }
-        DataType::String => {
-            let len = decode_varint(cursor).unwrap_or(0) as usize;
-            let mut str_buf = vec![0u8; len];
-            cursor.read_exact(&mut str_buf).ok()?;
-            Some(Value::string(String::from_utf8_lossy(&str_buf)))
-        }
-        DataType::Date => {
-            let mut buf = [0u8; 10];
-            cursor.read_exact(&mut buf[..4]).ok()?;
-            let year = i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            cursor.read_exact(&mut buf[..4]).ok()?;
-            let month = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            cursor.read_exact(&mut buf[..4]).ok()?;
-            let day = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            Some(Value::Date(DateValue { year, month, day }))
-        }
-        _ => None,
     }
 }
 
@@ -771,29 +676,6 @@ impl PropertyTable {
         }
     }
 
-    pub fn filter_live_records(&self) -> Vec<(u32, PropertyRecord)> {
-        let mut out = Vec::new();
-        for idx in 0..self.row_create_ts.len() {
-            if self.row_create_ts[idx] == 0 {
-                continue;
-            }
-            let offset = prop_index_to_offset(idx);
-            if self.free_list.contains(&offset) {
-                continue;
-            }
-            if self.row_delete_ts.get(idx).and_then(|v| *v).is_some() {
-                continue;
-            }
-            // Synthesize a PropertyRecord from column values for compat
-            let _props = self.column_store.get(idx);
-            let buf = Vec::new();
-            // We cannot faithfully serialize without data, but provide empty placeholder
-            let rec = PropertyRecord::new(buf, self.row_create_ts[idx]);
-            out.push((offset, rec));
-        }
-        out
-    }
-
     /// Check if schema is suitable for fast path operations:
     /// all types are fixed-size (no String, no Date)
     pub fn is_schema_fixed_size(&self) -> bool {
@@ -1007,7 +889,7 @@ mod olap_phase1_tests {
         legacy[CHECKSUM_POS..CHECKSUM_POS + 4].copy_from_slice(&computed.to_le_bytes());
         let mut loaded = PropertyTable::new();
         let err = loaded.load(&legacy).unwrap_err();
-        assert!(err.to_string().contains("no longer supported"));
+        assert!(err.to_string().contains("Unsupported PropertyTable version"));
 
         let mut current = PropertyTable::new();
         current.load(&data).unwrap();

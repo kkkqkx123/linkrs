@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) const EDGE_META_VERSION: u32 = 3;
+pub(crate) const EDGE_META_VERSION: u32 = 1;
 const EDGE_ID_STORAGE_MODE_DIRECT: u8 = 0;
 const EDGE_ID_STORAGE_MODE_SEPARATE: u8 = 1;
 

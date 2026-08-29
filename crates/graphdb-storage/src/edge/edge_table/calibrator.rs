@@ -74,8 +74,6 @@ pub struct CalibratorConfig {
     pub base_fragmentation_ratio: f32,
     /// Memory pressure trigger (buffer pool usage ratio).
     pub memory_pressure_threshold: f64,
-    /// Query latency SLO (p99 in microseconds).
-    pub query_latency_slo_us: u64,
     /// Minimum multiplier (most aggressive compactions).
     pub min_multiplier: f64,
     /// Maximum multiplier (least aggressive compactions).
@@ -90,7 +88,6 @@ impl Default for CalibratorConfig {
             base_deletion_ratio: 0.5,
             base_fragmentation_ratio: 2.0,
             memory_pressure_threshold: 0.8,
-            query_latency_slo_us: 10_000,
             min_multiplier: 0.5,
             max_multiplier: 2.0,
             branch_factor: 4,
@@ -159,8 +156,6 @@ pub struct CalibratorTree {
     config: CalibratorConfig,
     leaf_index: Vec<Option<usize>>,
     memory_pressure: f64,
-    query_latency_p99_us: u64,
-    write_throughput: f64,
 }
 
 impl std::fmt::Debug for CalibratorTree {
@@ -170,7 +165,6 @@ impl std::fmt::Debug for CalibratorTree {
             .field("root_idx", &self.root_idx)
             .field("config", &self.config)
             .field("memory_pressure", &self.memory_pressure)
-            .field("query_latency_p99_us", &self.query_latency_p99_us)
             .finish()
     }
 }
@@ -183,8 +177,6 @@ impl Clone for CalibratorTree {
             config: self.config.clone(),
             leaf_index: self.leaf_index.clone(),
             memory_pressure: self.memory_pressure,
-            query_latency_p99_us: self.query_latency_p99_us,
-            write_throughput: self.write_throughput,
         }
     }
 }
@@ -203,8 +195,6 @@ impl CalibratorTree {
             config,
             leaf_index: Vec::new(),
             memory_pressure: 0.0,
-            query_latency_p99_us: 0,
-            write_throughput: 0.0,
         }
     }
 
@@ -423,13 +413,6 @@ impl CalibratorTree {
             multiplier *= 1.0 - excess * 0.5;
         }
 
-        if self.query_latency_p99_us > self.config.query_latency_slo_us
-            && self.config.query_latency_slo_us > 0
-        {
-            let ratio = self.query_latency_p99_us as f64 / self.config.query_latency_slo_us as f64;
-            multiplier *= (1.0 + (ratio - 1.0) * 0.5).min(2.0);
-        }
-
         let del_ratio = root_stats.deletion_ratio();
         if del_ratio > 0.3 {
             multiplier *= 0.8;
@@ -437,12 +420,6 @@ impl CalibratorTree {
             multiplier *= 0.9;
         } else if del_ratio < 0.05 {
             multiplier *= 1.1;
-        }
-
-        if self.write_throughput > 10_000.0 {
-            multiplier *= 0.85;
-        } else if self.write_throughput < 100.0 && root_stats.edge_count > 0 {
-            multiplier *= 1.05;
         }
 
         let hot_ratio = if root_stats.edge_count > 0 {
@@ -497,25 +474,6 @@ impl CalibratorTree {
         self.memory_pressure = ratio.clamp(0.0, 1.0);
     }
 
-    pub fn set_query_latency_p99(&mut self, latency_us: u64) {
-        self.query_latency_p99_us = latency_us;
-    }
-
-    pub fn set_write_throughput(&mut self, throughput: f64) {
-        self.write_throughput = throughput.max(0.0);
-    }
-
-    pub fn set_last_compact_ts(&mut self, region_id: u32, ts: Timestamp) {
-        let rid = region_id as usize;
-        if rid >= self.leaf_index.len() {
-            return;
-        }
-        if let Some(Some(leaf_idx)) = self.leaf_index.get(rid) {
-            self.nodes[*leaf_idx].stats.last_compact_ts = ts;
-            self.propagate_to_root(*leaf_idx);
-        }
-    }
-
     /// Whether a region is hot (frequently accessed).
     pub fn is_hot_region(&self, region_id: u32, threshold: u64) -> bool {
         let rid = region_id as usize;
@@ -523,18 +481,6 @@ impl CalibratorTree {
             self.nodes[*leaf_idx].access_count.load(Ordering::Relaxed) >= threshold
         } else {
             false
-        }
-    }
-
-    /// Batch update from a collection of RegionMeta-like stats.
-    pub fn update_from_region_metas(&mut self, metas: &[(u32, DensityStats)]) {
-        // Ensure capacity covers max region id.
-        let max_id = metas.iter().map(|(id, _)| *id as usize).max().unwrap_or(0);
-        if max_id >= self.leaf_index.len() {
-            self.ensure_region_count(max_id + 1);
-        }
-        for (rid, stats) in metas {
-            self.update_region_stats(*rid, stats.clone());
         }
     }
 }
@@ -580,7 +526,6 @@ mod tests {
             base_deletion_ratio: 0.5,
             base_fragmentation_ratio: 2.0,
             memory_pressure_threshold: 0.8,
-            query_latency_slo_us: 10_000,
             min_multiplier: 0.5,
             max_multiplier: 2.0,
             branch_factor: 4,
@@ -594,27 +539,6 @@ mod tests {
         // High memory pressure should lower threshold (more aggressive)
         assert!(high_mem.effective_deletion_ratio() < base_ratio);
         assert!(high_mem.multiplier < base.multiplier);
-    }
-
-    #[test]
-    fn test_calibrated_threshold_query_latency() {
-        let config = CalibratorConfig {
-            base_deletion_ratio: 0.5,
-            base_fragmentation_ratio: 2.0,
-            memory_pressure_threshold: 0.8,
-            query_latency_slo_us: 5_000,
-            min_multiplier: 0.5,
-            max_multiplier: 2.0,
-            branch_factor: 4,
-        };
-        let mut tree = CalibratorTree::new(config);
-        let base = tree.calibrated_threshold();
-
-        tree.set_query_latency_p99(20_000);
-        let high_lat = tree.calibrated_threshold();
-        // High latency should raise multiplier (less aggressive to avoid blocking)
-        assert!(high_lat.multiplier > base.multiplier);
-        assert!(high_lat.effective_deletion_ratio() > base.effective_deletion_ratio());
     }
 
     #[test]
@@ -707,14 +631,12 @@ mod tests {
             base_deletion_ratio: 0.5,
             base_fragmentation_ratio: 2.0,
             memory_pressure_threshold: 0.0,
-            query_latency_slo_us: 1,
             min_multiplier: 0.7,
             max_multiplier: 1.3,
             branch_factor: 4,
         };
         let mut tree = CalibratorTree::new(config);
         tree.set_memory_pressure(1.0);
-        tree.set_query_latency_p99(1_000_000);
         let t = tree.calibrated_threshold();
         assert!(t.multiplier >= 0.7 && t.multiplier <= 1.3);
     }

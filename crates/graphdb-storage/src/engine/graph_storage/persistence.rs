@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::engine::paths::StoragePaths;
-use crate::engine::persistence_coordinator::{CheckpointData, CheckpointInfo, CheckpointStats};
+use crate::engine::persistence_coordinator::{
+    CheckpointData, CheckpointInfo, CheckpointStats, CHECKPOINT_FORMAT_VERSION,
+};
 use graphdb_core::types::{CompactConfig, CompactTarget, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
@@ -702,7 +704,7 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
     let lsn = lsn.ok_or_else(|| {
         StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
     })?;
-    if format_version != Some(2) {
+    if format_version != Some(CHECKPOINT_FORMAT_VERSION as u64) {
         return Err(StorageError::deserialize_error(format!(
             "Unsupported checkpoint format version: {:?}",
             format_version
