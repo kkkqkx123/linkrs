@@ -946,12 +946,7 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             }
         }
 
-        let nbr = Nbr::with_prop_offset(
-            edge.endpoint,
-            edge.rank,
-            edge.edge_id,
-            edge.prop_offset,
-        );
+        let nbr = Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset);
 
         // Same decode-once / pre-filter discipline as the mutable scan.
         let mut properties = decode_edge_properties(

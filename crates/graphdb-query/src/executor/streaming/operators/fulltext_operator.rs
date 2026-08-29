@@ -462,10 +462,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
-                    Err(QueryError::feature_disabled(
-                        "fulltext",
-                        "FULLTEXT SEARCH",
-                    ))
+                    Err(QueryError::feature_disabled("fulltext", "FULLTEXT SEARCH"))
                 }
             }
 
@@ -509,10 +506,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
-                    Err(QueryError::feature_disabled(
-                        "fulltext",
-                        "FULLTEXT LOOKUP",
-                    ))
+                    Err(QueryError::feature_disabled("fulltext", "FULLTEXT LOOKUP"))
                 }
             }
 
@@ -557,10 +551,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext"))]
                 {
                     let _ = (&match_expr, &tag_name, &field_name, input);
-                    Err(QueryError::feature_disabled(
-                        "fulltext",
-                        "FULLTEXT MATCH",
-                    ))
+                    Err(QueryError::feature_disabled("fulltext", "FULLTEXT MATCH"))
                 }
             }
         }

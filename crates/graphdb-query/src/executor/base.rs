@@ -21,10 +21,10 @@ pub use executor_stats::ExecutorStats;
 pub use memory_budget::{
     MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, Spillable,
 };
-pub use traits::{IndexInfo, SearchProvider, SearchProviderType};
 #[cfg(feature = "fulltext")]
 pub use traits::FulltextProvider;
 #[cfg(feature = "vector")]
 pub use traits::VectorProvider;
+pub use traits::{IndexInfo, SearchProvider, SearchProviderType};
 
 pub use graphdb_core::types::EdgeDirection;

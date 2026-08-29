@@ -33,9 +33,10 @@ pub async fn execute<
 
     // Map consistency from wire to API consistency
     let consistency = match request.consistency.as_deref() {
-        Some(s) if s.eq_ignore_ascii_case("read_your_writes")
-            || s.eq_ignore_ascii_case("ryw")
-            || s.eq_ignore_ascii_case("read-your-writes") =>
+        Some(s)
+            if s.eq_ignore_ascii_case("read_your_writes")
+                || s.eq_ignore_ascii_case("ryw")
+                || s.eq_ignore_ascii_case("read-your-writes") =>
         {
             graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites {
                 timeout_ms: request.consistency_timeout_ms.unwrap_or(2000),

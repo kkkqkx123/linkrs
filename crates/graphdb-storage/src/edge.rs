@@ -39,10 +39,10 @@ pub mod property_schema;
 pub mod property_table;
 pub mod single_mutable_csr;
 
-use property_schema::PROP_OFFSET_NONE;
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
+use property_schema::PROP_OFFSET_NONE;
 
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
@@ -254,12 +254,7 @@ impl Nbr {
     }
 
     /// Create a new alive edge with an associated property offset.
-    pub fn with_prop_offset(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        prop_offset: u32,
-    ) -> Self {
+    pub fn with_prop_offset(endpoint: u32, rank: i64, edge_id: EdgeId, prop_offset: u32) -> Self {
         Self {
             endpoint,
             rank,
@@ -347,12 +342,7 @@ impl ImmutableNbr {
         Self::with_timestamp(endpoint, rank, edge_id, 0)
     }
 
-    pub fn with_timestamp(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        timestamp: Timestamp,
-    ) -> Self {
+    pub fn with_timestamp(endpoint: u32, rank: i64, edge_id: EdgeId, timestamp: Timestamp) -> Self {
         Self {
             endpoint,
             rank,

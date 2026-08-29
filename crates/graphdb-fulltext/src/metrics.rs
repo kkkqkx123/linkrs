@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::ConsistencyState;
 use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
+use crate::ConsistencyState;
 use graphdb_core::stats::StatsManager;
 
 /// Wrapper around any [`FulltextSearchEngine`] that records latency and

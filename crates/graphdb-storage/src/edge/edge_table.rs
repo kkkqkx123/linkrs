@@ -478,11 +478,9 @@ impl core::TimeTravelEdgeStore {
             self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
 
         if keep_recent > 0 {
-            let newest_first =
-                |a: &(u32, Nbr, Timestamp), b: &(u32, Nbr, Timestamp)| {
-                    b.2.cmp(&a.2)
-                        .then_with(|| b.1.edge_id.cmp(&a.1.edge_id))
-                };
+            let newest_first = |a: &(u32, Nbr, Timestamp), b: &(u32, Nbr, Timestamp)| {
+                b.2.cmp(&a.2).then_with(|| b.1.edge_id.cmp(&a.1.edge_id))
+            };
             out_edges.sort_by(newest_first);
             in_edges.sort_by(newest_first);
             let cut = out_edges.len().saturating_sub(keep_recent as usize);

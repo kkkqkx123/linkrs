@@ -18,9 +18,9 @@ use tantivy::TantivyDocument;
 #[cfg(feature = "jieba")]
 use crate::jieba_tokenizer::JiebaTokenizer;
 
-use crate::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
+use crate::ConsistencyState;
 use graphdb_core::Value;
 
 use graphdb_config::fulltext::TantivyConfig;

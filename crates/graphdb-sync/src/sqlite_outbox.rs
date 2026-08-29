@@ -1338,21 +1338,22 @@ impl SqliteOutbox {
     }
 
     pub async fn retention_lsn(&self) -> Result<CommitLsn, String> {
-        let value: i64 = sqlx::query_scalar(
-            "SELECT retention_lsn FROM projection_state WHERE singleton = 1",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|error| error.to_string())?;
+        let value: i64 =
+            sqlx::query_scalar("SELECT retention_lsn FROM projection_state WHERE singleton = 1")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
         Ok(CommitLsn::new(from_sql_i64(value, "retention LSN")?))
     }
 
     pub async fn update_retention_lsn(&self, retention_lsn: CommitLsn) -> Result<(), String> {
-        sqlx::query("UPDATE projection_state SET retention_lsn = MAX(retention_lsn, ?) WHERE singleton = 1")
-            .bind(to_sql_i64(retention_lsn.get(), "retention LSN")?)
-            .execute(&self.pool)
-            .await
-            .map_err(|error| error.to_string())?;
+        sqlx::query(
+            "UPDATE projection_state SET retention_lsn = MAX(retention_lsn, ?) WHERE singleton = 1",
+        )
+        .bind(to_sql_i64(retention_lsn.get(), "retention LSN")?)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -1382,11 +1383,12 @@ impl SqliteOutbox {
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
-        let deleted = sqlx::query("DELETE FROM events WHERE status = 'dead_letter' AND commit_lsn <= ?")
-            .bind(retention)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        let deleted =
+            sqlx::query("DELETE FROM events WHERE status = 'dead_letter' AND commit_lsn <= ?")
+                .bind(retention)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         Ok(deleted.rows_affected())
     }
 
@@ -1407,7 +1409,10 @@ impl SqliteOutbox {
 
     /// Compute a safe retention LSN based on min applied frontier.
     /// Safe = min(target frontiers, index frontiers) - grace, at least 0.
-    pub async fn compute_safe_retention_lsn(&self, grace_lsn_distance: u64) -> Result<CommitLsn, String> {
+    pub async fn compute_safe_retention_lsn(
+        &self,
+        grace_lsn_distance: u64,
+    ) -> Result<CommitLsn, String> {
         let diag = self.diagnostics().await?;
         let mut min_lsn = diag.materialized_lsn;
         for t in &diag.targets {

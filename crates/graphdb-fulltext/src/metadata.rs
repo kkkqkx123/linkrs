@@ -1,5 +1,5 @@
-use graphdb_config::fulltext::FulltextEngineType as EngineType;
 use chrono::{DateTime, Utc};
+use graphdb_config::fulltext::FulltextEngineType as EngineType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

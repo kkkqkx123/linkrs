@@ -1767,12 +1767,7 @@ impl SyncManager {
             let target = target.clone();
             async move {
                 outbox
-                    .requeue_dead_letters_batch(
-                        target.as_ref(),
-                        index_id,
-                        generation,
-                        limit,
-                    )
+                    .requeue_dead_letters_batch(target.as_ref(), index_id, generation, limit)
                     .await
                     .map_err(SyncError::PersistenceError)
             }
@@ -1948,7 +1943,11 @@ impl SyncManager {
     }
 
     /// Run one retention cycle: prune applied, archive dead letters, update retention watermark.
-    pub fn run_retention_once(&self, grace_lsn_distance: u64, max_age_ms: u64) -> Result<(u64, u64, u64), SyncError> {
+    pub fn run_retention_once(
+        &self,
+        grace_lsn_distance: u64,
+        max_age_ms: u64,
+    ) -> Result<(u64, u64, u64), SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
             return Ok((0, 0, 0));
         };

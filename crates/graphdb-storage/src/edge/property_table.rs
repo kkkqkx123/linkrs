@@ -22,8 +22,7 @@ use crate::vertex::column_store::ColumnStore;
 use graphdb_core::types::EdgeId;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{
-    data_type_from_info, DataType, StorageError, StorageResult, TypeCodecError,
-    TypeInfo, Value,
+    data_type_from_info, DataType, StorageError, StorageResult, TypeCodecError, TypeInfo, Value,
 };
 
 mod columnar;
@@ -947,7 +946,9 @@ mod olap_phase1_tests {
         legacy[CHECKSUM_POS..CHECKSUM_POS + 4].copy_from_slice(&computed.to_le_bytes());
         let mut loaded = PropertyTable::new();
         let err = loaded.load(&legacy).unwrap_err();
-        assert!(err.to_string().contains("Unsupported PropertyTable version"));
+        assert!(err
+            .to_string()
+            .contains("Unsupported PropertyTable version"));
 
         let mut current = PropertyTable::new();
         current.load(&data).unwrap();

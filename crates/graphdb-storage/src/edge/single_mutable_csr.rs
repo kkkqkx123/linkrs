@@ -45,9 +45,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::persistence::read_u64_le;
 use graphdb_core::{StorageError, StorageResult};
 
-use super::{
-    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
-};
+use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
 
 fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
     let bytes = id.as_bytes();
@@ -110,10 +108,7 @@ impl SingleMutableCsr {
 
     pub fn with_capacity(vertex_capacity: usize) -> Self {
         let vertex_cap = vertex_capacity.max(1);
-        let nbr_list = vec![
-            Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
-            vertex_cap
-        ];
+        let nbr_list = vec![Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0); vertex_cap];
 
         Self {
             nbr_list,
@@ -375,7 +370,8 @@ impl SingleMutableCsr {
 
     pub fn used_memory_size(&self) -> usize {
         self.nbr_list.len() * std::mem::size_of::<Nbr>()
-            + self.create_ts_cache.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>())
+            + self.create_ts_cache.len()
+                * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>())
             + std::mem::size_of::<Self>()
     }
 
@@ -564,13 +560,31 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(1),
+            EdgeId(100),
+            100,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99, crate::edge::property_schema::PROP_OFFSET_NONE)
+            .insert_edge(
+                0u32,
+                VertexId::from_int64(2),
+                EdgeId(101),
+                99,
+                crate::edge::property_schema::PROP_OFFSET_NONE
+            )
             .is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(2),
+            EdgeId(102),
+            101,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
 
         assert_eq!(csr.edge_count(), 1);
     }
@@ -580,12 +594,30 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 100, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr1.insert_edge(
+            0u32,
+            VertexId::from_int64(10),
+            EdgeId(100),
+            100,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr1.insert_edge(
+            1u32,
+            VertexId::from_int64(20),
+            EdgeId(101),
+            100,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr1.insert_edge(
+            2u32,
+            VertexId::from_int64(30),
+            EdgeId(102),
+            100,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
 
         let data = csr1.dump();
 

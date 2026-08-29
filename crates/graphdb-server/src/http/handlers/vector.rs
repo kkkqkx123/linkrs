@@ -383,8 +383,9 @@ pub async fn search<
                 }
             }
         } else if let Some(timeout) = request.consistency_timeout_ms {
-            options.consistency =
-                graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites { timeout_ms: timeout };
+            options.consistency = graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites {
+                timeout_ms: timeout,
+            };
             if let Some(lsn) = request.minimum_lsn {
                 options.minimum_lsn = Some(graphdb_core::types::CommitLsn::new(lsn));
             }

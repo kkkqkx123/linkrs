@@ -19,7 +19,9 @@ use std::sync::Arc;
 pub enum ConsistencyLevel {
     #[default]
     Eventual,
-    ReadYourWrites { timeout_ms: u64 },
+    ReadYourWrites {
+        timeout_ms: u64,
+    },
 }
 
 /// Query request

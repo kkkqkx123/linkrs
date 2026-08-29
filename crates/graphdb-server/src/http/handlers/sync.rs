@@ -1,7 +1,7 @@
 use axum::{
     extract::{Query, State},
-    Json,
     response::Json as JsonResponse,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -350,5 +350,7 @@ pub async fn retention_status<
     let retention = sync_api
         .retention_lsn()
         .map_err(HttpError::transaction_message)?;
-    Ok(JsonResponse(serde_json::json!({ "retention_lsn": retention.get() })))
+    Ok(JsonResponse(
+        serde_json::json!({ "retention_lsn": retention.get() }),
+    ))
 }

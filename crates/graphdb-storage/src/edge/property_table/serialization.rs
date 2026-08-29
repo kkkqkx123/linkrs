@@ -339,8 +339,11 @@ impl PropertyTable {
             let schema_entry = self.schema.iter().find(|s| s.name == name).ok_or_else(|| {
                 StorageError::deserialize_error(format!("column {} not in schema", name))
             })?;
-            self.column_store
-                .add_column(name.clone(), schema_entry.data_type.clone(), schema_entry.nullable);
+            self.column_store.add_column(
+                name.clone(),
+                schema_entry.data_type.clone(),
+                schema_entry.nullable,
+            );
             // Load raw data
             self.column_store
                 .load_column_from_raw(&name, col_data, offsets, bitmap_raw, bitmap_len)?;

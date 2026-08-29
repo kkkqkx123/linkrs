@@ -494,11 +494,7 @@ impl<
                         );
                     }
                     _ => {
-                        return self.execute_transaction_command(
-                            &session,
-                            stmt_ast,
-                            &context,
-                        );
+                        return self.execute_transaction_command(&session, stmt_ast, &context);
                     }
                 }
             }
@@ -864,8 +860,7 @@ impl<
                     },
                     txn_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
+                let result = self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_err() {
                     let _ = txn_manager.abort_transaction(txn_id);
                     session.unbind_transaction();
@@ -947,8 +942,7 @@ impl<
                     txn_id,
                     savepoint_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
+                let result = self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_ok() {
                     session.push_variable_savepoint(&savepoint_stmt.name);
                 }
@@ -974,8 +968,7 @@ impl<
                     release_stmt.name,
                     txn_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id));
+                let result = self.run_transaction_command_plan(session.id(), context, Some(txn_id));
                 if result.is_ok() {
                     session.release_variable_savepoint(&release_stmt.name);
                 }
@@ -1013,9 +1006,9 @@ impl<
             && !context.stmt.trim().to_uppercase().starts_with("USE ")
         {
             let permission = self.extract_permission_from_statement(context.stmt);
-            if let Err(e) = self
-                .permission_manager
-                .check_permission(&username, context.space_id, permission)
+            if let Err(e) =
+                self.permission_manager
+                    .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1100,9 +1093,9 @@ impl<
             stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if !self.permission_manager.is_admin(&username) && !session_only_statement {
             let permission = self.extract_permission_from_statement(context.stmt);
-            if let Err(e) = self
-                .permission_manager
-                .check_permission(&username, context.space_id, permission)
+            if let Err(e) =
+                self.permission_manager
+                    .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1502,9 +1495,9 @@ impl<
             && !context.stmt.trim().to_uppercase().starts_with("USE ")
         {
             let permission = self.extract_permission_from_statement(context.stmt);
-            if let Err(e) = self
-                .permission_manager
-                .check_permission(&username, context.space_id, permission)
+            if let Err(e) =
+                self.permission_manager
+                    .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1519,7 +1512,13 @@ impl<
             }
         });
 
-        self.run_query_plan_with_consistency(&session, context, transaction_id, execution, consistency)
+        self.run_query_plan_with_consistency(
+            &session,
+            context,
+            transaction_id,
+            execution,
+            consistency,
+        )
     }
 
     fn execute_query_with_permission_and_consistency(
@@ -1541,9 +1540,9 @@ impl<
             stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if !self.permission_manager.is_admin(&username) && !session_only_statement {
             let permission = self.extract_permission_from_statement(context.stmt);
-            if let Err(e) = self
-                .permission_manager
-                .check_permission(&username, context.space_id, permission)
+            if let Err(e) =
+                self.permission_manager
+                    .check_permission(&username, context.space_id, permission)
             {
                 return Err(format!("Permission check failed: {}", e));
             }
@@ -1578,13 +1577,8 @@ impl<
             None
         };
 
-        let mut result = self.run_query_plan_with_consistency(
-            &session,
-            context,
-            None,
-            execution,
-            consistency,
-        );
+        let mut result =
+            self.run_query_plan_with_consistency(&session, context, None, execution, consistency);
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {

@@ -163,10 +163,7 @@ impl Csr {
             .collect()
     }
 
-    pub fn from_nbr_entries(
-        entries: &[(u32, Nbr, Timestamp)],
-        vertex_capacity: usize,
-    ) -> Self {
+    pub fn from_nbr_entries(entries: &[(u32, Nbr, Timestamp)], vertex_capacity: usize) -> Self {
         let mut csr = Self::with_capacity(vertex_capacity.max(1), entries.len());
         csr.rebuild_from_nbr_entries(entries, vertex_capacity);
         csr
@@ -212,10 +209,8 @@ impl Csr {
         self.offsets[vc] = cumsum;
 
         self.edges.clear();
-        self.edges.resize(
-            cumsum as usize,
-            ImmutableNbr::new(0, 0, EdgeId(0)),
-        );
+        self.edges
+            .resize(cumsum as usize, ImmutableNbr::new(0, 0, EdgeId(0)));
         let mut current_pos = self.offsets[..vc].to_vec();
         for (src, nbr, create_ts) in entries.iter() {
             let idx = *src as usize;
@@ -224,8 +219,13 @@ impl Csr {
             }
             let pos = current_pos[idx] as usize;
             if pos < self.edges.len() {
-                self.edges[pos] =
-                    ImmutableNbr::with_timestamp_and_prop(nbr.endpoint, nbr.rank, nbr.edge_id, *create_ts, nbr.prop_offset);
+                self.edges[pos] = ImmutableNbr::with_timestamp_and_prop(
+                    nbr.endpoint,
+                    nbr.rank,
+                    nbr.edge_id,
+                    *create_ts,
+                    nbr.prop_offset,
+                );
                 current_pos[idx] += 1;
             }
         }
@@ -317,10 +317,8 @@ impl Csr {
         self.offsets[vc] = cumsum;
 
         self.edges.clear();
-        self.edges.resize(
-            src_list.len(),
-            ImmutableNbr::new(0, 0, EdgeId(0)),
-        );
+        self.edges
+            .resize(src_list.len(), ImmutableNbr::new(0, 0, EdgeId(0)));
         let mut current_pos = self.offsets.clone();
         for i in 0..src_list.len() {
             let src = src_list[i] as usize;
@@ -329,12 +327,8 @@ impl Csr {
                 if pos < self.edges.len() {
                     let (endpoint_vertex, rank) = dst_list[i].decode_edge_endpoint();
                     let endpoint = endpoint_vertex.as_int64().unwrap_or(0) as u32;
-                    self.edges[pos] = ImmutableNbr::with_timestamp(
-                        endpoint,
-                        rank,
-                        edge_ids[i],
-                        timestamps[i],
-                    );
+                    self.edges[pos] =
+                        ImmutableNbr::with_timestamp(endpoint, rank, edge_ids[i], timestamps[i]);
                     current_pos[src] += 1;
                 }
             }

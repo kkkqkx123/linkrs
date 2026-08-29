@@ -84,8 +84,6 @@ impl Session {
         info.push(format!("Connected: {}", self.connected));
         info.join("\n")
     }
-
-
 }
 
 pub struct SessionManager {
@@ -117,8 +115,6 @@ impl SessionManager {
             config,
         })
     }
-
-
 
     /// Connect to the database
     pub async fn connect(&mut self, username: &str, password: &str) -> Result<()> {

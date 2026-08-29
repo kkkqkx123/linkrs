@@ -75,12 +75,7 @@ pub trait SearchProvider: Send + Sync + Debug + 'static {
     /// wrong.  The error is intentionally opaque (`String`) so that both
     /// `SearchError` and `VectorCoordinatorError` can be surfaced without
     /// introducing a shared error enum at the trait level.
-    fn drop_index(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-    ) -> Result<(), String>;
+    fn drop_index(&self, space_id: u64, tag_name: &str, field_name: &str) -> Result<(), String>;
 }
 
 /// Newtype wrapper for FulltextIndexManager to implement SearchProvider
@@ -141,12 +136,7 @@ impl SearchProvider for FulltextProvider {
             .collect()
     }
 
-    fn drop_index(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-    ) -> Result<(), String> {
+    fn drop_index(&self, space_id: u64, tag_name: &str, field_name: &str) -> Result<(), String> {
         // Block on the async drop_index from a sync context.
         let manager = self.manager.clone();
         let tag = tag_name.to_string();
@@ -217,20 +207,13 @@ impl SearchProvider for VectorProvider {
             .collect()
     }
 
-    fn drop_index(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-    ) -> Result<(), String> {
+    fn drop_index(&self, space_id: u64, tag_name: &str, field_name: &str) -> Result<(), String> {
         let coordinator = self.coordinator.clone();
         let tag = tag_name.to_string();
         let field = field_name.to_string();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                coordinator
-                    .drop_vector_index(space_id, &tag, &field)
-                    .await
+                coordinator.drop_vector_index(space_id, &tag, &field).await
             })
         })
         .map_err(|e| e.to_string())

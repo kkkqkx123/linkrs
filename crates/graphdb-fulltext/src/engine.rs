@@ -5,9 +5,9 @@
 //! operates on `Arc<dyn FulltextSearchEngine>` so new backends can be added
 //! without modifying the manager layer.
 
-use crate::ConsistencyState;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
+use crate::ConsistencyState;
 
 use async_trait::async_trait;
 

@@ -131,17 +131,18 @@ impl FulltextApi {
 
     /// Commit all pending index changes
     pub async fn commit_all(&self) -> Result<(), String> {
-        self.manager
-            .commit_all()
-            .await
-            .map_err(|e| e.to_string())
+        self.manager.commit_all().await.map_err(|e| e.to_string())
     }
 
     /// Get index statistics
-    pub fn get_stats(&self, space_id: u64, tag_name: &str, field_name: &str) -> Option<graphdb_fulltext::IndexMetadata> {
-        self.manager
-            .list_indexes()
-            .into_iter()
-            .find(|m| m.space_id == space_id && m.tag_name == tag_name && m.field_name == field_name)
+    pub fn get_stats(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<graphdb_fulltext::IndexMetadata> {
+        self.manager.list_indexes().into_iter().find(|m| {
+            m.space_id == space_id && m.tag_name == tag_name && m.field_name == field_name
+        })
     }
 }

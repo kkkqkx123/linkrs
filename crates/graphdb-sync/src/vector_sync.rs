@@ -54,7 +54,9 @@ impl From<crate::types::ChangeType> for VectorChangeType {
 pub enum SearchConsistency {
     #[default]
     Eventual,
-    ReadYourWrites { timeout_ms: u64 },
+    ReadYourWrites {
+        timeout_ms: u64,
+    },
 }
 
 /// Search options for vector search
@@ -153,7 +155,10 @@ impl CollectionNaming for SpaceGranularityNaming {
 pub struct FieldGranularityNaming;
 impl CollectionNaming for FieldGranularityNaming {
     fn collection_name(&self, loc: &VectorIndexLocation) -> String {
-        format!("{}_{}_{}_{}", VECTOR_INDEX_PREFIX, loc.space_id, loc.tag_name, loc.field_name)
+        format!(
+            "{}_{}_{}_{}",
+            VECTOR_INDEX_PREFIX, loc.space_id, loc.tag_name, loc.field_name
+        )
     }
     fn group_id(&self, _loc: &VectorIndexLocation) -> Option<String> {
         None
@@ -396,7 +401,8 @@ impl VectorSyncCoordinator {
     }
 
     pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
-        self.index_manager.index_exists(space_id, tag_name, field_name)
+        self.index_manager
+            .index_exists(space_id, tag_name, field_name)
     }
 
     pub fn set_index_name(
@@ -416,7 +422,8 @@ impl VectorSyncCoordinator {
         tag_name: &str,
         field_name: &str,
     ) -> Option<IndexMetadata> {
-        self.index_manager.index_info(space_id, tag_name, field_name)
+        self.index_manager
+            .index_info(space_id, tag_name, field_name)
     }
 
     pub fn list_indexes(&self) -> Vec<IndexMetadataWrapper> {
@@ -432,8 +439,14 @@ impl VectorSyncCoordinator {
         config: CollectionConfig,
         user_index_name: Option<String>,
     ) {
-        self.index_manager
-            .register_logical_index(space_id, tag_name, field_name, collection_name, config, user_index_name);
+        self.index_manager.register_logical_index(
+            space_id,
+            tag_name,
+            field_name,
+            collection_name,
+            config,
+            user_index_name,
+        );
     }
 
     pub async fn create_index_with_config(
@@ -493,8 +506,7 @@ impl VectorSyncCoordinator {
                             if let Some(gid) = self.group_id_for(&ctx.location) {
                                 json_payload.insert(
                                     "group_id".to_string(),
-                                    serde_json::to_value(gid)
-                                        .unwrap_or(serde_json::Value::Null),
+                                    serde_json::to_value(gid).unwrap_or(serde_json::Value::Null),
                                 );
                             }
                             let point = VectorPoint::new(point_id, ctx.data.vector)
@@ -687,7 +699,14 @@ impl VectorSyncCoordinator {
         threshold: f32,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         self.index_manager
-            .search_with_threshold(space_id, tag_name, field_name, query_vector, limit, threshold)
+            .search_with_threshold(
+                space_id,
+                tag_name,
+                field_name,
+                query_vector,
+                limit,
+                threshold,
+            )
             .await
     }
 

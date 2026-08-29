@@ -146,8 +146,7 @@ impl MetadataContext {
         index_type: Option<super::types::IndexType>,
     ) -> Option<&IndexMetadata> {
         self.index_metadata.values().find(|index| {
-            index.index_name == index_name
-                && index_type.map_or(true, |t| index.index_type == t)
+            index.index_name == index_name && index_type.map_or(true, |t| index.index_type == t)
         })
     }
 }

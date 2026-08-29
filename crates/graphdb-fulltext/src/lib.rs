@@ -16,12 +16,12 @@ pub mod warmup;
 #[cfg(test)]
 mod isolation_test;
 
+pub use engine::FulltextSearchEngine;
+pub use error::{Result, SearchError};
 pub use graphdb_config::fulltext::{
     Bm25Params, FulltextConfig, FulltextEngineType as EngineType, SyncConfig, SyncFailurePolicy,
     TantivyConfig, TokenizerKind,
 };
-pub use engine::FulltextSearchEngine;
-pub use error::{Result, SearchError};
 pub use graphdb_core::ConsistencyState;
 #[cfg(feature = "fulltext")]
 pub use manager::FulltextIndexManager;

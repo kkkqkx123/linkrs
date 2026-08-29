@@ -9,11 +9,11 @@ use crate::storage::StorageClient;
 use graphdb_core::Value;
 use graphdb_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use graphdb_core::{SessionStatistics, StatsManager};
+#[cfg(feature = "fulltext")]
+use graphdb_fulltext::FulltextIndexManager;
 use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use graphdb_query::parser::ast::Stmt;
 use graphdb_query::parser::{Parser, ParserResult};
-#[cfg(feature = "fulltext")]
-use graphdb_fulltext::FulltextIndexManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::SearchOptions;
 use graphdb_sync::SyncManager;

@@ -517,12 +517,17 @@ impl VectorOperator {
                         let resolved_vector = if let Some(text) = query_text {
                             #[cfg(feature = "embedding")]
                             {
-                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "TEXT vector embed",
-                                    coordinator.embed_text(text),
-                                ).map_err(
-                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
-                                )?;
+                                let embedded =
+                                    crate::executor::streaming::helpers::runtime_bridge::wait(
+                                        "TEXT vector embed",
+                                        coordinator.embed_text(text),
+                                    )
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "TEXT vector embed failed: {}",
+                                            e
+                                        ))
+                                    })?;
                                 embedded
                             }
                             #[cfg(not(feature = "embedding"))]
@@ -641,12 +646,17 @@ impl VectorOperator {
                         let resolved_vector = if let Some(text) = query_text {
                             #[cfg(feature = "embedding")]
                             {
-                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "TEXT vector embed",
-                                    coordinator.embed_text(text),
-                                ).map_err(
-                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
-                                )?;
+                                let embedded =
+                                    crate::executor::streaming::helpers::runtime_bridge::wait(
+                                        "TEXT vector embed",
+                                        coordinator.embed_text(text),
+                                    )
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "TEXT vector embed failed: {}",
+                                            e
+                                        ))
+                                    })?;
                                 embedded
                             }
                             #[cfg(not(feature = "embedding"))]
@@ -706,7 +716,14 @@ impl VectorOperator {
 
                 #[cfg(not(feature = "vector"))]
                 {
-                    let _ = (&space_id, &tag_name, &field_name, &query_vector, query_text.as_deref(), &top_k);
+                    let _ = (
+                        &space_id,
+                        &tag_name,
+                        &field_name,
+                        &query_vector,
+                        query_text.as_deref(),
+                        &top_k,
+                    );
                     Err(QueryError::feature_disabled("vector", "VECTOR LOOKUP"))
                 }
             }
@@ -731,12 +748,17 @@ impl VectorOperator {
                         let resolved_vector = if let Some(text) = query_text {
                             #[cfg(feature = "embedding")]
                             {
-                                let embedded = crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "TEXT vector embed",
-                                    coordinator.embed_text(text),
-                                ).map_err(
-                                    |e| QueryError::execution(format!("TEXT vector embed failed: {}", e)),
-                                )?;
+                                let embedded =
+                                    crate::executor::streaming::helpers::runtime_bridge::wait(
+                                        "TEXT vector embed",
+                                        coordinator.embed_text(text),
+                                    )
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "TEXT vector embed failed: {}",
+                                            e
+                                        ))
+                                    })?;
                                 embedded
                             }
                             #[cfg(not(feature = "embedding"))]

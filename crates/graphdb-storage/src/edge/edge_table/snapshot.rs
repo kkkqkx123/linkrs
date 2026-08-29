@@ -55,7 +55,9 @@ impl ExportedEdgeSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|edge| Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset))
+            .map(|edge| {
+                Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+            })
             .collect()
     }
 
@@ -66,15 +68,17 @@ impl ExportedEdgeSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|edge| Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset))
+            .map(|edge| {
+                Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+            })
             .collect()
     }
 
     /// Get a specific edge in the snapshot (if it exists)
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
-        self.out_csr
-            .get_edge(src, dst)
-            .map(|edge| Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset))
+        self.out_csr.get_edge(src, dst).map(|edge| {
+            Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+        })
     }
 
     /// Check if an edge exists in this snapshot
@@ -150,7 +154,12 @@ impl SnapshotBuilder {
             }
 
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let nbr = Nbr::with_prop_offset(immutable_nbr.endpoint, immutable_nbr.rank, edge_id, immutable_nbr.prop_offset);
+            let nbr = Nbr::with_prop_offset(
+                immutable_nbr.endpoint,
+                immutable_nbr.rank,
+                edge_id,
+                immutable_nbr.prop_offset,
+            );
             self.edge_map
                 .insert((src_u32, edge_id), (src_u32, nbr, immutable_nbr.timestamp));
         }
@@ -180,7 +189,10 @@ impl SnapshotBuilder {
     }
 
     /// Build CSR from collected edges
-    pub fn build_csr(edges: Vec<(u32, Nbr, Timestamp)>, vertex_capacity: usize) -> StorageResult<Csr> {
+    pub fn build_csr(
+        edges: Vec<(u32, Nbr, Timestamp)>,
+        vertex_capacity: usize,
+    ) -> StorageResult<Csr> {
         Ok(Csr::from_nbr_entries(&edges, vertex_capacity))
     }
 

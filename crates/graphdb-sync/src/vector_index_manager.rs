@@ -21,9 +21,7 @@ use vector_search::{
     PayloadSchemaType, VectorFilter,
 };
 
-use super::vector_sync::{
-    CollectionGranularity, SearchOptions, VectorIndexLocation,
-};
+use super::vector_sync::{CollectionGranularity, SearchOptions, VectorIndexLocation};
 
 /// Validate a distance metric at the index-creation entry points.
 fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
@@ -169,11 +167,9 @@ impl VectorIndexManager {
                 if existing.vector_size != vector_size
                     || existing.distance != distance
                     || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config)
-                        != format!("{:?}", config.hnsw_config)
+                    || format!("{:?}", existing.hnsw_config) != format!("{:?}", config.hnsw_config)
                     || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config)
-                        != format!("{:?}", config.ivf_config)
+                    || format!("{:?}", existing.ivf_config) != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),
@@ -251,11 +247,9 @@ impl VectorIndexManager {
                 if existing.vector_size != config.vector_size
                     || existing.distance != config.distance
                     || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config)
-                        != format!("{:?}", config.hnsw_config)
+                    || format!("{:?}", existing.hnsw_config) != format!("{:?}", config.hnsw_config)
                     || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config)
-                        != format!("{:?}", config.ivf_config)
+                    || format!("{:?}", existing.ivf_config) != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),

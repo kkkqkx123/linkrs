@@ -140,7 +140,8 @@ impl LabeledMutableCsr {
             let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
             let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
             for nbr in &self.nbr_list[start..end] {
-                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX
+                {
                     return Err(StorageError::edge_already_exists(format!(
                         "{} -> {:?}",
                         src_vid, dst
@@ -151,14 +152,24 @@ impl LabeledMutableCsr {
             // Append to end of label range
             self.create_ts_cache.insert(edge_id, ts);
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.nbr_list.push(Nbr::with_prop_offset(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id, prop_offset));
+            self.nbr_list.push(Nbr::with_prop_offset(
+                endpoint_vid.as_int64().unwrap_or(0) as u32,
+                rank,
+                edge_id,
+                prop_offset,
+            ));
             ranges[idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
             self.create_ts_cache.insert(edge_id, ts);
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.nbr_list.push(Nbr::with_prop_offset(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id, prop_offset));
+            self.nbr_list.push(Nbr::with_prop_offset(
+                endpoint_vid.as_int64().unwrap_or(0) as u32,
+                rank,
+                edge_id,
+                prop_offset,
+            ));
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -334,7 +345,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             let start = lr.offset as usize;
 
             for nbr in &mut self.nbr_list[start..end] {
-                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX
+                {
                     nbr.delete_ts = ts;
                     return true;
                 }
@@ -403,7 +415,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
 
             for nbr in &self.nbr_list[start..end] {
                 let create_ts = self.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
-                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.is_alive_at(ts, create_ts) {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.is_alive_at(ts, create_ts)
+                {
                     return Some(*nbr);
                 }
             }
@@ -488,7 +501,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             .map(|v| v.len() * std::mem::size_of::<LabelRange>())
             .sum::<usize>();
         let degrees_size = self.degrees.len() * std::mem::size_of::<u32>();
-        let cache_size = self.create_ts_cache.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
+        let cache_size = self.create_ts_cache.len()
+            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
         nbr_size + ranges_size + degrees_size + cache_size + std::mem::size_of::<Self>()
     }
 
@@ -569,7 +583,12 @@ impl<'a> Iterator for LabeledMutableCsrIterator<'a> {
                 while self.edge_idx < (range.count as usize) {
                     let nbr = self.csr.nbr_list[start + self.edge_idx];
                     self.edge_idx += 1;
-                    let create_ts = self.csr.create_ts_cache.get(&nbr.edge_id).copied().unwrap_or(0);
+                    let create_ts = self
+                        .csr
+                        .create_ts_cache
+                        .get(&nbr.edge_id)
+                        .copied()
+                        .unwrap_or(0);
                     if self.include_deleted || nbr.is_alive_at(self.ts, create_ts) {
                         return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                     }
@@ -599,10 +618,22 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges with implicit label 0
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(1),
+            EdgeId(100),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(2),
+            EdgeId(101),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
 
         assert_eq!(csr.edge_count(), 2);
 
@@ -619,10 +650,22 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(1),
+            EdgeId(100),
+            10,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(2),
+            EdgeId(101),
+            20,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
 
         // Query at different timestamps
         assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge created
@@ -642,14 +685,38 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(5, 100);
 
         // Insert multiple edges across vertices
-        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
-        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1, crate::edge::property_schema::PROP_OFFSET_NONE)
-            .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(10),
+            EdgeId(1),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::from_int64(11),
+            EdgeId(2),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr.insert_edge(
+            1,
+            VertexId::from_int64(20),
+            EdgeId(3),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
+        csr.insert_edge(
+            2,
+            VertexId::from_int64(30),
+            EdgeId(4),
+            1,
+            crate::edge::property_schema::PROP_OFFSET_NONE,
+        )
+        .unwrap();
 
         // Iterate and collect
         let mut edges_from_iter: Vec<_> = csr.iter(999).collect();
@@ -670,7 +737,7 @@ mod tests {
         for src in 0..5 {
             for dst in 0..3 {
                 let edge_id = (src * 3 + dst) as u64;
-                  csr.insert_edge(
+                csr.insert_edge(
                     src,
                     VertexId::from_int64(100 + dst as i64),
                     EdgeId(edge_id),

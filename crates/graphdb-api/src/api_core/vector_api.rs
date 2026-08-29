@@ -270,7 +270,10 @@ impl VectorApi {
             VectorWriteMode::Direct => {
                 tracing::warn!(
                     "Vector Direct write: point {} in {}.{}.{} bypasses transactional outbox",
-                    point.id, space_id, tag_name, field_name
+                    point.id,
+                    space_id,
+                    tag_name,
+                    field_name
                 );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -398,7 +401,10 @@ impl VectorApi {
             VectorWriteMode::Direct => {
                 tracing::warn!(
                     "Vector Direct delete: point {} in {}.{}.{} bypasses transactional outbox",
-                    point_id, space_id, tag_name, field_name
+                    point_id,
+                    space_id,
+                    tag_name,
+                    field_name
                 );
                 let collection_name =
                     VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();

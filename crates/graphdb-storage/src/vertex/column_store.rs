@@ -1601,7 +1601,10 @@ impl Column {
     }
 
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
-        self.version_chains.get(row_idx).map(|c| c.len()).unwrap_or(0)
+        self.version_chains
+            .get(row_idx)
+            .map(|c| c.len())
+            .unwrap_or(0)
     }
 
     pub fn fold_oldest(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
@@ -1649,7 +1652,8 @@ impl Column {
         self.row_start_ts = v;
         // Ensure version_chains matches length
         if self.version_chains.len() < self.row_start_ts.len() {
-            self.version_chains.resize(self.row_start_ts.len(), Vec::new());
+            self.version_chains
+                .resize(self.row_start_ts.len(), Vec::new());
         }
     }
 

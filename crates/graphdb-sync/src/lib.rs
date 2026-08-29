@@ -63,12 +63,12 @@ pub use types::{IndexOpKey, IndexOperation};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]
+pub use vector_index_manager::VectorIndexManager;
+#[cfg(feature = "vector")]
 pub use vector_sync::{
     VectorChangeContext, VectorChangeType, VectorEngineState, VectorIndexLocation, VectorPointData,
     VectorSyncCoordinator,
 };
-#[cfg(feature = "vector")]
-pub use vector_index_manager::VectorIndexManager;
 
 #[cfg(feature = "vector")]
 pub use backend::VectorBackend;

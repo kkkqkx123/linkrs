@@ -3,8 +3,8 @@
 //! Handles flush (write) and load (read) operations with support for
 //! versioning and compression.
 
-use super::mvcc::EdgeTimestamps;
 use super::super::{CsrBase, CsrVariant};
+use super::mvcc::EdgeTimestamps;
 use super::segment::{CsrSegment, DeletionInfo};
 use crate::edge::EdgeSchema;
 use crate::edge::PropertyTable;
@@ -746,9 +746,18 @@ mod tests {
 
         // CSR create_ts_cache rebuilt from edge_timestamps
         use crate::edge::csr_trait::MutableCsrTrait;
-        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(0)), Some(100));
-        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(1)), Some(200));
-        assert_eq!(loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(2)), Some(300));
+        assert_eq!(
+            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(0)),
+            Some(100)
+        );
+        assert_eq!(
+            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(1)),
+            Some(200)
+        );
+        assert_eq!(
+            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(2)),
+            Some(300)
+        );
     }
 
     #[test]

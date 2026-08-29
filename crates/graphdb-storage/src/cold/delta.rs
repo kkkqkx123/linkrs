@@ -466,7 +466,12 @@ impl ColdSnapshot {
                 edge.src_internal,
                 {
                     let (ep_vid, rank) = edge.neighbor.decode_edge_endpoint();
-                    Nbr::with_prop_offset(ep_vid.as_int64().unwrap_or(0) as u32, rank, edge.edge_id, crate::edge::property_schema::PROP_OFFSET_NONE)
+                    Nbr::with_prop_offset(
+                        ep_vid.as_int64().unwrap_or(0) as u32,
+                        rank,
+                        edge.edge_id,
+                        crate::edge::property_schema::PROP_OFFSET_NONE,
+                    )
                 },
                 edge.timestamp,
             ));
@@ -486,7 +491,12 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::with_prop_offset(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id, nbr.prop_offset),
+                    Nbr::with_prop_offset(
+                        dst_ep_vid.as_int64().unwrap_or(0) as u32,
+                        dst_rank,
+                        nbr.edge_id,
+                        nbr.prop_offset,
+                    ),
                     *create_ts,
                 ));
             }

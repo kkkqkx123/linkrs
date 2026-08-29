@@ -55,10 +55,7 @@ impl PropertyTable {
         let Some(row_idx) = prop_offset_to_index(offset) else {
             return false;
         };
-        self.row_delete_ts
-            .get(row_idx)
-            .and_then(|v| *v)
-            .is_some()
+        self.row_delete_ts.get(row_idx).and_then(|v| *v).is_some()
     }
 
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> u32 {

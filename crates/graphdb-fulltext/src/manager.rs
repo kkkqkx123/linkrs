@@ -3,14 +3,14 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ConsistencyState;
-use crate::error::SearchError;
-use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
-use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::engine::FulltextSearchEngine;
+use crate::error::SearchError;
+use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
+use crate::ConsistencyState;
+use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::stats::StatsManager;
 
@@ -162,8 +162,10 @@ impl FulltextIndexManager {
             self.config.tantivy.clone(),
         )?;
 
-        self.engines
-            .insert(key.clone(), Arc::new(engine) as Arc<dyn FulltextSearchEngine>);
+        self.engines.insert(
+            key.clone(),
+            Arc::new(engine) as Arc<dyn FulltextSearchEngine>,
+        );
         self.metadata.insert(key, metadata.clone());
 
         Ok(())

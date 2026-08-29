@@ -100,7 +100,12 @@ pub mod client_ext {
             limit: usize,
             offset: usize,
         ) -> Result<serde_json::Value> {
-            let mut url = format!("{}/sync/outbox/dead_letters?limit={}&offset={}", self.base_url(), limit, offset);
+            let mut url = format!(
+                "{}/sync/outbox/dead_letters?limit={}&offset={}",
+                self.base_url(),
+                limit,
+                offset
+            );
             if let Some(t) = target {
                 url.push_str(&format!("&target={}", t));
             }
@@ -119,10 +124,7 @@ pub mod client_ext {
             Self::check_response(resp).await
         }
 
-        pub async fn outbox_requeue(
-            &self,
-            req: &RequeuePayload,
-        ) -> Result<serde_json::Value> {
+        pub async fn outbox_requeue(&self, req: &RequeuePayload) -> Result<serde_json::Value> {
             let url = format!("{}/sync/outbox/requeue", self.base_url());
             let resp = self
                 .inner()
@@ -151,7 +153,11 @@ pub mod client_ext {
                 first = false;
             }
             if let Some(gen) = generation {
-                url.push_str(&format!("{}generation={}", if first { "?" } else { "&" }, gen));
+                url.push_str(&format!(
+                    "{}generation={}",
+                    if first { "?" } else { "&" },
+                    gen
+                ));
             }
             let resp = self
                 .inner()
@@ -164,7 +170,10 @@ pub mod client_ext {
 
         async fn check_response(resp: reqwest::Response) -> Result<serde_json::Value> {
             let status = resp.status();
-            let text = resp.text().await.map_err(|e| CliError::connection(e.to_string()))?;
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
             if !status.is_success() {
                 return Err(CliError::connection(format!("HTTP {}: {}", status, text)));
             }
