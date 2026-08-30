@@ -809,6 +809,9 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::ShowSessions { .. } => "ShowSessions",
         DdlSpec::Analyze { .. } => "Analyze",
         DdlSpec::Migrate { .. } => "Migrate",
+        DdlSpec::MigratePlan { .. } => "MigratePlan",
+        DdlSpec::MigrateRun { .. } => "MigrateRun",
+        DdlSpec::MigrateRollback { .. } => "MigrateRollback",
     }
 }
 

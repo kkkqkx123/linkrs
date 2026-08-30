@@ -199,6 +199,13 @@ pub fn create_router<
             "/schema/breaking-changes/{space}/{label}/{from_version}/{to_version}",
             get(schema::detect_breaking_changes),
         )
+        // Migration routes
+        .route(
+            "/migration/plan/{space}/{label}",
+            post(schema::create_migration_plan),
+        )
+        .route("/migration/execute", post(schema::execute_migration))
+        .route("/migration/rollback", post(schema::rollback_migration))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

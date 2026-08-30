@@ -131,6 +131,9 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             DdlOperatorKind::ShowSessions { .. } => "ShowSessions",
             DdlOperatorKind::Analyze { .. } => "Analyze",
             DdlOperatorKind::Migrate { .. } => "Migrate",
+            DdlOperatorKind::MigratePlan { .. } => "MigratePlan",
+            DdlOperatorKind::MigrateRun { .. } => "MigrateRun",
+            DdlOperatorKind::MigrateRollback { .. } => "MigrateRollback",
         },
         Fulltext(_, _, op) => match &op.kind {
             FulltextOperatorKind::FulltextManage { .. } => "FulltextManage",

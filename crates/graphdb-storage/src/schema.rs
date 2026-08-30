@@ -17,13 +17,11 @@
 //! - Store changes in `ChangeLog` indexed by version number
 //! - Query version history and detect breaking changes via `can_migrate()`
 //!
-//! ## Not Currently Supported
+//! ## Migration Support
 //!
-//! - Automatic data migration on schema changes
-//! - Zero-downtime schema upgrades
-//! - Compatibility scoring and migration strategies
-//!
-//! If these features are needed in the future, refer to git history for the migration framework design.
+//! Automatic data migration on schema changes is supported via the
+//! `graphdb-migration` crate. Use the MIGRATE DDL commands or HTTP/gRPC
+//! endpoints to perform migrations.
 
 pub mod change;
 pub mod version_history;

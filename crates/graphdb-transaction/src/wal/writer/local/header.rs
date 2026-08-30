@@ -109,5 +109,4 @@ impl LocalWalWriter {
     pub fn file_header(&self) -> Option<&WalFileHeader> {
         self.file_header.as_ref()
     }
-
 }

@@ -26,6 +26,9 @@ impl StmtParser {
 
     /// Analyzing a single statement (without distributing it through any pipelines)
     fn parse_single_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        if ctx.check_keyword("MIGRATE") {
+            return Self::parse_migrate_statement(ctx);
+        }
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
@@ -453,6 +456,70 @@ impl StmtParser {
     /// Parse full-text search statements
     fn parse_fulltext_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         crate::parser::parsing::fulltext_parser::parse_fulltext(ctx)
+    }
+
+    fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("MIGRATE")?;
+        if ctx.check_keyword("PLAN") {
+            ctx.consume_keyword("PLAN")?;
+            ctx.consume_keyword("FOR")?;
+            let is_edge = if ctx.check_keyword("TAG") {
+                ctx.consume_keyword("TAG")?;
+                false
+            } else if ctx.check_keyword("EDGE") {
+                ctx.consume_keyword("EDGE")?;
+                true
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "MIGRATE PLAN expects TAG or EDGE after FOR".to_string(),
+                    ctx.current_position(),
+                ));
+            };
+            let label = ctx.expect_identifier()?;
+            ctx.consume_keyword("FROM")?;
+            ctx.consume_keyword("VERSION")?;
+            let from_version = ctx.expect_integer_literal()? as u64;
+            ctx.consume_keyword("TO")?;
+            let to_version = ctx.expect_integer_literal()? as u64;
+            ctx.consume_keyword("IN")?;
+            let space = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Migrate(MigrateStmt::Plan(MigratePlanStmt {
+                span,
+                space,
+                label,
+                is_edge,
+                from_version,
+                to_version,
+            })))
+        } else if ctx.check_keyword("EXECUTE") {
+            ctx.consume_keyword("EXECUTE")?;
+            let plan_json = ctx.expect_string_literal()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Migrate(MigrateStmt::Execute(MigrateExecuteStmt {
+                span,
+                plan_json,
+            })))
+        } else if ctx.check_keyword("ROLLBACK") {
+            ctx.consume_keyword("ROLLBACK")?;
+            let plan_json = ctx.expect_string_literal()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Migrate(MigrateStmt::Rollback(MigrateRollbackStmt {
+                span,
+                plan_json,
+            })))
+        } else {
+            Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "MIGRATE expects PLAN, EXECUTE or ROLLBACK".to_string(),
+                ctx.current_position(),
+            ))
+        }
     }
 
     /// Pipeline after parsing set operation statements, or end of the process.

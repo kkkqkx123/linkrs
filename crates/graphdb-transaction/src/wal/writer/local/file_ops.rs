@@ -5,10 +5,10 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
+use crate::wal::parser::{LocalWalParser, WalParser};
 use graphdb_core::wal::types::{
     ArchiveMode, Lsn, WalError, WalFileHeader, WalResult, WAL_FILE_HEADER_SIZE,
 };
-use crate::wal::parser::{LocalWalParser, WalParser};
 
 use super::LocalWalWriter;
 
@@ -281,5 +281,4 @@ impl LocalWalWriter {
 
         self.reclaim_before_checkpoint()
     }
-
 }

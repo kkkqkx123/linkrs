@@ -553,3 +553,147 @@ pub async fn detect_breaking_changes<
 
     Ok(JsonResponse(result?))
 }
+
+// ==================== Migration ====================
+
+#[derive(serde::Deserialize)]
+pub struct MigrationPlanQuery {
+    pub from_version: Option<u64>,
+    pub to_version: Option<u64>,
+    pub is_edge: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct MigrationExecuteRequest {
+    pub plan_json: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct MigrationRollbackRequest {
+    pub plan_json: String,
+}
+
+pub async fn create_migration_plan<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path((space, label)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<MigrationPlanQuery>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let from_version = query
+        .from_version
+        .ok_or_else(|| HttpError::BadRequest("from_version required".into()))?;
+    let to_version = query
+        .to_version
+        .ok_or_else(|| HttpError::BadRequest("to_version required".into()))?;
+    let is_edge = query.is_edge.unwrap_or(false);
+
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage_read = storage.read();
+        let plan = if is_edge {
+            graphdb_migration::generate_edge_plan(
+                &*storage_read,
+                &space,
+                &label,
+                from_version,
+                to_version,
+            )
+        } else {
+            graphdb_migration::generate_vertex_plan(
+                &*storage_read,
+                &space,
+                &label,
+                from_version,
+                to_version,
+            )
+        }
+        .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok::<_, HttpError>(serde_json::json!({
+            "plan": plan,
+            "plan_json": serde_json::to_string(&plan).unwrap(),
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+pub async fn execute_migration<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(req): Json<MigrationExecuteRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let plan: graphdb_migration::MigrationPlan =
+        serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let mut storage_write = storage.write();
+        let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok::<_, HttpError>(serde_json::json!({
+            "success": report.success,
+            "steps_completed": report.steps_completed,
+            "rows_migrated": report.rows_migrated,
+            "errors": report.errors,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+pub async fn rollback_migration<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(req): Json<MigrationRollbackRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let plan: graphdb_migration::MigrationPlan =
+        serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let mut storage_write = storage.write();
+        let report = graphdb_migration::rollback_migration(&mut *storage_write, &plan)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok::<_, HttpError>(serde_json::json!({
+            "success": report.success,
+            "steps_completed": report.steps_completed,
+            "rows_migrated": report.rows_migrated,
+            "errors": report.errors,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}

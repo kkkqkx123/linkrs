@@ -9,6 +9,7 @@ mod ddl;
 mod dml;
 mod dql;
 mod management;
+mod migrate;
 mod search;
 mod transaction;
 
@@ -17,6 +18,7 @@ pub use ddl::*;
 pub use dml::*;
 pub use dql::*;
 pub use management::*;
+pub use migrate::*;
 pub use search::*;
 pub use transaction::*;
 
@@ -150,6 +152,7 @@ pub enum Stmt {
     ReleaseSavepoint(ReleaseSavepointStmt),
     AssignVariable(AssignVariableStmt),
     Copy(CopyStmt),
+    Migrate(MigrateStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -310,6 +313,11 @@ impl Stmt {
             Stmt::ReleaseSavepoint(_) => "RELEASE SAVEPOINT",
             Stmt::AssignVariable(_) => "LET",
             Stmt::Copy(_) => "COPY",
+            Stmt::Migrate(m) => match m {
+                MigrateStmt::Plan(_) => "MIGRATE PLAN",
+                MigrateStmt::Execute(_) => "MIGRATE EXECUTE",
+                MigrateStmt::Rollback(_) => "MIGRATE ROLLBACK",
+            },
         }
     }
 
@@ -962,8 +970,19 @@ mod tests {
                 }),
                 Dml,
             ),
+            (
+                Stmt::Migrate(MigrateStmt::Plan(MigratePlanStmt {
+                    span,
+                    space: "s".to_string(),
+                    label: "Person".to_string(),
+                    is_edge: false,
+                    from_version: 1,
+                    to_version: 2,
+                })),
+                Ddl,
+            ),
         ];
-        assert_eq!(cases.len(), 68, "Stmt has 68 variants; update this test");
+        assert_eq!(cases.len(), 69, "Stmt has 69 variants; update this test");
         for (stmt, expected) in cases {
             assert_eq!(
                 stmt.category(),

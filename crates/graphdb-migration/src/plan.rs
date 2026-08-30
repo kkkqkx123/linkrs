@@ -1,4 +1,5 @@
 use graphdb_core::{DataType, Value};
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod tests {
@@ -159,7 +160,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SafetyLevel {
     Safe,
     Warning,
@@ -180,7 +181,7 @@ impl SafetyLevel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MigrationStep {
     AddColumn {
         name: String,
@@ -327,20 +328,20 @@ impl MigrationStep {
 
 const DEFAULT_BATCH_SIZE: usize = 1000;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationTarget {
     pub space: String,
     pub label: String,
     pub is_edge: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionRange {
     pub from: u64,
     pub to: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationPlan {
     pub target: MigrationTarget,
     pub version_range: VersionRange,
@@ -416,7 +417,7 @@ impl MigrationPlan {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationReport {
     pub success: bool,
     pub steps_completed: usize,

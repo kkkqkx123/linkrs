@@ -411,6 +411,45 @@ impl MaintainPlanner {
             }
         }
     }
+
+    fn plan_migrate_plan(
+        &self,
+        stmt: &crate::parser::ast::MigratePlanStmt,
+        _validated: &ValidatedStatement,
+    ) -> PlanNodeEnum {
+        let _ = stmt;
+        let node = crate::planning::plan::core::nodes::ShowStatsNode::new(
+            next_node_id(),
+            crate::planning::plan::core::nodes::ShowStatsType::Storage,
+        );
+        PlanNodeEnum::ShowStats(node)
+    }
+
+    fn plan_migrate_execute(
+        &self,
+        stmt: &crate::parser::ast::MigrateExecuteStmt,
+        _validated: &ValidatedStatement,
+    ) -> PlanNodeEnum {
+        let _ = stmt;
+        let node = crate::planning::plan::core::nodes::ShowStatsNode::new(
+            next_node_id(),
+            crate::planning::plan::core::nodes::ShowStatsType::Storage,
+        );
+        PlanNodeEnum::ShowStats(node)
+    }
+
+    fn plan_migrate_rollback(
+        &self,
+        stmt: &crate::parser::ast::MigrateRollbackStmt,
+        _validated: &ValidatedStatement,
+    ) -> PlanNodeEnum {
+        let _ = stmt;
+        let node = crate::planning::plan::core::nodes::ShowStatsNode::new(
+            next_node_id(),
+            crate::planning::plan::core::nodes::ShowStatsType::Storage,
+        );
+        PlanNodeEnum::ShowStats(node)
+    }
 }
 
 impl Planner for MaintainPlanner {
@@ -495,6 +534,16 @@ impl Planner for MaintainPlanner {
 
             Stmt::Drop(drop_stmt) => self.plan_drop(drop_stmt, validated),
 
+            Stmt::Migrate(m) => match m {
+                crate::parser::ast::MigrateStmt::Plan(p) => self.plan_migrate_plan(p, validated),
+                crate::parser::ast::MigrateStmt::Execute(e) => {
+                    self.plan_migrate_execute(e, validated)
+                }
+                crate::parser::ast::MigrateStmt::Rollback(r) => {
+                    self.plan_migrate_rollback(r, validated)
+                }
+            },
+
             _ => {
                 return Err(PlannerError::UnsupportedOperation(format!(
                     "Statement {:?} is not supported by MaintainPlanner",
@@ -525,6 +574,7 @@ impl Planner for MaintainPlanner {
                 | Stmt::RollbackTransaction(_)
                 | Stmt::Savepoint(_)
                 | Stmt::ReleaseSavepoint(_)
+                | Stmt::Migrate(_)
         )
     }
 }

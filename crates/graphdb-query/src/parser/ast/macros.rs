@@ -20,6 +20,7 @@ macro_rules! define_stmt_helpers {
             pub fn span(&self) -> Span {
                 match self {
                     $( Stmt::$variant(s) => s.span, )+
+                    Stmt::Migrate(s) => s.span(),
                 }
             }
 
@@ -27,6 +28,7 @@ macro_rules! define_stmt_helpers {
                 use StmtCategory::*;
                 match self {
                     $( Stmt::$variant(_) => $category, )+
+                    Stmt::Migrate(_) => StmtCategory::Ddl,
                 }
             }
         }

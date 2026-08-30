@@ -11,20 +11,20 @@ use crate::wal::TransactionWalEntry;
 use graphdb_core::types::{EdgeIdentifier, VertexId};
 
 pub mod config;
-pub mod writeset;
+pub mod events;
 pub mod execution;
 pub mod stats;
-pub mod events;
+pub mod writeset;
 
 pub use config::{
     ConcurrencyMode, DurabilityLevel, IsolationLevel, RetryConfig, TransactionConfig,
     TransactionManagerConfig, TransactionOptions,
 };
 pub use events::{CommitCallback, RollbackCallback, TransactionEvent};
+pub(crate) use execution::SavepointParams;
 pub use execution::{
     OperationLog, SavepointId, SavepointInfo, TransactionExecution, TransactionInfo,
 };
-pub(crate) use execution::SavepointParams;
 pub use stats::{TransactionMetrics, TransactionResourceMetrics, TransactionStats};
 pub use writeset::{ReadRange, ResourceId, SsiState, WriteSet};
 

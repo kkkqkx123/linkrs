@@ -82,6 +82,11 @@ service GraphDBService {
   rpc GetVersionHistory(VersionHistoryRequest) returns (VersionHistoryResponse);
   rpc GetSchemaChanges(SchemaChangesRequest) returns (SchemaChangesResponse);
   rpc DetectBreakingChanges(BreakingChangesRequest) returns (BreakingChangesResponse);
+
+  // Migration
+  rpc MigratePlan(MigratePlanRequest) returns (MigratePlanResponse);
+  rpc MigrateExecute(MigrateExecuteRequest) returns (MigrateExecuteResponse);
+  rpc MigrateRollback(MigrateRollbackRequest) returns (MigrateRollbackResponse);
 }
 
 // ============================================================
@@ -947,4 +952,55 @@ message BreakingChangesResponse {
   repeated PropertyChangeEvent changes = 2;
   string recommendation = 3;
   string error = 4;
+}
+
+// ============================================================
+// Migration
+// ============================================================
+
+message MigratePlanRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+  uint64 from_version = 4;
+  uint64 to_version = 5;
+}
+
+message MigratePlanResponse {
+  string plan_json = 1;
+  string safety_level = 2;
+  uint64 estimated_rows = 3;
+  repeated MigrationStep steps = 4;
+  string error = 5;
+}
+
+message MigrationStep {
+  string step_type = 1;
+  string description = 2;
+  string safety_level = 3;
+  bool is_data_modifying = 4;
+}
+
+message MigrateExecuteRequest {
+  string plan_json = 1;
+}
+
+message MigrateExecuteResponse {
+  bool success = 1;
+  uint64 steps_completed = 2;
+  uint64 rows_migrated = 3;
+  repeated string errors = 4;
+  string error = 5;
+}
+
+message MigrateRollbackRequest {
+  string plan_json = 1;
+}
+
+message MigrateRollbackResponse {
+  bool success = 1;
+  uint64 steps_completed = 2;
+  uint64 rows_migrated = 3;
+  repeated string errors = 4;
+  string error = 5;
 }

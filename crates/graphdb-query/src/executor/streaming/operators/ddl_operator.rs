@@ -53,6 +53,7 @@ fn manage_result_layout() -> Arc<SlotLayout> {
 
 mod auth_executor;
 mod maintenance_executor;
+mod migration_executor;
 mod schema_executor;
 
 fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
@@ -185,6 +186,25 @@ pub enum DdlOperatorKind {
         migration_data: Option<String>,
         emitted: bool,
     },
+    MigratePlan {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        label: String,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+        emitted: bool,
+    },
+    MigrateRun {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        plan_json: String,
+        emitted: bool,
+    },
+    MigrateRollback {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        plan_json: String,
+        emitted: bool,
+    },
 }
 
 /// DDL operator.
@@ -291,6 +311,33 @@ impl DdlOperator {
                 migration_data: migration_data.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::MigratePlan {
+                space_name,
+                label,
+                is_edge,
+                from_version,
+                to_version,
+            } => DdlOperatorKind::MigratePlan {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                label: label.clone(),
+                is_edge: *is_edge,
+                from_version: *from_version,
+                to_version: *to_version,
+                emitted: false,
+            },
+            super::spec::DdlSpec::MigrateRun { plan_json } => DdlOperatorKind::MigrateRun {
+                storage: storage.clone(),
+                plan_json: plan_json.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::MigrateRollback { plan_json } => {
+                DdlOperatorKind::MigrateRollback {
+                    storage: storage.clone(),
+                    plan_json: plan_json.clone(),
+                    emitted: false,
+                }
+            }
         };
         Self::new(kind, output_layout)
     }
@@ -341,6 +388,11 @@ impl DdlOperator {
             }
             DdlOperatorKind::Analyze { .. } => maintenance_executor::execute_analyze(self),
             DdlOperatorKind::Migrate { .. } => maintenance_executor::execute_migrate(self),
+            DdlOperatorKind::MigratePlan { .. } => migration_executor::execute_migrate_plan(self),
+            DdlOperatorKind::MigrateRun { .. } => migration_executor::execute_migrate_run(self),
+            DdlOperatorKind::MigrateRollback { .. } => {
+                migration_executor::execute_migrate_rollback(self)
+            }
         }
     }
 

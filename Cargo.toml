@@ -169,6 +169,7 @@ graphdb-storage = { path = "crates/graphdb-storage" }
 graphdb-query = { path = "crates/graphdb-query" }
 graphdb-api = { path = "crates/graphdb-api" }
 graphdb-server = { path = "crates/graphdb-server" }
+graphdb-migration = { path = "crates/graphdb-migration" }
 clap.workspace = true
 flexi_logger.workspace = true
 tracing.workspace = true
@@ -220,6 +221,7 @@ toml = "1.1"
 reqwest = { version = "0.12", features = ["json"] }
 postcard.workspace = true
 graphdb-wire = { path = "crates/graphdb-wire" }
+graphdb-storage = { path = "crates/graphdb-storage", features = ["test-support"] }
 
 [[bench]]
 name = "storage_bench"

@@ -4,13 +4,13 @@ use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::wal::writer::compression::{self as compression_mod, create_compressor, Compressor};
+use crate::wal::writer::sync::elapsed_since;
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::types::{
     Lsn, RecordType, WalCompression, WalError, WalHeader, WalOpType, WalResult, WalStats,
     WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
 };
-use crate::wal::writer::compression::{self as compression_mod, create_compressor, Compressor};
-use crate::wal::writer::sync::elapsed_since;
 
 use super::{LocalWalWriter, WalHeaderParams};
 
@@ -131,7 +131,12 @@ impl LocalWalWriter {
     }
 
     /// Write a single entry to the file
-    pub(crate) fn write_entry(&mut self, header: &WalHeader, payload: &[u8], new_lsn: Lsn) -> WalResult<()> {
+    pub(crate) fn write_entry(
+        &mut self,
+        header: &WalHeader,
+        payload: &[u8],
+        new_lsn: Lsn,
+    ) -> WalResult<()> {
         let header_bytes = header.as_bytes();
 
         let file = self.file.as_mut().ok_or(WalError::Closed)?;
@@ -220,7 +225,10 @@ impl LocalWalWriter {
     /// [`wait_for_durable`](WalWriter::wait_for_durable) or the group-commit
     /// coordinator) **outside** any writer lock, so concurrent commits can
     /// share a single fsync.
-    pub(crate) fn write_batch_entries(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<u64> {
+    pub(crate) fn write_batch_entries(
+        &mut self,
+        entries: &[(WalOpType, Timestamp, &[u8])],
+    ) -> WalResult<u64> {
         let mut total_len = 0;
         let mut compressed_entries = Vec::with_capacity(entries.len());
 
@@ -377,5 +385,4 @@ impl LocalWalWriter {
     }
 
     // ── Getters and Setters ──
-
 }

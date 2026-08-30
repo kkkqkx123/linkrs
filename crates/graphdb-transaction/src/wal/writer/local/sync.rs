@@ -29,5 +29,4 @@ impl LocalWalWriter {
     pub fn group_commit_coordinator(&self) -> Option<&GroupCommitCoordinator> {
         self.group_commit.as_ref()
     }
-
 }

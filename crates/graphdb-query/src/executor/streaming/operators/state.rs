@@ -425,6 +425,9 @@ pub enum DdlState {
     ShowSessions,
     Analyze,
     Migrate,
+    MigratePlan,
+    MigrateRun,
+    MigrateRollback,
 }
 
 impl DdlState {
@@ -442,6 +445,9 @@ impl DdlState {
             super::spec::DdlSpec::ShowSessions { .. } => DdlState::ShowSessions,
             super::spec::DdlSpec::Analyze { .. } => DdlState::Analyze,
             super::spec::DdlSpec::Migrate { .. } => DdlState::Migrate,
+            super::spec::DdlSpec::MigratePlan { .. } => DdlState::MigratePlan,
+            super::spec::DdlSpec::MigrateRun { .. } => DdlState::MigrateRun,
+            super::spec::DdlSpec::MigrateRollback { .. } => DdlState::MigrateRollback,
         }
     }
 }

@@ -57,7 +57,6 @@ pub struct LocalWalWriter {
     group_commit: Option<GroupCommitCoordinator>,
 }
 
-
 impl LocalWalWriter {
     pub fn new(wal_uri: &str, thread_id: u32) -> Self {
         let config = WalConfig::default();
@@ -115,7 +114,6 @@ impl LocalWalWriter {
             group_commit: None,
         }
     }
-
 }
 
 impl LocalWalWriter {
@@ -315,7 +313,6 @@ impl Drop for LocalWalWriter {
         self.close();
     }
 }
-
 
 #[cfg(test)]
 mod tests {

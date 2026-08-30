@@ -877,6 +877,19 @@ pub enum DdlSpec {
         action: MigrateAction,
         migration_data: Option<String>,
     },
+    MigratePlan {
+        space_name: String,
+        label: String,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    },
+    MigrateRun {
+        plan_json: String,
+    },
+    MigrateRollback {
+        plan_json: String,
+    },
 }
 
 // ── Fulltext spec ────────────────────────────────────────────────────────────

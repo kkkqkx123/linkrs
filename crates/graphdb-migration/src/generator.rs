@@ -22,8 +22,8 @@ impl From<StorageError> for MigrationError {
     }
 }
 
-pub fn generate_vertex_plan(
-    reader: &dyn StorageReader,
+pub fn generate_vertex_plan<R: StorageReader + ?Sized>(
+    reader: &R,
     space: &str,
     tag: &str,
     from_version: u64,
@@ -81,8 +81,8 @@ pub fn generate_vertex_plan(
     ))
 }
 
-pub fn generate_edge_plan(
-    reader: &dyn StorageReader,
+pub fn generate_edge_plan<R: StorageReader + ?Sized>(
+    reader: &R,
     space: &str,
     edge_type: &str,
     from_version: u64,
@@ -140,12 +140,16 @@ pub fn generate_edge_plan(
     ))
 }
 
-fn estimate_vertex_rows(reader: &dyn StorageReader, space: &str, tag: &str) -> StorageResult<u64> {
+fn estimate_vertex_rows<R: StorageReader + ?Sized>(
+    reader: &R,
+    space: &str,
+    tag: &str,
+) -> StorageResult<u64> {
     reader.count_vertices_by_tag(space, tag)
 }
 
-fn estimate_edge_rows(
-    reader: &dyn StorageReader,
+fn estimate_edge_rows<R: StorageReader + ?Sized>(
+    reader: &R,
     space: &str,
     edge_type: &str,
 ) -> StorageResult<u64> {

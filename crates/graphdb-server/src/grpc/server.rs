@@ -883,6 +883,100 @@ impl<
             error: String::new(),
         }))
     }
+
+    async fn migrate_plan(
+        &self,
+        request: Request<MigratePlanRequest>,
+    ) -> Result<Response<MigratePlanResponse>, Status> {
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_read = storage.read();
+
+        let plan = if req.is_edge {
+            graphdb_migration::generate_edge_plan(
+                &*storage_read,
+                &req.space,
+                &req.label,
+                req.from_version,
+                req.to_version,
+            )
+        } else {
+            graphdb_migration::generate_vertex_plan(
+                &*storage_read,
+                &req.space,
+                &req.label,
+                req.from_version,
+                req.to_version,
+            )
+        }
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        let plan_json =
+            serde_json::to_string(&plan).map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(MigratePlanResponse {
+            plan_json,
+            safety_level: format!("{:?}", plan.overall_safety),
+            estimated_rows: plan.estimated_rows,
+            steps: plan
+                .steps
+                .iter()
+                .map(|s| MigrationStep {
+                    step_type: format!("{:?}", s),
+                    description: s.description(),
+                    safety_level: format!("{:?}", s.safety_level()),
+                    is_data_modifying: s.is_data_modifying(),
+                })
+                .collect(),
+            error: String::new(),
+        }))
+    }
+
+    async fn migrate_execute(
+        &self,
+        request: Request<MigrateExecuteRequest>,
+    ) -> Result<Response<MigrateExecuteResponse>, Status> {
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let mut storage_write = storage.write();
+
+        let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(MigrateExecuteResponse {
+            success: report.success,
+            steps_completed: report.steps_completed as u64,
+            rows_migrated: report.rows_migrated,
+            errors: report.errors,
+            error: String::new(),
+        }))
+    }
+
+    async fn migrate_rollback(
+        &self,
+        request: Request<MigrateRollbackRequest>,
+    ) -> Result<Response<MigrateRollbackResponse>, Status> {
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let mut storage_write = storage.write();
+
+        let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let report = graphdb_migration::rollback_migration(&mut *storage_write, &plan)
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(MigrateRollbackResponse {
+            success: report.success,
+            steps_completed: report.steps_completed as u64,
+            rows_migrated: report.rows_migrated,
+            errors: report.errors,
+            error: String::new(),
+        }))
+    }
 }
 
 impl<

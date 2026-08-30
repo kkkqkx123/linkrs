@@ -21,6 +21,7 @@ graphdb-wire = { path = "../graphdb-wire" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
 graphdb-fulltext = { path = "../graphdb-fulltext" }
+graphdb-migration = { path = "../graphdb-migration" }
 graphdb-api = { path = "../graphdb-api" }
 
 serde.workspace = true

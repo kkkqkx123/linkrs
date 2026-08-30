@@ -659,6 +659,8 @@ impl<'a> ParseContext<'a> {
             TokenKind::To => keyword.eq_ignore_ascii_case("TO"),
             TokenKind::As => keyword.eq_ignore_ascii_case("AS"),
             TokenKind::Upsert => keyword.eq_ignore_ascii_case("UPSERT"),
+            TokenKind::In => keyword.eq_ignore_ascii_case("IN"),
+            TokenKind::Rollback => keyword.eq_ignore_ascii_case("ROLLBACK"),
             _ => false,
         }
     }
