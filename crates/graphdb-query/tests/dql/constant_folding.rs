@@ -56,7 +56,7 @@ fn test_fold_004_partial_constant_subexpression() {
         .assert_success()
         .query("MATCH (p:person) RETURN p.age + (1 + 2) AS age_plus")
         .assert_success()
-        .assert_result_contains(vec![graphdb_query::core::Value::Int(33)]);
+        .assert_result_contains(vec![graphdb_core::Value::Int(33)]);
 }
 
 /// EXPLAIN surfaces the `folded: true` marker when constant folding applied.

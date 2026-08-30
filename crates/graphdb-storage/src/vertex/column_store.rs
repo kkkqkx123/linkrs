@@ -1147,9 +1147,31 @@ impl Column {
             };
         }
         if let Some(chain) = self.version_chains.get(row_idx) {
-            for entry in chain {
+            if !chain.is_empty() {
+                // Version chain is ordered by start_ts ascending (oldest first).
+                // Binary search finds the candidate interval containing query_ts
+                // in O(log n) instead of O(n) linear scan.
+                let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                    Ok(i) => i,
+                    Err(i) => {
+                        if i == 0 {
+                            return None;
+                        }
+                        i - 1
+                    }
+                };
+                let entry = &chain[idx];
                 if entry.start_ts <= query_ts && entry.end_ts > query_ts {
                     return entry.value.clone();
+                }
+                // After folding/GC intervals may have been merged; a single
+                // predecessor check suffices for contiguous chains. Fall back
+                // to neighbour check for the rare folded-gap case.
+                if idx + 1 < chain.len() {
+                    let nxt = &chain[idx + 1];
+                    if nxt.start_ts <= query_ts && nxt.end_ts > query_ts {
+                        return nxt.value.clone();
+                    }
                 }
             }
         }
@@ -1167,30 +1189,6 @@ impl Column {
             removed += before - chain.len();
         }
         removed
-    }
-
-    /// Incremental garbage-collect: process at most `batch_size` rows per call.
-    /// Returns `(removed_entries, has_more_work)`.
-    ///
-    /// This avoids long blocking of writes during GC by processing rows in
-    /// batches. Call repeatedly until `has_more_work` returns `false`.
-    pub fn gc_versions_incremental(
-        &mut self,
-        min_active_snapshot_ts: Timestamp,
-        batch_size: usize,
-    ) -> (usize, bool) {
-        let mut removed = 0;
-        let mut processed = 0;
-        for chain in &mut self.version_chains {
-            if processed >= batch_size {
-                return (removed, true);
-            }
-            let before = chain.len();
-            chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
-            removed += before - chain.len();
-            processed += 1;
-        }
-        (removed, false)
     }
 
     /// Snapshot the MVCC metadata of `from` into `to` (used by table
@@ -2072,29 +2070,6 @@ impl ColumnStore {
             removed += col.gc_versions(min_active_snapshot_ts);
         }
         removed
-    }
-
-    /// Incremental garbage-collect: process at most `batch_size` rows per call.
-    /// Returns `(removed_entries, has_more_work)`.
-    ///
-    /// This avoids long blocking of writes during GC by processing rows in
-    /// batches. Call repeatedly until `has_more_work` returns `false`.
-    pub fn gc_versions_incremental(
-        &mut self,
-        min_active_snapshot_ts: Timestamp,
-        batch_size: usize,
-    ) -> (usize, bool) {
-        let mut total_removed = 0;
-        let mut has_more = false;
-        for col in &mut self.columns {
-            let (removed, more) = col.gc_versions_incremental(min_active_snapshot_ts, batch_size);
-            total_removed += removed;
-            if more {
-                has_more = true;
-                break; // Stop after first column that needs more work
-            }
-        }
-        (total_removed, has_more)
     }
 
     /// Fold oldest version-chain entries for a single row across all columns.

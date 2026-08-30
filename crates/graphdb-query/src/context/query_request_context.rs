@@ -59,11 +59,8 @@ pub struct QueryRequestContext {
     /// [`prepare_request`]: crate::pipeline::prepared::PreparedRequest
     pub parsed_statement: Option<Arc<crate::parser::ast::stmt::Ast>>,
     /// Consistency requirement for secondary-index reads (vector/fulltext).
-    /// `None` = eventual; `Some(timeout_ms)` = read-your-writes with timeout.
-    pub consistency_timeout_ms: Option<u64>,
-    /// Minimum LSN to wait for when `consistency_timeout_ms` is set.
-    /// `None` means wait for current materialized LSN.
-    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    /// `None` = eventual; `Some(cfg)` = read-your-writes with timeout and optional LSN.
+    pub ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
 }
 
 impl QueryRequestContext {
@@ -84,8 +81,7 @@ impl QueryRequestContext {
             operation_context: None,
             operation_storage: None,
             parsed_statement: None,
-            consistency_timeout_ms: None,
-            minimum_lsn: None,
+            ryw_config: None,
         }
     }
 

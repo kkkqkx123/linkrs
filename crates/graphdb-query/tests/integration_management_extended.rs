@@ -19,7 +19,7 @@
 mod common;
 
 use common::test_scenario::TestScenario;
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 
 // ==================== USE Statement Extended Tests ====================
 
@@ -312,7 +312,7 @@ fn test_return_list_comprehension() {
         .assert_success()
         .assert_result_count(1)
         .assert_result_contains(vec![Value::list(
-            graphdb_query::core::value::list::List::from(vec![Value::Int(30), Value::Int(40)]),
+            graphdb_core::value::list::List::from(vec![Value::Int(30), Value::Int(40)]),
         )]);
 }
 
@@ -329,7 +329,7 @@ fn test_return_list_comprehension_in_vertex_projection() {
         .assert_success()
         .assert_result_count(1)
         .assert_result_contains(vec![Value::list(
-            graphdb_query::core::value::list::List::from(vec![
+            graphdb_core::value::list::List::from(vec![
                 Value::Int(2),
                 Value::Int(3),
                 Value::Int(4),

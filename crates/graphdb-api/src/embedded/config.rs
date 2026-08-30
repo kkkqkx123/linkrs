@@ -54,7 +54,7 @@ pub enum EmbeddedVectorEngine {
     Local,
     /// Remote Qdrant service; requires the `vector-qdrant` feature.
     #[cfg(feature = "vector-qdrant")]
-    Qdrant(vector_client::VectorClientConfig),
+    Qdrant(Box<vector_client::VectorClientConfig>),
 }
 
 /// Vector subsystem configuration for the embedded database.
@@ -180,7 +180,7 @@ impl DatabaseConfig {
     /// Select the remote Qdrant engine; requires the `vector-qdrant` feature.
     #[cfg(feature = "vector-qdrant")]
     pub fn with_vector_qdrant(mut self, config: vector_client::VectorClientConfig) -> Self {
-        self.vector.engine = EmbeddedVectorEngine::Qdrant(config);
+        self.vector.engine = EmbeddedVectorEngine::Qdrant(Box::new(config));
         self
     }
 

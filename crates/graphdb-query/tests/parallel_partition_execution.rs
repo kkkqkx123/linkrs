@@ -12,9 +12,9 @@ mod common;
 
 use common::TestStorage;
 
-use graphdb_query::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb_query::core::vertex_edge_path::Tag;
-use graphdb_query::core::{DataType, Edge, StatsManager, Value, Vertex};
+use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{DataType, Edge, StatsManager, Value, Vertex};
 use graphdb_query::executor::base::ExecutionResult;
 use graphdb_query::optimizer::{OptimizerEngine, PartitioningConfig};
 use graphdb_query::pipeline::QueryPipelineManager;

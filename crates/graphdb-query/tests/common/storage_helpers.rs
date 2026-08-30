@@ -4,8 +4,8 @@
 
 #![allow(dead_code)]
 
-use graphdb_query::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
-use graphdb_query::core::DataType;
+use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
+use graphdb_core::DataType;
 use graphdb_query::storage::GraphStorage;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use std::sync::Arc;

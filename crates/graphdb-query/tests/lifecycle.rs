@@ -8,7 +8,7 @@
 //! - partition-plan cache hit consistency (hit and miss produce equal results)
 //! - DDL invalidating cached (partitioned) plans
 
-use graphdb_query::core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_query::executor::base::ExecutionContext;
 use graphdb_query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
@@ -31,8 +31,8 @@ use std::sync::Arc;
 mod common;
 
 /// Build a typed TransactionId from a raw integer (tests only).
-fn crate_test_txn_id(raw: u64) -> graphdb_query::core::types::TransactionId {
-    graphdb_query::core::types::TransactionId(raw)
+fn crate_test_txn_id(raw: u64) -> graphdb_core::types::TransactionId {
+    graphdb_core::types::TransactionId(raw)
 }
 
 // ── Plan construction helpers ────────────────────────────────────────────────
@@ -476,11 +476,11 @@ fn lifecycle_explain_plan_description_round_trips_cbo_notes() {
 
 #[test]
 fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
-    use graphdb_query::core::stats::StatsManager;
-    use graphdb_query::core::types::VertexId;
-    use graphdb_query::core::types::{PropertyDef, SpaceInfo, TagInfo};
-    use graphdb_query::core::vertex_edge_path::Tag;
-    use graphdb_query::core::{DataType, Value, Vertex};
+    use graphdb_core::stats::StatsManager;
+    use graphdb_core::types::VertexId;
+    use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo};
+    use graphdb_core::vertex_edge_path::Tag;
+    use graphdb_core::{DataType, Value, Vertex};
     use graphdb_query::optimizer::OptimizerEngine;
     use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::StorageOperationContextOps;

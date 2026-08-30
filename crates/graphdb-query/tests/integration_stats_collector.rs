@@ -1,8 +1,8 @@
 mod common;
 
-use graphdb_query::core::types::{PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId};
-use graphdb_query::core::value::Value;
-use graphdb_query::core::vertex_edge_path::{Tag, Vertex};
+use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId};
+use graphdb_core::value::Value;
+use graphdb_core::vertex_edge_path::{Tag, Vertex};
 use graphdb_query::optimizer::stats::{StatisticsCollector, StatisticsManager};
 use graphdb_query::storage::{
     GraphStorage, PropertyGraphConfig, StorageCommitOps, StorageOperationContext,
@@ -17,13 +17,13 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
 
     {
         let mut space = SpaceInfo::new("col_stats_e2e".to_string())
-            .with_vid_type(graphdb_query::core::DataType::BigInt);
+            .with_vid_type(graphdb_core::DataType::BigInt);
         raw.create_space(&mut space).expect("create space");
         raw.create_tag(
             "col_stats_e2e",
             &TagInfo::new("Person".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), graphdb_query::core::DataType::String),
-                PropertyDef::new("age".to_string(), graphdb_query::core::DataType::BigInt),
+                PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
+                PropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
             ]),
         )
         .expect("create tag");

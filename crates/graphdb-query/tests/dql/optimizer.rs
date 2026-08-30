@@ -12,7 +12,7 @@ use super::common;
 
 use common::test_scenario::TestScenario;
 use common::TestStorage;
-use graphdb_query::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::pipeline::QueryPipelineManager;
 use std::sync::Arc;
@@ -361,11 +361,11 @@ fn test_optimizer_result_equivalence() {
     }
 
     // Construct SpaceInfo for opt_equiv (space_id is 1 as it's the first space created)
-    use graphdb_query::core::types::SpaceInfo;
+    use graphdb_core::types::SpaceInfo;
     let space_info = SpaceInfo {
         space_id: 1,
         space_name: "opt_equiv".to_string(),
-        vid_type: graphdb_query::core::DataType::BigInt,
+        vid_type: graphdb_core::DataType::BigInt,
         ..Default::default()
     };
     let space_info: SpaceInfo = space_info;

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use graphdb_query::executor::streaming::chunk::DataChunk;
 use graphdb_query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
 use graphdb_query::executor::streaming::operators::join_operator::JoinKeyValue;

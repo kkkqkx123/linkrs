@@ -317,7 +317,6 @@ pub fn build_query_request_context(
         read_only: false,
         operation_context: None,
         operation_storage: None,
-        consistency_timeout_ms: None,
-        minimum_lsn: None,
+        ryw_config: None,
     }
 }

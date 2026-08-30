@@ -9,9 +9,9 @@
 
 mod common;
 
-use graphdb_query::core::types::expr::Expression;
-use graphdb_query::core::types::DataType;
-use graphdb_query::core::value::{
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::DataType;
+use graphdb_core::value::{
     DateTimeValue, DateValue, GeographyValue, List, NullType, TimeValue, Value,
 };
 use graphdb_query::executor::expression::evaluation_context::DefaultExpressionContext;
@@ -308,7 +308,7 @@ fn test_value_unary_operations() {
         Value::Int(5)
     );
     assert_eq!(
-        Value::List(Box::new(graphdb_query::core::List {
+        Value::List(Box::new(graphdb_core::List {
             values: vec![Value::Int(1), Value::Int(2)]
         }))
         .len()
@@ -366,7 +366,7 @@ fn test_value_complex_types() {
     assert_eq!(geo.longitude, 116.4074);
 
     // IntervalValue
-    use graphdb_query::core::value::IntervalValue;
+    use graphdb_core::value::IntervalValue;
     let interval = IntervalValue::new(14, 3, 4_500_000_000);
     assert_eq!(interval.months, 14);
     assert_eq!(interval.days, 3);
@@ -519,7 +519,7 @@ fn test_expression_variable_creation() {
 
 #[test]
 fn test_expression_binary_creation() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
 
     let left = Expression::literal(10i64);
     let right = Expression::literal(5i64);
@@ -537,7 +537,7 @@ fn test_expression_binary_creation() {
 
 #[test]
 fn test_expression_unary_creation() {
-    use graphdb_query::core::types::UnaryOperator;
+    use graphdb_core::types::UnaryOperator;
 
     let operand = Expression::literal(true);
     let expr = Expression::Unary {
@@ -591,7 +591,7 @@ fn test_evaluator_variable() {
 
 #[test]
 fn test_evaluator_binary_arithmetic() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // Addition: 10 + 5
@@ -633,7 +633,7 @@ fn test_evaluator_binary_arithmetic() {
 
 #[test]
 fn test_evaluator_binary_comparison() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // Equivalent to: 5 == 5
@@ -675,7 +675,7 @@ fn test_evaluator_binary_comparison() {
 
 #[test]
 fn test_evaluator_binary_logical() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // AND: true && true
@@ -708,7 +708,7 @@ fn test_evaluator_binary_logical() {
 
 #[test]
 fn test_evaluator_unary() {
-    use graphdb_query::core::types::UnaryOperator;
+    use graphdb_core::types::UnaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // NOT: !true
@@ -738,7 +738,7 @@ fn test_evaluator_unary() {
 
 #[test]
 fn test_evaluator_nested_expression() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // (10 + 5) * 2 = 30
@@ -773,7 +773,7 @@ fn test_evaluator_can_evaluate() {
     // Pure constant expressions can be evaluated.
     let const_expr = Expression::Binary {
         left: Box::new(Expression::literal(10i64)),
-        op: graphdb_query::core::types::BinaryOperator::Add,
+        op: graphdb_core::types::BinaryOperator::Add,
         right: Box::new(Expression::literal(5i64)),
     };
     assert!(ExpressionEvaluator::can_evaluate(&const_expr));
@@ -898,7 +898,7 @@ fn test_context_parent_child() {
 
 #[test]
 fn test_complex_arithmetic_expression() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // Complex expression: (100 - 50) * 2 + 10 / 5 = 102
@@ -926,7 +926,7 @@ fn test_complex_arithmetic_expression() {
 
 #[test]
 fn test_mixed_type_operations() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // Mixed operations of integers and floating-point numbers
@@ -941,7 +941,7 @@ fn test_mixed_type_operations() {
 
 #[test]
 fn test_string_concatenation() {
-    use graphdb_query::core::types::BinaryOperator;
+    use graphdb_core::types::BinaryOperator;
     let mut ctx = DefaultExpressionContext::new();
 
     // String concatenation
@@ -957,7 +957,7 @@ fn test_string_concatenation() {
 #[test]
 fn test_list_operations() {
     // Create list values
-    let list = Value::List(Box::new(graphdb_query::core::List {
+    let list = Value::List(Box::new(graphdb_core::List {
         values: vec![Value::Int(1), Value::Int(2), Value::Int(3)],
     }));
 
@@ -965,7 +965,7 @@ fn test_list_operations() {
     assert_eq!(list.get_type(), DataType::List(Box::new(DataType::Int)));
 
     // Empty list
-    let empty_list = Value::List(Box::new(graphdb_query::core::List { values: vec![] }));
+    let empty_list = Value::List(Box::new(graphdb_core::List { values: vec![] }));
     assert_eq!(
         empty_list.len().expect("空列表长度计算应该成功"),
         Value::Int(0)
@@ -1001,7 +1001,7 @@ fn test_value_memory_estimation() {
     let string_val = Value::string("hello world");
     assert!(string_val.estimated_size() >= std::mem::size_of::<Value>() + "hello world".len());
 
-    let list_val = Value::List(Box::new(graphdb_query::core::List {
+    let list_val = Value::List(Box::new(graphdb_core::List {
         values: vec![Value::Int(1), Value::Int(2)],
     }));
     assert!(list_val.estimated_size() > int_val.estimated_size());

@@ -56,7 +56,7 @@ impl FulltextApi {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Result<IndexMetadata, String> {
+    ) -> Result<String, String> {
         self.manager
             .create_index(space_id, tag_name, field_name, None)
             .await

@@ -38,18 +38,23 @@ pub async fn execute<
                 || s.eq_ignore_ascii_case("ryw")
                 || s.eq_ignore_ascii_case("read-your-writes") =>
         {
-            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites {
-                timeout_ms: request.consistency_timeout_ms.unwrap_or(2000),
-            }
+            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites(
+                graphdb_core::types::ReadYourWritesConfig {
+                    timeout_ms: request.consistency_timeout_ms.unwrap_or(2000),
+                    minimum_lsn: request.minimum_lsn.map(graphdb_core::types::CommitLsn::new),
+                },
+            )
         }
         _ if request.consistency_timeout_ms.is_some() => {
-            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites {
-                timeout_ms: request.consistency_timeout_ms.unwrap(),
-            }
+            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites(
+                graphdb_core::types::ReadYourWritesConfig {
+                    timeout_ms: request.consistency_timeout_ms.unwrap(),
+                    minimum_lsn: request.minimum_lsn.map(graphdb_core::types::CommitLsn::new),
+                },
+            )
         }
         _ => graphdb_api::api_core::types::ConsistencyLevel::Eventual,
     };
-    let minimum_lsn = request.minimum_lsn.map(graphdb_core::types::CommitLsn::new);
 
     // Executing Queries with GraphService
     let result = match graph_service
@@ -59,7 +64,6 @@ pub async fn execute<
             parameters,
             session_variables,
             consistency,
-            minimum_lsn,
         )
         .await
     {

@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::{DataType, StorageError, Value, Vertex};
+use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{DataType, StorageError, Value, Vertex};
 use graphdb_storage::{
     open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate, StorageSchemaOps,
     StorageWriter, VertexColumnBatch,
@@ -45,7 +45,7 @@ fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
         if nullable && i % 3 == 0 {
             props[0] = (
                 "value".to_string(),
-                Value::Null(graphdb_storage::core::value::NullType::Null),
+                Value::Null(graphdb_core::value::NullType::Null),
             );
         }
         vertices.push(Vertex::new(
@@ -95,7 +95,7 @@ fn drain_columns(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec
                 rec.push(
                     col.values
                         .value_at(row)
-                        .unwrap_or(Value::Null(graphdb_storage::core::value::NullType::Null)),
+                        .unwrap_or(Value::Null(graphdb_core::value::NullType::Null)),
                 );
             }
             out.push(rec);
@@ -126,7 +126,7 @@ fn drain_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Ve
                         .iter()
                         .find(|(n, _)| n == name)
                         .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Null(graphdb_storage::core::value::NullType::Null)),
+                        .unwrap_or(Value::Null(graphdb_core::value::NullType::Null)),
                 );
             }
             out.push(row);

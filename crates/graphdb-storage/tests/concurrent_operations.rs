@@ -5,8 +5,8 @@
 
 mod common;
 
-use graphdb_storage::core::types::VertexId;
-use graphdb_storage::core::Value;
+use graphdb_core::types::VertexId;
+use graphdb_core::Value;
 use graphdb_storage::{StorageReader, StorageWriter};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;

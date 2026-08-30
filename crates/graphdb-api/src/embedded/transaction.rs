@@ -6,7 +6,7 @@ use crate::embedded::result::QueryResult;
 use crate::embedded::session::Session;
 use crate::storage::StorageClient;
 use graphdb_core::Value;
-use graphdb_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
+use crate::api_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use graphdb_transaction::types::{SavepointId, SavepointInfo};
 use graphdb_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;
@@ -204,7 +204,6 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let result = {
@@ -246,7 +245,6 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let result = {

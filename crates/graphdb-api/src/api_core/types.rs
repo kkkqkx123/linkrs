@@ -19,9 +19,17 @@ use std::sync::Arc;
 pub enum ConsistencyLevel {
     #[default]
     Eventual,
-    ReadYourWrites {
-        timeout_ms: u64,
-    },
+    ReadYourWrites(graphdb_core::types::ReadYourWritesConfig),
+}
+
+impl ConsistencyLevel {
+    /// Returns the RYW config if this is a `ReadYourWrites` level.
+    pub fn read_your_writes(&self) -> Option<&graphdb_core::types::ReadYourWritesConfig> {
+        match self {
+            Self::ReadYourWrites(cfg) => Some(cfg),
+            Self::Eventual => None,
+        }
+    }
 }
 
 /// Query request
@@ -52,9 +60,6 @@ pub struct QueryRequest {
     /// `Eventual` is the default for backward compatibility; `ReadYourWrites`
     /// makes a `SEARCH VECTOR` block until the outbox frontier catches up.
     pub consistency: ConsistencyLevel,
-    /// Minimum LSN to wait for when `consistency` is `ReadYourWrites`. When
-    /// `None`, the current outbox `materialized_lsn` is used.
-    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
 impl Default for QueryRequest {
@@ -70,7 +75,6 @@ impl Default for QueryRequest {
             isolation_level: None,
             parsed_statement: None,
             consistency: ConsistencyLevel::default(),
-            minimum_lsn: None,
         }
     }
 }

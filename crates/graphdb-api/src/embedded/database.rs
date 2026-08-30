@@ -6,7 +6,7 @@ use crate::embedded::config::{DatabaseConfig, EmbeddedVectorEngine};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use crate::storage::{GraphStorage, StorageClient};
-use graphdb_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
+use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use graphdb_core::{StatsManager, Value};
 use graphdb_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]

@@ -56,8 +56,6 @@ pub struct QueryExecutionContext<'a> {
 pub struct ConsistencyParams {
     /// Desired consistency level.
     pub consistency: graphdb_api::api_core::types::ConsistencyLevel,
-    /// Minimum LSN the server must have applied before executing the query.
-    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
 pub struct GraphService<S: StorageClient + Clone + 'static> {
@@ -550,7 +548,6 @@ impl<
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
         consistency: graphdb_api::api_core::types::ConsistencyLevel,
-        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
     ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
@@ -565,7 +562,6 @@ impl<
 
         let consistency_params = ConsistencyParams {
             consistency,
-            minimum_lsn,
         };
 
         match Self::parse_command(stmt) {
@@ -686,7 +682,6 @@ impl<
             query_id: Some(query_id as u64),
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.query_api.write();
@@ -1202,7 +1197,6 @@ impl<
             query_id: None,
             parsed_statement: context.parsed_ast.clone(),
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.query_api.write();
@@ -1248,7 +1242,6 @@ impl<
             query_id: None,
             parsed_statement: context.parsed_ast.clone(),
             consistency: consistency.consistency.clone(),
-            minimum_lsn: consistency.minimum_lsn,
         };
 
         let mut query_api = self.query_api.write();
@@ -1852,7 +1845,6 @@ where
             query_id: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
         let outcomes = self
             .query_api
@@ -1962,7 +1954,6 @@ where
             query_id: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
         let outcomes =
             self.query_api

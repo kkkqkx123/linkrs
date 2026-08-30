@@ -14,9 +14,9 @@ fn create_benchmark_group<'a>(
 }
 
 fn bench_json_serialization(c: &mut Criterion) {
-    use graphdb_storage::core::types::VertexId;
-    use graphdb_storage::core::vertex_edge_path::Tag;
-    use graphdb_storage::core::{Value, Vertex};
+    use graphdb_core::types::VertexId;
+    use graphdb_core::vertex_edge_path::Tag;
+    use graphdb_core::{Value, Vertex};
 
     let mut group = create_benchmark_group(c, "json_serialization");
 
@@ -67,9 +67,9 @@ fn bench_json_serialization(c: &mut Criterion) {
 }
 
 fn bench_json_deserialization(c: &mut Criterion) {
-    use graphdb_storage::core::types::VertexId;
-    use graphdb_storage::core::vertex_edge_path::Tag;
-    use graphdb_storage::core::{Value, Vertex};
+    use graphdb_core::types::VertexId;
+    use graphdb_core::vertex_edge_path::Tag;
+    use graphdb_core::{Value, Vertex};
 
     let mut group = create_benchmark_group(c, "json_deserialization");
 

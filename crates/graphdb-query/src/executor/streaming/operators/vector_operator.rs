@@ -62,8 +62,8 @@ pub enum VectorOperatorKind {
         threshold: Option<f32>,
         filter: Option<super::spec::SpecVectorFilter>,
         offset: usize,
-        consistency_timeout_ms: Option<u64>,
-        minimum_lsn: Option<u64>,
+        #[cfg(feature = "vector")]
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -78,8 +78,8 @@ pub enum VectorOperatorKind {
         top_k: u32,
         tag_name: String,
         field_name: String,
-        consistency_timeout_ms: Option<u64>,
-        minimum_lsn: Option<u64>,
+        #[cfg(feature = "vector")]
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -95,8 +95,8 @@ pub enum VectorOperatorKind {
         tag_name: String,
         field_name: String,
         space_id: u64,
-        consistency_timeout_ms: Option<u64>,
-        minimum_lsn: Option<u64>,
+        #[cfg(feature = "vector")]
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -146,8 +146,7 @@ impl VectorOperator {
                 threshold,
                 filter,
                 offset,
-                consistency_timeout_ms,
-                minimum_lsn,
+                ..
             } => VectorOperatorKind::VectorSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -161,8 +160,8 @@ impl VectorOperator {
                 threshold: *threshold,
                 filter: filter.clone(),
                 offset: *offset,
-                consistency_timeout_ms: *consistency_timeout_ms,
-                minimum_lsn: *minimum_lsn,
+                #[cfg(feature = "vector")]
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
@@ -175,8 +174,7 @@ impl VectorOperator {
                 top_k,
                 tag_name,
                 field_name,
-                consistency_timeout_ms,
-                minimum_lsn,
+                ..
             } => VectorOperatorKind::VectorLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -187,8 +185,8 @@ impl VectorOperator {
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                consistency_timeout_ms: *consistency_timeout_ms,
-                minimum_lsn: *minimum_lsn,
+                #[cfg(feature = "vector")]
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
@@ -202,8 +200,7 @@ impl VectorOperator {
                 tag_name,
                 field_name,
                 space_id,
-                consistency_timeout_ms,
-                minimum_lsn,
+                ..
             } => VectorOperatorKind::VectorMatch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -215,8 +212,8 @@ impl VectorOperator {
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
                 space_id: *space_id,
-                consistency_timeout_ms: *consistency_timeout_ms,
-                minimum_lsn: *minimum_lsn,
+                #[cfg(feature = "vector")]
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
@@ -494,17 +491,20 @@ impl VectorOperator {
             }
 
             VectorOperatorKind::VectorSearch {
+                storage: _,
+                space_name: _,
                 space_id,
-                tag_name,
-                field_name,
+                index_name: _,
                 query_vector,
                 query_text,
                 top_k,
+                tag_name,
+                field_name,
                 threshold,
                 filter,
                 offset,
-                consistency_timeout_ms,
-                minimum_lsn,
+                #[cfg(feature = "vector")]
+                ryw_config,
                 #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
@@ -559,15 +559,12 @@ impl VectorOperator {
                         if let Some(filter) = filter {
                             options.filter = Some(filter.clone());
                         }
-                        if let Some(timeout) = consistency_timeout_ms {
+                        if let Some(cfg) = ryw_config {
                             options.consistency =
                                 graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: *timeout,
+                                    timeout_ms: cfg.timeout_ms,
                                 };
-                            if let Some(lsn) = minimum_lsn {
-                                options.minimum_lsn =
-                                    Some(graphdb_core::types::CommitLsn::new(*lsn));
-                            }
+                            options.minimum_lsn = cfg.minimum_lsn;
                         }
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
@@ -619,14 +616,17 @@ impl VectorOperator {
             }
 
             VectorOperatorKind::VectorLookup {
+                storage: _,
+                space_name: _,
                 space_id,
-                tag_name,
-                field_name,
+                index_name: _,
                 query_vector,
                 query_text,
                 top_k,
-                consistency_timeout_ms,
-                minimum_lsn,
+                tag_name,
+                field_name,
+                #[cfg(feature = "vector")]
+                ryw_config,
                 #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
@@ -676,15 +676,12 @@ impl VectorOperator {
                             resolved_vector,
                             *top_k as usize,
                         );
-                        if let Some(timeout) = consistency_timeout_ms {
+                        if let Some(cfg) = ryw_config {
                             options.consistency =
                                 graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: *timeout,
+                                    timeout_ms: cfg.timeout_ms,
                                 };
-                            if let Some(lsn) = minimum_lsn {
-                                options.minimum_lsn =
-                                    Some(graphdb_core::types::CommitLsn::new(*lsn));
-                            }
+                            options.minimum_lsn = cfg.minimum_lsn;
                         }
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
@@ -729,14 +726,18 @@ impl VectorOperator {
             }
 
             VectorOperatorKind::VectorMatch {
-                space_id,
-                tag_name,
-                field_name,
+                storage: _,
+                space_name: _,
+                pattern: _,
+                field: _,
                 query_vector,
                 query_text,
                 threshold,
-                consistency_timeout_ms,
-                minimum_lsn,
+                tag_name,
+                field_name,
+                space_id,
+                #[cfg(feature = "vector")]
+                ryw_config,
                 #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
@@ -774,7 +775,7 @@ impl VectorOperator {
                         let thr = threshold.unwrap_or(0.5);
                         // VectorMatch currently uses threshold-only search; propagate
                         // RYW consistency via a full SearchOptions when timeout is set.
-                        let search_results = if let Some(timeout) = consistency_timeout_ms {
+                        let search_results = if let Some(cfg) = ryw_config {
                             let mut options = graphdb_sync::vector_sync::SearchOptions::new(
                                 *space_id,
                                 tag_name.clone(),
@@ -785,12 +786,9 @@ impl VectorOperator {
                             .with_threshold(thr);
                             options.consistency =
                                 graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: *timeout,
+                                    timeout_ms: cfg.timeout_ms,
                                 };
-                            if let Some(lsn) = minimum_lsn {
-                                options.minimum_lsn =
-                                    Some(graphdb_core::types::CommitLsn::new(*lsn));
-                            }
+                            options.minimum_lsn = cfg.minimum_lsn;
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector match",
                                 coordinator.search_with_options(options),

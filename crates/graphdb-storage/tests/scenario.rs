@@ -9,10 +9,10 @@
 
 mod common;
 
-use graphdb_storage::core::types::{PropertyDef, VertexId};
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::DataType;
-use graphdb_storage::core::{Edge, EdgeDirection, Value, Vertex};
+use graphdb_core::types::{PropertyDef, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::DataType;
+use graphdb_core::{Edge, EdgeDirection, Value, Vertex};
 use graphdb_storage::{
     StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
@@ -679,7 +679,7 @@ fn test_unique_index_rejects_duplicate() {
     let mut storage = common::create_in_memory_storage();
     common::setup_basic_schema(&mut storage);
 
-    use graphdb_storage::core::types::{Index, IndexConfig, IndexField, IndexType};
+    use graphdb_core::types::{Index, IndexConfig, IndexField, IndexType};
     let unique_index = Index::new(IndexConfig {
         id: 1,
         name: "person_name_unique_idx".to_string(),
@@ -718,26 +718,26 @@ fn test_unique_index_rejects_duplicate() {
 /// Business scenario: User uses string-based vertex IDs instead of integers.
 #[test]
 fn test_string_vertex_id_operations() {
-    use graphdb_storage::core::types::SpaceInfo;
+    use graphdb_core::types::SpaceInfo;
 
     let mut storage = common::create_in_memory_storage();
 
     // Create space with String vid type
     let mut space = SpaceInfo::new("str_space".to_string())
-        .with_vid_type(graphdb_storage::core::DataType::String)
+        .with_vid_type(graphdb_core::DataType::String)
         .with_comment(Some("string ID space".to_string()));
     storage.create_space(&mut space).unwrap();
 
     // Create a tag
-    let person_tag = graphdb_storage::core::types::TagInfo::new("Person".to_string())
+    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string())
         .with_properties(vec![
-            graphdb_storage::core::types::PropertyDef::new(
+            graphdb_core::types::PropertyDef::new(
                 "name".to_string(),
-                graphdb_storage::core::DataType::String,
+                graphdb_core::DataType::String,
             ),
-            graphdb_storage::core::types::PropertyDef::new(
+            graphdb_core::types::PropertyDef::new(
                 "age".to_string(),
-                graphdb_storage::core::DataType::BigInt,
+                graphdb_core::DataType::BigInt,
             ),
         ]);
     storage.create_tag("str_space", &person_tag).unwrap();

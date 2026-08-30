@@ -36,12 +36,19 @@ fn default_num_shards() -> usize {
 // shard-local ids dense (0..n) exactly as the underlying VertexTable rows.
 //
 // Because each shard's i-th segment is fixed at `shard + i * num_shards`,
-// IDs stay proportional to the vertex count: with K = 12 and balanced shards,
-// N vertices occupy IDs up to ~N + num_shards * 4096, versus the 16x blowup
-// of the previous shard-in-low-bits encoding.
-const SEGMENT_SLOTS_BITS: u32 = 12;
+// IDs stay proportional to the vertex count: with K = 14 and balanced shards,
+// N vertices occupy IDs up to ~N + num_shards * 16384, versus the 16x blowup
+// of the previous shard-in-low-bits encoding. K=14 (16384 slots) trades a
+// slightly larger ID tail for fewer segments and lower fragmentation rate;
+// combined with lazy ID recycling, the effective reclaimed space stays high.
+const SEGMENT_SLOTS_BITS: u32 = 14;
 const SEGMENT_SLOTS: u32 = 1 << SEGMENT_SLOTS_BITS;
 const SEGMENT_SLOTS_MASK: u32 = SEGMENT_SLOTS - 1;
+
+/// Fragmentation ratio threshold above which a shard is considered for
+/// selective compaction. Segments with low fragmentation are skipped to
+/// avoid global remapping.
+const SHARD_FRAGMENTATION_THRESHOLD: f64 = 0.25;
 
 fn encode_id(shard: usize, local_id: u32, num_shards: usize) -> u32 {
     debug_assert!(shard < num_shards);
@@ -794,6 +801,11 @@ impl ShardedVertexTable {
     /// Returns the removed external keys and the old-to-new *global* internal
     /// ID mapping (shard-local rows translated into encoded global IDs), which
     /// callers must propagate to edge CSR rows before dependent queries.
+    ///
+    /// Shards whose fragmentation ratio is below
+    /// [`SHARD_FRAGMENTATION_THRESHOLD`] are skipped (segment-level
+    /// compaction): lazy ID recycling already reclaims their holes without a
+    /// global remap, avoiding cross-shard coordination.
     pub fn compact_with_ts_collect_mapping(
         &self,
         ts: Timestamp,
@@ -801,6 +813,24 @@ impl ShardedVertexTable {
         let mut all_removed = Vec::new();
         let mut all_mapping = std::collections::HashMap::new();
         for (idx, shard) in self.shards.iter().enumerate() {
+            // Selective compaction: only compact shards with significant
+            // fragmentation to avoid global remapping overhead.
+            {
+                let table = shard.read();
+                let (live, allocated) = table.id_hole_stats(ts);
+                if allocated > 0 {
+                    let frag = if live >= allocated {
+                        0.0
+                    } else {
+                        1.0 - (live as f64 / allocated as f64)
+                    };
+                    if frag < SHARD_FRAGMENTATION_THRESHOLD {
+                        // Shard is sufficiently dense; lazy recycling will
+                        // reclaim holes without compaction.
+                        continue;
+                    }
+                }
+            }
             let mut table = shard.write();
             let (removed, local_mapping) = table.compact_with_ts_collect_mapping(ts)?;
             for (old_local, new_local) in local_mapping {

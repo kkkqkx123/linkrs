@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use std::collections::HashMap;
 
 mod common;

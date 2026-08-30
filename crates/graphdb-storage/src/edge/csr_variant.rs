@@ -224,10 +224,10 @@ impl CsrVariant {
         let bpe = bytes / edges;
         if bpe == 0 {
             let fallback = match self {
-                CsrVariant::Multiple(_) => 26,
-                CsrVariant::Single(_) => 20,
-                CsrVariant::MultiSingle(_) => 28,
-                CsrVariant::Labeled(_) => 36,
+                CsrVariant::Multiple(_)
+                | CsrVariant::Single(_)
+                | CsrVariant::MultiSingle(_)
+                | CsrVariant::Labeled(_) => std::mem::size_of::<super::Nbr>(),
                 CsrVariant::None { .. } => 0,
             };
             log::warn!(

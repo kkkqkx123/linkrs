@@ -4,12 +4,12 @@
 
 use crate::embedded::session::Session;
 use crate::storage::StorageClient;
-pub use graphdb_core::BatchConfig;
-use graphdb_core::{
-    BatchError as CoreBatchError, BatchOperation as CoreBatchOperation,
-    BatchResult as CoreBatchResult,
+pub use crate::api_core::BatchConfig;
+use crate::api_core::{
+    BatchError as CoreBatchError, BatchItemType as CoreBatchItemType,
+    BatchOperation as CoreBatchOperation, BatchResult as CoreBatchResult,
 };
-use graphdb_core::{CoreError, CoreResult};
+use crate::api_core::{CoreError, CoreResult};
 use graphdb_core::{Edge, Vertex};
 
 /// Batch Inserter
@@ -133,11 +133,11 @@ pub enum BatchItemType {
     Edge,
 }
 
-impl From<graphdb_core::BatchItemType> for BatchItemType {
-    fn from(item_type: graphdb_core::BatchItemType) -> Self {
+impl From<CoreBatchItemType> for BatchItemType {
+    fn from(item_type: CoreBatchItemType) -> Self {
         match item_type {
-            graphdb_core::BatchItemType::Vertex => BatchItemType::Vertex,
-            graphdb_core::BatchItemType::Edge => BatchItemType::Edge,
+            CoreBatchItemType::Vertex => BatchItemType::Vertex,
+            CoreBatchItemType::Edge => BatchItemType::Edge,
         }
     }
 }
@@ -296,7 +296,7 @@ mod tests {
             failed_count: 1,
             errors: vec![CoreBatchError {
                 index: 0,
-                item_type: graphdb_core::BatchItemType::Vertex,
+                item_type: CoreBatchItemType::Vertex,
                 message: "Test error".to_string(),
             }],
         };

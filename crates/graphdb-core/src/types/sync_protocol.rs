@@ -46,6 +46,34 @@ numeric_version_type!(IndexGeneration, "generation:");
 numeric_version_type!(LeaseEpoch, "lease:");
 numeric_version_type!(SnapshotTimestamp, "snapshot:");
 
+/// Read-your-writes consistency configuration.
+///
+/// When present, the secondary index (vector/fulltext) must catch up to
+/// `minimum_lsn` before the query proceeds. If `minimum_lsn` is `None`,
+/// the current materialized LSN of the outbox is used automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadYourWritesConfig {
+    /// Maximum time (ms) to wait for the frontier to catch up.
+    pub timeout_ms: u64,
+    /// Minimum LSN the index must have applied.
+    /// `None` = use the current materialized LSN.
+    pub minimum_lsn: Option<CommitLsn>,
+}
+
+impl ReadYourWritesConfig {
+    pub fn new(timeout_ms: u64) -> Self {
+        Self {
+            timeout_ms,
+            minimum_lsn: None,
+        }
+    }
+
+    pub fn with_minimum_lsn(mut self, lsn: CommitLsn) -> Self {
+        self.minimum_lsn = Some(lsn);
+        self
+    }
+}
+
 macro_rules! string_identifier_type {
     ($name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

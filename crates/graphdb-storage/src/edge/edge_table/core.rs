@@ -717,12 +717,8 @@ impl TimeTravelEdgeStore {
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        if let Err(e) = self
-            .out_csr
-            .insert_edge(src, dst_key, edge_id, ts, prop_offset)
-        {
-            return Err(e);
-        }
+        self.out_csr
+            .insert_edge(src, dst_key, edge_id, ts, prop_offset)?;
 
         if let Err(e) = self
             .in_csr

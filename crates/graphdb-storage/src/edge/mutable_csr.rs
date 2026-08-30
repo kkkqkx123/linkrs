@@ -13,7 +13,7 @@
 //! sorted-vector map keyed by vertex id. This keeps the per-row fixed cost to 12 bytes
 //! (offset + degree + capacity) and eliminates HashMap fragmentation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -51,6 +51,10 @@ const DEFAULT_VERTEX_DEGREE: usize = 4;
 const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
 const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
+
+/// Maximum overflow chunks per vertex before per-vertex compaction is
+/// triggered. Prevents unbounded overflow growth for high-degree vertices.
+const MAX_OVERFLOW_CHUNKS_PER_VERTEX: usize = 32;
 
 /// Per-region metadata for incremental freeze decision.
 ///
@@ -397,6 +401,10 @@ pub struct MutableCsr {
     overflow_chunks: OverflowStorage,
     overflow_chunk_edges: usize,
     overflow_index: OverflowIndex,
+    /// Live endpoint set for overflow vertices: (endpoint, rank) of edges
+    /// whose `delete_ts == MAX`. Enables O(1) duplicate detection for
+    /// high-degree vertices instead of scanning all overflow blocks.
+    overflow_live_sets: HashMap<u32, HashSet<(u32, i64)>>,
 
     edge_count: AtomicU64,
     total_edge_capacity: usize,
@@ -412,6 +420,7 @@ impl Clone for MutableCsr {
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
             overflow_index: self.overflow_index.clone(),
+            overflow_live_sets: self.overflow_live_sets.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
             total_edge_capacity: self.total_edge_capacity,
         }
@@ -457,6 +466,7 @@ impl MutableCsr {
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
             overflow_index: OverflowIndex::new(),
+            overflow_live_sets: HashMap::new(),
             edge_count: AtomicU64::new(0),
             total_edge_capacity: 0,
         }
@@ -531,6 +541,96 @@ impl MutableCsr {
             sequential_vertices,
             sparse_vertices,
             metadata_bytes_saved: saved,
+        }
+    }
+
+    fn rebuild_overflow_live_sets(&mut self) {
+        self.overflow_live_sets.clear();
+        for (vid, chunks) in self.overflow_chunks.iter() {
+            let mut set = HashSet::new();
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.delete_ts == Timestamp::MAX {
+                        set.insert((nbr.endpoint, nbr.rank));
+                    }
+                }
+            }
+            if !set.is_empty() {
+                self.overflow_live_sets.insert(*vid, set);
+            }
+        }
+    }
+
+    fn track_overflow_live_insert(&mut self, vid: u32, endpoint: u32, rank: i64) {
+        self.overflow_live_sets
+            .entry(vid)
+            .or_default()
+            .insert((endpoint, rank));
+    }
+
+    fn track_overflow_live_remove(&mut self, vid: u32, endpoint: u32, rank: i64) {
+        if let Some(set) = self.overflow_live_sets.get_mut(&vid) {
+            set.remove(&(endpoint, rank));
+            if set.is_empty() {
+                self.overflow_live_sets.remove(&vid);
+            }
+        }
+    }
+
+    fn compact_overflow_for_vertex(&mut self, vid: u32) {
+        let Some(chunks) = self.overflow_chunks.get(&vid).cloned() else {
+            return;
+        };
+        let mut live: Vec<Nbr> = Vec::new();
+        for chunk in &chunks {
+            for nbr in chunk {
+                if nbr.delete_ts == Timestamp::MAX {
+                    live.push(*nbr);
+                }
+            }
+        }
+        if live.is_empty() {
+            // Remove empty overflow entry entirely to reclaim metadata.
+            // We need to remove from sorted vector; find index and remove.
+            if let Ok(idx) = self.overflow_chunks.entries.binary_search_by_key(&vid, |(k, _)| *k)
+            {
+                self.overflow_chunks.entries.remove(idx);
+            }
+            self.overflow_live_sets.remove(&vid);
+            return;
+        }
+        // Repack live entries into fresh chunks.
+        let mut new_chunks: Vec<Vec<Nbr>> = Vec::new();
+        for chunk in live.chunks(self.overflow_chunk_edges) {
+            let mut v = Vec::with_capacity(self.overflow_chunk_edges);
+            v.extend_from_slice(chunk);
+            new_chunks.push(v);
+        }
+        // Update capacity accounting: old capacity vs new.
+        let old_cap: usize = chunks.iter().map(|c| c.capacity()).sum();
+        let new_cap: usize = new_chunks.iter().map(|c| c.capacity()).sum();
+        self.total_edge_capacity = self
+            .total_edge_capacity
+            .saturating_sub(old_cap)
+            .saturating_add(new_cap);
+        if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
+            *slot = new_chunks;
+        }
+        // Rebuild live set for this vertex.
+        let mut set = HashSet::new();
+        if let Some(new_chunks_ref) = self.overflow_chunks.get(&vid) {
+            for chunk in new_chunks_ref {
+                for nbr in chunk {
+                    if nbr.delete_ts == Timestamp::MAX {
+                        set.insert((nbr.endpoint, nbr.rank));
+                    }
+                }
+            }
+        }
+        if set.is_empty() {
+            self.overflow_live_sets.remove(&vid);
+        } else {
+            self.overflow_live_sets.insert(vid, set);
         }
     }
 
@@ -664,6 +764,7 @@ impl MutableCsr {
         }
         if nbr.delete_ts == Timestamp::MAX {
             self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.track_overflow_live_insert(src_vid, nbr.endpoint, nbr.rank);
         }
     }
 
@@ -736,6 +837,29 @@ impl MutableCsr {
         if let Some(chunk) = chunks.last_mut() {
             chunk.push(nbr);
         }
+        if nbr.delete_ts == Timestamp::MAX {
+            self.track_overflow_live_insert(src_vid, nbr.endpoint, nbr.rank);
+        }
+        // Per-vertex overflow compaction: if chunk count exceeds threshold,
+        // reclaim dead entries and repack to bound scan cost.
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            if chunks.len() > MAX_OVERFLOW_CHUNKS_PER_VERTEX {
+                let dead = chunks
+                    .iter()
+                    .flat_map(|c| c.iter())
+                    .filter(|nbr| nbr.delete_ts != Timestamp::MAX)
+                    .count();
+                if dead > 0 {
+                    self.compact_overflow_for_vertex(src_vid);
+                } else if chunks.len() > MAX_OVERFLOW_CHUNKS_PER_VERTEX * 2 {
+                    log::warn!(
+                        "MutableCsr vertex {} overflow chunks {} exceeds limit without dead entries; consider compaction",
+                        src_vid,
+                        chunks.len()
+                    );
+                }
+            }
+        }
     }
 
     /// Insert an edge with automatic capacity expansion
@@ -776,7 +900,16 @@ impl MutableCsr {
                 )));
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        // Overflow duplicate check via O(1) live set; fallback to scan if
+        // set is missing (e.g., after manual load before rebuild).
+        if let Some(set) = self.overflow_live_sets.get(&src_vid) {
+            if set.contains(&(decoded_endpoint, decoded_rank)) {
+                return Err(StorageError::edge_already_exists(format!(
+                    "{} -> {:?}",
+                    src_vid, dst
+                )));
+            }
+        } else if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for nbr in chunk {
                     if nbr.endpoint == decoded_endpoint
@@ -887,6 +1020,12 @@ impl MutableCsr {
 
         // Scan overflow
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
+            // Capture endpoint/rank before mutable borrow ends for live set update.
+            let (endpoint, rank) = {
+                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let n = &chunks[chunk_idx][edge_idx];
+                (n.endpoint, n.rank)
+            };
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
                 if nbr.delete_ts != Timestamp::MAX {
@@ -902,6 +1041,7 @@ impl MutableCsr {
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                    self.track_overflow_live_remove(src_vid, endpoint, rank);
                     return Ok(true);
                 }
                 return Ok(false);
@@ -942,18 +1082,26 @@ impl MutableCsr {
 
         // Scan overflow
         let indices = self.scan_overflow_for_dst(src_vid, dst);
+        // Collect endpoints for set removal before mutable borrow.
+        let mut overflow_deleted_endpoints: Vec<(u32, i64)> = Vec::new();
         if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
             for (chunk_idx, edge_idx) in indices {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
                 if nbr.delete_ts == Timestamp::MAX {
                     let create_ts = nbr.create_ts;
                     if create_ts <= ts {
+                        let ep = nbr.endpoint;
+                        let rk = nbr.rank;
                         nbr.delete_ts = ts;
                         self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        overflow_deleted_endpoints.push((ep, rk));
                         deleted = true;
                     }
                 }
             }
+        }
+        for (ep, rk) in overflow_deleted_endpoints {
+            self.track_overflow_live_remove(src_vid, ep, rk);
         }
 
         deleted
@@ -1043,8 +1191,39 @@ impl MutableCsr {
 
         // Scan overflow
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
+            // Capture live status before removal for set maintenance.
+            let was_live = {
+                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                chunks[chunk_idx][edge_idx].delete_ts == Timestamp::MAX
+            };
+            let (endpoint, rank) = {
+                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let n = &chunks[chunk_idx][edge_idx];
+                (n.endpoint, n.rank)
+            };
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 chunks[chunk_idx].remove(edge_idx);
+                // Clean up empty chunk vectors to keep per-vertex chunk count bounded.
+                if chunks[chunk_idx].is_empty() {
+                    chunks.remove(chunk_idx);
+                    self.total_edge_capacity = self
+                        .total_edge_capacity
+                        .saturating_sub(self.overflow_chunk_edges);
+                    if chunks.is_empty() {
+                        // Remove empty overflow entry from sorted vector.
+                        if let Ok(idx) =
+                            self.overflow_chunks.entries.binary_search_by_key(&src_vid, |(k, _)| *k)
+                        {
+                            self.overflow_chunks.entries.remove(idx);
+                        }
+                        self.overflow_live_sets.remove(&src_vid);
+                        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        return true;
+                    }
+                }
+                if was_live {
+                    self.track_overflow_live_remove(src_vid, endpoint, rank);
+                }
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
             }
@@ -1083,11 +1262,17 @@ impl MutableCsr {
 
         // Scan overflow
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
+            let (endpoint, rank) = {
+                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let n = &chunks[chunk_idx][edge_idx];
+                (n.endpoint, n.rank)
+            };
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
                 if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
                     nbr.delete_ts = Timestamp::MAX;
                     self.edge_count.fetch_add(1, Ordering::Relaxed);
+                    self.track_overflow_live_insert(src_vid, endpoint, rank);
                     return true;
                 }
             }
@@ -1204,6 +1389,7 @@ impl MutableCsr {
         }
         self.overflow_chunks.clear();
         self.overflow_index.clear();
+        self.overflow_live_sets.clear();
         self.total_edge_capacity = self
             .primary_capacities
             .iter()
@@ -1357,6 +1543,7 @@ impl MutableCsr {
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
+        self.rebuild_overflow_live_sets();
 
         Ok(())
     }
@@ -1474,6 +1661,7 @@ impl MutableCsr {
 
         self.overflow_chunks = OverflowStorage::new();
         self.overflow_index.clear();
+        self.overflow_live_sets.clear();
 
         removed_count
     }

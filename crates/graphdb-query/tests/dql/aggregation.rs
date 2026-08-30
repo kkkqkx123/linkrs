@@ -11,7 +11,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use graphdb_query::parser::Parser;
 
 // ==================== GROUPING SETS / ROLLUP / CUBE Tests ====================

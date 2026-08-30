@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use graphdb_query::core::types::span::Span;
+use graphdb_core::types::span::Span;
 use graphdb_query::metadata::{IndexMetadata, IndexType, MetadataContext};
 use graphdb_query::parser::ast::fulltext::FulltextQueryExpr;
 use graphdb_query::parser::ast::vector::{VectorQueryExpr, VectorQueryType};

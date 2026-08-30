@@ -158,13 +158,11 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Reject if there's an active edge with newer or equal timestamp
-        if nbr.delete_ts == Timestamp::MAX {
-            if ts <= nbr.create_ts {
-                return Err(StorageError::conflict(format!(
-                    "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
-                    src, ts, nbr.create_ts
-                )));
-            }
+        if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
+            return Err(StorageError::conflict(format!(
+                "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
+                src, ts, nbr.create_ts
+            )));
         }
 
         let was_empty = nbr.delete_ts < Timestamp::MAX;

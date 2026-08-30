@@ -384,8 +384,6 @@ impl VectorReceiver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[tokio::test]
     #[cfg(feature = "vector")]
     async fn vector_receiver_rejects_late_arrival() {

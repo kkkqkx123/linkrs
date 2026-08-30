@@ -336,6 +336,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         // Populate unified search providers for discovery
         {
+            #[cfg(any(feature = "fulltext", feature = "vector"))]
             let mut providers: Vec<Arc<dyn crate::executor::base::traits::SearchProvider>> =
                 Vec::new();
             #[cfg(feature = "fulltext")]
@@ -350,6 +351,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::executor::base::traits::VectorProvider::new(coordinator.clone()),
                 ));
             }
+            #[cfg(not(any(feature = "fulltext", feature = "vector")))]
+            let providers: Vec<Arc<dyn crate::executor::base::traits::SearchProvider>> =
+                Vec::new();
             context.search.search_providers = providers;
         }
         if let Some(ref space_name) = query_context.space_name() {
@@ -360,8 +364,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         context.cancel_token = Some(query_context.cancel_token());
         context.isolation_level = query_context.isolation_level();
-        context.consistency_timeout_ms = query_context.request_context().consistency_timeout_ms;
-        context.minimum_lsn = query_context.request_context().minimum_lsn;
+        context.ryw_config = query_context.request_context().ryw_config;
         if query_context.has_arena() {
             context.arena = Some(Arc::new(
                 parking_lot::Mutex::new(graphdb_core::Arena::new()),

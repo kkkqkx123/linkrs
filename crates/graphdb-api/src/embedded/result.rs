@@ -2,7 +2,7 @@
 //!
 //! Provides comprehensive query result processing capabilities, extending the core layer of QueryResult and Row
 
-use graphdb_core::{CoreError, CoreResult, QueryResult as CoreQueryResult};
+use crate::api_core::{CoreError, CoreResult, QueryResult as CoreQueryResult};
 use graphdb_core::{Edge, Path, Value, Vertex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

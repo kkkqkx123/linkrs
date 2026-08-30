@@ -11,10 +11,10 @@
 
 mod common;
 
-use graphdb_storage::core::types::{Index, IndexConfig, IndexField, IndexType, VertexId};
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::Value;
-use graphdb_storage::core::Vertex;
+use graphdb_core::types::{Index, IndexConfig, IndexField, IndexType, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::Value;
+use graphdb_core::Vertex;
 use graphdb_storage::{
     StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };

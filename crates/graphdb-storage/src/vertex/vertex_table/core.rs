@@ -824,22 +824,6 @@ impl VertexTable {
         Ok(count)
     }
 
-    /// Incremental garbage collection: process at most `batch_size` rows per call.
-    /// Returns `(version_entries_removed, has_more_work)`.
-    ///
-    /// This is a non-blocking alternative to [`gc`](Self::gc) that processes
-    /// version chains in batches. Call repeatedly until `has_more_work` returns
-    /// `false`. Only handles version-chain GC; vertex deletion and compaction
-    /// should be done via a full `gc()` pass when safe.
-    pub fn gc_incremental(
-        &mut self,
-        min_ts: Timestamp,
-        batch_size: usize,
-    ) -> (usize, bool) {
-        self.columns
-            .gc_versions_incremental(min_ts, batch_size)
-    }
-
     /// Compact timestamps independently of id_indexer and columns.
     ///
     /// Removes all temporally-deleted entries (those with `end_ts != MAX_TIMESTAMP`)

@@ -91,10 +91,9 @@ pub struct ExecutionContext {
     /// an explicit transaction. Execution-time knob threaded from the
     /// API layer through [`crate::QueryContext`]; `None` = auto-commit.
     pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
-    /// Consistency timeout for secondary-index reads. `None` = eventual.
-    pub consistency_timeout_ms: Option<u64>,
-    /// Minimum LSN to wait for when consistency is RYW.
-    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    /// Consistency requirement for secondary-index reads.
+    /// `None` = eventual; `Some(cfg)` = read-your-writes with timeout and optional LSN.
+    pub ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
 }
 
 /// Internal: build the non-search portion of an `ExecutionContext`.
@@ -121,8 +120,7 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         columnar_policy: None,
         join_algorithms: HashMap::new(),
         isolation_level: None,
-        consistency_timeout_ms: None,
-        minimum_lsn: None,
+        ryw_config: None,
     }
 }
 

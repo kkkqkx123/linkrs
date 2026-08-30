@@ -160,7 +160,7 @@ fn test_lookup_execution_with_yield() {
         .query("LOOKUP ON Person WHERE Person.age == 30 YIELD Person.name")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![graphdb_query::core::Value::string("Alice")]);
+        .assert_result_contains(vec![graphdb_core::Value::string("Alice")]);
 }
 
 // ==================== LOOKUP Error Handling Tests ====================
@@ -217,7 +217,7 @@ fn test_lookup_with_index_edge() {
         .assert_result_count(1)
         .assert_vertex_or_edge_has_property(
             "since",
-            graphdb_query::core::Value::string("2024-01-01"),
+            graphdb_core::Value::string("2024-01-01"),
         );
 }
 

@@ -204,7 +204,7 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         None => return graphdb_error_code_t::GRAPHDB_INTERNAL as c_int,
     };
 
-    let ctx = graphdb_core::QueryRequest {
+    let ctx = crate::api_core::QueryRequest {
         space_id: session.inner.space_id(),
         space_name: session.inner.space_name().map(|s| s.to_string()),
         auto_commit: false,
@@ -215,7 +215,6 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         isolation_level: None,
         parsed_statement: None,
         consistency: Default::default(),
-        minimum_lsn: None,
     };
 
     let mut query_api = session.inner.query_api_mut();

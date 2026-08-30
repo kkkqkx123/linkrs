@@ -712,8 +712,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_search_s
         threshold: node.threshold,
         filter: node.filter.clone(),
         offset: node.offset,
-        consistency_timeout_ms: exec_ctx.consistency_timeout_ms,
-        minimum_lsn: exec_ctx.minimum_lsn.map(|lsn| lsn.get()),
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -735,8 +734,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_lookup_s
         top_k: node.limit as u32,
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
-        consistency_timeout_ms: exec_ctx.consistency_timeout_ms,
-        minimum_lsn: exec_ctx.minimum_lsn.map(|lsn| lsn.get()),
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -756,8 +754,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_match_sp
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         space_id: node.space_id,
-        consistency_timeout_ms: exec_ctx.consistency_timeout_ms,
-        minimum_lsn: exec_ctx.minimum_lsn.map(|lsn| lsn.get()),
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -796,6 +793,7 @@ fn vector_query_to_vec(
 /// Supports:
 /// - `Value::String("[0.1, 0.2, ...]")` — JSON array string
 /// - `Value::List(Vec<Value>)` — list of numeric values
+#[cfg(feature = "vector")]
 fn resolve_param_to_vector(
     val: &graphdb_core::Value,
     param_name: &str,

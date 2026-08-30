@@ -3,8 +3,8 @@
 //! Provides a high-level API for writing integration tests with fluent interface
 
 use super::TestResult;
-use graphdb_query::core::types::VertexId;
-use graphdb_query::core::Value;
+use graphdb_core::types::VertexId;
+use graphdb_core::Value;
 use graphdb_query::executor::base::ExecutionResult;
 use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
@@ -20,7 +20,7 @@ pub struct TestScenario {
     pipeline: QueryPipelineManager<GraphStorage>,
     last_result: Option<ExecutionResult>,
     last_error: Option<String>,
-    current_space: Option<graphdb_query::core::types::SpaceInfo>,
+    current_space: Option<graphdb_core::types::SpaceInfo>,
 }
 
 impl TestScenario {
@@ -29,7 +29,7 @@ impl TestScenario {
         let test_storage = TestStorage::new()?;
         let storage = test_storage.storage();
 
-        use graphdb_query::core::stats::StatsManager;
+        use graphdb_core::stats::StatsManager;
         use graphdb_query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 

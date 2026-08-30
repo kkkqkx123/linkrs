@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::{DataType, Edge, Value, Vertex};
+use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{DataType, Edge, Value, Vertex};
 use graphdb_storage::{
     GraphStorage, RequiredProperty, ScanOptions, ScanPredicate, StorageReader, StorageSchemaOps,
     StorageWriter,

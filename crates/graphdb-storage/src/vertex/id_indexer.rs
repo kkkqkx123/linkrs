@@ -133,6 +133,9 @@ pub struct IdManager {
     keys: Vec<Option<IdKey>>,
     key_to_id: HashMap<IdKey, u32>,
     live_ids: BTreeSet<u32>,
+    /// Recycled local IDs from deletions, for lazy reuse without global
+    /// compaction. Reduces fragmentation by filling holes immediately.
+    free_ids: Vec<u32>,
     config: IdIndexerConfig,
 }
 
@@ -147,6 +150,7 @@ impl IdManager {
             keys: Vec::with_capacity(capacity),
             key_to_id: HashMap::with_capacity(capacity),
             live_ids: BTreeSet::new(),
+            free_ids: Vec::new(),
             config,
         }
     }
@@ -168,6 +172,27 @@ impl IdManager {
     pub fn insert(&mut self, key: IdKey) -> StorageResult<u32> {
         if self.key_to_id.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
+        }
+
+        // Lazy ID reuse: recycle a deleted slot before growing the id space.
+        if let Some(recycled) = self.free_ids.pop() {
+            let idx = recycled as usize;
+            // Ensure keys vector is large enough (should be, since recycled
+            // came from a previous hole within the vector).
+            if idx < self.keys.len() {
+                debug_assert!(self.keys[idx].is_none());
+                self.keys[idx] = Some(key.clone());
+            } else {
+                // Fallback: extend if recycled idx is at tail (rare after
+                // deserialize rebuilding).
+                while self.keys.len() <= idx {
+                    self.keys.push(None);
+                }
+                self.keys[idx] = Some(key.clone());
+            }
+            self.key_to_id.insert(key, recycled);
+            self.live_ids.insert(recycled);
+            return Ok(recycled);
         }
 
         if self.keys.len() >= self.config.max_capacity {
@@ -222,6 +247,7 @@ impl IdManager {
                 self.keys[idx as usize] = None;
             }
             self.live_ids.remove(&idx);
+            self.free_ids.push(idx);
         })
     }
 
@@ -244,6 +270,10 @@ impl IdManager {
             .collect();
 
         if entries.is_empty() {
+            // No live entries: reset to empty dense state and clear free list.
+            self.keys.clear();
+            self.live_ids.clear();
+            self.free_ids.clear();
             return Ok(HashMap::new());
         }
 
@@ -259,10 +289,13 @@ impl IdManager {
         }
 
         if mapping.is_empty() {
+            // Already dense; still clear free list if it had stale entries.
+            self.free_ids.clear();
             return Ok(HashMap::new());
         }
 
         self.rebuild_with_mapping(&entries)?;
+        self.free_ids.clear();
 
         Ok(mapping)
     }
@@ -281,6 +314,7 @@ impl IdManager {
         self.keys = new_keys;
         self.key_to_id = new_key_to_id;
         self.live_ids = (0..entries.len() as u32).collect();
+        self.free_ids.clear();
 
         Ok(())
     }
@@ -360,6 +394,15 @@ impl IdManager {
             let key = IdKey::from_bytes(&key_bytes)?;
             manager.set_at(internal_id, key);
         }
+
+        // Rebuild free list for holes left by non-dense persisted ids
+        // (e.g., after deletions that left gaps).
+        manager.free_ids = manager
+            .keys
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, k)| if k.is_none() { Some(idx as u32) } else { None })
+            .collect();
 
         Ok(manager)
     }

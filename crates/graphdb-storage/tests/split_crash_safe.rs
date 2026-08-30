@@ -2,8 +2,8 @@
 
 mod common;
 
-use graphdb_storage::core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
-use graphdb_storage::core::Value;
+use graphdb_core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
+use graphdb_core::Value;
 use graphdb_storage::{
     GenerationBuildState, GenerationState, StoragePersistenceOps, StorageReader, StorageSchemaOps,
     StorageWriter,
@@ -142,7 +142,7 @@ fn split_startup_reconciles_publishing_state() {
         let mut versioned = Vec::new();
         versioned.extend_from_slice(b"LNKF");
         versioned.extend_from_slice(
-            &(graphdb_storage::core::types::StorageVersion::CURRENT as u32).to_le_bytes(),
+            &(graphdb_core::types::StorageVersion::CURRENT as u32).to_le_bytes(),
         );
         versioned.extend_from_slice(&serialized);
         std::fs::write(index_root.join("generation_build.bin"), &versioned)

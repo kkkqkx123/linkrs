@@ -15,9 +15,9 @@ pub mod storage_helpers;
 #[path = "common/test_scenario.rs"]
 pub mod test_scenario;
 
-use graphdb_query::core::error::DBError;
-use graphdb_query::core::metadata::SchemaManager;
-use graphdb_query::core::types::set_bcrypt_cost;
+use graphdb_core::error::DBError;
+use graphdb_core::metadata::SchemaManager;
+use graphdb_core::types::set_bcrypt_cost;
 use graphdb_query::storage::PropertyGraphConfig;
 use graphdb_query::storage::{GraphStorage, StorageSchemaContextOps};
 use parking_lot::RwLock;

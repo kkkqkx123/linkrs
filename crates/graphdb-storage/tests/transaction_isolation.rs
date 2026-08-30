@@ -4,7 +4,7 @@
 
 mod common;
 
-use graphdb_storage::core::types::VertexId;
+use graphdb_core::types::VertexId;
 use graphdb_storage::{StorageReader, StorageWriter};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
@@ -145,7 +145,7 @@ fn test_concurrent_vertex_updates_consistency() {
                         // Verify property types are correct
                         if let Some(name) = v.properties.get("name") {
                             match name {
-                                graphdb_storage::core::Value::String(_) => {
+                                graphdb_core::Value::String(_) => {
                                     // OK
                                 }
                                 _ => panic!("Name should be string"),

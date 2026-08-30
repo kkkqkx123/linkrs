@@ -6,8 +6,8 @@
 //! must fall back to the bind path and still produce correct results.
 
 use super::common::TestStorage;
-use graphdb_query::core::stats::StatsManager;
-use graphdb_query::core::types::VertexId;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::VertexId;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::StorageReader;
@@ -37,7 +37,7 @@ impl Fixture {
     fn create_space_with_person_tag(
         &mut self,
         space_name: &str,
-    ) -> graphdb_query::core::types::SpaceInfo {
+    ) -> graphdb_core::types::SpaceInfo {
         self.pipeline
             .execute_query_with_space(&format!("CREATE SPACE IF NOT EXISTS {space_name}"), None)
             .expect("create space");
@@ -56,13 +56,13 @@ impl Fixture {
         space
     }
 
-    fn insert(&mut self, space: &graphdb_query::core::types::SpaceInfo, query: &str) {
+    fn insert(&mut self, space: &graphdb_core::types::SpaceInfo, query: &str) {
         self.pipeline
             .execute_query_with_space(query, Some(space.clone()))
             .expect("insert should succeed");
     }
 
-    fn name_of(&self, space: &str, vid: &str) -> Option<graphdb_query::core::Value> {
+    fn name_of(&self, space: &str, vid: &str) -> Option<graphdb_core::Value> {
         self.storage
             .read()
             .get_vertex(space, &VertexId::from_string(vid))
@@ -100,11 +100,11 @@ fn test_memo_hit_skips_bind_on_warm_statement() {
 
     assert_eq!(
         fx.name_of("memo_space", "p1"),
-        Some(graphdb_query::core::Value::string("A"))
+        Some(graphdb_core::Value::string("A"))
     );
     assert_eq!(
         fx.name_of("memo_space", "p2"),
-        Some(graphdb_query::core::Value::string("B"))
+        Some(graphdb_core::Value::string("B"))
     );
 }
 
@@ -151,11 +151,11 @@ fn test_ddl_invalidation_restores_bind_path() {
 
     assert_eq!(
         fx.name_of("ddl_space", "p3"),
-        Some(graphdb_query::core::Value::string("C"))
+        Some(graphdb_core::Value::string("C"))
     );
     assert_eq!(
         fx.name_of("ddl_space", "p4"),
-        Some(graphdb_query::core::Value::string("D"))
+        Some(graphdb_core::Value::string("D"))
     );
 }
 
@@ -202,19 +202,19 @@ fn test_space_switch_restores_bind_path() {
     // per space; a wrongly reused plan would write into the wrong table).
     assert_eq!(
         fx.name_of("space_a", "p1"),
-        Some(graphdb_query::core::Value::string("A"))
+        Some(graphdb_core::Value::string("A"))
     );
     assert_eq!(
         fx.name_of("space_a", "p2"),
-        Some(graphdb_query::core::Value::string("B"))
+        Some(graphdb_core::Value::string("B"))
     );
     assert_eq!(
         fx.name_of("space_b", "q1"),
-        Some(graphdb_query::core::Value::string("X"))
+        Some(graphdb_core::Value::string("X"))
     );
     assert_eq!(
         fx.name_of("space_b", "q2"),
-        Some(graphdb_query::core::Value::string("Y"))
+        Some(graphdb_core::Value::string("Y"))
     );
     assert!(fx
         .storage
@@ -255,7 +255,7 @@ fn test_param_type_change_restores_bind_path() {
 
     assert_eq!(
         fx.name_of("param_type_space", "p3"),
-        Some(graphdb_query::core::Value::string("C"))
+        Some(graphdb_core::Value::string("C"))
     );
     let p3 = fx
         .storage
@@ -265,6 +265,6 @@ fn test_param_type_change_restores_bind_path() {
         .expect("exists");
     assert_eq!(
         p3.properties.get("age"),
-        Some(&graphdb_query::core::Value::Double(3.0))
+        Some(&graphdb_core::Value::Double(3.0))
     );
 }

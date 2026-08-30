@@ -6,7 +6,7 @@
 mod common;
 
 use common::test_scenario::TestScenario;
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use std::collections::HashMap;
 
 // ==================== Basic CRUD Flow ====================

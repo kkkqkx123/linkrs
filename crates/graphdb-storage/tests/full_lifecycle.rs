@@ -15,9 +15,9 @@
 
 mod common;
 
-use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, VertexId};
-use graphdb_storage::core::DataType;
-use graphdb_storage::core::Value;
+use graphdb_core::types::{EdgeTypeInfo, PropertyDef, VertexId};
+use graphdb_core::DataType;
+use graphdb_core::Value;
 use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 // ── Scenario 1: Schema → Vertex → Edge Full Lifecycle ──
@@ -90,7 +90,7 @@ fn test_space_isolation() {
     common::create_space(&mut storage, "beta");
 
     // Create Person tag in both spaces (with name+age to match create_person_vertex)
-    let person_tag = graphdb_storage::core::types::TagInfo::new("Person".to_string())
+    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string())
         .with_properties(vec![
             PropertyDef::new("name".to_string(), DataType::String),
             PropertyDef::new("age".to_string(), DataType::BigInt),

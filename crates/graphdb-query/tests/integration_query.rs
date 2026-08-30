@@ -14,8 +14,8 @@ mod common;
 
 use common::{assertions::assert_ok, TestStorage};
 
-use graphdb_query::core::types::SpaceInfo;
-use graphdb_query::core::StatsManager;
+use graphdb_core::types::SpaceInfo;
+use graphdb_core::StatsManager;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::parser::Parser;
 use graphdb_query::pipeline::QueryPipelineManager;

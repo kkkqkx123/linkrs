@@ -318,7 +318,7 @@ fn bench_large_edge_density(c: &mut Criterion) {
                     .get_node_edges(
                         &space_name,
                         &VertexId::from_int64(0),
-                        graphdb_storage::core::EdgeDirection::Out,
+                        graphdb_core::EdgeDirection::Out,
                     )
                     .expect("get edges");
                 black_box(edges.len());

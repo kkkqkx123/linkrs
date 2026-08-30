@@ -7,8 +7,8 @@
 
 mod common;
 
-use graphdb_storage::core::types::VertexId;
-use graphdb_storage::core::EdgeDirection;
+use graphdb_core::types::VertexId;
+use graphdb_core::EdgeDirection;
 use graphdb_storage::{GraphStorage, StorageReader, StorageWriter};
 
 fn setup_snapshot_pair() -> (tempfile::TempDir, GraphStorage, u64) {
@@ -63,7 +63,7 @@ fn cold_snapshot_get_edge_fallback() {
     assert_eq!(edge.ranking, 0);
     assert_eq!(
         edge.props.get("since"),
-        Some(&graphdb_storage::core::Value::Int(2020))
+        Some(&graphdb_core::Value::Int(2020))
     );
 
     // A non-existent edge still returns None.
@@ -122,7 +122,7 @@ fn cold_snapshot_node_edges_merge() {
         .unwrap();
     assert_eq!(
         since_2021.props.get("since"),
-        Some(&graphdb_storage::core::Value::Int(2021))
+        Some(&graphdb_core::Value::Int(2021))
     );
 
     // Removing the remaining hot edge keeps it reachable via cold (no duplicate).

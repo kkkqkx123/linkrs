@@ -953,10 +953,8 @@ pub enum VectorSpec {
         /// Number of leading result rows to skip after the engine returns
         /// `top_k + offset` candidates (OFFSET semantics).
         offset: usize,
-        /// Consistency timeout for RYW; None = eventual.
-        consistency_timeout_ms: Option<u64>,
-        /// Minimum LSN to wait for when RYW is set.
-        minimum_lsn: Option<u64>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
     },
     VectorLookup {
         space_name: String,
@@ -968,8 +966,8 @@ pub enum VectorSpec {
         top_k: u32,
         tag_name: String,
         field_name: String,
-        consistency_timeout_ms: Option<u64>,
-        minimum_lsn: Option<u64>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
     },
     VectorMatch {
         space_name: String,
@@ -982,9 +980,21 @@ pub enum VectorSpec {
         tag_name: String,
         field_name: String,
         space_id: u64,
-        consistency_timeout_ms: Option<u64>,
-        minimum_lsn: Option<u64>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
     },
+}
+
+impl VectorSpec {
+    /// Return the RYW consistency config, if any.
+    pub fn ryw_config(&self) -> Option<graphdb_core::types::ReadYourWritesConfig> {
+        match self {
+            Self::VectorManage { .. } => None,
+            Self::VectorSearch { ryw_config, .. }
+            | Self::VectorLookup { ryw_config, .. }
+            | Self::VectorMatch { ryw_config, .. } => *ryw_config,
+        }
+    }
 }
 
 // ── Txn spec ─────────────────────────────────────────────────────────────────

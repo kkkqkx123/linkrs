@@ -5,7 +5,7 @@
 
 mod common;
 
-use graphdb_storage::core::Value;
+use graphdb_core::Value;
 use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 /// Verify that a single rebuild cycle preserves indexed data and the
@@ -33,7 +33,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
     assert_eq!(
         indexed,
         vec![Value::from(
-            graphdb_storage::core::types::VertexId::from_int64(1)
+            graphdb_core::types::VertexId::from_int64(1)
         )]
     );
 
@@ -47,7 +47,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
     assert_eq!(
         indexed_bob,
         vec![Value::from(
-            graphdb_storage::core::types::VertexId::from_int64(2)
+            graphdb_core::types::VertexId::from_int64(2)
         )]
     );
 }
@@ -87,7 +87,7 @@ fn barrier_fence_survives_restart_after_rebuild() {
     assert_eq!(
         indexed,
         vec![Value::from(
-            graphdb_storage::core::types::VertexId::from_int64(1)
+            graphdb_core::types::VertexId::from_int64(1)
         )]
     );
 }
@@ -123,7 +123,7 @@ fn barrier_fence_multiple_rebuilds_remain_consistent() {
         assert_eq!(
             indexed,
             vec![Value::from(
-                graphdb_storage::core::types::VertexId::from_int64(i)
+                graphdb_core::types::VertexId::from_int64(i)
             )],
             "index lookup for Person{} should return vertex {}",
             i,

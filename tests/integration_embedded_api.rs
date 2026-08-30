@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use graphdb::api::core::SpaceConfig;
+use graphdb::api::api_core::SpaceConfig;
 use graphdb::api::embedded::{
     BatchConfig, BatchError, BatchItemType, BatchResult, DatabaseConfig, GraphDatabase,
     QueryResult, ResultMetadata, Row, SyncMode, TransactionConfig,
@@ -564,7 +564,7 @@ async fn test_session_with_transaction() {
     let session = db.session().expect("创建会话失败");
 
     let result = session
-        .with_transaction(|_txn| Ok::<_, graphdb::api::core::CoreError>(42))
+        .with_transaction(|_txn| Ok::<_, graphdb::api::api_core::CoreError>(42))
         .expect("事务执行失败");
 
     assert_eq!(result, 42);
@@ -577,7 +577,7 @@ async fn test_session_with_transaction_rollback_on_error() {
     let session = db.session().expect("创建会话失败");
 
     let result: Result<i32, graphdb::api::CoreError> = session.with_transaction(|_txn| {
-        Err::<i32, _>(graphdb::api::core::CoreError::Internal(
+        Err::<i32, _>(graphdb::api::api_core::CoreError::Internal(
             "测试错误".to_string(),
         ))
     });
@@ -725,10 +725,10 @@ fn test_batch_error_create() {
 
 #[test]
 fn test_query_result_empty() {
-    let result = QueryResult::from_core(graphdb::api::core::QueryResult {
+    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
         columns: vec![],
         rows: vec![],
-        metadata: graphdb::api::core::ExecutionMetadata {
+        metadata: graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
@@ -744,10 +744,10 @@ fn test_query_result_empty() {
 #[test]
 fn test_query_result_columns() {
     let columns = vec!["id".to_string(), "name".to_string()];
-    let result = QueryResult::from_core(graphdb::api::core::QueryResult {
+    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
         columns: columns.clone(),
         rows: vec![],
-        metadata: graphdb::api::core::ExecutionMetadata {
+        metadata: graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
@@ -765,14 +765,14 @@ fn test_query_result_metadata() {
     let mut values2 = HashMap::new();
     values2.insert("id".to_string(), Value::Int(2));
 
-    let core_row1 = graphdb::api::core::Row { values: values1 };
-    let core_row2 = graphdb::api::core::Row { values: values2 };
+    let core_row1 = graphdb::api::api_core::Row { values: values1 };
+    let core_row2 = graphdb::api::api_core::Row { values: values2 };
     let rows = vec![core_row1, core_row2];
 
-    let result = QueryResult::from_core(graphdb::api::core::QueryResult {
+    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
         columns: vec!["id".to_string()],
         rows,
-        metadata: graphdb::api::core::ExecutionMetadata {
+        metadata: graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 100,
             rows_scanned: 100,
             rows_returned: 10,
@@ -789,12 +789,12 @@ fn test_query_result_iterator() {
     let columns = vec!["id".to_string()];
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(1));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
 
-    let result = QueryResult::from_core(graphdb::api::core::QueryResult {
+    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
         columns,
         rows: vec![core_row],
-        metadata: graphdb::api::core::ExecutionMetadata {
+        metadata: graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
@@ -812,12 +812,12 @@ fn test_query_result_into_iterator() {
     let columns = vec!["id".to_string()];
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(1));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
 
-    let result = QueryResult::from_core(graphdb::api::core::QueryResult {
+    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
         columns,
         rows: vec![core_row],
-        metadata: graphdb::api::core::ExecutionMetadata {
+        metadata: graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
@@ -834,7 +834,7 @@ fn test_query_result_into_iterator() {
 fn test_row_get() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get("id");
@@ -847,7 +847,7 @@ fn test_row_get_by_index() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
     values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_by_index(0);
@@ -859,7 +859,7 @@ fn test_row_columns() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
     values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let columns = row.columns();
@@ -872,7 +872,7 @@ fn test_row_columns() {
 fn test_row_has_column() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     assert!(row.has_column("id"));
@@ -883,7 +883,7 @@ fn test_row_has_column() {
 fn test_row_get_string() {
     let mut values = HashMap::new();
     values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_string("name");
@@ -894,7 +894,7 @@ fn test_row_get_string() {
 fn test_row_get_int() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_int("id");
@@ -905,7 +905,7 @@ fn test_row_get_int() {
 fn test_row_get_float() {
     let mut values = HashMap::new();
     values.insert("score".to_string(), Value::Float(2.5_f32));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_float("score");
@@ -916,7 +916,7 @@ fn test_row_get_float() {
 fn test_row_get_bool() {
     let mut values = HashMap::new();
     values.insert("active".to_string(), Value::Bool(true));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_bool("active");
@@ -928,7 +928,7 @@ fn test_row_get_vertex() {
     let vertex = Vertex::with_vid(VertexId::from_int64(1));
     let mut values = HashMap::new();
     values.insert("v".to_string(), Value::Vertex(Box::new(vertex)));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_vertex("v");
@@ -946,7 +946,7 @@ fn test_row_get_edge() {
     );
     let mut values = HashMap::new();
     values.insert("e".to_string(), Value::Edge(Box::new(edge)));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     let value = row.get_edge("e");
@@ -958,7 +958,7 @@ fn test_row_len() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
     values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     assert_eq!(row.len(), 2);
@@ -967,7 +967,7 @@ fn test_row_len() {
 #[test]
 fn test_row_is_empty() {
     let values = HashMap::new();
-    let core_row = graphdb::api::core::Row { values };
+    let core_row = graphdb::api::api_core::Row { values };
     let row = Row::from_core(core_row);
 
     assert!(row.is_empty());

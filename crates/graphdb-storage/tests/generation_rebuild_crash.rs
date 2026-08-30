@@ -2,7 +2,7 @@
 
 mod common;
 
-use graphdb_storage::core::Value;
+use graphdb_core::Value;
 use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 #[test]
@@ -65,7 +65,7 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
     assert_eq!(
         indexed,
         vec![Value::from(
-            graphdb_storage::core::types::VertexId::from_int64(1)
+            graphdb_core::types::VertexId::from_int64(1)
         )]
     );
 }

@@ -7,7 +7,7 @@ use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
 use crate::storage::StorageClient;
 use graphdb_core::Value;
-use graphdb_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
+use crate::api_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use graphdb_core::{SessionStatistics, StatsManager};
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;
@@ -298,7 +298,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -504,7 +503,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
             consistency: Default::default(),
-            minimum_lsn: None,
         };
         let mut query_api = self.db.query_api.write();
         if active {
@@ -553,7 +551,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let result = {
@@ -604,7 +601,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -725,7 +721,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -800,7 +795,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             isolation_level: None,
             parsed_statement: None,
             consistency: Default::default(),
-            minimum_lsn: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -1170,7 +1164,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         field_name: &str,
         query_vector: Vec<f32>,
         limit: usize,
-    ) -> CoreResult<Vec<graphdb_core::VectorSearchResult>> {
+    ) -> CoreResult<Vec<crate::api_core::VectorSearchResult>> {
         let space_id = (*self.space_id.read())
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
 
@@ -1191,7 +1185,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         Ok(results
             .into_iter()
-            .map(|r| graphdb_core::VectorSearchResult {
+            .map(|r| crate::api_core::VectorSearchResult {
                 id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
@@ -1220,7 +1214,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         query_vector: Vec<f32>,
         limit: usize,
         threshold: f32,
-    ) -> CoreResult<Vec<graphdb_core::VectorSearchResult>> {
+    ) -> CoreResult<Vec<crate::api_core::VectorSearchResult>> {
         let space_id = (*self.space_id.read())
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
 
@@ -1242,7 +1236,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         Ok(results
             .into_iter()
-            .map(|r| graphdb_core::VectorSearchResult {
+            .map(|r| crate::api_core::VectorSearchResult {
                 id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),

@@ -10,9 +10,9 @@
 
 mod common;
 
-use graphdb_query::core::types::VertexId;
-use graphdb_query::core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
-use graphdb_query::core::{List, NullType, Value};
+use graphdb_core::types::VertexId;
+use graphdb_core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
+use graphdb_core::{List, NullType, Value};
 use graphdb_query::executor::expression::functions::FunctionRegistry;
 use std::collections::HashMap;
 
@@ -738,7 +738,7 @@ fn test_timestamp_function() {
     ));
 
     // 测试 timestamp(datetime)
-    let dt = Value::DateTime(graphdb_query::core::value::DateTimeValue {
+    let dt = Value::DateTime(graphdb_core::value::DateTimeValue {
         year: 2024,
         month: 1,
         day: 15,
@@ -1065,7 +1065,7 @@ fn test_st_point_function() {
 #[test]
 fn test_st_distance_function() {
     let registry = FunctionRegistry::new();
-    use graphdb_query::core::value::geography::{Geography, GeographyValue};
+    use graphdb_core::value::geography::{Geography, GeographyValue};
 
     let beijing = Value::Geography(Geography::Point(GeographyValue {
         longitude: 116.4074,
@@ -1089,7 +1089,7 @@ fn test_st_distance_function() {
 #[test]
 fn test_st_isvalid_function() {
     let registry = FunctionRegistry::new();
-    use graphdb_query::core::value::geography::{Geography, GeographyValue};
+    use graphdb_core::value::geography::{Geography, GeographyValue};
 
     let valid_point = Value::Geography(Geography::Point(GeographyValue {
         longitude: 116.4074,
@@ -1104,7 +1104,7 @@ fn test_st_isvalid_function() {
 #[test]
 fn test_st_dwithin_function() {
     let registry = FunctionRegistry::new();
-    use graphdb_query::core::value::geography::{Geography, GeographyValue};
+    use graphdb_core::value::geography::{Geography, GeographyValue};
 
     let point1 = Value::Geography(Geography::Point(GeographyValue {
         longitude: 116.4074,
@@ -1123,7 +1123,7 @@ fn test_st_dwithin_function() {
 #[test]
 fn test_st_astext_function() {
     let registry = FunctionRegistry::new();
-    use graphdb_query::core::value::geography::{Geography, GeographyValue};
+    use graphdb_core::value::geography::{Geography, GeographyValue};
 
     let point = Value::Geography(Geography::Point(GeographyValue {
         longitude: 116.4074,

@@ -4,7 +4,6 @@
 //! Uses contiguous storage for memory efficiency and cache locality.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
@@ -42,21 +41,11 @@ fn read_endpoint_rank(data: &[u8], offset: &mut usize) -> StorageResult<(u32, i6
 /// - `offsets`: Offset array where offsets[v] is the start index in edges for vertex v
 /// - `edges`: Contiguous array of all edges
 /// - offsets[len-1] stores the total edge count (i.e. `offsets` has `vertex_capacity + 1` entries)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Csr {
     offsets: Vec<u32>,
     edges: Vec<ImmutableNbr>,
-    edge_count: AtomicU64,
-}
-
-impl Clone for Csr {
-    fn clone(&self) -> Self {
-        Self {
-            offsets: self.offsets.clone(),
-            edges: self.edges.clone(),
-            edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-        }
-    }
+    edge_count: u64,
 }
 
 impl Csr {
@@ -72,7 +61,7 @@ impl Csr {
         Self {
             offsets: vec![0],
             edges: Vec::new(),
-            edge_count: AtomicU64::new(0),
+            edge_count: 0,
         }
     }
 
@@ -80,25 +69,27 @@ impl Csr {
         Self {
             offsets: vec![0; vertex_capacity + 1],
             edges: Vec::with_capacity(edge_capacity),
-            edge_count: AtomicU64::new(0),
+            edge_count: 0,
         }
     }
 
     /// Average bytes per edge based on actual memory usage.
     ///
     /// Computed as `used_memory_size() / edge_count()` for dynamic calibration.
-    /// Falls back to 24 bytes when edge_count is 0.
+    /// Falls back to the actual `ImmutableNbr` size when edge_count is 0.
     pub fn bytes_per_edge(&self) -> usize {
         let edges = self.edge_count().max(1) as usize;
         let bytes = self.used_memory_size();
         let bpe = bytes / edges;
         if bpe == 0 {
+            let fallback = std::mem::size_of::<ImmutableNbr>();
             log::warn!(
-                "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback 24",
+                "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
                 bytes,
-                self.edge_count()
+                self.edge_count(),
+                fallback
             );
-            24
+            fallback
         } else {
             bpe
         }
@@ -182,7 +173,7 @@ impl Csr {
             self.offsets.truncate(1);
             self.offsets.fill(0);
             self.edges.clear();
-            self.edge_count.store(0, Ordering::Relaxed);
+            self.edge_count = 0;
             return;
         }
 
@@ -230,7 +221,7 @@ impl Csr {
             }
         }
 
-        self.edge_count.store(cumsum as u64, Ordering::Relaxed);
+        self.edge_count = cumsum as u64;
     }
 
     /// Rebuild the CSR in-place from per-vertex edge counts.
@@ -265,7 +256,7 @@ impl Csr {
 
         self.offsets = offsets;
         self.edges = edges;
-        self.edge_count.store(total as u64, Ordering::Relaxed);
+        self.edge_count = total as u64;
     }
 
     /// Estimate the allocation needed for a CSR with the given dimensions.
@@ -334,8 +325,7 @@ impl Csr {
             }
         }
 
-        self.edge_count
-            .store(src_list.len() as u64, Ordering::Relaxed);
+        self.edge_count = src_list.len() as u64;
     }
 
     /// Create iterator over all edges
@@ -350,7 +340,7 @@ impl Csr {
         // Format version (u32) —adds prop_offset per edge.
         result.extend_from_slice(&2u32.to_le_bytes());
 
-        result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
+        result.extend_from_slice(&self.edge_count.to_le_bytes());
 
         result.extend_from_slice(&(self.offsets.len() as u64).to_le_bytes());
         for &offset in &self.offsets {
@@ -415,7 +405,7 @@ impl Csr {
 
         self.offsets = offsets;
         self.edges = edges;
-        self.edge_count.store(edge_count, Ordering::Relaxed);
+        self.edge_count = edge_count;
 
         Ok(())
     }
@@ -503,7 +493,7 @@ impl CsrBase for Csr {
     }
 
     fn edge_count(&self) -> u64 {
-        self.edge_count.load(Ordering::Relaxed)
+        self.edge_count
     }
 
     fn dump(&self) -> Vec<u8> {

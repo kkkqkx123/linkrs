@@ -6,7 +6,7 @@
 //! - Vector search configuration handling
 //! - Error handling when schema_manager is not available
 
-use graphdb::api::core::QueryApi;
+use graphdb::api::api_core::QueryApi;
 use graphdb::config::Config;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
@@ -311,7 +311,7 @@ fn test_complete_storage_to_query_workflow() {
     let mut query_api = QueryApi::with_schema_manager(storage, stats_manager, schema_manager);
 
     // Step 3: Execute a query request
-    let request = graphdb::api::core::types::QueryRequest {
+    let request = graphdb::api::api_core::types::QueryRequest {
         space_id: None,
         space_name: None,
         auto_commit: true,
@@ -322,7 +322,6 @@ fn test_complete_storage_to_query_workflow() {
         parsed_statement: None,
         isolation_level: None,
         consistency: Default::default(),
-        minimum_lsn: None,
     };
 
     let result = query_api.execute("CREATE SPACE workflow_test (vid_type=STRING)", request);

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use graphdb_storage::core::types::{
+use graphdb_core::types::{
     EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, VertexId,
 };
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::DataType;
-use graphdb_storage::core::{Edge, Value, Vertex};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::DataType;
+use graphdb_core::{Edge, Value, Vertex};
 use graphdb_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
 /// Create a new in-memory storage for integration testing.
@@ -46,7 +46,7 @@ pub fn create_space(storage: &mut GraphStorage, name: &str) -> u64 {
 /// Create a Person tag with name and age properties.
 pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag =
-        graphdb_storage::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
             PropertyDef::new("name".to_string(), DataType::String),
             PropertyDef::new("age".to_string(), DataType::BigInt),
         ]);
@@ -59,7 +59,7 @@ pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
 #[allow(dead_code)]
 pub fn create_employee_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag =
-        graphdb_storage::core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
+        graphdb_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
             PropertyDef::new("company".to_string(), DataType::String),
             PropertyDef::new("salary".to_string(), DataType::BigInt),
         ]);

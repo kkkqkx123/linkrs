@@ -1,7 +1,7 @@
 use axum::{
     http::StatusCode,
     middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
 use std::time::Duration;
@@ -259,8 +259,8 @@ fn add_vector_routes<
             "/vector/{space_id}/{tag_name}/{field_name}/count",
             get(vector::count),
         )
-        .route("/vector/payload", put(vector::set_payload))
-        .route("/vector/payload/fields", put(vector::set_payload_fields))
+        .route("/vector/payload", axum::routing::put(vector::set_payload))
+        .route("/vector/payload/fields", axum::routing::put(vector::set_payload_fields))
         .route("/vector/payload/delete", post(vector::delete_payload))
         .route("/vector/scroll", post(vector::scroll))
 }

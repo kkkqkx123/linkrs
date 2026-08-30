@@ -18,7 +18,7 @@
 //!   RUSTFLAGS="-C target-cpu=native" cargo bench --bench columnar_necessity_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use graphdb_query::executor::streaming::chunk::DataChunk;
 use graphdb_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
@@ -46,8 +46,8 @@ fn create_wide_chunk(size: usize) -> DataChunk {
 /// the per-row Value path; this group quantifies the throughput of the batch
 /// paths (`numeric_i64_view` / `numeric_f64_view` promotion in `typed.rs`).
 fn bench_numeric_promotion(c: &mut Criterion) {
-    use graphdb_query::core::types::expr::Expression;
-    use graphdb_query::core::types::operators::BinaryOperator;
+    use graphdb_core::types::expr::Expression;
+    use graphdb_core::types::operators::BinaryOperator;
 
     let mut group = c.benchmark_group("numeric_promotion");
     group.measurement_time(Duration::from_secs(2));
@@ -200,12 +200,12 @@ fn bench_wide_single_column_filter(c: &mut Criterion) {
                 || create_wide_chunk(n),
                 |mut chunk| {
                     let _ = chunk.evaluate_expression(
-                        &graphdb_query::core::types::expr::Expression::Binary {
-                            left: Box::new(graphdb_query::core::types::expr::Expression::Variable(
+                        &graphdb_core::types::expr::Expression::Binary {
+                            left: Box::new(graphdb_core::types::expr::Expression::Variable(
                                 "k0".into(),
                             )),
-                            op: graphdb_query::core::types::operators::BinaryOperator::GreaterThan,
-                            right: Box::new(graphdb_query::core::types::expr::Expression::Literal(
+                            op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+                            right: Box::new(graphdb_core::types::expr::Expression::Literal(
                                 Value::BigInt(500),
                             )),
                         },
@@ -242,12 +242,12 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.sample_size(30);
 
-    let predicate = graphdb_query::core::types::expr::Expression::Binary {
-        left: Box::new(graphdb_query::core::types::expr::Expression::Variable(
+    let predicate = graphdb_core::types::expr::Expression::Binary {
+        left: Box::new(graphdb_core::types::expr::Expression::Variable(
             "k0".into(),
         )),
-        op: graphdb_query::core::types::operators::BinaryOperator::GreaterThan,
-        right: Box::new(graphdb_query::core::types::expr::Expression::Literal(
+        op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+        right: Box::new(graphdb_core::types::expr::Expression::Literal(
             Value::BigInt(500),
         )),
     };
@@ -282,7 +282,7 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
 /// End-to-end Filter→Project chain with selection-vector propagation
 /// vs. the materialized path (1% selectivity).
 fn bench_selection_chain(c: &mut Criterion) {
-    use graphdb_query::core::types::expr::Expression;
+    use graphdb_core::types::expr::Expression;
     use graphdb_query::executor::streaming::chunk::set_selection_propagation_enabled;
 
     let mut group = c.benchmark_group("selection_propagation_chain");
@@ -292,7 +292,7 @@ fn bench_selection_chain(c: &mut Criterion) {
     let n = 16384usize;
     let predicate = Expression::Binary {
         left: Box::new(Expression::Variable("k0".into())),
-        op: graphdb_query::core::types::operators::BinaryOperator::LessThan,
+        op: graphdb_core::types::operators::BinaryOperator::LessThan,
         right: Box::new(Expression::Literal(Value::BigInt(163))), // ~1% of 0..16384
     };
     let project = Expression::Variable("k1".into());
@@ -550,9 +550,9 @@ fn bench_selectivity_propagation(c: &mut Criterion) {
 /// NULL-bearing typed columns vs Fallback: does the validity bitmap keep
 /// low-NULL-density columns on the typed fast path (Q3 follow-up)?
 fn bench_nullable_typed_column_filter(c: &mut Criterion) {
-    use graphdb_query::core::types::expr::Expression;
-    use graphdb_query::core::types::operators::BinaryOperator;
-    use graphdb_query::core::value::NullType;
+    use graphdb_core::types::expr::Expression;
+    use graphdb_core::types::operators::BinaryOperator;
+    use graphdb_core::value::NullType;
 
     let mut group = c.benchmark_group("nullable_typed_column_filter");
     group.measurement_time(Duration::from_secs(2));

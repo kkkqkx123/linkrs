@@ -31,6 +31,7 @@ async fn test_http_transaction_begin_commit() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -56,6 +57,7 @@ async fn test_http_transaction_begin_commit() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -88,6 +90,7 @@ async fn test_http_transaction_rollback() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -107,6 +110,7 @@ async fn test_http_transaction_rollback() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -143,6 +147,7 @@ async fn test_http_concurrent_transaction_requests() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
+        consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -169,6 +174,7 @@ async fn test_http_concurrent_transaction_requests() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
+        consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -220,6 +226,7 @@ async fn test_http_transaction_with_data_operations() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -233,6 +240,7 @@ async fn test_http_transaction_with_data_operations() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -246,6 +254,7 @@ async fn test_http_transaction_with_data_operations() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -275,6 +284,7 @@ async fn test_http_rapid_transaction_requests() {
             parameters: Default::default(),
             session_variables: Default::default(),
             consistency: Default::default(),
+        consistency_timeout_ms: None,
             minimum_lsn: None,
         };
 
@@ -294,6 +304,7 @@ async fn test_http_rapid_transaction_requests() {
             parameters: Default::default(),
             session_variables: Default::default(),
             consistency: Default::default(),
+        consistency_timeout_ms: None,
             minimum_lsn: None,
         };
 
@@ -324,6 +335,7 @@ async fn test_http_transaction_savepoints() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -337,6 +349,7 @@ async fn test_http_transaction_savepoints() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -350,6 +363,7 @@ async fn test_http_transaction_savepoints() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -363,6 +377,7 @@ async fn test_http_transaction_savepoints() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -386,6 +401,7 @@ async fn test_http_transaction_error_handling() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -400,6 +416,7 @@ async fn test_http_transaction_error_handling() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -423,6 +440,7 @@ async fn test_http_streaming_transaction() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -442,6 +460,7 @@ async fn test_http_streaming_transaction() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -477,6 +496,7 @@ async fn test_mixed_api_transaction_consistency() {
         parameters: Default::default(),
         session_variables: Default::default(),
         consistency: Default::default(),
+        consistency_timeout_ms: None,
         minimum_lsn: None,
     };
 
@@ -580,6 +600,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
+        consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -599,6 +620,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
+        consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 

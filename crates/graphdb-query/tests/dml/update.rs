@@ -8,7 +8,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
-use graphdb_query::core::Value;
+use graphdb_core::Value;
 use graphdb_query::parser::Parser;
 use std::collections::HashMap;
 
@@ -133,23 +133,23 @@ fn test_update_vertex_and_verify() {
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
-            map.insert("age", graphdb_query::core::Value::Int(30));
-            map.insert("city", graphdb_query::core::Value::string("NYC"));
+            map.insert("age", graphdb_core::Value::Int(30));
+            map.insert("city", graphdb_core::Value::string("NYC"));
             map
         })
         .exec_dml("UPDATE 1 SET age = 31")
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
-            map.insert("age", graphdb_query::core::Value::Int(31));
+            map.insert("age", graphdb_core::Value::Int(31));
             map
         })
         .exec_dml("UPDATE 1 SET age = 32, city = 'LA'")
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
-            map.insert("age", graphdb_query::core::Value::Int(32));
-            map.insert("city", graphdb_query::core::Value::string("LA"));
+            map.insert("age", graphdb_core::Value::Int(32));
+            map.insert("city", graphdb_core::Value::string("LA"));
             map
         });
 }
@@ -167,11 +167,11 @@ fn test_update_vertex_with_condition() {
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
-            map.insert("state", graphdb_query::core::Value::string("premium"));
+            map.insert("state", graphdb_core::Value::string("premium"));
             map
         })
         .query("FETCH PROP ON Person 2")
-        .assert_vertex_or_edge_has_property("state", graphdb_query::core::Value::string("inactive"));
+        .assert_vertex_or_edge_has_property("state", graphdb_core::Value::string("inactive"));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn test_update_edge_and_verify() {
         .exec_dml("UPDATE 1 -> 2 OF KNOWS SET strength = 0.9")
         .assert_success()
         .query("FETCH PROP ON KNOWS 1 -> 2")
-        .assert_vertex_or_edge_has_property("strength", graphdb_query::core::Value::Double(0.9));
+        .assert_vertex_or_edge_has_property("strength", graphdb_core::Value::Double(0.9));
 }
 
 // ==================== Error Handling Tests ====================
@@ -481,7 +481,7 @@ fn test_update_edge_yield_execution() {
 #[test]
 fn test_update_divide_by_zero() {
     use crate::common::TestStorage;
-    use graphdb_query::core::stats::StatsManager;
+    use graphdb_core::stats::StatsManager;
     use graphdb_query::optimizer::OptimizerEngine;
     use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::{StorageReader, StorageSchemaContextOps};

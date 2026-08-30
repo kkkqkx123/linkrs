@@ -1,9 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use graphdb_storage::core::types::{
+use graphdb_core::types::{
     Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, TagInfo, VertexId,
 };
-use graphdb_storage::core::vertex_edge_path::Tag;
-use graphdb_storage::core::{DataType, Value, Vertex};
+use graphdb_core::vertex_edge_path::Tag;
+use graphdb_core::{DataType, Value, Vertex};
 use graphdb_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::time::Duration;
 

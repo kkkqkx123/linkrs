@@ -11,8 +11,8 @@ use super::common;
 
 use common::test_scenario::TestScenario;
 use common::TestStorage;
-use graphdb_query::core::stats::StatsManager;
-use graphdb_query::core::types::VertexId;
+use graphdb_core::stats::StatsManager;
+use graphdb_core::types::VertexId;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::StorageReader;
@@ -159,17 +159,17 @@ fn test_complete_crud_flow() {
         .assert_vertex_exists(101, "Product")
         .assert_vertex_props(101, "Product", {
             let mut map = std::collections::HashMap::new();
-            map.insert("stock", graphdb_query::core::Value::Int(10));
+            map.insert("stock", graphdb_core::Value::Int(10));
             map
         })
         .query("FETCH PROP ON Product 101")
         .assert_result_count(1)
-        .assert_vertex_or_edge_has_property("name", graphdb_query::core::Value::string("Laptop"))
+        .assert_vertex_or_edge_has_property("name", graphdb_core::Value::string("Laptop"))
         .exec_dml("UPDATE 101 SET stock = 9")
         .assert_success()
         .assert_vertex_props(101, "Product", {
             let mut map = std::collections::HashMap::new();
-            map.insert("stock", graphdb_query::core::Value::Int(9));
+            map.insert("stock", graphdb_core::Value::Int(9));
             map
         })
         .exec_dml("DELETE VERTEX 101")
@@ -308,24 +308,24 @@ fn test_dml_shape_template_ast_cache() {
     let p1 = read("p1");
     assert_eq!(
         p1.properties.get("name"),
-        Some(&graphdb_query::core::Value::string("A"))
+        Some(&graphdb_core::Value::string("A"))
     );
     assert_eq!(
         p1.properties.get("age"),
-        Some(&graphdb_query::core::Value::BigInt(1))
+        Some(&graphdb_core::Value::BigInt(1))
     );
     let p2 = read("p2");
     assert_eq!(
         p2.properties.get("name"),
-        Some(&graphdb_query::core::Value::string("B"))
+        Some(&graphdb_core::Value::string("B"))
     );
     assert_eq!(
         p2.properties.get("age"),
-        Some(&graphdb_query::core::Value::BigInt(2))
+        Some(&graphdb_core::Value::BigInt(2))
     );
     let p3 = read("p3");
     assert_eq!(
         p3.properties.get("name"),
-        Some(&graphdb_query::core::Value::string("C"))
+        Some(&graphdb_core::Value::string("C"))
     );
 }

@@ -3,8 +3,8 @@
 //! Tests complete streaming execution pipelines with multiple operators
 //! chained together to verify end-to-end functionality.
 
-use graphdb_query::core::types::expr::Expression;
-use graphdb_query::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::Value;
 use graphdb_query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb_query::executor::streaming::executor::StreamingExecutor;
 use graphdb_query::executor::streaming::operators::base::OperatorBase;

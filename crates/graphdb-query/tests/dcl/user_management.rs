@@ -10,7 +10,7 @@ use super::common;
 
 use common::test_scenario::TestScenario;
 use common::TestStorage;
-use graphdb_query::core::stats::StatsManager;
+use graphdb_core::stats::StatsManager;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::parser::Parser;
 use graphdb_query::pipeline::QueryPipelineManager;

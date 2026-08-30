@@ -3,8 +3,8 @@
 //! Provides convenient query execution and result extraction functions for tests
 
 use super::TestResult;
-use graphdb_query::core::error::DBError;
-use graphdb_query::core::Value;
+use graphdb_core::error::DBError;
+use graphdb_core::Value;
 use graphdb_query::executor::base::ExecutionResult;
 use graphdb_query::pipeline::QueryPipelineManager;
 use parking_lot::RwLock;
@@ -18,7 +18,7 @@ pub struct QueryHelper<S: graphdb_query::storage::StorageClient + 'static> {
 impl<S: graphdb_query::storage::StorageClient + 'static> QueryHelper<S> {
     /// Create a new query helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
-        use graphdb_query::core::stats::StatsManager;
+        use graphdb_core::stats::StatsManager;
         use graphdb_query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 

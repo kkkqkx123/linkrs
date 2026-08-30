@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use graphdb_query::core::types::expr::Expression;
-use graphdb_query::core::types::operators::BinaryOperator;
-use graphdb_query::core::Value;
+use graphdb_core::types::expr::Expression;
+use graphdb_core::types::operators::BinaryOperator;
+use graphdb_core::Value;
 use graphdb_query::executor::streaming::chunk::DataChunk;
 use graphdb_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;

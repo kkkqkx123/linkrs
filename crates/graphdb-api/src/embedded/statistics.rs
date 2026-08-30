@@ -37,7 +37,7 @@ impl QueryStatistics {
     ///
     /// # Parameters
     /// - `metadata` - query result metadata
-    pub fn from_metadata(metadata: &graphdb_core::ExecutionMetadata) -> Self {
+    pub fn from_metadata(metadata: &crate::api_core::ExecutionMetadata) -> Self {
         Self {
             rows_affected: metadata.rows_returned,
             rows_returned: metadata.rows_returned,

@@ -4,7 +4,7 @@
 
 mod common;
 
-use graphdb_storage::core::types::VertexId;
+use graphdb_core::types::VertexId;
 use graphdb_storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
 
 /// Test: Recovery after partial write during vertex insertion
@@ -132,7 +132,7 @@ fn test_recovery_index_state_after_crash() {
         let result = storage.lookup_index(
             "test_space",
             "person_name_idx",
-            &graphdb_storage::core::Value::string("Alice"),
+            &graphdb_core::Value::string("Alice"),
         );
 
         // May not find due to WAL recovery behavior, but should not error

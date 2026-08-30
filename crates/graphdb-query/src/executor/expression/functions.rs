@@ -11,7 +11,7 @@
 //! ## How to use it
 //!
 //! ```rust
-//! use graphdb_query::core::value::Value;
+//! use graphdb_core::value::Value;
 //! use graphdb_query::executor::expression::functions::{BuiltinFunction, MathFunction};
 //!
 //! let func = BuiltinFunction::Math(MathFunction::Abs);
