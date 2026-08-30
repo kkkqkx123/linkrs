@@ -252,7 +252,9 @@ impl TestDb {
             let txn_id = self
                 .transaction_manager
                 .begin_transaction(options)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             self.current_transaction = Some(txn_id);
             return Ok(empty_query_result());
         }
@@ -270,7 +272,9 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .create_savepoint(txn_id, Some(name))
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("RELEASE SAVEPOINT") {
@@ -285,10 +289,9 @@ impl TestDb {
                     "No active transaction, cannot release savepoint".to_string(),
                 )
             })?;
-            let context = self
-                .transaction_manager
-                .get_context(txn_id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            let context = self.transaction_manager.get_context(txn_id).map_err(|e| {
+                graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+            })?;
             let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
                 graphdb::api::api_core::CoreError::QueryExecutionFailed(format!(
                     "Savepoint '{}' does not exist",
@@ -297,7 +300,9 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .release_savepoint(txn_id, savepoint.id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("ROLLBACK TO") {
@@ -312,10 +317,9 @@ impl TestDb {
                     "No active transaction, cannot rollback to savepoint".to_string(),
                 )
             })?;
-            let context = self
-                .transaction_manager
-                .get_context(txn_id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            let context = self.transaction_manager.get_context(txn_id).map_err(|e| {
+                graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+            })?;
             let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
                 graphdb::api::api_core::CoreError::QueryExecutionFailed(format!(
                     "Savepoint '{}' does not exist",
@@ -325,7 +329,9 @@ impl TestDb {
             let storage = self.storage.read();
             self.transaction_manager
                 .rollback_to_savepoint(txn_id, savepoint.id, &*storage)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("COMMIT") {
@@ -336,7 +342,9 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .commit_transaction(txn_id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             self.current_transaction = None;
             return Ok(empty_query_result());
         }
@@ -348,7 +356,9 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .abort_transaction(txn_id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             self.current_transaction = None;
             return Ok(empty_query_result());
         }
@@ -357,14 +367,18 @@ impl TestDb {
         // transaction-bound storage context (mirroring the embedded Session
         // flow) so writes stay isolated until COMMIT / ROLLBACK.
         let result = if let Some(txn_id) = self.current_transaction {
-            let (ctx, statement_start) = self
-                .transaction_manager
-                .begin_statement(txn_id)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            let (ctx, statement_start) =
+                self.transaction_manager
+                    .begin_statement(txn_id)
+                    .map_err(|e| {
+                        graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    })?;
             let execution = self
                 .transaction_manager
                 .create_execution(txn_id, false)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             let txn_ctx = graphdb::api::api_core::types::QueryRequest {
                 space_id: self.current_space_id,
                 space_name: self.current_space_name.clone(),
@@ -382,7 +396,9 @@ impl TestDb {
                 .execute_with_execution(query, txn_ctx, &execution);
             self.transaction_manager
                 .finish_statement(&ctx, statement_start)
-                .map_err(|e| graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
             result
         } else {
             let ctx = graphdb::api::api_core::types::QueryRequest {

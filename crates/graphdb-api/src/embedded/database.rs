@@ -2,11 +2,11 @@
 //!
 //! Provide the GraphDatabase structure as the main entry point for the embedded API.
 
+use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use crate::embedded::config::{DatabaseConfig, EmbeddedVectorEngine};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use crate::storage::{GraphStorage, StorageClient};
-use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use graphdb_core::{StatsManager, Value};
 use graphdb_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]

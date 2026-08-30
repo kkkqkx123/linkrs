@@ -90,27 +90,29 @@ impl PropertyTable {
                 result.extend_from_slice(&(meta_buf.len() as u32).to_le_bytes());
                 result.extend_from_slice(&meta_buf);
             }
-            // MVCC: row_start_ts
-            let row_start = col.row_start_ts_vec();
-            result.extend_from_slice(&(row_start.len() as u32).to_le_bytes());
-            for &ts in row_start {
+            // MVCC V2: RowVisibility (create_ts only) + optional version chains
+            let vis = col.visibility();
+            result.extend_from_slice(&(vis.create_ts().len() as u32).to_le_bytes());
+            for &ts in vis.create_ts() {
                 result.extend_from_slice(&ts.to_le_bytes());
             }
-            // MVCC: version chains per row
-            let chains = col.version_chains_ref();
-            result.extend_from_slice(&(chains.len() as u32).to_le_bytes());
-            for chain in chains {
-                result.extend_from_slice(&(chain.len() as u32).to_le_bytes());
-                for entry in chain {
-                    result.extend_from_slice(&entry.start_ts.to_le_bytes());
-                    result.extend_from_slice(&entry.end_ts.to_le_bytes());
-                    match &entry.value {
-                        None => result.push(0),
-                        Some(v) => {
-                            result.push(1);
-                            let v_bytes = postcard::to_allocvec(v).unwrap_or_default();
-                            result.extend_from_slice(&(v_bytes.len() as u32).to_le_bytes());
-                            result.extend_from_slice(&v_bytes);
+            let has_chains = col.version_chains_opt().is_some();
+            result.push(if has_chains { 1 } else { 0 });
+            if let Some(chains) = col.version_chains_opt() {
+                result.extend_from_slice(&(chains.len() as u32).to_le_bytes());
+                for chain in chains {
+                    result.extend_from_slice(&(chain.len() as u32).to_le_bytes());
+                    for entry in chain {
+                        result.extend_from_slice(&entry.start_ts.to_le_bytes());
+                        result.extend_from_slice(&entry.end_ts.to_le_bytes());
+                        match &entry.value {
+                            None => result.push(0),
+                            Some(v) => {
+                                result.push(1);
+                                let v_bytes = postcard::to_allocvec(v).unwrap_or_default();
+                                result.extend_from_slice(&(v_bytes.len() as u32).to_le_bytes());
+                                result.extend_from_slice(&v_bytes);
+                            }
                         }
                     }
                 }
@@ -182,9 +184,10 @@ impl PropertyTable {
             StorageError::deserialize_error("PropertyTable data missing version byte")
         })?;
         offset += 1;
-        if version != PROPERTY_TABLE_VERSION {
+        if version != PROPERTY_TABLE_VERSION && version != PROPERTY_TABLE_VERSION_V1 {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported PropertyTable version: expected {PROPERTY_TABLE_VERSION}, got {version}"
+                "Unsupported PropertyTable version: expected {PROPERTY_TABLE_VERSION} or {}, got {version}",
+                PROPERTY_TABLE_VERSION_V1
             )));
         }
         let schema_len = read_u32_le(data, &mut offset)? as usize;
@@ -383,49 +386,114 @@ impl PropertyTable {
                     EncodingType::None => {}
                 }
             }
-            // MVCC row_start
-            let rs_len = read_u32_le(data, &mut offset)? as usize;
-            let mut row_start = Vec::with_capacity(rs_len);
-            for _ in 0..rs_len {
-                row_start.push(read_u64_le(data, &mut offset)?);
-            }
-            // Version chains
-            let chains_len = read_u32_le(data, &mut offset)? as usize;
-            let mut chains: Vec<Vec<crate::vertex::column_store::VersionEntry>> =
-                Vec::with_capacity(chains_len);
-            for _ in 0..chains_len {
-                let chain_n = read_u32_le(data, &mut offset)? as usize;
-                let mut chain = Vec::with_capacity(chain_n);
-                for _ in 0..chain_n {
-                    let start_ts = read_u64_le(data, &mut offset)?;
-                    let end_ts = read_u64_le(data, &mut offset)?;
-                    let has_val = data[offset];
-                    offset += 1;
-                    let value = if has_val == 1 {
-                        let v_len = read_u32_le(data, &mut offset)? as usize;
-                        if offset + v_len > data.len() {
-                            return Err(StorageError::deserialize_error("unexpected end of data"));
-                        }
-                        let v_bytes = &data[offset..offset + v_len];
-                        offset += v_len;
-                        let v: Value = postcard::from_bytes(v_bytes).map_err(|e| {
-                            StorageError::deserialize_error(format!("Value decode error: {e}"))
-                        })?;
-                        Some(v)
-                    } else {
-                        None
-                    };
-                    chain.push(crate::vertex::column_store::VersionEntry {
-                        start_ts,
-                        end_ts,
-                        value,
-                    });
+            if version == PROPERTY_TABLE_VERSION_V1 {
+                // MVCC V1: row_start_ts + version chains (always present)
+                let rs_len = read_u32_le(data, &mut offset)? as usize;
+                let mut row_start = Vec::with_capacity(rs_len);
+                for _ in 0..rs_len {
+                    row_start.push(read_u64_le(data, &mut offset)?);
                 }
-                chains.push(chain);
-            }
-            if let Some(col) = self.column_store.get_column_mut(&name) {
-                col.set_row_start_ts(row_start);
-                col.set_version_chains(chains);
+                let chains_len = read_u32_le(data, &mut offset)? as usize;
+                let mut chains: Vec<Vec<crate::vertex::column_store::VersionEntry>> =
+                    Vec::with_capacity(chains_len);
+                for _ in 0..chains_len {
+                    let chain_n = read_u32_le(data, &mut offset)? as usize;
+                    let mut chain = Vec::with_capacity(chain_n);
+                    for _ in 0..chain_n {
+                        let start_ts = read_u64_le(data, &mut offset)?;
+                        let end_ts = read_u64_le(data, &mut offset)?;
+                        let has_val = data[offset];
+                        offset += 1;
+                        let value = if has_val == 1 {
+                            let v_len = read_u32_le(data, &mut offset)? as usize;
+                            if offset + v_len > data.len() {
+                                return Err(StorageError::deserialize_error(
+                                    "unexpected end of data",
+                                ));
+                            }
+                            let v_bytes = &data[offset..offset + v_len];
+                            offset += v_len;
+                            let v: Value = postcard::from_bytes(v_bytes).map_err(|e| {
+                                StorageError::deserialize_error(format!("Value decode error: {e}"))
+                            })?;
+                            Some(v)
+                        } else {
+                            None
+                        };
+                        chain.push(crate::vertex::column_store::VersionEntry {
+                            start_ts,
+                            end_ts,
+                            value,
+                        });
+                    }
+                    chains.push(chain);
+                }
+                if let Some(col) = self.column_store.get_column_mut(&name) {
+                    let mut vis = crate::vertex::column_store::RowVisibility::new();
+                    vis.set_create_ts(row_start);
+                    col.set_visibility(vis);
+                    col.set_version_chains(chains);
+                }
+            } else {
+                // MVCC V2: RowVisibility (create only) + optional version chains
+                let vis_create_len = read_u32_le(data, &mut offset)? as usize;
+                let mut vis_create = Vec::with_capacity(vis_create_len);
+                for _ in 0..vis_create_len {
+                    vis_create.push(read_u64_le(data, &mut offset)?);
+                }
+                if offset >= data.len() {
+                    return Err(StorageError::deserialize_error("unexpected end of data"));
+                }
+                let has_chains = data[offset];
+                offset += 1;
+                let version_chains_opt = if has_chains == 1 {
+                    let chains_len = read_u32_le(data, &mut offset)? as usize;
+                    let mut chains: Vec<Vec<crate::vertex::column_store::VersionEntry>> =
+                        Vec::with_capacity(chains_len);
+                    for _ in 0..chains_len {
+                        let chain_n = read_u32_le(data, &mut offset)? as usize;
+                        let mut chain = Vec::with_capacity(chain_n);
+                        for _ in 0..chain_n {
+                            let start_ts = read_u64_le(data, &mut offset)?;
+                            let end_ts = read_u64_le(data, &mut offset)?;
+                            let has_val = data[offset];
+                            offset += 1;
+                            let value = if has_val == 1 {
+                                let v_len = read_u32_le(data, &mut offset)? as usize;
+                                if offset + v_len > data.len() {
+                                    return Err(StorageError::deserialize_error(
+                                        "unexpected end of data",
+                                    ));
+                                }
+                                let v_bytes = &data[offset..offset + v_len];
+                                offset += v_len;
+                                let v: Value = postcard::from_bytes(v_bytes).map_err(|e| {
+                                    StorageError::deserialize_error(format!(
+                                        "Value decode error: {e}"
+                                    ))
+                                })?;
+                                Some(v)
+                            } else {
+                                None
+                            };
+                            chain.push(crate::vertex::column_store::VersionEntry {
+                                start_ts,
+                                end_ts,
+                                value,
+                            });
+                        }
+                        chains.push(chain);
+                    }
+                    Some(chains)
+                } else {
+                    None
+                };
+                if let Some(col) = self.column_store.get_column_mut(&name) {
+                    let mut vis = crate::vertex::column_store::RowVisibility::new();
+                    vis.set_create_ts(vis_create);
+                    col.set_visibility(vis);
+                    col.set_version_chains_opt(version_chains_opt);
+                }
             }
             // Stats
             let has_stats = data[offset];

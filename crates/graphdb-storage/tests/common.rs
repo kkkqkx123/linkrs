@@ -45,11 +45,10 @@ pub fn create_space(storage: &mut GraphStorage, name: &str) -> u64 {
 
 /// Create a Person tag with name and age properties.
 pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
-    let tag =
-        graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            PropertyDef::new("name".to_string(), DataType::String),
-            PropertyDef::new("age".to_string(), DataType::BigInt),
-        ]);
+    let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("age".to_string(), DataType::BigInt),
+    ]);
     storage
         .create_tag(space, &tag)
         .expect("Failed to create Person tag")
@@ -58,11 +57,10 @@ pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
 /// Create an Employee tag with company and salary properties.
 #[allow(dead_code)]
 pub fn create_employee_tag(storage: &mut GraphStorage, space: &str) -> u32 {
-    let tag =
-        graphdb_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
-            PropertyDef::new("company".to_string(), DataType::String),
-            PropertyDef::new("salary".to_string(), DataType::BigInt),
-        ]);
+    let tag = graphdb_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
+        PropertyDef::new("company".to_string(), DataType::String),
+        PropertyDef::new("salary".to_string(), DataType::BigInt),
+    ]);
     storage
         .create_tag(space, &tag)
         .expect("Failed to create Employee tag")

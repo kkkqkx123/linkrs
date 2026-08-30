@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-
 use crate::edge::edge_table::remap::remap_immutable_csr;
 use crate::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
@@ -67,8 +66,7 @@ impl ColdPropertyIndex {
             for nbr in exported.out_csr.edges_of(src_u32) {
                 let dst_internal = nbr.endpoint;
                 let rank = nbr.rank;
-                let Some(props) = exported.properties.read_properties(nbr.prop_offset)
-                else {
+                let Some(props) = exported.properties.read_properties(nbr.prop_offset) else {
                     continue;
                 };
                 for (name, value) in props {

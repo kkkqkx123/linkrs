@@ -416,8 +416,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
             let start = lr.offset as usize;
 
             for nbr in &self.nbr_list[start..end] {
-                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.is_alive_at(ts)
-                {
+                if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.is_alive_at(ts) {
                     return Some(*nbr);
                 }
             }
@@ -519,7 +518,6 @@ impl MutableCsrTrait for LabeledMutableCsr {
             }
         }
     }
-
 }
 
 impl LabeledMutableCsr {

@@ -32,7 +32,10 @@ mod zone_map;
 
 /// Current on-disk layout version: columnar-only (ColumnStore per property) +
 /// zone maps + per-column encodings + row Create/Delete metadata.
-const PROPERTY_TABLE_VERSION: u8 = 1;
+/// V1 = legacy row_start_ts (mapped to RowVisibility.create_ts) + version_chains (always Vec)
+/// V2 = RowVisibility (create/delete) + optional version chains
+const PROPERTY_TABLE_VERSION: u8 = 2;
+const PROPERTY_TABLE_VERSION_V1: u8 = 1;
 
 /// Rows per zone-map chunk. Zone maps store min/max/ndv/null_count per chunk
 /// for predicate pushdown (skip chunks whose zone cannot contain the predicate).
@@ -570,7 +573,7 @@ impl PropertyTable {
         self.check_write_conflict(row_idx, offset, ts)?;
         // Per-column back-in-time check: if the column already has a newer version, reject.
         if let Some(col) = self.column_store.get_column(name) {
-            if let Some(&start) = col.row_start_ts_vec().get(row_idx) {
+            if let Some(&start) = col.visibility().create_ts().get(row_idx) {
                 if start != 0 && start > ts {
                     return Err(StorageError::write_write_conflict(format!(
                         "property row at offset {} already has a newer version of '{}' at ts={}, attempted write at ts={}",
@@ -584,7 +587,11 @@ impl PropertyTable {
         }
         self.column_store
             .set_property_versioned(row_idx, name, value.as_ref(), ts)?;
-        self.fold_oldest_versions(row_idx);
+        if self.version_chain_cap != 0 {
+            if let Some(col) = self.column_store.get_column_mut(name) {
+                col.fold_oldest(row_idx, self.version_chain_cap, self.retention_horizon);
+            }
+        }
         self.refresh_zone_map_for_row(row_idx);
         if let Some(new_props) = self.get(offset, None) {
             self.value_index.index_record(&new_props, offset);
@@ -687,24 +694,22 @@ impl PropertyTable {
         })
     }
 
-    pub(crate) fn fold_oldest_versions(&mut self, row_idx: usize) {
+    pub(crate) fn fold_oldest_versions_filtered(&mut self, row_idx: usize, names: &[String]) {
         let cap = self.version_chain_cap;
-        if cap == 0 {
+        if cap == 0 || names.is_empty() {
             return;
         }
         let horizon = self.retention_horizon;
-        let needs_fold = self
-            .column_store
-            .columns()
-            .iter()
-            .any(|col| col.version_chain_len(row_idx) > cap);
-        if !needs_fold {
-            return;
-        }
-        // Delegate folding to each column that exceeds cap and whose oldest
-        // entries are before retention horizon.
-        for col in self.column_store.columns_mut() {
-            col.fold_oldest(row_idx, cap, horizon);
+        for name in names {
+            if let Some(col) = self.column_store.get_column_mut(name) {
+                if col.version_chains_opt().is_none() {
+                    continue;
+                }
+                if col.version_chain_len(row_idx) <= cap {
+                    continue;
+                }
+                col.fold_oldest(row_idx, cap, horizon);
+            }
         }
     }
 }

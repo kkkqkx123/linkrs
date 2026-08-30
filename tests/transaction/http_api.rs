@@ -147,7 +147,7 @@ async fn test_http_concurrent_transaction_requests() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
-        consistency_timeout_ms: None,
+                consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -174,7 +174,7 @@ async fn test_http_concurrent_transaction_requests() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
-        consistency_timeout_ms: None,
+                consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -284,7 +284,7 @@ async fn test_http_rapid_transaction_requests() {
             parameters: Default::default(),
             session_variables: Default::default(),
             consistency: Default::default(),
-        consistency_timeout_ms: None,
+            consistency_timeout_ms: None,
             minimum_lsn: None,
         };
 
@@ -304,7 +304,7 @@ async fn test_http_rapid_transaction_requests() {
             parameters: Default::default(),
             session_variables: Default::default(),
             consistency: Default::default(),
-        consistency_timeout_ms: None,
+            consistency_timeout_ms: None,
             minimum_lsn: None,
         };
 
@@ -600,7 +600,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
-        consistency_timeout_ms: None,
+                consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 
@@ -620,7 +620,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 parameters: Default::default(),
                 session_variables: Default::default(),
                 consistency: Default::default(),
-        consistency_timeout_ms: None,
+                consistency_timeout_ms: None,
                 minimum_lsn: None,
             };
 

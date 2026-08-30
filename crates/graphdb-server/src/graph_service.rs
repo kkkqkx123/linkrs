@@ -560,9 +560,7 @@ impl<
             txn_manager.cleanup_expired_transactions();
         }
 
-        let consistency_params = ConsistencyParams {
-            consistency,
-        };
+        let consistency_params = ConsistencyParams { consistency };
 
         match Self::parse_command(stmt) {
             Err(parse_error) => return Err(parse_error),

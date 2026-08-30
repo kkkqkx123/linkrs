@@ -34,10 +34,7 @@ impl Fixture {
         Self { storage, pipeline }
     }
 
-    fn create_space_with_person_tag(
-        &mut self,
-        space_name: &str,
-    ) -> graphdb_core::types::SpaceInfo {
+    fn create_space_with_person_tag(&mut self, space_name: &str) -> graphdb_core::types::SpaceInfo {
         self.pipeline
             .execute_query_with_space(&format!("CREATE SPACE IF NOT EXISTS {space_name}"), None)
             .expect("create space");

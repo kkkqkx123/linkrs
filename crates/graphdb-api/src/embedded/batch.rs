@@ -2,14 +2,14 @@
 //!
 //! Supports efficient high-volume data import
 
-use crate::embedded::session::Session;
-use crate::storage::StorageClient;
 pub use crate::api_core::BatchConfig;
 use crate::api_core::{
     BatchError as CoreBatchError, BatchItemType as CoreBatchItemType,
     BatchOperation as CoreBatchOperation, BatchResult as CoreBatchResult,
 };
 use crate::api_core::{CoreError, CoreResult};
+use crate::embedded::session::Session;
+use crate::storage::StorageClient;
 use graphdb_core::{Edge, Vertex};
 
 /// Batch Inserter

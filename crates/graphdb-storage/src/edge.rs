@@ -271,12 +271,7 @@ impl Nbr {
     }
 
     /// Create with explicit create timestamp.
-    pub fn with_create_ts(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        create_ts: Timestamp,
-    ) -> Self {
+    pub fn with_create_ts(endpoint: u32, rank: i64, edge_id: EdgeId, create_ts: Timestamp) -> Self {
         Self {
             endpoint,
             rank,

@@ -592,7 +592,10 @@ impl MutableCsr {
         if live.is_empty() {
             // Remove empty overflow entry entirely to reclaim metadata.
             // We need to remove from sorted vector; find index and remove.
-            if let Ok(idx) = self.overflow_chunks.entries.binary_search_by_key(&vid, |(k, _)| *k)
+            if let Ok(idx) = self
+                .overflow_chunks
+                .entries
+                .binary_search_by_key(&vid, |(k, _)| *k)
             {
                 self.overflow_chunks.entries.remove(idx);
             }
@@ -926,7 +929,8 @@ impl MutableCsr {
         }
 
         // Record create_ts in the Nbr before writing
-        let nbr_with_ts = Nbr::with_create_ts_and_prop(decoded_endpoint, decoded_rank, edge_id, ts, prop_offset);
+        let nbr_with_ts =
+            Nbr::with_create_ts_and_prop(decoded_endpoint, decoded_rank, edge_id, ts, prop_offset);
 
         // Write to primary if space available and overflow not yet allocated
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
@@ -1211,8 +1215,10 @@ impl MutableCsr {
                         .saturating_sub(self.overflow_chunk_edges);
                     if chunks.is_empty() {
                         // Remove empty overflow entry from sorted vector.
-                        if let Ok(idx) =
-                            self.overflow_chunks.entries.binary_search_by_key(&src_vid, |(k, _)| *k)
+                        if let Ok(idx) = self
+                            .overflow_chunks
+                            .entries
+                            .binary_search_by_key(&src_vid, |(k, _)| *k)
                         {
                             self.overflow_chunks.entries.remove(idx);
                         }
@@ -1357,10 +1363,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
-            if nbr.endpoint == decoded_endpoint
-                && nbr.rank == decoded_rank
-                && nbr.is_alive_at(ts)
-            {
+            if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.is_alive_at(ts) {
                 return Some(*nbr);
             }
         }
@@ -1802,8 +1805,7 @@ impl MutableCsr {
     /// Get used memory size (active edges only)
     pub fn used_memory_size(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
-        active_edges * std::mem::size_of::<Nbr>()
-            + std::mem::size_of::<Self>()
+        active_edges * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }
 
     /// Look up the creation timestamp for an edge.

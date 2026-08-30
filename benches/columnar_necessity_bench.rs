@@ -243,9 +243,7 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
     group.sample_size(30);
 
     let predicate = graphdb_core::types::expr::Expression::Binary {
-        left: Box::new(graphdb_core::types::expr::Expression::Variable(
-            "k0".into(),
-        )),
+        left: Box::new(graphdb_core::types::expr::Expression::Variable("k0".into())),
         op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
         right: Box::new(graphdb_core::types::expr::Expression::Literal(
             Value::BigInt(500),

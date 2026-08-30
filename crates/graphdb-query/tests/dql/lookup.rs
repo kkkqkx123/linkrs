@@ -215,10 +215,7 @@ fn test_lookup_with_index_edge() {
         .query("LOOKUP ON KNOWS WHERE KNOWS.since == '2024-01-01'")
         .assert_success()
         .assert_result_count(1)
-        .assert_vertex_or_edge_has_property(
-            "since",
-            graphdb_core::Value::string("2024-01-01"),
-        );
+        .assert_vertex_or_edge_has_property("since", graphdb_core::Value::string("2024-01-01"));
 }
 
 #[test]

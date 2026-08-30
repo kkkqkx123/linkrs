@@ -190,11 +190,15 @@ impl VertexTable {
             self.timestamps.insert(internal_id, ts);
             self.columns
                 .set_versioned(internal_id as usize, &converted, ts)?;
-            self.columns.fold_oldest_for_row(
-                internal_id as usize,
-                self.version_chain_cap,
-                self.retention_horizon,
-            );
+            if self.version_chain_cap != 0 && !converted.is_empty() {
+                let names: Vec<String> = converted.iter().map(|(n, _)| n.clone()).collect();
+                self.columns.fold_oldest_for_row_filtered(
+                    internal_id as usize,
+                    self.version_chain_cap,
+                    self.retention_horizon,
+                    &names,
+                );
+            }
             return Ok(internal_id);
         }
 
@@ -202,11 +206,15 @@ impl VertexTable {
         self.timestamps.insert(internal_id, ts);
         self.columns
             .set_versioned(internal_id as usize, &converted, ts)?;
-        self.columns.fold_oldest_for_row(
-            internal_id as usize,
-            self.version_chain_cap,
-            self.retention_horizon,
-        );
+        if self.version_chain_cap != 0 && !converted.is_empty() {
+            let names: Vec<String> = converted.iter().map(|(n, _)| n.clone()).collect();
+            self.columns.fold_oldest_for_row_filtered(
+                internal_id as usize,
+                self.version_chain_cap,
+                self.retention_horizon,
+                &names,
+            );
+        }
 
         Ok(internal_id)
     }
@@ -397,11 +405,15 @@ impl VertexTable {
             Some(&converted_value),
             ts,
         )?;
-        self.columns.fold_oldest_for_row(
-            internal_id as usize,
-            self.version_chain_cap,
-            self.retention_horizon,
-        );
+        if self.version_chain_cap != 0 {
+            if let Some(col) = self.columns.get_column_mut(col_name) {
+                col.fold_oldest(
+                    internal_id as usize,
+                    self.version_chain_cap,
+                    self.retention_horizon,
+                );
+            }
+        }
         Ok(())
     }
 
@@ -436,11 +448,13 @@ impl VertexTable {
             .get_column_by_id_mut(col_id)
             .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
         col.set_versioned(internal_id as usize, Some(&converted_value), ts)?;
-        self.columns.fold_oldest_for_row(
-            internal_id as usize,
-            self.version_chain_cap,
-            self.retention_horizon,
-        );
+        if self.version_chain_cap != 0 {
+            col.fold_oldest(
+                internal_id as usize,
+                self.version_chain_cap,
+                self.retention_horizon,
+            );
+        }
         Ok(())
     }
 

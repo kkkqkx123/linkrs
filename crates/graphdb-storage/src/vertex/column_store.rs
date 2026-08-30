@@ -567,28 +567,33 @@ fn value_payload_bytes(value: &Value) -> usize {
         Value::Geography(geo) => {
             // Geography contains coordinate data; estimate based on point count
             match geo {
-                Geography::Point(_) => 24,      // 2 x f64 + srid
+                Geography::Point(_) => 24, // 2 x f64 + srid
                 Geography::LineString(ls) => ls.points.len() * 24,
                 Geography::Polygon(pg) => {
                     pg.exterior.points.len() * 24
                         + pg.holes.iter().map(|r| r.points.len() * 24).sum::<usize>()
                 }
                 Geography::MultiPoint(mp) => mp.points.len() * 24,
-                Geography::MultiLineString(ml) => {
-                    ml.linestrings.iter().map(|ls| ls.points.len() * 24).sum::<usize>()
-                }
-                Geography::MultiPolygon(mpg) => {
-                    mpg.polygons.iter().map(|pg| {
+                Geography::MultiLineString(ml) => ml
+                    .linestrings
+                    .iter()
+                    .map(|ls| ls.points.len() * 24)
+                    .sum::<usize>(),
+                Geography::MultiPolygon(mpg) => mpg
+                    .polygons
+                    .iter()
+                    .map(|pg| {
                         pg.exterior.points.len() * 24
                             + pg.holes.iter().map(|r| r.points.len() * 24).sum::<usize>()
-                    }).sum::<usize>()
-                }
+                    })
+                    .sum::<usize>(),
             }
         }
         Value::Vector(v) => match v {
             VectorValue::Dense(data) => data.len() * std::mem::size_of::<f32>(),
             VectorValue::Sparse { indices, values } => {
-                indices.len() * std::mem::size_of::<u32>() + values.len() * std::mem::size_of::<f32>()
+                indices.len() * std::mem::size_of::<u32>()
+                    + values.len() * std::mem::size_of::<f32>()
             }
         },
         Value::Json(j) => j.as_str().len(),
@@ -598,8 +603,8 @@ fn value_payload_bytes(value: &Value) -> usize {
         }
         Value::Struct(sv) => sv.fields.len() * std::mem::size_of::<Value>(),
         Value::Array(av) => av.values.len() * std::mem::size_of::<Value>(),
-        Value::Vertex(_) => 64,   // fixed-size vertex record
-        Value::Edge(_) => 64,     // fixed-size edge record
+        Value::Vertex(_) => 64,         // fixed-size vertex record
+        Value::Edge(_) => 64,           // fixed-size edge record
         Value::Path(p) => p.len() * 32, // per-hop estimate
         _ => 0, // fixed-width types (Bool, Int, Float, etc.) have no heap payload
     }
@@ -908,8 +913,8 @@ enum ColumnInner {
 /// One before-image of a row's value, valid on `[start_ts, end_ts)`.
 ///
 /// The version chain per row stores the newest entry first. The current value
-/// lives in the column storage and is valid from `row_start_ts` onward; each
-/// write pushes the previous current value here with its lifetime.
+/// lives in the column storage and is valid from `visibility.create_ts` onward;
+/// each write pushes the previous current value here with its lifetime.
 #[derive(Debug, Clone)]
 pub struct VersionEntry {
     /// First timestamp at which this version is visible.
@@ -918,6 +923,87 @@ pub struct VersionEntry {
     pub end_ts: Timestamp,
     /// The before-image value; `None` denotes a null (missing) value.
     pub value: Option<Value>,
+}
+
+/// Per-row visibility metadata for MVCC isolation.
+///
+/// Lightweight layer that replaces per-column version chains for transaction
+/// isolation purposes. Each row stores its creation timestamp; historical
+/// values are stored in the optional version chains. Row deletion is tracked
+/// at the table level (`VertexTimestamp` / `PropertyTable::row_delete_ts`),
+/// so column-level visibility only needs the creation time.
+#[derive(Debug, Clone, Default)]
+pub struct RowVisibility {
+    create_ts: Vec<Timestamp>,
+    len: usize,
+}
+
+impl RowVisibility {
+    pub fn new() -> Self {
+        Self {
+            create_ts: Vec::new(),
+            len: 0,
+        }
+    }
+
+    #[inline]
+    pub fn is_visible(&self, row_idx: usize, snapshot_ts: Timestamp) -> bool {
+        let create = self.create_ts.get(row_idx).copied().unwrap_or(0);
+        create <= snapshot_ts
+    }
+
+    #[inline]
+    pub fn mark_created(&mut self, row_idx: usize, ts: Timestamp) {
+        self.ensure_len(row_idx + 1);
+        self.create_ts[row_idx] = ts;
+        if row_idx + 1 > self.len {
+            self.len = row_idx + 1;
+        }
+    }
+
+    pub fn create_ts(&self) -> &[Timestamp] {
+        &self.create_ts
+    }
+
+    pub fn set_create_ts(&mut self, v: Vec<Timestamp>) {
+        self.len = v.len();
+        self.create_ts = v;
+    }
+
+    pub fn ensure_len(&mut self, n: usize) {
+        if self.create_ts.len() < n {
+            self.create_ts.resize(n, 0);
+        }
+        if self.len < n {
+            self.len = n;
+        }
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.create_ts.reserve(additional);
+    }
+
+    pub fn resize(&mut self, new_len: usize) {
+        self.create_ts.resize(new_len, 0);
+        self.len = new_len;
+    }
+
+    pub fn clear(&mut self) {
+        self.create_ts.clear();
+        self.len = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.create_ts.len() * std::mem::size_of::<Timestamp>()
+    }
 }
 
 /// Column storage that automatically selects fixed-width or variable-width
@@ -934,9 +1020,9 @@ pub struct VersionEntry {
 ///
 /// Property updates are versioned through [`Column::set_versioned`] /
 /// [`Column::get_at_ts`]: each row keeps a chain of before-images
-/// (`row_start_ts` + `version_chains`), so a snapshot read at a historical
-/// timestamp returns the value visible then instead of the current one.
-/// Old versions are reclaimed by [`Column::gc_versions`].
+/// (`visibility.create_ts` + optional `version_chains`), so a snapshot
+/// read at a historical timestamp returns the value visible then instead
+/// of the current one. Old versions are reclaimed by [`Column::gc_versions`].
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
@@ -951,11 +1037,12 @@ pub struct Column {
     /// nulls leave them stale but conservative), so pruning stays correct
     /// for any MVCC snapshot.
     zone_maps: Vec<ZoneBounds>,
-    /// Timestamp at which each row's current value became visible (0 means
-    /// "current from the beginning", used for loaded/legacy rows).
-    row_start_ts: Vec<Timestamp>,
-    /// Per-row version chains (before-images), newest first.
-    version_chains: Vec<Vec<VersionEntry>>,
+    /// Per-row version chains (before-images), lazily allocated.
+    /// `None` means no updates have occurred and no version history is retained.
+    version_chains: Option<Vec<Vec<VersionEntry>>>,
+    /// Lightweight row-level visibility metadata (Layer 1).
+    /// Always present; used for fast transaction isolation checks.
+    visibility: RowVisibility,
 }
 
 /// Rows per zone-map chunk of a [`Column`].
@@ -1026,8 +1113,8 @@ impl Column {
             encoding: ColumnEncoding::None,
             stats: None,
             zone_maps: Vec::new(),
-            row_start_ts: Vec::new(),
-            version_chains: Vec::new(),
+            version_chains: None,
+            visibility: RowVisibility::new(),
         }
     }
 
@@ -1049,10 +1136,12 @@ impl Column {
     /// New (never-written) rows default to start_ts 0, i.e. their loaded or
     /// not-yet-written value is treated as current.
     fn ensure_row_meta(&mut self, n: usize) {
-        if self.row_start_ts.len() < n {
-            self.row_start_ts.resize(n, 0);
-            self.version_chains.resize(n, Vec::new());
+        if self.visibility.len() < n {
+            if let Some(chains) = self.version_chains.as_mut() {
+                chains.resize(n, Vec::new());
+            }
         }
+        self.visibility.ensure_len(n);
     }
 
     /// Write `value` into the column, handling the encoded and raw paths.
@@ -1099,13 +1188,17 @@ impl Column {
         // Plain set treats the value as "current from the beginning": it
         // resets the row's MVCC metadata (no historical version recorded).
         self.ensure_row_meta(row_idx + 1);
-        self.row_start_ts[row_idx] = 0;
-        self.version_chains[row_idx].clear();
+        if let Some(chains) = self.version_chains.as_mut() {
+            if row_idx < chains.len() {
+                chains[row_idx].clear();
+            }
+        }
+        self.visibility.mark_created(row_idx, 0);
         self.write_value(row_idx, value)
     }
 
     /// Versioned write: records the current value as a before-image valid on
-    /// `[row_start_ts, ts)`, then stores `value` as the current value valid
+    /// `[create_ts, ts)`, then stores `value` as the current value valid
     /// from `ts` onward. Rows written for the first time get no before-image.
     pub fn set_versioned(
         &mut self,
@@ -1114,21 +1207,35 @@ impl Column {
         ts: Timestamp,
     ) -> StorageResult<()> {
         self.ensure_row_meta(row_idx + 1);
+        let old_create = self
+            .visibility
+            .create_ts()
+            .get(row_idx)
+            .copied()
+            .unwrap_or(0);
         // Only record a before-image when the current value genuinely predates
         // this write (guards against zero-length ranges from rollback writes
         // that reuse the transaction's original timestamp).
-        if row_idx < self.len() && self.row_start_ts[row_idx] < ts {
+        if row_idx < self.len() && old_create < ts {
             let current = self.get(row_idx);
             if current.is_some() || self.is_null(row_idx) {
-                self.version_chains[row_idx].push(VersionEntry {
-                    start_ts: self.row_start_ts[row_idx],
-                    end_ts: ts,
-                    value: current,
-                });
+                if self.version_chains.is_none() {
+                    self.version_chains = Some(vec![Vec::new(); self.visibility.len()]);
+                }
+                if let Some(chains) = self.version_chains.as_mut() {
+                    if row_idx >= chains.len() {
+                        chains.resize(row_idx + 1, Vec::new());
+                    }
+                    chains[row_idx].push(VersionEntry {
+                        start_ts: old_create,
+                        end_ts: ts,
+                        value: current,
+                    });
+                }
             }
         }
         self.write_value(row_idx, value)?;
-        self.row_start_ts[row_idx] = ts;
+        self.visibility.mark_created(row_idx, ts);
         Ok(())
     }
 
@@ -1138,7 +1245,7 @@ impl Column {
     /// otherwise searches the version chain for the before-image covering
     /// `query_ts`. A `None` return means the value is null at `query_ts`.
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
-        let start_ts = self.row_start_ts.get(row_idx).copied().unwrap_or(0);
+        let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
         if start_ts <= query_ts {
             return if self.encoding.is_encoded() {
                 self.encoding.get(row_idx)
@@ -1146,31 +1253,33 @@ impl Column {
                 self.inner().get(row_idx)
             };
         }
-        if let Some(chain) = self.version_chains.get(row_idx) {
-            if !chain.is_empty() {
-                // Version chain is ordered by start_ts ascending (oldest first).
-                // Binary search finds the candidate interval containing query_ts
-                // in O(log n) instead of O(n) linear scan.
-                let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
-                    Ok(i) => i,
-                    Err(i) => {
-                        if i == 0 {
-                            return None;
+        if let Some(chains) = self.version_chains.as_ref() {
+            if let Some(chain) = chains.get(row_idx) {
+                if !chain.is_empty() {
+                    // Version chain is ordered by start_ts ascending (oldest first).
+                    // Binary search finds the candidate interval containing query_ts
+                    // in O(log n) instead of O(n) linear scan.
+                    let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                        Ok(i) => i,
+                        Err(i) => {
+                            if i == 0 {
+                                return None;
+                            }
+                            i - 1
                         }
-                        i - 1
+                    };
+                    let entry = &chain[idx];
+                    if entry.start_ts <= query_ts && entry.end_ts > query_ts {
+                        return entry.value.clone();
                     }
-                };
-                let entry = &chain[idx];
-                if entry.start_ts <= query_ts && entry.end_ts > query_ts {
-                    return entry.value.clone();
-                }
-                // After folding/GC intervals may have been merged; a single
-                // predecessor check suffices for contiguous chains. Fall back
-                // to neighbour check for the rare folded-gap case.
-                if idx + 1 < chain.len() {
-                    let nxt = &chain[idx + 1];
-                    if nxt.start_ts <= query_ts && nxt.end_ts > query_ts {
-                        return nxt.value.clone();
+                    // After folding/GC intervals may have been merged; a single
+                    // predecessor check suffices for contiguous chains. Fall back
+                    // to neighbour check for the rare folded-gap case.
+                    if idx + 1 < chain.len() {
+                        let nxt = &chain[idx + 1];
+                        if nxt.start_ts <= query_ts && nxt.end_ts > query_ts {
+                            return nxt.value.clone();
+                        }
                     }
                 }
             }
@@ -1183,10 +1292,12 @@ impl Column {
     /// removed.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         let mut removed = 0;
-        for chain in &mut self.version_chains {
-            let before = chain.len();
-            chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
-            removed += before - chain.len();
+        if let Some(chains) = self.version_chains.as_mut() {
+            for chain in chains.iter_mut() {
+                let before = chain.len();
+                chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
+                removed += before - chain.len();
+            }
         }
         removed
     }
@@ -1198,8 +1309,15 @@ impl Column {
             return;
         }
         self.ensure_row_meta(to + 1);
-        self.row_start_ts[to] = self.row_start_ts[from];
-        self.version_chains[to] = self.version_chains[from].clone();
+        if let Some(chains) = self.version_chains.as_mut() {
+            if from < chains.len() && to < chains.len() {
+                chains[to] = chains[from].clone();
+            }
+        }
+        if from < self.visibility.create_ts.len() && to < self.visibility.create_ts.len() {
+            let create = self.visibility.create_ts[from];
+            self.visibility.create_ts[to] = create;
+        }
     }
 
     pub fn get(&self, row_idx: usize) -> Option<Value> {
@@ -1232,19 +1350,23 @@ impl Column {
     pub fn memory_usage(&self) -> usize {
         let version_bytes = self
             .version_chains
-            .iter()
-            .map(|chain| {
-                chain.len() * std::mem::size_of::<VersionEntry>()
-                    + chain
-                        .iter()
-                        .map(|entry| {
-                            // Approximate heap payload for the retained Value.
-                            entry.value.as_ref().map(value_payload_bytes).unwrap_or(0)
-                        })
-                        .sum::<usize>()
+            .as_ref()
+            .map(|chains| {
+                chains
+                    .iter()
+                    .map(|chain| {
+                        chain.len() * std::mem::size_of::<VersionEntry>()
+                            + chain
+                                .iter()
+                                .map(|entry| {
+                                    entry.value.as_ref().map(value_payload_bytes).unwrap_or(0)
+                                })
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
             })
-            .sum::<usize>()
-            + self.row_start_ts.len() * std::mem::size_of::<Timestamp>();
+            .unwrap_or(0)
+            + self.visibility.memory_usage();
         self.inner().memory_usage() + self.encoding.memory_usage() + version_bytes
     }
 
@@ -1262,23 +1384,27 @@ impl Column {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
         self.zone_maps.clear();
-        self.row_start_ts.clear();
-        self.version_chains.clear();
+        self.version_chains = None;
+        self.visibility.clear();
     }
 
     /// Pre-allocate capacity for `additional` more rows in the underlying
     /// storage buffers (used by batch inserts).
     pub fn reserve(&mut self, additional: usize) {
         self.inner_mut().reserve(additional);
-        self.row_start_ts.reserve(additional);
-        self.version_chains.reserve(additional);
+        if let Some(chains) = self.version_chains.as_mut() {
+            chains.reserve(additional);
+        }
+        self.visibility.reserve(additional);
     }
 
     pub fn resize(&mut self, new_count: usize) {
         self.inner_mut().resize(new_count);
         self.ensure_row_meta(new_count);
-        self.row_start_ts.resize(new_count, 0);
-        self.version_chains.resize(new_count, Vec::new());
+        if let Some(chains) = self.version_chains.as_mut() {
+            chains.resize(new_count, Vec::new());
+        }
+        self.visibility.resize(new_count);
     }
 
     pub fn load_data_from_raw(
@@ -1706,19 +1832,23 @@ impl Column {
 
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
         self.version_chains
-            .get(row_idx)
+            .as_ref()
+            .and_then(|chains| chains.get(row_idx))
             .map(|c| c.len())
             .unwrap_or(0)
     }
 
     pub fn version_chain_stats(&self) -> VersionChainStats {
-        let total_rows = self.version_chains.len();
-        let total_entries: usize = self.version_chains.iter().map(|c| c.len()).sum();
+        let total_rows = self.version_chains.as_ref().map(|v| v.len()).unwrap_or(0);
+        let total_entries: usize = self
+            .version_chains
+            .as_ref()
+            .map(|chains| chains.iter().map(|c| c.len()).sum())
+            .unwrap_or(0);
         let max_len = self
             .version_chains
-            .iter()
-            .map(|c| c.len())
-            .max()
+            .as_ref()
+            .map(|chains| chains.iter().map(|c| c.len()).max().unwrap_or(0))
             .unwrap_or(0);
         let avg_len = if total_rows > 0 {
             total_entries as f64 / total_rows as f64
@@ -1727,16 +1857,21 @@ impl Column {
         };
         let memory_bytes = self
             .version_chains
-            .iter()
-            .map(|chain| {
-                chain.len() * std::mem::size_of::<VersionEntry>()
-                    + chain
-                        .iter()
-                        .map(|e| e.value.as_ref().map(value_payload_bytes).unwrap_or(0))
-                        .sum::<usize>()
+            .as_ref()
+            .map(|chains| {
+                chains
+                    .iter()
+                    .map(|chain| {
+                        chain.len() * std::mem::size_of::<VersionEntry>()
+                            + chain
+                                .iter()
+                                .map(|e| e.value.as_ref().map(value_payload_bytes).unwrap_or(0))
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
             })
-            .sum::<usize>()
-            + self.row_start_ts.len() * std::mem::size_of::<Timestamp>();
+            .unwrap_or(0)
+            + self.visibility.memory_usage();
         VersionChainStats {
             total_rows,
             total_entries,
@@ -1750,7 +1885,10 @@ impl Column {
         if cap == 0 {
             return;
         }
-        let Some(chain) = self.version_chains.get_mut(row_idx) else {
+        let Some(chains) = self.version_chains.as_mut() else {
+            return;
+        };
+        let Some(chain) = chains.get_mut(row_idx) else {
             return;
         };
         // Fold from the front: merge the second-newest entry into the newest,
@@ -1778,35 +1916,57 @@ impl Column {
     }
 
     pub fn clear_row_version_chains(&mut self, row_idx: usize) {
-        if row_idx < self.version_chains.len() {
-            self.version_chains[row_idx].clear();
+        if let Some(chains) = self.version_chains.as_mut() {
+            if row_idx < chains.len() {
+                chains[row_idx].clear();
+            }
         }
-        if row_idx < self.row_start_ts.len() {
-            self.row_start_ts[row_idx] = 0;
-        }
-    }
-
-    pub fn row_start_ts_vec(&self) -> &Vec<Timestamp> {
-        &self.row_start_ts
-    }
-
-    pub fn set_row_start_ts(&mut self, v: Vec<Timestamp>) {
-        self.row_start_ts = v;
-        // Ensure version_chains matches length
-        if self.version_chains.len() < self.row_start_ts.len() {
-            self.version_chains
-                .resize(self.row_start_ts.len(), Vec::new());
+        if row_idx < self.visibility.create_ts.len() {
+            self.visibility.create_ts[row_idx] = 0;
         }
     }
 
-    pub fn version_chains_ref(&self) -> &Vec<Vec<VersionEntry>> {
-        &self.version_chains
+    pub fn version_chains_ref(&self) -> &[Vec<VersionEntry>] {
+        self.version_chains.as_deref().unwrap_or(&[])
+    }
+
+    /// Optional accessor for lazy-allocated chains.
+    pub fn version_chains_opt(&self) -> Option<&Vec<Vec<VersionEntry>>> {
+        self.version_chains.as_ref()
     }
 
     pub fn set_version_chains(&mut self, v: Vec<Vec<VersionEntry>>) {
+        // Lazily keep None if no actual entries exist
+        if v.is_empty() || v.iter().all(|c| c.is_empty()) {
+            self.version_chains = None;
+        } else {
+            self.version_chains = Some(v);
+        }
+        if let Some(chains) = self.version_chains.as_ref() {
+            self.visibility.ensure_len(chains.len());
+        }
+    }
+
+    /// Directly set the optional version chains (used by V2 serialization).
+    pub fn set_version_chains_opt(&mut self, v: Option<Vec<Vec<VersionEntry>>>) {
         self.version_chains = v;
-        if self.row_start_ts.len() < self.version_chains.len() {
-            self.row_start_ts.resize(self.version_chains.len(), 0);
+        if let Some(chains) = self.version_chains.as_ref() {
+            self.visibility.ensure_len(chains.len());
+        }
+    }
+
+    pub fn visibility(&self) -> &RowVisibility {
+        &self.visibility
+    }
+
+    pub fn visibility_mut(&mut self) -> &mut RowVisibility {
+        &mut self.visibility
+    }
+
+    pub fn set_visibility(&mut self, vis: RowVisibility) {
+        self.visibility = vis;
+        if let Some(chains) = self.version_chains.as_ref() {
+            self.visibility.ensure_len(chains.len());
         }
     }
 }
@@ -2080,6 +2240,51 @@ impl ColumnStore {
             return;
         }
         for col in &mut self.columns {
+            // Fast skip: columns with lazy None have no history to fold.
+            if col.version_chains_opt().is_none() {
+                continue;
+            }
+            col.fold_oldest(row_idx, cap, horizon);
+        }
+    }
+
+    /// Fold oldest entries only for the specified columns.
+    /// This reduces write amplification when only a subset of columns was updated.
+    pub fn fold_oldest_for_row_filtered(
+        &mut self,
+        row_idx: usize,
+        cap: usize,
+        horizon: Timestamp,
+        names: &[String],
+    ) {
+        if cap == 0 || names.is_empty() {
+            return;
+        }
+        for name in names {
+            if let Some(col) = self.get_column_mut(name) {
+                if col.version_chains_opt().is_none() {
+                    continue;
+                }
+                col.fold_oldest(row_idx, cap, horizon);
+            }
+        }
+    }
+
+    /// Fold oldest entries for a single column by id, used when updating by col_id.
+    pub fn fold_oldest_for_column(
+        &mut self,
+        col_id: i32,
+        row_idx: usize,
+        cap: usize,
+        horizon: Timestamp,
+    ) {
+        if cap == 0 {
+            return;
+        }
+        if let Some(col) = self.get_column_by_id_mut(col_id) {
+            if col.version_chains_opt().is_none() {
+                return;
+            }
             col.fold_oldest(row_idx, cap, horizon);
         }
     }

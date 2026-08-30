@@ -311,9 +311,9 @@ fn test_return_list_comprehension() {
         .query("RETURN [x IN [1, 2, 3, 4] WHERE x > 2 | x * 10] AS doubled")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::list(
-            graphdb_core::value::list::List::from(vec![Value::Int(30), Value::Int(40)]),
-        )]);
+        .assert_result_contains(vec![Value::list(graphdb_core::value::list::List::from(
+            vec![Value::Int(30), Value::Int(40)],
+        ))]);
 }
 
 #[test]
@@ -328,13 +328,9 @@ fn test_return_list_comprehension_in_vertex_projection() {
         .query("MATCH (n:person) RETURN [s IN [1, 2, 3] | s + 1] AS boosted")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::list(
-            graphdb_core::value::list::List::from(vec![
-                Value::Int(2),
-                Value::Int(3),
-                Value::Int(4),
-            ]),
-        )]);
+        .assert_result_contains(vec![Value::list(graphdb_core::value::list::List::from(
+            vec![Value::Int(2), Value::Int(3), Value::Int(4)],
+        ))]);
 }
 
 #[test]

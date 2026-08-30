@@ -357,8 +357,7 @@ impl SingleMutableCsr {
     }
 
     pub fn used_memory_size(&self) -> usize {
-        self.nbr_list.len() * std::mem::size_of::<Nbr>()
-            + std::mem::size_of::<Self>()
+        self.nbr_list.len() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }
 
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
@@ -526,7 +525,10 @@ impl MutableCsrTrait for SingleMutableCsr {
     }
 
     fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.nbr_list.iter().find(|n| n.edge_id == edge_id).map(|n| n.create_ts)
+        self.nbr_list
+            .iter()
+            .find(|n| n.edge_id == edge_id)
+            .map(|n| n.create_ts)
     }
 
     fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {

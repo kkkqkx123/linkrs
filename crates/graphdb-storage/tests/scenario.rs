@@ -729,17 +729,10 @@ fn test_string_vertex_id_operations() {
     storage.create_space(&mut space).unwrap();
 
     // Create a tag
-    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string())
-        .with_properties(vec![
-            graphdb_core::types::PropertyDef::new(
-                "name".to_string(),
-                graphdb_core::DataType::String,
-            ),
-            graphdb_core::types::PropertyDef::new(
-                "age".to_string(),
-                graphdb_core::DataType::BigInt,
-            ),
-        ]);
+    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
+        graphdb_core::types::PropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
+    ]);
     storage.create_tag("str_space", &person_tag).unwrap();
 
     // Insert vertices with string IDs

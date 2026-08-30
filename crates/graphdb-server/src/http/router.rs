@@ -260,7 +260,10 @@ fn add_vector_routes<
             get(vector::count),
         )
         .route("/vector/payload", axum::routing::put(vector::set_payload))
-        .route("/vector/payload/fields", axum::routing::put(vector::set_payload_fields))
+        .route(
+            "/vector/payload/fields",
+            axum::routing::put(vector::set_payload_fields),
+        )
         .route("/vector/payload/delete", post(vector::delete_payload))
         .route("/vector/scroll", post(vector::scroll))
 }

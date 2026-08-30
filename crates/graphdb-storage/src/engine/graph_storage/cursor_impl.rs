@@ -1063,8 +1063,6 @@ fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Tim
     }
 }
 
-
-
 /// Decode edge properties keeping projected columns plus any extra columns
 /// required by pushed scan predicates.
 fn decode_edge_properties(

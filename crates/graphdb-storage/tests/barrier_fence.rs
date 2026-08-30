@@ -32,9 +32,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .expect("lookup after rebuild");
     assert_eq!(
         indexed,
-        vec![Value::from(
-            graphdb_core::types::VertexId::from_int64(1)
-        )]
+        vec![Value::from(graphdb_core::types::VertexId::from_int64(1))]
     );
 
     storage
@@ -46,9 +44,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .expect("lookup Bob");
     assert_eq!(
         indexed_bob,
-        vec![Value::from(
-            graphdb_core::types::VertexId::from_int64(2)
-        )]
+        vec![Value::from(graphdb_core::types::VertexId::from_int64(2))]
     );
 }
 
@@ -86,9 +82,7 @@ fn barrier_fence_survives_restart_after_rebuild() {
         .expect("lookup after reopen");
     assert_eq!(
         indexed,
-        vec![Value::from(
-            graphdb_core::types::VertexId::from_int64(1)
-        )]
+        vec![Value::from(graphdb_core::types::VertexId::from_int64(1))]
     );
 }
 
@@ -122,9 +116,7 @@ fn barrier_fence_multiple_rebuilds_remain_consistent() {
             .expect("lookup after multiple rebuilds");
         assert_eq!(
             indexed,
-            vec![Value::from(
-                graphdb_core::types::VertexId::from_int64(i)
-            )],
+            vec![Value::from(graphdb_core::types::VertexId::from_int64(i))],
             "index lookup for Person{} should return vertex {}",
             i,
             i

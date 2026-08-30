@@ -2,12 +2,12 @@
 //!
 //! Provide the concept of a "session" as the context in which queries are executed.
 
+use crate::api_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
 use crate::storage::StorageClient;
 use graphdb_core::Value;
-use crate::api_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
 use graphdb_core::{SessionStatistics, StatsManager};
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;

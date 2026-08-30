@@ -968,8 +968,7 @@ impl core::TimeTravelEdgeStore {
         let create_ts_vec: Vec<_> = create_ts_iter.collect();
         self.out_csr
             .rebuild_create_ts(create_ts_vec.iter().copied());
-        self.in_csr
-            .rebuild_create_ts(create_ts_vec.into_iter());
+        self.in_csr.rebuild_create_ts(create_ts_vec.into_iter());
 
         let props_path = path.join("properties.bin");
         self.properties = persistence::load_properties(&props_path)?;

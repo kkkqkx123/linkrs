@@ -289,7 +289,9 @@ impl TimeTravelEdgeStore {
             // If none selected due to very low density but we have edges, freeze the densest
             // up to max_regions to ensure progress, but for small case freeze all.
             if selected.is_empty() {
-                if non_empty.len() <= config.max_regions_per_freeze || config.max_regions_per_freeze == 0 {
+                if non_empty.len() <= config.max_regions_per_freeze
+                    || config.max_regions_per_freeze == 0
+                {
                     for r in non_empty {
                         selected.insert(r.region_id);
                     }
@@ -299,7 +301,8 @@ impl TimeTravelEdgeStore {
                         selected.insert(r.region_id);
                     }
                 }
-            } else if selected.len() < non_empty.len() && non_empty.len() <= config.max_regions_per_freeze
+            } else if selected.len() < non_empty.len()
+                && non_empty.len() <= config.max_regions_per_freeze
             {
                 // All non-empty should be frozen for small case to preserve single-freeze semantics
                 // unless explicitly filtered by density. For correctness we ensure at least
@@ -412,21 +415,20 @@ impl TimeTravelEdgeStore {
         }
         delta.rebuild_overflow_index();
         // Decide which regions to freeze
-        let selected = Self::select_regions_to_freeze(
-            delta,
-            ts,
-            calibrator,
-            config,
-        );
+        let selected = Self::select_regions_to_freeze(delta, ts, calibrator, config);
 
         // If no incremental selection (e.g. other CSR variant or empty), fallback to full
         if selected.is_empty() {
             // Check if there are any visible entries at all — if so, fallback to full freeze
-            let has_visible = delta
-                .iter_all()
-                .any(|(_, nbr)| nbr.create_ts <= ts);
+            let has_visible = delta.iter_all().any(|(_, nbr)| nbr.create_ts <= ts);
             if has_visible {
-                return Self::freeze_delta(delta, segments, free_space, ts, config.region_vertex_count);
+                return Self::freeze_delta(
+                    delta,
+                    segments,
+                    free_space,
+                    ts,
+                    config.region_vertex_count,
+                );
             } else {
                 delta.clear();
                 return merge::FreezeDeltaResult { frozen_count: 0 };

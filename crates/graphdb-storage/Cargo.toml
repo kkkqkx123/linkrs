@@ -33,5 +33,13 @@ rand.workspace = true
 tracing.workspace = true
 arc-swap.workspace = true
 
+[[bench]]
+name = "csr_compaction"
+harness = false
+
+[[bench]]
+name = "mvcc_version_chain"
+harness = false
+
 [dev-dependencies]
 tempfile.workspace = true

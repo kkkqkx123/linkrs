@@ -90,11 +90,10 @@ fn test_space_isolation() {
     common::create_space(&mut storage, "beta");
 
     // Create Person tag in both spaces (with name+age to match create_person_vertex)
-    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string())
-        .with_properties(vec![
-            PropertyDef::new("name".to_string(), DataType::String),
-            PropertyDef::new("age".to_string(), DataType::BigInt),
-        ]);
+    let person_tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("age".to_string(), DataType::BigInt),
+    ]);
     storage.create_tag("alpha", &person_tag).unwrap();
     storage.create_tag("beta", &person_tag).unwrap();
 

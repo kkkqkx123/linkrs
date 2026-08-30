@@ -7,7 +7,6 @@ use graphdb_core::StorageResult;
 
 use super::{EdgeId, Nbr, Timestamp, VertexId};
 
-
 pub trait CsrBase: std::fmt::Debug + Send + Sync {
     fn vertex_capacity(&self) -> usize;
 

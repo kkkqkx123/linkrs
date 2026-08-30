@@ -20,7 +20,7 @@ impl PropertyTable {
         for (name, _) in values {
             if self.has_property(name) {
                 if let Some(col) = self.column_store.get_column(name) {
-                    if let Some(&start) = col.row_start_ts_vec().get(row_idx) {
+                    if let Some(&start) = col.visibility().create_ts().get(row_idx) {
                         if start != 0 && start > ts {
                             return Err(StorageError::write_write_conflict(format!(
                                 "property row at offset {} already has a newer version of '{}' at ts={}, attempted write at ts={}",
@@ -43,7 +43,10 @@ impl PropertyTable {
                     .set_property_versioned(row_idx, name, value.as_ref(), ts);
             }
         }
-        self.fold_oldest_versions(row_idx);
+        if self.version_chain_cap != 0 && !values.is_empty() {
+            let names: Vec<String> = values.iter().map(|(n, _)| n.clone()).collect();
+            self.fold_oldest_versions_filtered(row_idx, &names);
+        }
         self.refresh_zone_map_for_row(row_idx);
 
         self.value_index.index_record(values, offset);
