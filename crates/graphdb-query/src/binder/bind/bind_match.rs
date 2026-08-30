@@ -74,11 +74,10 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression)
-                            .map(|be| BoundOrderByItem {
-                                expression: be,
-                                direction: item.direction,
-                            })
+                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
+                            expression: be,
+                            direction: item.direction,
+                        })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })

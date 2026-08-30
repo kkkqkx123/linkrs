@@ -47,8 +47,8 @@ use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOpe
 use graphdb_core::types::{ContextualExpression, Expression};
 
 pub use exists_types::{
-    collect_expression_subqueries, extract_conjunctive_exists, is_trivially_true,
-    ExistsSpec, PlannedGroupJoin, PlannedSubquery, SubqueryIdAllocator,
+    collect_expression_subqueries, extract_conjunctive_exists, is_trivially_true, ExistsSpec,
+    PlannedGroupJoin, PlannedSubquery, SubqueryIdAllocator,
 };
 pub(crate) use exists_utils::to_contextual;
 
@@ -128,9 +128,8 @@ pub fn plan_contextual_subqueries(
         return Ok(Vec::new());
     }
     let ctx = ctx_expr.context();
-    let new_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
-        planned_expr,
-    ));
+    let new_id =
+        ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(planned_expr));
     *ctx_expr = ContextualExpression::new(new_id, ctx.clone());
     Ok(subqueries)
 }
@@ -658,8 +657,7 @@ fn build_group_join_right_subtree(
         })
         .collect();
     let project = crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(
-        input_node,
-        columns,
+        input_node, columns,
     )?;
 
     let mut aggregate = AggregateNode::new(project.into_enum(), key_names.clone(), vec![agg_func])?;

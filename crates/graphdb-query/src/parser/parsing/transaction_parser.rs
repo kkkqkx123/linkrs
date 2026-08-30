@@ -19,10 +19,7 @@ impl TransactionParser {
     /// Parse BEGIN TRANSACTION statement
     ///
     /// Grammar: `BEGIN [TRANSACTION] [READ ONLY | READ WRITE]`
-    pub fn parse_begin_transaction(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_begin_transaction(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Begin)?;
 
@@ -64,10 +61,7 @@ impl TransactionParser {
     }
 
     /// Parse COMMIT TRANSACTION statement
-    pub fn parse_commit_transaction(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_commit_transaction(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Commit)?;
 
@@ -129,10 +123,7 @@ impl TransactionParser {
     /// Parse RELEASE SAVEPOINT statement
     ///
     /// Grammar: `RELEASE SAVEPOINT <savepoint-name>`
-    pub fn parse_release_savepoint(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_release_savepoint(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Release)?;
         ctx.expect_token(TokenKind::Savepoint)?;

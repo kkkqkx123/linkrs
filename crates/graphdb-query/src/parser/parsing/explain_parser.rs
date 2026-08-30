@@ -17,10 +17,7 @@ impl ExplainParser {
     }
 
     /// Parse EXPLAIN statement (contains a sub-statement)
-    pub fn parse_explain_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_explain_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Explain)?;
 
@@ -58,10 +55,7 @@ impl ExplainParser {
     }
 
     /// Parse PROFILE statement
-    pub fn parse_profile_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_profile_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Profile)?;
 
@@ -96,10 +90,7 @@ impl ExplainParser {
     }
 
     /// Parse ANALYZE statement: `ANALYZE` or `ANALYZE SPACE <name>`.
-    pub fn parse_analyze_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    pub fn parse_analyze_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Analyze)?;
 

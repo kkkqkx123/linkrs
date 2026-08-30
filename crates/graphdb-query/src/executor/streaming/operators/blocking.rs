@@ -21,10 +21,10 @@ pub use materialize::{DataCollectState, DistinctState, MaterializeState, RollUpA
 pub use sort::{MergeState, RunBuffer, SortState, TopNState};
 pub use window::{WindowFunctionState, WindowState};
 
+pub use crate::executor::streaming::chunk::ColumnarBatch;
+pub use crate::executor::streaming::executor::SortDirection;
 pub use graphdb_core::types::expr::Expression;
 pub use graphdb_core::Value;
-pub use crate::executor::streaming::executor::SortDirection;
-pub use crate::executor::streaming::chunk::ColumnarBatch;
 
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -39,7 +39,10 @@ pub enum BlockingOperatorKind {
     },
     Aggregate {
         group_by_expressions: Vec<graphdb_core::types::expr::Expression>,
-        aggregate_functions: Vec<(graphdb_core::types::operators::AggregateFunction, Vec<graphdb_core::types::expr::Expression>)>,
+        aggregate_functions: Vec<(
+            graphdb_core::types::operators::AggregateFunction,
+            Vec<graphdb_core::types::expr::Expression>,
+        )>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<AggregateState>,
@@ -91,14 +94,20 @@ pub enum BlockingOperatorKind {
     },
     PartialAggregate {
         group_by_expressions: Vec<graphdb_core::types::expr::Expression>,
-        aggregate_functions: Vec<(graphdb_core::types::operators::AggregateFunction, Vec<graphdb_core::types::expr::Expression>)>,
+        aggregate_functions: Vec<(
+            graphdb_core::types::operators::AggregateFunction,
+            Vec<graphdb_core::types::expr::Expression>,
+        )>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<PartialAggregateState>,
     },
     FinalAggregate {
         group_by_expressions: Vec<graphdb_core::types::expr::Expression>,
-        aggregate_functions: Vec<(graphdb_core::types::operators::AggregateFunction, Vec<graphdb_core::types::expr::Expression>)>,
+        aggregate_functions: Vec<(
+            graphdb_core::types::operators::AggregateFunction,
+            Vec<graphdb_core::types::expr::Expression>,
+        )>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<FinalAggregateState>,
@@ -605,7 +614,10 @@ impl BlockingOperator {
         }
     }
 
-    pub fn spill_with_manager(&mut self, sm: &crate::executor::streaming::spill::SpillManager) -> Result<(), QueryError> {
+    pub fn spill_with_manager(
+        &mut self,
+        sm: &crate::executor::streaming::spill::SpillManager,
+    ) -> Result<(), QueryError> {
         match &mut self.kind {
             BlockingOperatorKind::Sort {
                 state,
@@ -624,11 +636,7 @@ impl BlockingOperator {
                 state,
                 memory_tracker,
                 ..
-            } => aggregate_operator::spill_aggregate(
-                state.as_mut().unwrap(),
-                memory_tracker,
-                sm,
-            ),
+            } => aggregate_operator::spill_aggregate(state.as_mut().unwrap(), memory_tracker, sm),
             BlockingOperatorKind::GroupBy {
                 state,
                 memory_tracker,
@@ -667,20 +675,14 @@ impl BlockingOperator {
                 state,
                 memory_tracker,
                 ..
-            } => materialize_operator::spill_distinct(
-                state.as_mut().unwrap(),
-                memory_tracker,
-                sm,
-            ),
+            } => materialize_operator::spill_distinct(state.as_mut().unwrap(), memory_tracker, sm),
             BlockingOperatorKind::Materialize {
                 state,
                 memory_tracker,
                 ..
-            } => materialize_operator::spill_materialize(
-                state.as_mut().unwrap(),
-                sm,
-                memory_tracker,
-            ),
+            } => {
+                materialize_operator::spill_materialize(state.as_mut().unwrap(), sm, memory_tracker)
+            }
             BlockingOperatorKind::DataCollect {
                 state,
                 memory_tracker,

@@ -171,20 +171,24 @@ pub(super) fn next_sort(
         if out_rows.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(crate::executor::streaming::chunk::DataChunk::new_with_layout(
-                out_rows,
-                Arc::clone(ctx.output_layout),
-            )))
+            Ok(Some(
+                crate::executor::streaming::chunk::DataChunk::new_with_layout(
+                    out_rows,
+                    Arc::clone(ctx.output_layout),
+                ),
+            ))
         }
     } else if let Some(ref mut iter) = state.row_iter {
         let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
         if chunk_rows.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(crate::executor::streaming::chunk::DataChunk::new_with_layout(
-                chunk_rows,
-                Arc::clone(ctx.output_layout),
-            )))
+            Ok(Some(
+                crate::executor::streaming::chunk::DataChunk::new_with_layout(
+                    chunk_rows,
+                    Arc::clone(ctx.output_layout),
+                ),
+            ))
         }
     } else {
         Ok(None)
@@ -221,12 +225,7 @@ pub(super) fn next_topn(
             }
             if batch.num_rows() > limit {
                 if !sort_expressions.is_empty() {
-                    sort_columnar_batch(
-                        batch,
-                        &state.col_names,
-                        sort_expressions,
-                        sort_directions,
-                    );
+                    sort_columnar_batch(batch, &state.col_names, sort_expressions, sort_directions);
                 }
                 batch.truncate(limit);
             }
@@ -249,10 +248,12 @@ pub(super) fn next_topn(
 
     if let Some(iter) = &mut state.result_iter {
         if let Some(row) = iter.next() {
-            Ok(Some(crate::executor::streaming::chunk::DataChunk::new_with_layout(
-                vec![row],
-                Arc::clone(ctx.output_layout),
-            )))
+            Ok(Some(
+                crate::executor::streaming::chunk::DataChunk::new_with_layout(
+                    vec![row],
+                    Arc::clone(ctx.output_layout),
+                ),
+            ))
         } else {
             Ok(None)
         }

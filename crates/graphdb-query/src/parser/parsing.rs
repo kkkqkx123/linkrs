@@ -5,8 +5,8 @@
 mod clause_parser;
 mod ddl_parser;
 mod dml_parser;
-mod expr_parser;
 mod explain_parser;
+mod expr_parser;
 mod fulltext_parser;
 mod parse_context;
 mod parser;

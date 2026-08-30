@@ -17,10 +17,7 @@ use super::Binder;
 impl Binder {
     // ── Expression binding ─────────────────────────────────────────────────
 
-    pub(crate) fn bind_expr(
-        &mut self,
-        expr: &ContextualExpression,
-    ) -> DBResult<BoundExpression> {
+    pub(crate) fn bind_expr(&mut self, expr: &ContextualExpression) -> DBResult<BoundExpression> {
         super::super::semantic_checker::validate_expression(expr)?;
         let type_hint = expr.data_type();
         let Some(inner) = expr.get_expression() else {
@@ -39,10 +36,7 @@ impl Binder {
     /// Used by clause binders that must validate their output variables
     /// (e.g. RETURN), where an undefined reference is a user error rather
     /// than a silently-null value.
-    pub(crate) fn ensure_variables_defined(
-        &self,
-        expr: &ContextualExpression,
-    ) -> DBResult<()> {
+    pub(crate) fn ensure_variables_defined(&self, expr: &ContextualExpression) -> DBResult<()> {
         fn check(scope: &BinderScope, e: &Expression) -> DBResult<()> {
             match e {
                 Expression::Variable(name) => {
@@ -635,11 +629,10 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression)
-                            .map(|be| BoundOrderByItem {
-                                expression: be,
-                                direction: item.direction,
-                            })
+                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
+                            expression: be,
+                            direction: item.direction,
+                        })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
@@ -677,11 +670,10 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression)
-                            .map(|be| BoundOrderByItem {
-                                expression: be,
-                                direction: item.direction,
-                            })
+                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
+                            expression: be,
+                            direction: item.direction,
+                        })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })

@@ -32,11 +32,12 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression)
-                            .map(|be| super::super::bound::BoundOrderByItem {
+                        self.bind_expr(&item.expression).map(|be| {
+                            super::super::bound::BoundOrderByItem {
                                 expression: be,
                                 direction: item.direction,
-                            })
+                            }
+                        })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })

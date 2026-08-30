@@ -14,12 +14,12 @@ use graphdb_core::types::expr::analysis_utils::collect_variables_from_contextual
 use graphdb_core::types::expr::contextual::ContextualExpression;
 
 use super::flatten::{
-    classify_join, classify_join_logical, flatten_join_chain, flatten_join_chain_logical,
-    leaf_id, leaf_id_logical, logical_column_types, assign_leaf_info, assign_leaf_info_logical,
+    assign_leaf_info, assign_leaf_info_logical, classify_join, classify_join_logical,
+    flatten_join_chain, flatten_join_chain_logical, leaf_id, leaf_id_logical, logical_column_types,
 };
 use super::types::{
-    FlattenedJoinChain, FlattenedJoinChainLogical, JoinNodeType, OptResult,
-    OptResultLogical, PredMap,
+    FlattenedJoinChain, FlattenedJoinChainLogical, JoinNodeType, OptResult, OptResultLogical,
+    PredMap,
 };
 
 pub fn build_optimizer_input(chain: &FlattenedJoinChain) -> (Vec<TableInfo>, Vec<JoinCondition>) {
@@ -900,8 +900,8 @@ pub fn walk_and_optimize_joins_logical(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::flatten::logical_output_var;
+    use super::*;
     use crate::optimizer::cost::CostCalculator;
     use crate::optimizer::stats::StatisticsManager;
     use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;

@@ -6,7 +6,10 @@ use crate::binder::bound::*;
 use super::Binder;
 
 impl Binder {
-    pub(crate) fn bind_go(&mut self, stmt: &crate::parser::ast::GoStmt) -> DBResult<BoundStatement> {
+    pub(crate) fn bind_go(
+        &mut self,
+        stmt: &crate::parser::ast::GoStmt,
+    ) -> DBResult<BoundStatement> {
         let from = stmt
             .from
             .vertices

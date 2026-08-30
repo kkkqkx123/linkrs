@@ -11,7 +11,7 @@ use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
 use crate::executor::streaming::spill::{HashPartitionConfig, HashPartitionSpiller, SpillManager};
 
-use super::helpers::{BlockingContext, reject_spill_replay, spill_not_supported};
+use super::helpers::{reject_spill_replay, spill_not_supported, BlockingContext};
 use super::materialize::{DataCollectState, DistinctState, MaterializeState, RollUpApplyState};
 
 pub(super) fn open_distinct(state: &mut Option<DistinctState>) {
@@ -143,19 +143,16 @@ pub(super) fn next_distinct(
                 for row in chunk.rows {
                     if !state.seen_rows.contains(&row) {
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                            if let Some(sm) = ctx
-                                .runtime
-                                .as_ref()
-                                .and_then(|rt| rt.get_spill_manager())
+                            if let Some(sm) =
+                                ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
                             {
                                 let config = HashPartitionConfig::default();
                                 let mut spiller = HashPartitionSpiller::new(config, &sm, 0)?;
 
                                 for seen_row in state.seen_rows.drain() {
                                     spiller.insert_row(&seen_row, &sm)?;
-                                    memory_tracker.release(
-                                        MemoryBudget::estimate_row_memory(&seen_row),
-                                    );
+                                    memory_tracker
+                                        .release(MemoryBudget::estimate_row_memory(&seen_row));
                                 }
 
                                 spiller.insert_row(&row, &sm)?;
@@ -190,9 +187,7 @@ pub(super) fn next_distinct(
                 .runtime
                 .as_ref()
                 .and_then(|rt| rt.get_spill_manager())
-                .ok_or_else(|| {
-                    QueryError::execution("Spill manager not available".to_string())
-                })?;
+                .ok_or_else(|| QueryError::execution("Spill manager not available".to_string()))?;
             for row in chunk.rows {
                 spiller.insert_row(&row, &sm)?;
             }
@@ -265,8 +260,7 @@ pub(super) fn next_materialize(
         }
 
         state.materialized = true;
-        state.result_iter =
-            Some(std::mem::take(&mut state.materialized_rows).into_iter());
+        state.result_iter = Some(std::mem::take(&mut state.materialized_rows).into_iter());
     }
 
     if let Some(iter) = &mut state.result_iter {
@@ -467,7 +461,12 @@ pub(super) fn spill_data_collect(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(&mut state.all_rows, sm, &mut state.spill_files, memory_tracker)
+    spill_not_supported(
+        &mut state.all_rows,
+        sm,
+        &mut state.spill_files,
+        memory_tracker,
+    )
 }
 
 pub(super) fn spill_rollup_apply(
@@ -475,5 +474,10 @@ pub(super) fn spill_rollup_apply(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(&mut state.all_rows, sm, &mut state.spill_files, memory_tracker)
+    spill_not_supported(
+        &mut state.all_rows,
+        sm,
+        &mut state.spill_files,
+        memory_tracker,
+    )
 }

@@ -13,7 +13,9 @@ use crate::executor::streaming::executor::{SortDirection, StreamingExecutor, Val
 use crate::executor::streaming::spill::{HashPartitionConfig, HashPartitionSpiller, SpillManager};
 
 use super::helpers::BlockingContext;
-use super::window::{compute_window_partition_result, sort_partition_rows, WindowFunctionState, WindowState};
+use super::window::{
+    compute_window_partition_result, sort_partition_rows, WindowFunctionState, WindowState,
+};
 
 pub(super) fn open_window_function(state: &mut Option<WindowFunctionState>) {
     *state = Some(WindowFunctionState {
@@ -181,9 +183,7 @@ pub(super) fn next_window_function(
                                 .as_ref()
                                 .and_then(|rt| rt.get_spill_manager())
                                 .ok_or_else(|| {
-                                    QueryError::execution(
-                                        "Spill manager not available".to_string(),
-                                    )
+                                    QueryError::execution("Spill manager not available".to_string())
                                 })?;
                             let partition_key = eval_partition_key(&row, &state.col_names);
                             let p = crate::executor::streaming::spill::hash_row_partition(
@@ -194,10 +194,8 @@ pub(super) fn next_window_function(
                             continue;
                         }
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                            if let Some(sm) = ctx
-                                .runtime
-                                .as_ref()
-                                .and_then(|rt| rt.get_spill_manager())
+                            if let Some(sm) =
+                                ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
                             {
                                 let config = HashPartitionConfig::default();
                                 let num_partitions = config.num_partitions;
@@ -211,9 +209,8 @@ pub(super) fn next_window_function(
                                         num_partitions,
                                     ) as usize;
                                     spiller.insert_row_to_partition(&pending, p, &sm)?;
-                                    memory_tracker.release(
-                                        MemoryBudget::estimate_row_memory(&pending),
-                                    );
+                                    memory_tracker
+                                        .release(MemoryBudget::estimate_row_memory(&pending));
                                 }
 
                                 let partition_key = eval_partition_key(&row, &state.col_names);
@@ -427,9 +424,7 @@ pub(super) fn next_window(
                                 .as_ref()
                                 .and_then(|rt| rt.get_spill_manager())
                                 .ok_or_else(|| {
-                                    QueryError::execution(
-                                        "Spill manager not available".to_string(),
-                                    )
+                                    QueryError::execution("Spill manager not available".to_string())
                                 })?;
                             let partition_key = eval_partition_key(&row, &state.col_names);
                             let p = crate::executor::streaming::spill::hash_row_partition(
@@ -440,10 +435,8 @@ pub(super) fn next_window(
                             continue;
                         }
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                            if let Some(sm) = ctx
-                                .runtime
-                                .as_ref()
-                                .and_then(|rt| rt.get_spill_manager())
+                            if let Some(sm) =
+                                ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
                             {
                                 let config = HashPartitionConfig::default();
                                 let num_partitions = config.num_partitions;
@@ -457,9 +450,8 @@ pub(super) fn next_window(
                                         num_partitions,
                                     ) as usize;
                                     spiller.insert_row_to_partition(&pending, p, &sm)?;
-                                    memory_tracker.release(
-                                        MemoryBudget::estimate_row_memory(&pending),
-                                    );
+                                    memory_tracker
+                                        .release(MemoryBudget::estimate_row_memory(&pending));
                                 }
 
                                 let partition_key = eval_partition_key(&row, &state.col_names);
