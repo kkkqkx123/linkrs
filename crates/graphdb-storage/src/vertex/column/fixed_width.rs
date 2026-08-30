@@ -1,4 +1,4 @@
-use graphdb_core::value::{DateValue, DateTimeValue, TimeValue};
+use graphdb_core::value::{DateTimeValue, DateValue, TimeValue};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use super::{ensure_bitmap_len, ColumnStorage};

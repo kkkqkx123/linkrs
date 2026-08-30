@@ -308,8 +308,7 @@ impl Column {
                         match &v {
                             Value::String(s) => {
                                 let bytes = s.as_bytes();
-                                new_data
-                                    .extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                                new_data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                                 new_data.extend_from_slice(bytes);
                             }
                             _ => {
@@ -343,5 +342,3 @@ impl Column {
         (new_data, new_offsets, new_bitmap)
     }
 }
-
-

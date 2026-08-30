@@ -1,47 +1,30 @@
-use crate::index::chunk::chunked_index::ChunkedIndex;
-use crate::index::chunk::serialize::write_chunked_index_checkpoint;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{GenerationBuildState, GenerationState, IndexManifest, IndexShard};
+use crate::index::manifest::{GenerationBuildState, IndexManifest, IndexShard};
 use crate::index::types::IndexRecord;
 use crate::index::{EdgeIndexOps, VertexIndexOps};
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
-use graphdb_core::types::{
-    CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp,
-};
-use graphdb_core::wal::EntityRef;
+use graphdb_core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use super::context::GraphStorageContext;
 
-type IndexDataMaps = (
+pub(crate) type IndexDataMaps = (
     BTreeMap<Vec<u8>, IndexRecord>,
     BTreeMap<Vec<u8>, IndexRecord>,
 );
 
-/// Write a generation checkpoint using the chunked index format.
-fn write_generation_checkpoint(
-    gen_dir: &std::path::Path,
-    forward: &BTreeMap<Vec<u8>, IndexRecord>,
-    reverse: &BTreeMap<Vec<u8>, IndexRecord>,
-) -> StorageResult<()> {
-    const POOL_CAPACITY: u64 = 64 * 1024 * 1024;
-    let fwd_dir = gen_dir.join("forward_chunks");
-    let rev_dir = gen_dir.join("reverse_chunks");
-    let fwd = ChunkedIndex::from_btree(vec![], forward, POOL_CAPACITY);
-    let rev = ChunkedIndex::from_btree(vec![], reverse, POOL_CAPACITY);
-    write_chunked_index_checkpoint(&fwd_dir, &fwd)?;
-    write_chunked_index_checkpoint(&rev_dir, &rev)?;
-    Ok(())
-}
+pub mod checkpoint;
+pub mod wal_replay;
 
-use graphdb_transaction::wal::{
-    collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
-    LocalWalParser, WalParser,
+pub(crate) use checkpoint::{
+    build_edge_index_data, build_vertex_index_data, generation_output_paths,
+    load_generation_build_state, remove_generation_build_state, resolve_crash_recovery,
+    save_generation_build_state, write_generation_checkpoint,
 };
+pub(crate) use wal_replay::{replay_wal_partition, wal_intents_for_index};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum GenerationFaultPoint {
@@ -84,162 +67,6 @@ pub(crate) fn current_wal_lsn(ctx: &GraphStorageContext) -> CommitLsn {
         }
     }
     CommitLsn::ZERO
-}
-
-fn committed_wal_transactions(
-    ctx: &GraphStorageContext,
-) -> StorageResult<Vec<CommittedWalTransaction>> {
-    let Some(paths) = ctx.storage_paths() else {
-        return Ok(Vec::new());
-    };
-    if !paths.wal_dir().exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut parser = LocalWalParser::new();
-    parser
-        .open(&paths.wal_dir().to_string_lossy())
-        .map_err(|error| {
-            StorageError::wal_error(format!(
-                "Failed to parse WAL for index generation catch-up: {}",
-                error
-            ))
-        })?;
-    collect_committed_transactions(&parser.parse_all_entries()).map_err(|error| {
-        StorageError::wal_error(format!(
-            "Failed to validate WAL for index generation catch-up: {}",
-            error
-        ))
-    })
-}
-
-pub(crate) fn wal_intents_for_index(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index: &Index,
-    start_lsn: CommitLsn,
-    barrier_lsn: CommitLsn,
-) -> StorageResult<Vec<graphdb_core::wal::OutboxIntent>> {
-    let transactions = committed_wal_transactions(ctx)?;
-    let mut index_ids = vec![index.id];
-    for logical_name in [&index.name, &index.schema_name] {
-        index_ids.push(stable_hash(logical_name.as_bytes()));
-        index_ids.push(stable_hash(
-            format!("{}:{}", space_id, logical_name).as_bytes(),
-        ));
-        index_ids.extend(index.fields.iter().map(|field| {
-            stable_hash(format!("{}:{}:{}", space_id, logical_name, field.name).as_bytes())
-        }));
-    }
-
-    Ok(filter_intents_for_indexes(
-        &transactions,
-        &index_ids,
-        start_lsn,
-        barrier_lsn,
-    ))
-}
-
-fn save_generation_build_state(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index_name: &str,
-    state: &GenerationBuildState,
-) -> StorageResult<()> {
-    // In-memory storage has no crash-recovery boundary. Its generation state is
-    // still tracked in memory by the manifest catalog, but there is no durable
-    // file to write.
-    if ctx.work_dir().is_none() {
-        return Ok(());
-    }
-    let serialized =
-        serde_json::to_vec(state).map_err(|e| StorageError::serialize_error(e.to_string()))?;
-    let dir = build_state_dir(ctx, space_id)?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{index_name}_generation_build.json"));
-    let temporary = path.with_extension("tmp");
-    {
-        use std::io::Write;
-        let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(&serialized)?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&temporary, &path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
-}
-
-fn load_generation_build_state(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index_name: &str,
-) -> StorageResult<Option<GenerationBuildState>> {
-    if ctx.work_dir().is_none() {
-        return Ok(None);
-    }
-    let dir = build_state_dir(ctx, space_id)?;
-    let path = dir.join(format!("{index_name}_generation_build.json"));
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(&path)?;
-    let state: GenerationBuildState = serde_json::from_slice(&bytes)
-        .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
-    Ok(Some(state))
-}
-
-fn remove_generation_build_state(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index_name: &str,
-) -> StorageResult<()> {
-    if ctx.work_dir().is_none() {
-        return Ok(());
-    }
-    let dir = build_state_dir(ctx, space_id)?;
-    let path = dir.join(format!("{index_name}_generation_build.json"));
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-    }
-    Ok(())
-}
-
-fn build_state_dir(ctx: &GraphStorageContext, space_id: u64) -> StorageResult<std::path::PathBuf> {
-    ctx.work_dir()
-        .as_ref()
-        .map(|dir| {
-            dir.join("generation_build_state")
-                .join(space_id.to_string())
-        })
-        .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))
-}
-
-fn resolve_crash_recovery(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index_name: &str,
-) -> StorageResult<()> {
-    let Some(build_state) = load_generation_build_state(ctx, space_id, index_name)? else {
-        return Ok(());
-    };
-    // If the build was incomplete (Building or CatchingUp), discard it.
-    // The caller will rebuild from scratch.
-    if !build_state.is_active() && !matches!(build_state.state, GenerationState::Publishing) {
-        log::warn!(
-            "Discarding incomplete generation build for index {index_name} (state={:?})",
-            build_state.state
-        );
-        remove_generation_build_state(ctx, space_id, index_name)?;
-        return Ok(());
-    }
-    // If the build was in Publishing state, the manifest may have been published
-    // but the metadata update was lost. The published manifest is the authority.
-    if matches!(build_state.state, GenerationState::Publishing) {
-        log::info!("Completing generation build for index {index_name} from Publishing state");
-    }
-    Ok(())
 }
 
 pub(crate) fn create_tag_index(
@@ -305,16 +132,7 @@ pub(crate) fn list_tag_indexes(
     ctx.index_metadata_manager().list_tag_indexes(space_id)
 }
 
-fn edge_entity_ref(edge: &graphdb_core::Edge) -> EntityRef {
-    EntityRef::Edge {
-        src: edge.src,
-        dst: edge.dst,
-        edge_type: stable_hash(edge.edge_type.as_bytes()) as u32,
-        ranking: edge.ranking,
-    }
-}
-
-fn stable_hash(bytes: &[u8]) -> u64 {
+pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
@@ -323,110 +141,6 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     // Index IDs are persisted in SQLite INTEGER columns, so keep the
     // deterministic hash within the signed 64-bit range.
     hash & (i64::MAX as u64)
-}
-
-fn record_changed_after(record: &IndexRecord, snapshot_timestamp: Timestamp) -> bool {
-    record.created_ts > snapshot_timestamp
-        || record
-            .deleted_ts
-            .is_some_and(|deleted_ts| deleted_ts > snapshot_timestamp)
-}
-
-fn replay_wal_partition<F, R>(
-    (mut active_forward, mut active_reverse): IndexDataMaps,
-    (rebuilt_forward, rebuilt_reverse): IndexDataMaps,
-    snapshot_timestamp: Timestamp,
-    intents: &[graphdb_core::wal::OutboxIntent],
-    matches_forward: F,
-    matches_reverse: R,
-) -> IndexDataMaps
-where
-    F: Fn(&[u8]) -> bool,
-    R: Fn(&[u8]) -> bool,
-{
-    let changed_entities = intents
-        .iter()
-        .map(|intent| &intent.mutation.entity_ref)
-        .collect::<Vec<_>>();
-    let matches_changed_entity = |record: &IndexRecord| {
-        changed_entities.is_empty()
-            || record
-                .entity_ref
-                .as_ref()
-                .is_some_and(|entity| changed_entities.contains(&entity))
-    };
-    let forward_changes: Vec<(Vec<u8>, IndexRecord)> = active_forward
-        .iter()
-        .filter(|(key, record)| {
-            matches_forward(key)
-                && record_changed_after(record, snapshot_timestamp)
-                && matches_changed_entity(record)
-        })
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect();
-    let reverse_changes: Vec<(Vec<u8>, IndexRecord)> = active_reverse
-        .iter()
-        .filter(|(key, record)| {
-            matches_reverse(key)
-                && record_changed_after(record, snapshot_timestamp)
-                && matches_changed_entity(record)
-        })
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect();
-
-    active_forward.retain(|key, _| !matches_forward(key));
-    active_reverse.retain(|key, _| !matches_reverse(key));
-    active_forward.extend(rebuilt_forward);
-    active_reverse.extend(rebuilt_reverse);
-    active_forward.extend(forward_changes);
-    active_reverse.extend(reverse_changes);
-    (active_forward, active_reverse)
-}
-
-/// Build new index data from a snapshot of vertices.
-fn build_vertex_index_data(
-    space_id: u64,
-    index: &Index,
-    vertices: &[graphdb_core::Vertex],
-    snapshot_timestamp: Timestamp,
-) -> StorageResult<IndexDataMaps> {
-    let mut forward = BTreeMap::new();
-    let mut reverse = BTreeMap::new();
-
-    for vertex in vertices {
-        let indexed_values: Vec<Value> = index
-            .fields
-            .iter()
-            .filter_map(|field| vertex.properties.get(&field.name).cloned())
-            .collect();
-        let included_columns = index
-            .properties
-            .iter()
-            .filter_map(|name| {
-                vertex
-                    .properties
-                    .get(name)
-                    .cloned()
-                    .map(|value| (name.clone(), value))
-            })
-            .collect::<Vec<_>>();
-        let vid_value = Value::from(vertex.vid);
-
-        for prop_value in &indexed_values {
-            let logical_forward_key =
-                KeyBuilder::build_vertex_index_key(space_id, &index.name, prop_value, &vid_value)?;
-            let logical_reverse_key =
-                KeyBuilder::build_vertex_reverse_key_v2(space_id, &vid_value, &index.name)?;
-
-            let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
-                .with_entity_version(snapshot_timestamp)
-                .with_entity_ref(EntityRef::Vertex(vertex.vid));
-
-            forward.insert(logical_forward_key.0, entry.clone());
-            reverse.insert(logical_reverse_key.0, entry);
-        }
-    }
-    Ok((forward, reverse))
 }
 
 /// Get a fresh generation number derived from the active manifest's generation + 1.
@@ -455,36 +169,6 @@ fn next_generation(
     Ok(IndexGeneration::new(
         stats.active_generation.get().saturating_add(1),
     ))
-}
-
-/// Return the physical output location for a rebuilt generation.
-///
-/// Persistent storage gets a durable generation directory and manifest path.
-/// In-memory storage keeps the same logical manifest/runtime behavior but uses
-/// a synthetic path and skips filesystem writes entirely.
-fn generation_output_paths(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    index_id: u64,
-    generation: IndexGeneration,
-) -> (PathBuf, Option<PathBuf>) {
-    if let Some(index_dir) = ctx.storage_paths().map(|paths| paths.indexes_dir()) {
-        let index_root = index_dir
-            .join(space_id.to_string())
-            .join(index_id.to_string());
-        (
-            index_root.join(format!("generation-{}", generation.get())),
-            Some(index_root.join("manifest.bin")),
-        )
-    } else {
-        (
-            PathBuf::from("memory-index")
-                .join(space_id.to_string())
-                .join(index_id.to_string())
-                .join(format!("generation-{}", generation.get())),
-            None,
-        )
-    }
 }
 
 pub(crate) fn rebuild_tag_index(
@@ -716,65 +400,6 @@ pub(crate) fn drop_edge_index(
         manager.unregister_native_index(space_id, index_name);
     }
     Ok(dropped)
-}
-
-/// Build new index data from a snapshot of edges.
-fn build_edge_index_data(
-    space_id: u64,
-    index: &Index,
-    edges: &[graphdb_core::Edge],
-    snapshot_timestamp: Timestamp,
-) -> StorageResult<IndexDataMaps> {
-    let mut forward = BTreeMap::new();
-    let mut reverse = BTreeMap::new();
-
-    for edge in edges {
-        let indexed_values: Vec<Value> = index
-            .fields
-            .iter()
-            .filter_map(|field| edge.props.get(&field.name).cloned())
-            .collect();
-        let included_columns = index
-            .properties
-            .iter()
-            .filter_map(|name| {
-                edge.props
-                    .get(name)
-                    .cloned()
-                    .map(|value| (name.clone(), value))
-            })
-            .collect::<Vec<_>>();
-        let src_value = Value::from(edge.src);
-        let dst_value = Value::from(edge.dst);
-
-        for prop_value in &indexed_values {
-            let logical_forward_key = KeyBuilder::build_edge_index_key(
-                space_id,
-                &index.name,
-                prop_value,
-                &src_value,
-                &dst_value,
-                &edge.edge_type,
-                edge.ranking,
-            )?;
-            let logical_reverse_key = KeyBuilder::build_edge_reverse_key(
-                space_id,
-                &src_value,
-                &dst_value,
-                &edge.edge_type,
-                edge.ranking,
-                &index.name,
-            )?;
-
-            let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
-                .with_entity_version(snapshot_timestamp)
-                .with_entity_ref(edge_entity_ref(edge));
-
-            forward.insert(logical_forward_key.0, entry.clone());
-            reverse.insert(logical_reverse_key.0, entry);
-        }
-    }
-    Ok((forward, reverse))
 }
 
 pub(crate) fn rebuild_edge_index(

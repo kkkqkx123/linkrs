@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use graphdb_core::{DataType, Value};
     use graphdb_core::{ArrayTypeInfo, StructTypeInfo};
+    use graphdb_core::{DataType, Value};
 
     #[test]
     fn test_column_basic() {

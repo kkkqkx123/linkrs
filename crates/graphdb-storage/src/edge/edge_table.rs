@@ -14,9 +14,11 @@
 
 pub mod calibrator;
 pub mod compaction;
+pub mod config;
 pub mod core;
 pub mod free_space;
 pub mod freeze;
+pub mod iterator;
 pub mod merge;
 pub mod mvcc;
 pub mod page_state;

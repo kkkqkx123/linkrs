@@ -18,122 +18,8 @@ use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
-pub struct EdgeTableConfig {
-    pub initial_vertex_capacity: usize,
-    pub initial_edge_capacity: usize,
-    /// Fixed number of edges allocated per high-degree overflow chunk.
-    pub overflow_chunk_edges: usize,
-    pub max_segments_per_direction: usize,
-    /// Write backpressure: max size of mutable CSR (in bytes) before triggering freeze.
-    /// Set to 0 to disable. Typical value: 100MB (100 * 1024 * 1024).
-    pub max_mutable_csr_bytes: usize,
-
-    /// Segment merge threshold: trigger auto-merge when segment count reaches this value.
-    /// Default: 50 segments per direction before merging oldest segments.
-    /// Set to 0 to disable auto-merge.
-    pub segment_merge_threshold: usize,
-
-    /// Merge behavior: how many segments to keep after merging.
-    /// When merging is triggered and segment count exceeds threshold,
-    /// keep only the N newest segments (others are merged).
-    /// Default: 5 (keeps 5 newest, merges the rest).
-    pub merge_keep_newest: usize,
-
-    /// Automatic maintenance: run freeze / GC / property compaction on the
-    /// write path when the configured thresholds are exceeded.
-    pub auto_maintenance: AutoMaintenanceConfig,
-
-    /// Region-level recycling: vertex count per region (0 = disabled).
-    pub region_vertex_count: usize,
-
-    /// Upper bound on the per-row before-image version chain length in the
-    /// property table. `0` disables the bound (unbounded history).
-    pub version_chain_cap: usize,
-
-    /// Calibrator configuration for density balancing.
-    pub calibrator: CalibratorConfig,
-
-    /// Maximum number of regions frozen per incremental freeze operation.
-    /// `0` means unlimited (full freeze, legacy behavior). With `N > 0`,
-    /// each freeze incrementally freezes at most `N` high-density regions,
-    /// leaving low-density regions in the mutable CSR to reduce per-freeze
-    /// latency. Default 8 balances latency and progress.
-    pub max_regions_per_freeze: usize,
-
-    /// Density threshold for incremental freeze: a region is considered high-density
-    /// when `edge_count / capacity >= threshold`. Calibrator may lower this threshold
-    /// under memory pressure. Default 0.05 (5%).
-    pub freeze_density_threshold: f32,
-}
-
-/// Thresholds that trigger automatic maintenance on the write path.
-#[derive(Debug, Clone, Copy)]
-pub struct AutoMaintenanceConfig {
-    /// Run GC when the total tombstone count exceeds this value.
-    /// Set to 0 to disable tombstone GC.
-    pub tombstone_gc_threshold: usize,
-    /// Run property compaction when deleted-but-not-reclaimed property rows
-    /// exceed this ratio of total rows. Set to 0.0 to disable.
-    pub property_compact_ratio: f32,
-    /// Freeze the mutable CSR when its estimated memory exceeds this value.
-    /// Set to 0 to disable (falls back to global `max_mutable_csr_bytes`).
-    pub max_delta_memory_bytes: usize,
-    /// Minimum serial number between automatic GC runs. Each time GC runs
-    /// the serial is incremented; subsequent write-path calls skip GC until
-    /// the counter reaches this value again. Set to 0 to disable cooldown.
-    pub gc_min_serial: u64,
-    /// Run a PhysicalDeletion segment merge when the deleted edge ratio in
-    /// frozen segments exceeds this value (0.0 to 1.0). Set to 0.0 to disable.
-    /// Edges are only physically dropped when an active snapshot bounds the
-    /// retention horizon; without snapshots the merge is a no-op for reclamation.
-    pub deletion_compact_ratio: f64,
-}
-
-impl Default for AutoMaintenanceConfig {
-    fn default() -> Self {
-        Self {
-            tombstone_gc_threshold: 200_000,
-            property_compact_ratio: 0.15,
-            max_delta_memory_bytes: 150 * 1024 * 1024,
-            gc_min_serial: 500,
-            deletion_compact_ratio: 0.5,
-        }
-    }
-}
-
-impl Default for EdgeTableConfig {
-    fn default() -> Self {
-        Self {
-            initial_vertex_capacity: 4096,
-            initial_edge_capacity: 4096,
-            overflow_chunk_edges: 4096,
-            max_segments_per_direction: 100,
-            // Default: 100MB per direction
-            max_mutable_csr_bytes: 100 * 1024 * 1024,
-            // Auto-merge when segment count reaches 50 per direction
-            segment_merge_threshold: 50,
-            // Keep only 5 newest segments, merge the rest (oldest 45 become 1)
-            merge_keep_newest: 5,
-            auto_maintenance: AutoMaintenanceConfig::default(),
-            region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
-            version_chain_cap: crate::edge::property_table::DEFAULT_VERSION_CHAIN_CAP,
-            calibrator: CalibratorConfig::default(),
-            max_regions_per_freeze: 8,
-            freeze_density_threshold: 0.05,
-        }
-    }
-}
-
-/// Parameters for update_edge_property_by_offset operation
-pub struct UpdateEdgePropertyByOffsetParams {
-    pub src: u32,
-    pub dst: u32,
-    pub rank: i64,
-    pub prop_id: u16,
-    pub value: Value,
-    pub ts: Timestamp,
-}
+pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByOffsetParams};
+pub use super::iterator::EdgeTableScanIterator;
 
 /// TimeTravel edge store: multi-segment CSR with freeze/merge/MVCC (full history).
 pub struct TimeTravelEdgeStore {
@@ -582,7 +468,12 @@ impl TimeTravelEdgeStore {
         self.base_get_edge(segments, sparse_index, src, dst, ts)
     }
 
-    fn edge_record_from_nbr(&self, src: u32, nbr: Nbr, query_ts: Timestamp) -> EdgeRecord {
+    pub(crate) fn edge_record_from_nbr(
+        &self,
+        src: u32,
+        nbr: Nbr,
+        query_ts: Timestamp,
+    ) -> EdgeRecord {
         let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
         let rank = nbr.rank;
         let properties = if nbr.prop_offset != crate::edge::property_schema::PROP_OFFSET_NONE {
@@ -1876,111 +1767,6 @@ impl TimeTravelEdgeStore {
             .into_iter()
             .map(|((src, dst, rank), _record)| (src, dst, rank))
             .collect()
-    }
-}
-
-pub struct EdgeTableScanIterator<'a> {
-    _table: &'a TimeTravelEdgeStore,
-    records: std::vec::IntoIter<EdgeRecord>,
-    /// Maximum number of records to return (None = unlimited)
-    max_records: Option<usize>,
-    /// Current record count
-    current_count: usize,
-}
-
-impl<'a> EdgeTableScanIterator<'a> {
-    pub fn new(table: &'a TimeTravelEdgeStore, ts: Timestamp) -> Self {
-        Self::with_limit(table, ts, None)
-    }
-
-    /// Create a scan iterator with a maximum record limit
-    pub fn with_limit(
-        table: &'a TimeTravelEdgeStore,
-        ts: Timestamp,
-        max_records: Option<usize>,
-    ) -> Self {
-        let mut seen = HashSet::new();
-        let mut records = Vec::new();
-
-        for (src_vid, nbr) in table.out_csr.iter(ts) {
-            if !table.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                records.push(table.edge_record_from_nbr(
-                    src_vid.as_int64().unwrap_or(0) as u32,
-                    nbr,
-                    ts,
-                ));
-
-                if let Some(max) = max_records {
-                    if records.len() >= max {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if records.len() < max_records.unwrap_or(usize::MAX) {
-            for segment in table.out_segments.iter().rev() {
-                if segment.create_ts_min > ts {
-                    continue;
-                }
-
-                for (src_vid, edge) in segment.csr.read().iter() {
-                    if edge.timestamp <= ts
-                        && !table.mvcc.is_tombstoned(edge.edge_id, ts)
-                        && seen.insert(edge.edge_id)
-                    {
-                        records.push(table.edge_record_from_nbr(
-                            src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::with_prop_offset(
-                                edge.endpoint,
-                                edge.rank,
-                                edge.edge_id,
-                                edge.prop_offset,
-                            ),
-                            ts,
-                        ));
-
-                        if let Some(max) = max_records {
-                            if records.len() >= max {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if let Some(max) = max_records {
-                    if records.len() >= max {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Self {
-            _table: table,
-            records: records.into_iter(),
-            max_records,
-            current_count: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for EdgeTableScanIterator<'a> {
-    type Item = EdgeRecord;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(max) = self.max_records {
-            if self.current_count >= max {
-                return None;
-            }
-        }
-
-        if let Some(record) = self.records.next() {
-            self.current_count += 1;
-            Some(record)
-        } else {
-            None
-        }
     }
 }
 

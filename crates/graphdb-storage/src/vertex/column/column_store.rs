@@ -138,11 +138,7 @@ fn decode_column_values_at_ts(
     }
 }
 
-fn general_column_at_ts(
-    column: &Column,
-    rows: &[usize],
-    query_ts: Timestamp,
-) -> ColumnValues {
+fn general_column_at_ts(column: &Column, rows: &[usize], query_ts: Timestamp) -> ColumnValues {
     ColumnValues::General(
         rows.iter()
             .map(|&r| column.get_at_ts(r, query_ts))
@@ -192,13 +188,16 @@ impl ColumnStore {
         for zone in zones {
             if let Some(v) = &zone.min {
                 match &merged.min {
-                    Some(cur) if super::zone_map::compare_values(cur, v) != std::cmp::Ordering::Greater => {}
+                    Some(cur)
+                        if super::zone_map::compare_values(cur, v)
+                            != std::cmp::Ordering::Greater => {}
                     _ => merged.min = Some(v.clone()),
                 }
             }
             if let Some(v) = &zone.max {
                 match &merged.max {
-                    Some(cur) if super::zone_map::compare_values(cur, v) != std::cmp::Ordering::Less => {}
+                    Some(cur)
+                        if super::zone_map::compare_values(cur, v) != std::cmp::Ordering::Less => {}
                     _ => merged.max = Some(v.clone()),
                 }
             }
