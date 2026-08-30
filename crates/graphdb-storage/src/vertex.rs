@@ -9,15 +9,18 @@
 //! - `ColumnStore`: Columnar property storage
 //! - `VertexTimestamp`: MVCC timestamp tracking for vertices
 
-pub mod column_store;
+pub mod column;
 pub mod gc_manager;
 pub mod id_indexer;
 pub mod vertex_table;
 pub mod vertex_timestamp;
 
+// Backward-compatible alias: external code uses `crate::vertex::column_store::*`.
+pub use column as column_store;
+
 use crate::types::StoragePropertyDef;
 
-pub use column_store::ColumnStore;
+pub use column::ColumnStore;
 pub use gc_manager::VertexGcConfig;
 pub use id_indexer::{IdIndexer, IdKey};
 pub use vertex_table::ShardedVertexTable;
