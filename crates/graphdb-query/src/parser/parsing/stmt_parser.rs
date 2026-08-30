@@ -7,8 +7,9 @@ use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::parsing::{
-    ddl_parser::DdlParser, dml_parser::DmlParser, traversal_parser::TraversalParser,
-    user_parser::UserParser, util_stmt_parser::UtilStmtParser,
+    ddl_parser::DdlParser, dml_parser::DmlParser, explain_parser::ExplainParser,
+    session_parser::SessionParser, show_parser::ShowParser, transaction_parser::TransactionParser,
+    traversal_parser::TraversalParser, user_parser::UserParser, util_stmt_parser::UtilStmtParser,
 };
 use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
@@ -28,9 +29,6 @@ impl StmtParser {
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
-            // MATCH VECTOR is dispatched to the vector parser; plain
-            // MATCH (and OPTIONAL MATCH, whose first token is OPTIONAL)
-            // goes to the traversal parser.
             TokenKind::Match | TokenKind::Optional => {
                 if ctx.check_keyword_sequence(&["MATCH", "VECTOR"]) {
                     return crate::parser::parsing::vector_parser::parse_vector(ctx);
@@ -66,16 +64,14 @@ impl StmtParser {
 
             // Tool statements
             TokenKind::Use => UtilStmtParser::new().parse_use_statement(ctx),
-            TokenKind::Show => Self::parse_show_statement_extended(ctx),
-            TokenKind::Explain => Self::parse_explain_statement(ctx),
-            TokenKind::Profile => Self::parse_profile_statement(ctx),
-            TokenKind::Analyze => Self::parse_analyze_statement(ctx),
+            TokenKind::Show => ShowParser::new().parse_show_statement_extended(ctx),
+            TokenKind::Explain => ExplainParser::new().parse_explain_statement(ctx),
+            TokenKind::Profile => ExplainParser::new().parse_profile_statement(ctx),
+            TokenKind::Analyze => ExplainParser::new().parse_analyze_statement(ctx),
             TokenKind::Group => Self::parse_group_by_statement(ctx),
-            TokenKind::Kill => Self::parse_kill_statement(ctx),
+            TokenKind::Kill => SessionParser::new().parse_kill_statement(ctx),
             TokenKind::Fetch => UtilStmtParser::new().parse_fetch_statement(ctx),
             TokenKind::Lookup => {
-                // LOOKUP VECTOR is dispatched to the vector parser; plain
-                // LOOKUP ON EDGE/TAG goes to the util statement parser.
                 if ctx.check_keyword_sequence(&["LOOKUP", "VECTOR"]) {
                     return crate::parser::parsing::vector_parser::parse_vector(ctx);
                 }
@@ -89,24 +85,20 @@ impl StmtParser {
             TokenKind::Remove => UtilStmtParser::new().parse_remove_statement(ctx),
 
             // Transaction statements
-            TokenKind::Begin => Self::parse_begin_transaction(ctx),
-            TokenKind::Commit => Self::parse_commit_transaction(ctx),
-            TokenKind::Rollback => Self::parse_rollback_transaction(ctx),
-            TokenKind::Savepoint => Self::parse_savepoint_statement(ctx),
-            TokenKind::Release => Self::parse_release_savepoint(ctx),
+            TokenKind::Begin => TransactionParser::new().parse_begin_transaction(ctx),
+            TokenKind::Commit => TransactionParser::new().parse_commit_transaction(ctx),
+            TokenKind::Rollback => TransactionParser::new().parse_rollback_transaction(ctx),
+            TokenKind::Savepoint => TransactionParser::new().parse_savepoint_statement(ctx),
+            TokenKind::Release => TransactionParser::new().parse_release_savepoint(ctx),
 
             // Session variable assignment statement
-            TokenKind::Let => Self::parse_let_statement(ctx),
+            TokenKind::Let => SessionParser::new().parse_let_statement(ctx),
 
             // Full-text search statements
-            // Check if it's SEARCH VECTOR or SEARCH INDEX
             TokenKind::Search => {
-                // Peek ahead to check if it's SEARCH VECTOR
                 if ctx.check_keyword_sequence(&["SEARCH", "VECTOR"]) {
-                    // It's a vector search, call vector parser
                     return crate::parser::parsing::vector_parser::parse_vector(ctx);
                 }
-                // Otherwise, it's a fulltext search
                 Self::parse_fulltext_statement(ctx)
             }
 
@@ -122,7 +114,6 @@ impl StmtParser {
     }
 
     /// Analyzing the pipe suffix (the | operator)
-    /// Also handles sequential clauses like MATCH ... WITH ... RETURN
     fn parse_pipe_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {
         if ctx.match_token(TokenKind::Pipe) {
             let start_span = left.span();
@@ -177,8 +168,6 @@ impl StmtParser {
 
             Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else if ctx.current_token().kind == TokenKind::Group {
-            // A GROUP BY may follow the previous stage without a pipe
-            // operator, e.g. MATCH ... WITH ... GROUP BY ...
             let start_span = left.span();
             let right = Self::parse_group_by_statement(ctx)?;
             let end_span = right.span();
@@ -192,18 +181,13 @@ impl StmtParser {
 
             Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else {
-            // Check whether it is a set operation.
             Self::parse_set_operation_suffix(ctx, left)
         }
     }
 
     /// Parse the right-hand side of a `|` pipe operator.
-    ///
-    /// Most stages are ordinary statements, but WHERE / GROUP BY / COLLECT are
-    /// standalone clause stages that only appear as pipe suffixes.
     fn parse_pipe_stage(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         if ctx.current_token().kind == TokenKind::Where {
-            // A standalone WHERE stage filters the rows of the previous stage.
             let start_span = ctx.current_span();
             ctx.next_token();
             let expression = Self::parse_expression(ctx)?;
@@ -218,7 +202,6 @@ impl StmtParser {
             ctx.current_token().kind,
             TokenKind::Identifier(ref word) if word.eq_ignore_ascii_case("COLLECT")
         ) {
-            // A standalone COLLECT stage aggregates all input rows into one.
             let start_span = ctx.current_span();
             ctx.next_token();
             let mut items = Vec::new();
@@ -239,100 +222,6 @@ impl StmtParser {
             return Ok(Stmt::Collect(CollectStmt { span, items }));
         }
         Self::parse_single_statement(ctx)
-    }
-
-    /// Analyzing the EXPLAIN statement (special handling is required, as it contains sub-statements)
-    fn parse_explain_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Explain)?;
-
-        // Optional ANALYZE: execute the statement and overlay actual
-        // operator statistics on the plan output.
-        let analyze = ctx.match_token(TokenKind::Analyze);
-
-        // Analysis of the optional FORMAT clause
-        let format = if ctx.match_token(TokenKind::Format) {
-            ctx.expect_token(TokenKind::Assign)?;
-            let format_name = ctx.expect_identifier()?;
-            match format_name.to_uppercase().as_str() {
-                "DOT" => ExplainFormat::Dot,
-                "TABLE" => ExplainFormat::Table,
-                _ => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        format!(
-                            "Unknown EXPLAIN format: {}, expects DOT or TABLE",
-                            format_name
-                        ),
-                        ctx.current_position(),
-                    ));
-                }
-            }
-        } else {
-            ExplainFormat::default()
-        };
-
-        let statement = Box::new(Self::parse_statement(ctx)?);
-
-        Ok(Stmt::Explain(ExplainStmt {
-            span: start_span,
-            statement,
-            format,
-            analyze,
-        }))
-    }
-
-    /// Analyzing the PROFILE statement
-    fn parse_profile_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Profile)?;
-
-        // Parsing the optional FORMAT clause
-        let format = if ctx.match_token(TokenKind::Format) {
-            ctx.expect_token(TokenKind::Assign)?;
-            let format_name = ctx.expect_identifier()?;
-            match format_name.to_uppercase().as_str() {
-                "DOT" => ExplainFormat::Dot,
-                "TABLE" => ExplainFormat::Table,
-                _ => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        format!(
-                            "Unknown PROFILE format: {}, expects DOT or TABLE",
-                            format_name
-                        ),
-                        ctx.current_position(),
-                    ));
-                }
-            }
-        } else {
-            ExplainFormat::default()
-        };
-
-        let statement = Box::new(Self::parse_statement(ctx)?);
-
-        Ok(Stmt::Profile(ProfileStmt {
-            span: start_span,
-            statement,
-            format,
-        }))
-    }
-
-    /// Analyzing the ANALYZE statement: `ANALYZE` or `ANALYZE SPACE <name>`.
-    fn parse_analyze_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Analyze)?;
-
-        let space = if ctx.match_token(TokenKind::Space) {
-            Some(ctx.expect_identifier()?)
-        } else {
-            None
-        };
-
-        Ok(Stmt::Analyze(AnalyzeStmt {
-            span: start_span,
-            space,
-        }))
     }
 
     /// Analysis of the GROUP BY statement
@@ -372,7 +261,6 @@ impl StmtParser {
             let all_items: Vec<_> = sets.iter().flatten().cloned().collect();
             (all_items, GroupingType::GroupingSets(sets))
         } else {
-            // Parse the list of group items (only identifiers are to be parsed).
             let mut group_items = Vec::new();
             loop {
                 let ident = ctx.expect_identifier()?;
@@ -391,11 +279,9 @@ impl StmtParser {
             (group_items, GroupingType::Standard)
         };
 
-        // Analyzing the YIELD clause
         let yield_clause = if ctx.match_token(TokenKind::Yield) {
             ClauseParser::new().parse_yield_clause(ctx)?
         } else {
-            // If YIELD is not available, create a default version that returns all group items.
             let items: Vec<YieldItem> = group_items
                 .iter()
                 .enumerate()
@@ -415,7 +301,6 @@ impl StmtParser {
             }
         };
 
-        // Analyzing the optional HAVING clause
         let having_clause = if ctx.match_token(TokenKind::Having) {
             ctx.recover_clause(|_| Ok(None), |c| Self::parse_expression(c).map(Some))?
         } else {
@@ -465,152 +350,25 @@ impl StmtParser {
         )
     }
 
-    /// Analysis of extended SHOW statements (including SESSIONS, QUERIES, and CONFIGS)
-    fn parse_show_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::{ShowConfigsStmt, ShowQueriesStmt, ShowSessionsStmt};
-
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Show)?;
-
-        // Check the next token.
-        if ctx.check_token(TokenKind::Sessions) {
-            ctx.expect_token(TokenKind::Sessions)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowSessions(ShowSessionsStmt { span }))
-        } else if ctx.check_token(TokenKind::Queries) {
-            ctx.expect_token(TokenKind::Queries)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowQueries(ShowQueriesStmt { span }))
-        } else if ctx.check_token(TokenKind::Configs) {
-            ctx.expect_token(TokenKind::Configs)?;
-            // Analysis of the available module names
-            let module = if ctx.is_identifier_or_in_token() {
-                Some(ctx.expect_identifier()?)
-            } else {
-                None
-            };
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowConfigs(ShowConfigsStmt { span, module }))
-        } else if ctx.check_token(TokenKind::Spaces) {
-            ctx.expect_token(TokenKind::Spaces)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::Show(crate::parser::ast::stmt::ShowStmt {
-                span,
-                target: crate::parser::ast::stmt::ShowTarget::Spaces,
-            }))
-        } else if ctx.check_token(TokenKind::Tags) {
-            ctx.expect_token(TokenKind::Tags)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::Show(crate::parser::ast::stmt::ShowStmt {
-                span,
-                target: crate::parser::ast::stmt::ShowTarget::Tags,
-            }))
-        } else if ctx.check_token(TokenKind::Edges) {
-            ctx.expect_token(TokenKind::Edges)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::Show(crate::parser::ast::stmt::ShowStmt {
-                span,
-                target: crate::parser::ast::stmt::ShowTarget::Edges,
-            }))
-        } else if ctx.check_token(TokenKind::Hosts) {
-            ctx.expect_token(TokenKind::Hosts)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            // HOSTS is temporarily mapped to Spaces, as this is a single-node implementation.
-            Ok(Stmt::Show(crate::parser::ast::stmt::ShowStmt {
-                span,
-                target: crate::parser::ast::stmt::ShowTarget::Spaces,
-            }))
-        } else if ctx.check_token(TokenKind::Parts) {
-            ctx.expect_token(TokenKind::Parts)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            // The “PARTS” component is temporarily mapped to the “Spaces” component, because this is a single-node implementation.
-            Ok(Stmt::Show(crate::parser::ast::stmt::ShowStmt {
-                span,
-                target: crate::parser::ast::stmt::ShowTarget::Spaces,
-            }))
-        } else if ctx.check_token(TokenKind::Users) {
-            ctx.expect_token(TokenKind::Users)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowUsers(crate::parser::ast::stmt::ShowUsersStmt {
-                span,
-            }))
-        } else if ctx.check_token(TokenKind::Roles) {
-            UtilStmtParser::new().parse_show_roles_internal(ctx, start_span)
-        } else if ctx.check_token(TokenKind::Create) {
-            // The SHOW CREATE statement: A unified processing method delegated to UtilStmtParser
-            // Supports SHOW CREATE { SPACE | TAG | EDGE | INDEX } <name>
-            UtilStmtParser::new().parse_show_create_internal(ctx, start_span)
-        } else {
-            Err(ParseError::new(
-                ParseErrorKind::SyntaxError,
-                format!("Unknown SHOW Target: {:?}", ctx.peek_token().kind),
-                ctx.current_position(),
-            ))
-        }
-    }
-
-    /// Analyzing the KILL statement
-    fn parse_kill_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::KillQueryStmt;
-
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Kill)?;
-        ctx.expect_token(TokenKind::Query)?;
-
-        // Analyzing the `session_id`
-        let session_id = ctx.expect_integer_literal()?;
-
-        // Analyzing the use of commas
-        ctx.expect_token(TokenKind::Comma)?;
-
-        // Analysis of plan_id
-        let plan_id = ctx.expect_integer_literal()?;
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::KillQuery(KillQueryStmt {
-            span,
-            session_id,
-            plan_id,
-        }))
-    }
-
     /// Analysis of the extended UPDATE statement (including UPDATE CONFIGS)
     fn parse_update_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::parser::ast::stmt::UpdateConfigsStmt;
         use crate::parser::parsing::dml_parser::DmlParser;
 
-        // Check whether it is an UPDATE CONFIGS command.
-        // Consume the UPDATE token first.
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Update)?;
 
         if ctx.check_token(TokenKind::Configs) {
-            // Analysis of the UPDATE CONFIGS command
             ctx.expect_token(TokenKind::Configs)?;
 
-            // Let’s first analyze the first identifier.
             let first_ident = ctx.expect_identifier()?;
 
-            // Check whether the next token is ‘=’. If it is, the first identifier represents the configuration name.
-            // Otherwise, the first identifier is the module name, and the configuration name also needs to be parsed.
             let (module, config_name) = if ctx.check_token(TokenKind::Assign) {
                 (None, first_ident)
             } else {
                 (Some(first_ident), ctx.expect_identifier()?)
             };
 
-            // Analyzing the equal sign and the value
             ctx.expect_token(TokenKind::Assign)?;
             let config_value = Self::parse_expression(ctx)?;
 
@@ -624,10 +382,6 @@ impl StmtParser {
                 config_value,
             }))
         } else {
-            // It’s not about using the `UPDATE CONFIGS` command; instead, we need to revert to the regular `UPDATE` parsing method.
-            // Since we have already used the UPDATE token, we need to call other methods of the DML parser.
-            // Here, we directly call the `parse_update_statement` function and handle any errors that may occur.
-            // In fact, it should be restructured, but let’s deal with it this way for now.
             DmlParser::new().parse_update_after_token(ctx, start_span)
         }
     }
@@ -639,13 +393,10 @@ impl StmtParser {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Dollar)?;
 
-        // Analyzing variable names
         let var_name = ctx.expect_identifier()?;
 
-        // Analyzing the equal sign
         ctx.expect_token(TokenKind::Assign)?;
 
-        // Analyze the sentence on the right side.
         let statement = Box::new(Self::parse_statement(ctx)?);
 
         let end_span = ctx.current_span();
@@ -658,54 +409,40 @@ impl StmtParser {
         }))
     }
 
-    /// Analyzing the extended CREATE statement
-    /// Distinguish between DDL CREATE statements (for creating tags, edges, spaces, or indexes) and Cypher CREATE statements for creating data.
+    /// Analysis of the extended CREATE statement
     fn parse_create_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::parser::parsing::ddl_parser::DdlParser;
         use crate::parser::parsing::dml_parser::DmlParser;
 
-        // Pre-read the next token to determine the type of the CREATE command.
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Create)?;
 
-        // Check whether it is a Cypher-style CREATE statement (starting with ‘(‘).
         if ctx.check_token(TokenKind::LParen) {
-            // Cypher CREATE data statement: CREATE (n:Label {props})
-            // Since the CREATE token has already been consumed, a special method needs to be called.
             return DmlParser::new().parse_create_data_after_token(ctx, start_span);
         }
 
-        // Check whether it is a CREATE USER statement.
         if ctx.check_token(TokenKind::User) {
             return UserParser::new().parse_create_user_statement_after_create(ctx, start_span);
         }
 
-        // Check whether it is a CREATE FULLTEXT INDEX statement.
         if ctx.check_keyword("FULLTEXT") {
-            // Parse as full-text index statement (CREATE already consumed)
             return crate::parser::parsing::fulltext_parser::parse_create_fulltext_index_after_create(ctx);
         }
 
-        // Check whether it is a CREATE VECTOR INDEX statement.
         if ctx.check_keyword("VECTOR") {
-            // Parse as vector index statement (CREATE already consumed)
             return crate::parser::parsing::vector_parser::parse_create_vector_index_after_create(
                 ctx,
             );
         }
 
-        // Check the DDL CREATE type.
         if ctx.check_token(TokenKind::Tag)
             || ctx.check_token(TokenKind::Edge)
             || ctx.check_token(TokenKind::Space)
             || ctx.check_token(TokenKind::Index)
         {
-            // DDL CREATE: CREATE TAG/EDGE/SPACE/INDEX
-            // Since the CREATE token has already been consumed, a special method of the DDL parser is called.
             return DdlParser::new().parse_create_after_token(ctx, start_span);
         }
 
-        // It is not possible to determine the type; an error has occurred.
         Err(ParseError::new(
             ParseErrorKind::SyntaxError,
             "CREATE statement expects '(' (Cypher data creation) or TAG/EDGE/SPACE/INDEX (Schema definition) or USER (user management)".to_string(),
@@ -722,7 +459,6 @@ impl StmtParser {
     fn parse_set_operation_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {
         use crate::parser::ast::stmt::{SetOperationStmt, SetOperationType};
 
-        // Check whether it is a set operator.
         let op_type = if ctx.match_token(TokenKind::Union) {
             if ctx.match_token(TokenKind::All) {
                 SetOperationType::UnionAll
@@ -734,7 +470,6 @@ impl StmtParser {
         } else if ctx.match_token(TokenKind::SetMinus) {
             SetOperationType::Minus
         } else {
-            // It is not a set operator; it returns the statement on the left side.
             return Ok(left);
         };
 
@@ -750,191 +485,7 @@ impl StmtParser {
             right: Box::new(right),
         });
 
-        // Continue to check whether there are any more set operations.
         Self::parse_set_operation_suffix(ctx, set_op_stmt)
-    }
-
-    /// Parse BEGIN TRANSACTION statement
-    ///
-    /// Grammar: `BEGIN [TRANSACTION] [READ ONLY | READ WRITE]`
-    fn parse_begin_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Begin)?;
-
-        // Optional: TRANSACTION keyword
-        if ctx.check_token(TokenKind::Transaction) {
-            ctx.expect_token(TokenKind::Transaction)?;
-        }
-
-        // Optional: access mode (READ ONLY / READ WRITE)
-        let mut read_only = None;
-        if ctx.check_token(TokenKind::Read) {
-            ctx.expect_token(TokenKind::Read)?;
-            let mode = if ctx.check_token(TokenKind::Only) {
-                ctx.expect_token(TokenKind::Only)?;
-                true
-            } else if ctx.check_token(TokenKind::Write) {
-                ctx.expect_token(TokenKind::Write)?;
-                false
-            } else {
-                let pos = ctx.current_position();
-                return Err(ParseError::new(
-                    ParseErrorKind::UnexpectedToken,
-                    format!(
-                        "Expected READ ONLY or READ WRITE, found {:?}",
-                        ctx.current_token().kind
-                    ),
-                    pos,
-                )
-                .with_expected_tokens(vec!["READ ONLY".to_string(), "READ WRITE".to_string()]));
-            };
-            read_only = Some(mode);
-        }
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::BeginTransaction(BeginTransactionStmt {
-            span,
-            read_only,
-        }))
-    }
-
-    /// Parse COMMIT TRANSACTION statement
-    fn parse_commit_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Commit)?;
-
-        // Optional: TRANSACTION keyword
-        if ctx.check_token(TokenKind::Transaction) {
-            ctx.expect_token(TokenKind::Transaction)?;
-        }
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::CommitTransaction(CommitTransactionStmt { span }))
-    }
-
-    /// Parse ROLLBACK TRANSACTION statement
-    ///
-    /// Grammar: `ROLLBACK [TRANSACTION] [TO <savepoint-name>]`
-    fn parse_rollback_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Rollback)?;
-
-        // Optional: TRANSACTION keyword
-        if ctx.check_token(TokenKind::Transaction) {
-            ctx.expect_token(TokenKind::Transaction)?;
-        }
-
-        // Optional: TO <savepoint-name> — rolls back to a savepoint instead
-        // of the whole transaction. The name keeps its original case (the
-        // transaction layer matches savepoint names verbatim).
-        let savepoint_name = if ctx.check_token(TokenKind::To) {
-            ctx.expect_token(TokenKind::To)?;
-            Some(ctx.expect_identifier()?)
-        } else {
-            None
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::RollbackTransaction(RollbackTransactionStmt {
-            span,
-            savepoint_name,
-        }))
-    }
-
-    /// Parse SAVEPOINT statement
-    ///
-    /// Grammar: `SAVEPOINT <savepoint-name>`
-    fn parse_savepoint_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Savepoint)?;
-        let name = ctx.expect_identifier()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::Savepoint(SavepointStmt { span, name }))
-    }
-
-    /// Parse RELEASE SAVEPOINT statement
-    ///
-    /// Grammar: `RELEASE SAVEPOINT <savepoint-name>`
-    fn parse_release_savepoint(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Release)?;
-        ctx.expect_token(TokenKind::Savepoint)?;
-        let name = ctx.expect_identifier()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::ReleaseSavepoint(ReleaseSavepointStmt { span, name }))
-    }
-
-    /// Parse LET statement
-    ///
-    /// Grammar: `LET [$]name = expr`. The name must be a valid identifier
-    /// (`[A-Za-z_][A-Za-z0-9_]*`); the right-hand side is parsed through the
-    /// standard expression pipeline so it may reference `$name` session
-    /// variables and `@name` parameters.
-    fn parse_let_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Let)?;
-
-        // Optional leading `$` (both `LET $name = expr` and `LET name = expr`).
-        let _ = ctx.match_token(TokenKind::Dollar);
-
-        // The name token must be an identifier; reject empty / malformed
-        // names with a clear message.
-        let name = match ctx.expect_identifier() {
-            Ok(name) => name,
-            Err(_) => {
-                let pos = ctx.current_position();
-                let display_name = ctx.current_token().lexeme.clone();
-                return Err(ParseError::new(
-                    ParseErrorKind::SyntaxError,
-                    format!("Invalid session variable name '{}'", display_name),
-                    pos,
-                ));
-            }
-        };
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !valid {
-            let pos = ctx.current_position();
-            return Err(ParseError::new(
-                ParseErrorKind::SyntaxError,
-                format!("Invalid session variable name '{}'", name),
-                pos,
-            ));
-        }
-
-        // The `=` assignment separator must follow; a bare `LET $name`
-        // reports the missing-assignment message.
-        if !ctx.check_token(TokenKind::Assign) {
-            let pos = ctx.current_position();
-            return Err(ParseError::new(
-                ParseErrorKind::SyntaxError,
-                "LET requires an assignment: LET $name = expr".to_string(),
-                pos,
-            ));
-        }
-        ctx.expect_token(TokenKind::Assign)?;
-
-        let expression = Self::parse_expression(ctx)?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::AssignVariable(AssignVariableStmt {
-            span,
-            name,
-            expression,
-        }))
     }
 }
 
@@ -1026,7 +577,6 @@ mod tests {
 
     #[test]
     fn test_parse_create_tag_composite_nesting_limit() {
-        // 17 levels of nesting exceeds the limit of 16 and must fail.
         let mut ddl = String::from("CREATE TAG Deep (a ARRAY<");
         for _ in 0..17 {
             ddl.push_str("ARRAY<");
@@ -1077,7 +627,7 @@ mod tests {
         if let Ok(Stmt::Use(stmt)) = result {
             assert_eq!(stmt.space, "test_space");
         } else {
-            panic!("“Use statement” is a term commonly used in programming languages to refer to a specific instruction or command that tells the computer how to perform a certain action. For example, in Python, the “print” statement is used to display text on the screen.");
+            panic!("Expected Use statement");
         }
     }
 
@@ -1094,20 +644,16 @@ mod tests {
 
     #[test]
     fn test_create_space_statement_parses() {
-        // It has been tested that the CREATE SPACE statement can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE IF NOT EXISTS test_space");
         let result = StmtParser::parse_statement(&mut ctx);
 
-        // Verification and parsing were successful.
         assert!(
             result.is_ok(),
             "CREATE SPACE Parse failure: {:?}",
             result.err()
         );
 
-        // The verification involves the “Create” statement.
         if let Ok(Stmt::Create(stmt)) = result {
-            // The verification confirms that Space created the target.
             match &stmt.target {
                 CreateTarget::Space { name, vid_type, .. } => {
                     assert_eq!(name, "test_space");
@@ -1126,20 +672,16 @@ mod tests {
 
     #[test]
     fn test_create_space_with_params_parses() {
-        // The test shows that the CREATE SPACE statement with parameters can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE test_space(vid_type=FIXEDSTRING32)");
         let result = StmtParser::parse_statement(&mut ctx);
 
-        // Verification and parsing were successful.
         assert!(
             result.is_ok(),
             "CREATE SPACE with params failed to parse: {:?}",
             result.err()
         );
 
-        // The verification involves the “Create” statement.
         if let Ok(Stmt::Create(stmt)) = result {
-            // The verification confirms that Space has created the target.
             match &stmt.target {
                 CreateTarget::Space { name, vid_type, .. } => {
                     assert_eq!(name, "test_space");
@@ -1164,7 +706,7 @@ mod tests {
         if let Ok(Stmt::Explain(stmt)) = result {
             assert!(matches!(stmt.format, ExplainFormat::Table));
         } else {
-            panic!("The phrase “Expect to” is used to indicate that someone has a reasonable expectation or belief about a certain situation or outcome. It suggests that the expectation is based on facts, information, or past experience, and that it is likely to come true. For example, if someone says, “I expect to finish the project by Friday,” they are expressing the belief that they will be able to complete the project by that deadline.");
+            panic!("Expected Explain statement");
         }
     }
 
@@ -1182,7 +724,7 @@ mod tests {
             assert!(matches!(stmt.format, ExplainFormat::Dot));
             assert!(!stmt.analyze);
         } else {
-            panic!("“Expect” is a verb that means to have a belief or hope that something will happen in a particular way. For example, if you expect to finish a project by Friday, you believe that you will be able to complete it by that day. The phrase “explain” is a verb that means to give a clear description or explanation of something so that others can understand it. For example, if someone asks you to explain a complex concept, you need to provide enough information so that they can understand it.");
+            panic!("Expected Explain statement");
         }
     }
 
@@ -1292,7 +834,7 @@ mod tests {
             assert_eq!(stmt.yield_clause.items.len(), 1);
             assert!(stmt.having_clause.is_none());
         } else {
-            panic!("The expectation is that the GroupBy statement will be used.");
+            panic!("Expected GroupBy statement");
         }
     }
 
@@ -1310,7 +852,7 @@ mod tests {
             assert_eq!(stmt.group_items.len(), 2);
             assert_eq!(stmt.yield_clause.items.len(), 2);
         } else {
-            panic!("The expectation is that the GroupBy statement will be used.");
+            panic!("Expected GroupBy statement");
         }
     }
 
@@ -1325,9 +867,8 @@ mod tests {
         );
 
         if let Ok(Stmt::ShowSessions(_)) = result {
-            // Success
         } else {
-            panic!("The expectation is that the ShowSessions statement will be executed.");
+            panic!("Expected ShowSessions statement");
         }
     }
 
@@ -1342,9 +883,8 @@ mod tests {
         );
 
         if let Ok(Stmt::ShowQueries(_)) = result {
-            // Success
         } else {
-            panic!("The expectation is for the ShowQueries statement to be executed.");
+            panic!("Expected ShowQueries statement");
         }
     }
 
@@ -1362,7 +902,7 @@ mod tests {
             assert_eq!(stmt.session_id, 123);
             assert_eq!(stmt.plan_id, 456);
         } else {
-            panic!("The expectation is that the KillQuery statement will be executed.");
+            panic!("Expected KillQuery statement");
         }
     }
 
@@ -1428,7 +968,7 @@ mod tests {
         if let Ok(Stmt::ShowConfigs(stmt)) = result {
             assert!(stmt.module.is_none());
         } else {
-            panic!("The expectation for the ShowConfigs statement");
+            panic!("Expected ShowConfigs statement");
         }
     }
 
@@ -1445,7 +985,7 @@ mod tests {
         if let Ok(Stmt::ShowConfigs(stmt)) = result {
             assert_eq!(stmt.module, Some("storage".to_string()));
         } else {
-            panic!("The expectation for the ShowConfigs statement");
+            panic!("Expected ShowConfigs statement");
         }
     }
 
@@ -1463,7 +1003,7 @@ mod tests {
             assert!(stmt.module.is_none());
             assert_eq!(stmt.config_name, "max_connections");
         } else {
-            panic!("The expectation is for the UpdateConfigs statement to be executed.");
+            panic!("Expected UpdateConfigs statement");
         }
     }
 
@@ -1481,7 +1021,7 @@ mod tests {
             assert_eq!(stmt.module, Some("storage".to_string()));
             assert_eq!(stmt.config_name, "cache_size");
         } else {
-            panic!("The expectation is for the UpdateConfigs statement to be executed.");
+            panic!("Expected UpdateConfigs statement");
         }
     }
 
@@ -1525,7 +1065,6 @@ mod tests {
             panic!("Expected an AssignVariable statement, got {:?}", result);
         }
 
-        // Without the leading `$`.
         let mut ctx = create_parser_context("LET y = 'Alice'");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1542,7 +1081,6 @@ mod tests {
 
     #[test]
     fn test_parse_let_statement_errors() {
-        // Missing assignment separator.
         let mut ctx = create_parser_context("LET $x");
         let result = StmtParser::parse_statement(&mut ctx);
         let err = result.expect_err("LET without `=` must fail");
@@ -1552,7 +1090,6 @@ mod tests {
             err
         );
 
-        // Empty name.
         let mut ctx = create_parser_context("LET $ = 1");
         let result = StmtParser::parse_statement(&mut ctx);
         let err = result.expect_err("LET with empty name must fail");
@@ -1562,7 +1099,6 @@ mod tests {
             err
         );
 
-        // Name starting with a digit.
         let mut ctx = create_parser_context("LET $1x = 1");
         let result = StmtParser::parse_statement(&mut ctx);
         let err = result.expect_err("LET with digit-leading name must fail");
@@ -1588,7 +1124,6 @@ mod tests {
             panic!("Expected a RollbackTransaction statement, got {:?}", result);
         }
 
-        // Full rollback keeps savepoint_name = None.
         let mut ctx = create_parser_context("ROLLBACK");
         let result = StmtParser::parse_statement(&mut ctx);
         if let Ok(Stmt::RollbackTransaction(stmt)) = result {
