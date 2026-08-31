@@ -16,11 +16,13 @@ use graphdb_core::{StorageError, StorageResult};
 
 /// Maps string names to PropertyId.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct NameIndexer {
     name_to_id: HashMap<String, PropertyId>,
     next_id: u16,
 }
 
+#[allow(dead_code)]
 impl NameIndexer {
     pub fn new() -> Self {
         Self {

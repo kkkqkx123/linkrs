@@ -28,10 +28,12 @@ pub mod section {
     pub const EDGE_IN_CSR: u32 = 0x0203;
     pub const EDGE_PROPERTIES: u32 = 0x0204;
 
+    #[allow(dead_code)]
     pub const PROPERTY_TABLE: u32 = 0x0301;
 }
 
 /// Write a persistence header (magic + version + section_id) into a buffer
+#[allow(dead_code)]
 pub fn write_header(buf: &mut Vec<u8>, section_id: u32) {
     buf.extend_from_slice(&PERSISTENCE_MAGIC);
     buf.extend_from_slice(&CURRENT_VERSION.to_le_bytes());

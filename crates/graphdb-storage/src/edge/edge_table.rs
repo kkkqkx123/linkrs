@@ -46,7 +46,6 @@ use crate::persistence::write_header_to;
 use graphdb_core::types::CompactConfig;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
-use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -1011,35 +1010,33 @@ impl core::TimeTravelEdgeStore {
         self.in_csr.rebuild_create_ts(create_ts_vec.into_iter());
 
         let props_path = path.join("properties.bin");
-        self.properties = match persistence::load_csr_properties(&props_path) {
-            Ok(p) => {
-                let mut new_props = p;
-                // Rebuild columns to match current schema if needed
-                let current_schema_names: std::collections::HashSet<_> = self.schema.properties.iter().map(|p| &p.name).collect();
-                let existing_names: std::collections::HashSet<_> = new_props.property_schema().iter().map(|s| &s.name).collect();
-                if current_schema_names != existing_names {
-                    // Schema mismatch: rebuild from schema
-                    let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
-                        .schema
-                        .properties
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            crate::edge::property_schema::PropertySchema::new(
-                                p.name.clone(),
-                                i as i32,
-                                p.data_type.clone(),
-                            )
-                            .nullable(p.nullable)
-                        })
-                        .collect();
-                    let mut rebuilt = crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
-                    rebuilt.set_version_chain_cap(self.config.version_chain_cap);
-                    new_props = rebuilt;
-                }
-                new_props
+        self.properties = {
+            let p = persistence::load_csr_properties(&props_path)?;
+            let mut new_props = p;
+            // Rebuild columns to match current schema if needed
+            let current_schema_names: std::collections::HashSet<_> = self.schema.properties.iter().map(|p| &p.name).collect();
+            let existing_names: std::collections::HashSet<_> = new_props.property_schema().iter().map(|s| &s.name).collect();
+            if current_schema_names != existing_names {
+                // Schema mismatch: rebuild from schema
+                let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
+                    .schema
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        crate::edge::property_schema::PropertySchema::new(
+                            p.name.clone(),
+                            i as i32,
+                            p.data_type.clone(),
+                        )
+                        .nullable(p.nullable)
+                    })
+                    .collect();
+                let mut rebuilt = crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
+                rebuilt.set_version_chain_cap(self.config.version_chain_cap);
+                new_props = rebuilt;
             }
-            Err(e) => return Err(e),
+            new_props
         };
 
         if self.next_edge_id.0 == 0 {

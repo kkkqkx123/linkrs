@@ -44,7 +44,7 @@ fn bench_compaction_with_calibrator() {
     for vid in 0..1024u32 {
         for i in 0..4 {
             let dst = VertexId::from_int64((vid as i64) * 10 + i as i64);
-            let _ = csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1, 0);
+            let _ = csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1);
         }
     }
     for vid in 0..512u32 {
@@ -72,7 +72,7 @@ fn bench_compaction_with_calibrator() {
     for vid in 0..1024u32 {
         for i in 0..4 {
             let dst = VertexId::from_int64((vid as i64) * 10 + i as i64);
-            let _ = csr2.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1, 0);
+            let _ = csr2.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1);
         }
     }
     for vid in 0..512u32 {
@@ -95,7 +95,7 @@ fn bench_overflow_index() {
     for vid in 0..1000u32 {
         for i in 0..10 {
             let dst = VertexId::from_int64((vid as i64) * 100 + i as i64);
-            let _ = csr.insert_edge(vid, dst, EdgeId(vid as u64 * 100 + i as u64), 1, 0);
+            let _ = csr.insert_edge(vid, dst, EdgeId(vid as u64 * 100 + i as u64), 1);
         }
     }
     let start = Instant::now();

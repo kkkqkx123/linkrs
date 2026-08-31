@@ -532,7 +532,7 @@ fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
 }
 
 /// Property value type tags for the delta codec. Mirrors the scalar subset
-/// stored by `PropertyTable` (Bool/SmallInt/Int/BigInt/Float/Double/String/
+/// stored by CsrWithProperties (Bool/SmallInt/Int/BigInt/Float/Double/String/
 /// Date). Unsupported value types are rejected at encode time.
 fn encode_value(buf: &mut Vec<u8>, value: &Value) -> StorageResult<()> {
     match value {

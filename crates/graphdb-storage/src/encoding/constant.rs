@@ -17,6 +17,7 @@ pub struct ConstantColumn {
     overrides: HashMap<usize, Option<Value>>,
 }
 
+#[allow(dead_code)]
 impl ConstantColumn {
     pub fn new(value: Option<Value>, count: usize) -> Self {
         Self {

@@ -10,43 +10,40 @@
 //! - Time-travel read: get with historical timestamp over deep chain
 //! - Memory: version_chain_stats after many updates
 
+use graphdb_core::types::EdgeId;
 use graphdb_core::{DataType, Value};
-use graphdb_storage::edge::PropertyTable;
+use graphdb_storage::edge::property_schema::PropertySchema;
+use graphdb_storage::edge::CsrWithProperties;
 use std::time::Instant;
 
 fn bench_lazy_allocation() {
     println!("--- Lazy allocation: 10 columns, only 1 updated ---");
-    let mut table = PropertyTable::new();
-    for i in 0..10 {
+    let schema: Vec<PropertySchema> = (0..10)
+        .map(|i| PropertySchema::new(format!("c{}", i), i, DataType::Int).nullable(true))
+        .collect();
+    let mut table = CsrWithProperties::new(16, schema);
+    for i in 0..10_000u32 {
+        let eid = EdgeId(i as u64 + 1);
         table
-            .add_property(format!("c{}", i), DataType::Int, true)
+            .insert_for_edge(
+                eid,
+                &[("c0".to_string(), Value::Int(i as i32))],
+                100 + i as u64,
+            )
             .unwrap();
     }
     let start = Instant::now();
-    let mut offsets = Vec::with_capacity(10_000);
-    for row in 0..10_000usize {
-        let v = Value::Int(row as i32);
-        let off = table
-            .insert(&[("c0".to_string(), v)], 100 + row as u64)
-            .unwrap();
-        offsets.push(off);
-    }
-    // Now update only c0 for each row via set_property (other cols untouched after initial)
-    let upd_start = Instant::now();
-    for (idx, &off) in offsets.iter().enumerate() {
+    for idx in 0..10_000usize {
+        let eid = EdgeId(idx as u64 + 1);
         let v = Value::Int((idx as i32) * 2);
         table
-            .set_property(off, "c0", Some(v), 200_000 + idx as u64)
+            .set_property_for_edge(eid, "c0", Some(v), 200_000 + idx as u64)
             .unwrap();
     }
     let elapsed = start.elapsed();
-    let upd_elapsed = upd_start.elapsed();
     let stats = table.version_chain_stats();
-    println!(
-        "  inserted 10k rows (10 cols, 1 col with value) in {:?}",
-        elapsed
-    );
-    println!("  updated c0 for 10k rows in {:?}", upd_elapsed);
+    println!("  inserted 10k rows (10 cols, 1 col with value) in {:?}", start.elapsed());
+    println!("  updated c0 for 10k rows in {:?}", elapsed);
     println!(
         "  version_chains: total_rows={}, total_entries={}, max_len={}, memory_bytes={}",
         stats.total_rows, stats.total_entries, stats.max_len, stats.memory_bytes
@@ -56,18 +53,17 @@ fn bench_lazy_allocation() {
 
 fn bench_fold_optimization() {
     println!("\n--- Fold optimization: 1 column, 1000 updates to same row, cap=64 ---");
-    let mut table = PropertyTable::new();
-    table
-        .add_property("age".to_string(), DataType::Int, true)
-        .unwrap();
+    let schema = vec![PropertySchema::new("age".to_string(), 0, DataType::Int).nullable(true)];
+    let mut table = CsrWithProperties::new(4, schema);
     table.set_version_chain_cap(64);
-    let off = table
-        .insert(&[("age".to_string(), Value::Int(0))], 1)
+    let eid = EdgeId(1);
+    table
+        .insert_for_edge(eid, &[("age".to_string(), Value::Int(0))], 1)
         .unwrap();
     let start = Instant::now();
     for ts in 2..=1001u64 {
         table
-            .set_property(off, "age", Some(Value::Int(ts as i32)), ts)
+            .set_property_for_edge(eid, "age", Some(Value::Int(ts as i32)), ts)
             .unwrap();
     }
     let elapsed = start.elapsed();
@@ -83,25 +79,24 @@ fn bench_fold_optimization() {
 
 fn bench_time_travel_read() {
     println!("\n--- Time-travel read latency ---");
-    let mut table = PropertyTable::new();
-    table
-        .add_property("v".to_string(), DataType::BigInt, true)
-        .unwrap();
+    let schema = vec![PropertySchema::new("v".to_string(), 0, DataType::BigInt).nullable(true)];
+    let mut table = CsrWithProperties::new(4, schema);
     table.set_version_chain_cap(0);
-    let off = table
-        .insert(&[("v".to_string(), Value::BigInt(0))], 10)
+    let eid = EdgeId(1);
+    table
+        .insert_for_edge(eid, &[("v".to_string(), Value::BigInt(0))], 10)
         .unwrap();
     for ts in 1..=100u64 {
         let t = 10 + ts * 10;
         table
-            .set_property(off, "v", Some(Value::BigInt(t as i64)), t)
+            .set_property_for_edge(eid, "v", Some(Value::BigInt(t as i64)), t)
             .unwrap();
     }
     let queries = 10_000;
     let start = Instant::now();
     for i in 0..queries {
         let q = (i % 100) * 10 + 5;
-        let _ = table.get(off, Some(q as u64));
+        let _ = table.get_by_edge_id(eid, q as u64);
     }
     let elapsed = start.elapsed();
     let stats = table.version_chain_stats();
@@ -114,28 +109,30 @@ fn bench_time_travel_read() {
     );
     // Verify correctness: query at 55 should return value at ts 50
     assert_eq!(
-        table.get(off, Some(55)).unwrap()[0].1,
+        table.get_by_edge_id(eid, 55).unwrap()[0].1,
         Some(Value::BigInt(50))
     );
-    assert!(table.get(off, Some(5)).is_none() || table.get(off, Some(5)).unwrap()[0].1.is_none());
+    assert!(
+        table.get_by_edge_id(eid, 5).is_none()
+            || table.get_by_edge_id(eid, 5).unwrap()[0].1.is_none()
+    );
     println!("  time-travel correctness verified");
 }
 
 fn bench_memory() {
     println!("\n--- Memory usage: 1k rows, each with 10 updates (cap 64) ---");
-    let mut table = PropertyTable::new();
-    table
-        .add_property("a".to_string(), DataType::Int, true)
-        .unwrap();
-    table
-        .add_property("b".to_string(), DataType::String, true)
-        .unwrap();
+    let schema = vec![
+        PropertySchema::new("a".to_string(), 0, DataType::Int).nullable(true),
+        PropertySchema::new("b".to_string(), 1, DataType::String).nullable(true),
+    ];
+    let mut table = CsrWithProperties::new(1024, schema);
     table.set_version_chain_cap(64);
     let start = Instant::now();
-    let mut offsets = Vec::new();
     for row in 0..1000usize {
-        let off = table
-            .insert(
+        let eid = EdgeId(row as u64 + 1);
+        table
+            .insert_for_edge(
+                eid,
                 &[
                     ("a".to_string(), Value::Int(row as i32)),
                     ("b".to_string(), Value::string("init")),
@@ -143,10 +140,9 @@ fn bench_memory() {
                 100,
             )
             .unwrap();
-        offsets.push(off);
         for upd in 1..10u64 {
             let v = Value::Int((row as i32) * 10 + upd as i32);
-            table.set_property(off, "a", Some(v), 100 + upd).unwrap();
+            table.set_property_for_edge(eid, "a", Some(v), 100 + upd).unwrap();
         }
     }
     let elapsed = start.elapsed();

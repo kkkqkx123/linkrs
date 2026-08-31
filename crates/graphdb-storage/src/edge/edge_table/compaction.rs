@@ -168,8 +168,8 @@ impl TimeTravelEdgeStore {
     ///
     /// Identifies all valid property offsets referenced by edges in the table,
     /// then reclaims the slots of tombstoned records that no live edge
-    /// references. Live rows keep their offsets, so CSR `prop_offset`
-    /// pointers never need remapping.
+    /// references. Live rows keep their positions, so edge-to-row
+    /// mappings never need remapping.
     ///
     /// # Handling of Deleted Edges
     ///
@@ -182,22 +182,21 @@ impl TimeTravelEdgeStore {
     pub fn compact_properties(&mut self, ts: Timestamp) {
         // Valid property rows are those whose EdgeId is still live at `ts`
         // (not tombstoned) via the internal CsrWithProperties mapping.
-        let mut valid_offsets = std::collections::HashSet::new();
-        for (edge_id, pos) in self.properties.edge_mappings() {
+        let mut valid_edge_ids = std::collections::HashSet::new();
+        for (edge_id, _pos) in self.properties.edge_mappings() {
             if !self.mvcc.is_tombstoned(*edge_id, ts) {
-                let off = crate::edge::property_schema::prop_index_to_offset(*pos as usize);
-                valid_offsets.insert(off);
+                valid_edge_ids.insert(*edge_id);
             }
         }
 
         // Reclaim property slots whose rows are dead (tombstoned and no
         // longer referenced by any live edge). Slot reclamation keeps every
-        // live row at a stable offset, so CSR `prop_offset` pointers stay
-        // valid without any relocation mapping. The retention bound derives
+        // live row at a stable position, so edge-to-row mappings stay
+        // valid without any relocation. The retention bound derives
         // from active snapshots / the operator floor: an unbounded bound
         // (MAX) reclaims nothing, preserving time-travel history.
         let bound = self.mvcc.effective_retention_bound();
-        let reclaimed = self.properties.reclaim_slots(&valid_offsets, bound);
+        let reclaimed = self.properties.reclaim_slots(&valid_edge_ids, bound);
         if reclaimed > 0 {
             log::debug!("Property slot reclaim recycled {} row(s)", reclaimed);
         }

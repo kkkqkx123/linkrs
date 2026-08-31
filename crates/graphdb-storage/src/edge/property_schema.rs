@@ -6,26 +6,8 @@
 use crate::encoding::EncodingType;
 use graphdb_core::DataType;
 
-/// Sentinel value meaning "no properties"
-pub const PROP_OFFSET_NONE: u32 = 0;
-
 /// Default version chain capacity for property storage
 pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
-
-/// Convert a property offset to a row index
-/// Offset 0 is the sentinel for "no properties", so row index = offset - 1
-pub fn prop_offset_to_index(offset: u32) -> Option<usize> {
-    if offset == PROP_OFFSET_NONE {
-        return None;
-    }
-    Some((offset - 1) as usize)
-}
-
-/// Convert a row index to a property offset
-/// Row index 0 corresponds to offset 1 (since offset 0 is the sentinel)
-pub fn prop_index_to_offset(index: usize) -> u32 {
-    (index + 1) as u32
-}
 
 /// Property schema definition
 #[derive(Debug, Clone)]

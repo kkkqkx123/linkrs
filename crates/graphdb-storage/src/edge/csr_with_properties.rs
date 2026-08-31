@@ -136,10 +136,11 @@ impl CsrWithProperties {
         }
     }
 
-    /// Generic insert (like PropertyTable) — allocates next free row.
-    pub fn insert(&mut self, values: &[(String, Value)], create_ts: Timestamp) -> StorageResult<u32> {
+    /// Allocate a new row and populate it with the given values.
+    /// Returns the row index (0-based).
+    fn allocate_row(&mut self, values: &[(String, Value)], create_ts: Timestamp) -> StorageResult<usize> {
         let row_idx = if let Some(free_off) = self.free_list.pop() {
-            let idx = (free_off - 1) as usize;
+            let idx = free_off as usize;
             if idx >= self.visibility.len() {
                 self.visibility.resize(idx + 1, RowVisibility::new(0));
                 for col in &mut self.property_columns {
@@ -182,7 +183,7 @@ impl CsrWithProperties {
                 col.fold_oldest(row_idx, self.version_chain_cap, self.retention_horizon);
             }
         }
-        Ok(crate::edge::property_schema::prop_index_to_offset(row_idx))
+        Ok(row_idx)
     }
 
     /// Insert an edge's properties at the CSR position for `src`.
@@ -281,39 +282,6 @@ impl CsrWithProperties {
         )
     }
 
-    /// For compatibility with PropertyTable API: get by offset (prop_offset = pos+1)
-    pub fn get(&self, offset: u32, query_ts: Option<Timestamp>) -> Option<Vec<(String, Option<Value>)>> {
-        let row_idx = crate::edge::property_schema::prop_offset_to_index(offset)?;
-        let ts = query_ts.unwrap_or(Timestamp::MAX);
-        let vis = self.visibility.get(row_idx)?;
-        if !vis.is_visible_at(ts) {
-            return None;
-        }
-        Some(
-            self.property_schema
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let v = self.property_columns[i].get_at_ts(row_idx, ts);
-                    (s.name.clone(), v)
-                })
-                .collect(),
-        )
-    }
-
-    pub fn read_properties(&self, offset: u32) -> Option<Vec<(String, Value)>> {
-        let props = self.get(offset, None)?;
-        let result: Vec<(String, Value)> = props
-            .into_iter()
-            .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
-            .collect();
-        if result.is_empty() {
-            None
-        } else {
-            Some(result)
-        }
-    }
-
     /// Read non-nullable properties for an edge by its EdgeId (no MVCC filtering).
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
         let pos = *self.edge_to_row.get(&edge_id)? as usize;
@@ -346,38 +314,31 @@ impl CsrWithProperties {
         false
     }
 
-    /// Insert properties for an edge using the free-list path and associate
-    /// the allocated row with `edge_id`. Returns the property offset (row+1).
+    /// Insert properties for an edge and associate the row with `edge_id`.
     pub fn insert_for_edge(
         &mut self,
         edge_id: EdgeId,
         values: &[(String, Value)],
         create_ts: Timestamp,
-    ) -> StorageResult<u32> {
-        let offset = self.insert(values, create_ts)?;
-        if let Some(row_idx) = crate::edge::property_schema::prop_offset_to_index(offset) {
-            self.edge_to_row.insert(edge_id, row_idx as u32);
-        }
-        Ok(offset)
+    ) -> StorageResult<()> {
+        let row_idx = self.allocate_row(values, create_ts)?;
+        self.edge_to_row.insert(edge_id, row_idx as u32);
+        Ok(())
     }
 
-    /// Associate an existing offset with an edge id (for migration paths).
-    pub fn associate_edge(&mut self, edge_id: EdgeId, offset: u32) {
-        if let Some(row_idx) = crate::edge::property_schema::prop_offset_to_index(offset) {
-            self.edge_to_row.insert(edge_id, row_idx as u32);
-        }
+    /// Associate an existing row index with an edge id.
+    pub fn associate_edge(&mut self, edge_id: EdgeId, row_idx: usize) {
+        self.edge_to_row.insert(edge_id, row_idx as u32);
     }
 
-    pub fn get_offset_for_edge(&self, edge_id: EdgeId) -> Option<u32> {
-        self.edge_to_row
-            .get(&edge_id)
-            .map(|pos| crate::edge::property_schema::prop_index_to_offset(*pos as usize))
+    /// Get the row index for an edge.
+    pub fn get_row_for_edge(&self, edge_id: EdgeId) -> Option<usize> {
+        self.edge_to_row.get(&edge_id).map(|&pos| pos as usize)
     }
 
-    pub fn remove_edge_mapping(&mut self, edge_id: EdgeId) -> Option<u32> {
-        self.edge_to_row.remove(&edge_id).map(|pos| {
-            crate::edge::property_schema::prop_index_to_offset(pos as usize)
-        })
+    /// Remove edge-to-row mapping and return the row index.
+    pub fn remove_edge_mapping(&mut self, edge_id: EdgeId) -> Option<usize> {
+        self.edge_to_row.remove(&edge_id).map(|pos| pos as usize)
     }
 
     /// Edge-aware property update: lookup row via `edge_id`.
@@ -392,8 +353,7 @@ impl CsrWithProperties {
             .edge_to_row
             .get(&edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        let offset = crate::edge::property_schema::prop_index_to_offset(pos as usize);
-        self.set_property(offset, name, value, ts)
+        self.set_property_at_row(pos as usize, name, value, ts)
     }
 
     /// Edge-aware bulk property update: lookup row via `edge_id` and update all properties.
@@ -407,8 +367,7 @@ impl CsrWithProperties {
             .edge_to_row
             .get(&edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        let offset = crate::edge::property_schema::prop_index_to_offset(pos as usize);
-        self.update(offset, properties, ts)
+        self.update_at_row(pos as usize, properties, ts)
     }
 
     pub fn set_property_by_id_for_edge(
@@ -422,14 +381,17 @@ impl CsrWithProperties {
             .edge_to_row
             .get(&edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        let offset = crate::edge::property_schema::prop_index_to_offset(pos as usize);
-        self.set_property_by_id(offset, prop_id, value, ts)
+        let idx = prop_id.as_usize();
+        if idx >= self.property_schema.len() {
+            return Err(StorageError::column_not_found(format!("prop_id={}", prop_id.0)));
+        }
+        let name = self.property_schema[idx].name.clone();
+        self.set_property_at_row(pos as usize, &name, value, ts)
     }
 
     pub fn revert_deletion_for_edge(&mut self, edge_id: EdgeId) -> bool {
         if let Some(&pos) = self.edge_to_row.get(&edge_id) {
-            let offset = crate::edge::property_schema::prop_index_to_offset(pos as usize);
-            return self.revert_deletion(offset);
+            return self.revert_deletion_at_row(pos as usize);
         }
         false
     }
@@ -443,9 +405,7 @@ impl CsrWithProperties {
         self.edge_to_row.keys().copied()
     }
 
-    pub fn mark_deleted_by_offset(&mut self, offset: u32, ts: Timestamp) -> StorageResult<()> {
-        let row_idx = crate::edge::property_schema::prop_offset_to_index(offset)
-            .ok_or_else(|| StorageError::invalid_offset(offset))?;
+    pub fn mark_deleted_at_row(&mut self, row_idx: usize, ts: Timestamp) -> StorageResult<()> {
         if row_idx >= self.visibility.len() {
             return Ok(());
         }
@@ -456,22 +416,18 @@ impl CsrWithProperties {
         Ok(())
     }
 
-    pub fn is_deleted(&self, offset: u32) -> bool {
-        if let Some(row_idx) = crate::edge::property_schema::prop_offset_to_index(offset) {
-            if let Some(vis) = self.visibility.get(row_idx) {
-                return vis.delete_ts.is_some();
-            }
+    pub fn is_deleted_at_row(&self, row_idx: usize) -> bool {
+        if let Some(vis) = self.visibility.get(row_idx) {
+            return vis.delete_ts.is_some();
         }
         false
     }
 
-    pub fn revert_deletion(&mut self, offset: u32) -> bool {
-        if let Some(row_idx) = crate::edge::property_schema::prop_offset_to_index(offset) {
-            if let Some(vis) = self.visibility.get_mut(row_idx) {
-                if vis.delete_ts.is_some() {
-                    vis.delete_ts = None;
-                    return true;
-                }
+    pub fn revert_deletion_at_row(&mut self, row_idx: usize) -> bool {
+        if let Some(vis) = self.visibility.get_mut(row_idx) {
+            if vis.delete_ts.is_some() {
+                vis.delete_ts = None;
+                return true;
             }
         }
         false
@@ -573,17 +529,15 @@ impl CsrWithProperties {
         Ok(())
     }
 
-    pub fn set_property(
+    pub fn set_property_at_row(
         &mut self,
-        offset: u32,
+        row_idx: usize,
         name: &str,
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let row_idx = crate::edge::property_schema::prop_offset_to_index(offset)
-            .ok_or_else(|| StorageError::invalid_offset(offset))?;
         if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
-            return Err(StorageError::invalid_offset(offset));
+            return Err(StorageError::invalid_offset(row_idx as u32));
         }
         let col_idx = self
             .property_schema
@@ -598,17 +552,15 @@ impl CsrWithProperties {
         Ok(())
     }
 
-    /// Bulk update properties at a given offset position.
-    pub fn update(
+    /// Bulk update properties at a given row index.
+    pub fn update_at_row(
         &mut self,
-        offset: u32,
+        row_idx: usize,
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let row_idx = crate::edge::property_schema::prop_offset_to_index(offset)
-            .ok_or_else(|| StorageError::invalid_offset(offset))?;
         if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
-            return Err(StorageError::invalid_offset(offset));
+            return Err(StorageError::invalid_offset(row_idx as u32));
         }
         for (name, value) in properties {
             let col_idx = self
@@ -623,21 +575,6 @@ impl CsrWithProperties {
             }
         }
         Ok(())
-    }
-
-    pub fn set_property_by_id(
-        &mut self,
-        offset: u32,
-        prop_id: crate::types::PropertyId,
-        value: Option<Value>,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        let idx = prop_id.as_usize();
-        if idx >= self.property_schema.len() {
-            return Err(StorageError::column_not_found(format!("prop_id={}", prop_id.0)));
-        }
-        let name = self.property_schema[idx].name.clone();
-        self.set_property(offset, &name, value, ts)
     }
 
     pub fn compaction_stats(&self) -> crate::edge::property_schema::PropertyCompactionStats {
@@ -970,7 +907,7 @@ impl CsrWithProperties {
         removed
     }
 
-    pub fn reclaim_slots(&mut self, valid_offsets: &HashSet<u32>, retention_bound: Timestamp) -> usize {
+    pub fn reclaim_slots(&mut self, valid_edge_ids: &HashSet<EdgeId>, retention_bound: Timestamp) -> usize {
         if retention_bound == Timestamp::MAX {
             return 0;
         }
@@ -979,51 +916,28 @@ impl CsrWithProperties {
             if vis.create_ts == 0 {
                 continue;
             }
-            let offset = crate::edge::property_schema::prop_index_to_offset(idx);
-            if valid_offsets.contains(&offset) {
+            // Find the edge_id that maps to this row, if any.
+            let has_live_edge = self.edge_to_row.iter().any(|(eid, &p)| p as usize == idx && valid_edge_ids.contains(eid));
+            if has_live_edge {
                 continue;
             }
             if let Some(del_ts) = vis.delete_ts {
                 if del_ts <= retention_bound {
-                    to_reclaim.push((idx, offset));
+                    to_reclaim.push(idx);
                 }
             }
         }
-        for (idx, offset) in to_reclaim.iter() {
-            self.visibility[*idx].create_ts = 0;
-            self.visibility[*idx].delete_ts = None;
+        for &idx in &to_reclaim {
+            self.visibility[idx].create_ts = 0;
+            self.visibility[idx].delete_ts = None;
             for col in &mut self.property_columns {
-                col.clear_row_version_chains(*idx);
+                col.clear_row_version_chains(idx);
             }
-            let pos = crate::edge::property_schema::prop_offset_to_index(*offset).unwrap() as u32;
-            self.edge_to_row.retain(|_, p| *p != pos);
-            self.free_list.push(*offset);
+            self.edge_to_row.retain(|_, p| *p as usize != idx);
+            self.free_list.push(idx as u32);
             self.row_count = self.row_count.saturating_sub(1);
         }
         to_reclaim.len()
-    }
-
-    pub fn get_projected(
-        &self,
-        offset: u32,
-        projection: &[String],
-        query_ts: Option<Timestamp>,
-    ) -> Option<Vec<(String, Option<Value>)>> {
-        let row_idx = crate::edge::property_schema::prop_offset_to_index(offset)?;
-        let ts = query_ts.unwrap_or(Timestamp::MAX);
-        let vis = self.visibility.get(row_idx)?;
-        if !vis.is_visible_at(ts) {
-            return None;
-        }
-        let mut out = Vec::with_capacity(projection.len());
-        for col_name in projection {
-            if let Some(col) = self.property_columns.iter().find(|c| &c.name == col_name) {
-                out.push((col_name.clone(), col.get_at_ts(row_idx, ts)));
-            } else {
-                out.push((col_name.clone(), None));
-            }
-        }
-        Some(out)
     }
 
     pub fn column_stats_snapshot(
@@ -1031,71 +945,6 @@ impl CsrWithProperties {
         _column: &str,
     ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
         None
-    }
-
-    pub fn find_by_property(&self, _name: &str, _value: &Value) -> Vec<u32> {
-        Vec::new()
-    }
-    pub fn find_by_property_null(&self, _name: &str) -> Vec<u32> {
-        Vec::new()
-    }
-
-    pub fn get_projected_batch(
-        &self,
-        offsets: &[u32],
-        projection: &[String],
-        query_ts: Option<Timestamp>,
-    ) -> Vec<Option<Vec<(String, Option<Value>)>>> {
-        offsets
-            .iter()
-            .map(|off| self.get_projected(*off, projection, query_ts))
-            .collect()
-    }
-
-    pub fn get_batch<'a, I>(&'a self, offsets: I, query_ts: Option<Timestamp>) -> Vec<Option<Vec<(String, Option<Value>)>>>
-    where
-        I: IntoIterator<Item = &'a u32>,
-    {
-        offsets
-            .into_iter()
-            .map(|off| self.get(*off, query_ts))
-            .collect()
-    }
-
-    pub fn column_values(&self, col_idx: usize) -> Vec<Option<Value>> {
-        if col_idx >= self.property_schema.len() {
-            return Vec::new();
-        }
-        let mut values = Vec::with_capacity(self.visibility.len());
-        for row_idx in 0..self.visibility.len() {
-            if self.visibility[row_idx].create_ts == 0
-                || self.visibility[row_idx].delete_ts.is_some()
-            {
-                values.push(None);
-            } else {
-                values.push(self.property_columns[col_idx].get(row_idx));
-            }
-        }
-        values
-    }
-
-    pub fn apply_column_encoding(
-        &mut self,
-        col_name: &str,
-        encoding: crate::encoding::EncodingType,
-    ) -> StorageResult<()> {
-        if let Some(col) = self.property_columns.iter_mut().find(|c| c.name == col_name) {
-            // Delegate to column's encoding apply - simplified
-            let _ = encoding;
-            let _ = col;
-        }
-        Ok(())
-    }
-
-    pub fn zone_maps(&self) -> &HashMap<String, Vec<crate::column_stats::ColumnStats>> {
-        // Return empty static
-        static EMPTY: std::sync::OnceLock<HashMap<String, Vec<crate::column_stats::ColumnStats>>> = std::sync::OnceLock::new();
-        EMPTY.get_or_init(HashMap::new)
     }
 }
 
@@ -1147,11 +996,11 @@ mod tests {
         let eid = EdgeId(42);
         csr.insert_properties(0, eid, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
-        let off = 1u32; // pos 0 -> offset 1
-        csr.set_property(off, "weight", Some(Value::Double(2.0)), 200).unwrap();
-        let old = csr.get(off, Some(150)).unwrap();
+        csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
+            .unwrap();
+        let old = csr.get_by_edge_id(eid, 150).unwrap();
         assert!(old.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
-        let ne = csr.get(off, Some(250)).unwrap();
+        let ne = csr.get_by_edge_id(eid, 250).unwrap();
         assert!(ne.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
     }
 }

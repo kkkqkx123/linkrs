@@ -722,16 +722,15 @@ mod tests {
         let mut pt = CsrWithProperties::new(1, schemas);
 
         let edge_id = graphdb_core::types::EdgeId(42);
-        let offset = pt
-            .insert_for_edge(
-                edge_id,
-                &[
-                    ("name".to_string(), Value::String("Alice".into())),
-                    ("age".to_string(), Value::Int(30)),
-                ],
-                100,
-            )
-            .unwrap();
+        pt.insert_for_edge(
+            edge_id,
+            &[
+                ("name".to_string(), Value::String("Alice".into())),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
+        .unwrap();
 
         let props = pt.read_properties_by_edge_id(edge_id).unwrap();
         assert_eq!(props.len(), 2);

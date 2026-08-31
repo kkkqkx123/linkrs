@@ -1,7 +1,7 @@
 //! Unified MVCC (Multi-Version Concurrency Control) infrastructure
 //!
 //! Provides a consistent interface for snapshot isolation across all storage tables
-//! (VertexTable, EdgeTable, PropertyTable). Implements a tiered tombstone management
+//! (VertexTable, EdgeTable, CsrWithProperties). Implements a tiered tombstone management
 //! system for efficient garbage collection.
 
 use graphdb_core::types::storage_ids::Timestamp;
@@ -26,6 +26,7 @@ impl SnapshotHandle {
 
 /// Tombstone entry representing a deletion with its timestamp
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct TombstoneEntry<T: Clone + Copy + Eq> {
     /// The key that was deleted
     pub key: T,
@@ -41,6 +42,7 @@ pub struct TombstoneEntry<T: Clone + Copy + Eq> {
 /// This design balances O(1) insertion (hot) with O(log n) lookup (cold)
 /// while maintaining good cache locality for cold queries.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TieredTombstoneManager<T: Clone + Copy + Eq + std::hash::Hash> {
     /// Hot layer: HashMap for recent/frequent deletions (O(1) access)
     hot_tombstones: HashMap<T, Timestamp>,
@@ -54,6 +56,7 @@ pub struct TieredTombstoneManager<T: Clone + Copy + Eq + std::hash::Hash> {
     cold_gc_cursor: usize,
 }
 
+#[allow(dead_code)]
 impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     /// Create a new tiered tombstone manager
     ///

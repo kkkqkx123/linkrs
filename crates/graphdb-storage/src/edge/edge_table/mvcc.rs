@@ -46,7 +46,7 @@ impl EdgeTimestamps {
 /// (CSR delta, frozen segments, property table) delegate to this manager.
 pub struct MVCCManager {
     /// Per-edge creation and deletion timestamps. Centralized MVCC state
-    /// that replaces inline timestamps in Nbr and PropertyTable rows.
+    /// that replaces inline timestamps in Nbr rows and CsrWithProperties visibility.
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
     /// Authoritative tombstone table (hot layer). Every deletion, regardless
     /// of path (hot CSR inline delete, frozen segment, delta freeze, physical

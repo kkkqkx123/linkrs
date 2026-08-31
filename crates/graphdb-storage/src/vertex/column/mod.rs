@@ -23,7 +23,7 @@ mod tests;
 pub use column::{Column, ColumnStorage};
 pub use column_store::ColumnStore;
 pub use fixed_width::element_size;
-pub use mvcc::{RowVisibility, VersionChainStats, VersionEntry};
+pub use mvcc::VersionChainStats;
 pub use zone_map::{compare_values, ZONE_MAP_CHUNK_ROWS};
 
 use graphdb_core::DataType;

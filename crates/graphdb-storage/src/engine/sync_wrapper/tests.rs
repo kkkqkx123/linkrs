@@ -72,6 +72,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     graphdb_sync::runtime::block_on_ambient(
         fulltext_manager.create_index(1, "Person", "name", None),
     )
+    .expect("fulltext index should be created")
     .expect("fulltext index should be created");
 
     let sync_coordinator = Arc::new(SyncCoordinator::new(

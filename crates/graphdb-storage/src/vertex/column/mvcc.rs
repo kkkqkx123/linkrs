@@ -23,7 +23,7 @@ pub struct VersionEntry {
 /// Lightweight layer that replaces per-column version chains for transaction
 /// isolation purposes. Each row stores its creation timestamp; historical
 /// values are stored in the optional version chains. Row deletion is tracked
-/// at the table level (`VertexTimestamp` / `PropertyTable::row_delete_ts`),
+/// at the table level (`VertexTimestamp` / `CsrWithProperties::visibility`),
 /// so column-level visibility only needs the creation time.
 #[derive(Debug, Clone, Default)]
 pub struct RowVisibility {
@@ -40,6 +40,7 @@ impl RowVisibility {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn is_visible(&self, row_idx: usize, snapshot_ts: Timestamp) -> bool {
         let create = self.create_ts.get(row_idx).copied().unwrap_or(0);
         create <= snapshot_ts
@@ -58,6 +59,7 @@ impl RowVisibility {
         &self.create_ts
     }
 
+    #[allow(dead_code)]
     pub fn set_create_ts(&mut self, v: Vec<Timestamp>) {
         self.len = v.len();
         self.create_ts = v;
@@ -90,6 +92,7 @@ impl RowVisibility {
         self.len
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -350,6 +353,7 @@ impl Column {
         }
     }
 
+    #[allow(dead_code)]
     pub fn version_chains_ref(&self) -> &[Vec<VersionEntry>] {
         self.version_chains.as_deref().unwrap_or(&[])
     }
@@ -359,6 +363,7 @@ impl Column {
         self.version_chains.as_ref()
     }
 
+    #[allow(dead_code)]
     pub fn set_version_chains(&mut self, v: Vec<Vec<VersionEntry>>) {
         // Lazily keep None if no actual entries exist
         if v.is_empty() || v.iter().all(|c| c.is_empty()) {
@@ -372,6 +377,7 @@ impl Column {
     }
 
     /// Directly set the optional version chains (used by V2 serialization).
+    #[allow(dead_code)]
     pub fn set_version_chains_opt(&mut self, v: Option<Vec<Vec<VersionEntry>>>) {
         self.version_chains = v;
         if let Some(chains) = self.version_chains.as_ref() {
@@ -379,14 +385,17 @@ impl Column {
         }
     }
 
+    #[allow(dead_code)]
     pub fn visibility(&self) -> &RowVisibility {
         &self.visibility
     }
 
+    #[allow(dead_code)]
     pub fn visibility_mut(&mut self) -> &mut RowVisibility {
         &mut self.visibility
     }
 
+    #[allow(dead_code)]
     pub fn set_visibility(&mut self, vis: RowVisibility) {
         self.visibility = vis;
         if let Some(chains) = self.version_chains.as_ref() {

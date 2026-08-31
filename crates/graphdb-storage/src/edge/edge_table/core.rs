@@ -586,7 +586,7 @@ impl TimeTravelEdgeStore {
         }
 
         if !converted_values.is_empty() {
-            let _ = self.properties.insert_for_edge(edge_id, &converted_values, ts)?;
+            self.properties.insert_for_edge(edge_id, &converted_values, ts)?;
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
