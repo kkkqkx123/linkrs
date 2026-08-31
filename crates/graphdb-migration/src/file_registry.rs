@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::generator::MigrationError;
+use crate::error::MigrationError;
 use crate::plan::MigrationPlan;
 
 /// A single migration file entry tracked by the registry.

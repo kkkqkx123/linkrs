@@ -1,7 +1,7 @@
 use graphdb_core::{DataType, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::generator::MigrationError;
+use crate::error::MigrationError;
 
 #[cfg(test)]
 mod tests {
@@ -448,6 +448,29 @@ impl MigrationPlan {
         }
     }
 
+    pub fn new_with_config(
+        target: MigrationTarget,
+        version_range: VersionRange,
+        steps: Vec<MigrationStep>,
+        estimated_rows: u64,
+        overall_safety: SafetyLevel,
+        rollback_plan: Option<Box<MigrationPlan>>,
+        config: &crate::config::MigrationConfig,
+    ) -> Self {
+        let mut plan = Self::new(
+            target,
+            version_range,
+            steps,
+            estimated_rows,
+            overall_safety,
+            rollback_plan,
+        );
+        if config.batch_size != 0 {
+            plan.batch_size = config.batch_size;
+        }
+        plan
+    }
+
     pub fn compute_hash(&self) -> String {
         compute_steps_hash(&self.steps)
     }
@@ -548,6 +571,8 @@ pub struct MigrationCheckpoint {
     pub rows_migrated_after: u64,
     pub timestamp: u64,
     pub step_result: StepResult,
+    #[serde(default)]
+    pub completed_steps: Vec<usize>,
 }
 
 impl MigrationCheckpoint {
@@ -561,9 +586,9 @@ impl MigrationCheckpoint {
             plan.target.space, plan.target.label, plan.plan_hash
         ));
         let content = serde_json::to_string_pretty(self)
-            .map_err(|e| MigrationError::Plan(format!("serialize checkpoint: {e}")))?;
+            .map_err(|e| MigrationError::Checkpoint(format!("serialize checkpoint: {e}")))?;
         std::fs::write(&checkpoint_file, content)
-            .map_err(|e| MigrationError::Plan(format!("write checkpoint: {e}")))?;
+            .map_err(|e| MigrationError::Checkpoint(format!("write checkpoint: {e}")))?;
         Ok(())
     }
 
@@ -579,9 +604,9 @@ impl MigrationCheckpoint {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&checkpoint_file)
-            .map_err(|e| MigrationError::Plan(format!("read checkpoint: {e}")))?;
+            .map_err(|e| MigrationError::Checkpoint(format!("read checkpoint: {e}")))?;
         let checkpoint: Self = serde_json::from_str(&content)
-            .map_err(|e| MigrationError::Plan(format!("parse checkpoint: {e}")))?;
+            .map_err(|e| MigrationError::Checkpoint(format!("parse checkpoint: {e}")))?;
         Ok(Some(checkpoint))
     }
 
@@ -595,7 +620,7 @@ impl MigrationCheckpoint {
         ));
         if checkpoint_file.exists() {
             std::fs::remove_file(&checkpoint_file)
-                .map_err(|e| MigrationError::Plan(format!("remove checkpoint: {e}")))?;
+                .map_err(|e| MigrationError::Checkpoint(format!("remove checkpoint: {e}")))?;
         }
         Ok(())
     }

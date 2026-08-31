@@ -1,26 +1,8 @@
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::StorageResult;
 use graphdb_storage::{ChangeDetails, PropertyChange, StorageReader};
 
-use crate::converter::ConversionError;
+use crate::error::MigrationError;
 use crate::plan::{MigrationPlan, MigrationStep, MigrationTarget, SafetyLevel, VersionRange};
-
-#[derive(Debug, thiserror::Error)]
-pub enum MigrationError {
-    #[error("Storage error: {0}")]
-    Storage(Box<StorageError>),
-
-    #[error("Plan error: {0}")]
-    Plan(String),
-
-    #[error("Conversion error: {0}")]
-    Conversion(#[from] ConversionError),
-}
-
-impl From<StorageError> for MigrationError {
-    fn from(e: StorageError) -> Self {
-        MigrationError::Storage(Box::new(e))
-    }
-}
 
 pub fn generate_vertex_plan<R: StorageReader + ?Sized>(
     reader: &R,

@@ -30,7 +30,7 @@ csv.workspace = true
 thiserror.workspace = true
 log.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true

@@ -127,6 +127,10 @@ pub fn create_router<
         .route("/statistics/system", get(system))
         .route("/statistics/search", get(search_stats))
         .route("/statistics/freeze", get(freeze_stats).post(trigger_freeze))
+        .route(
+            "/statistics/migration",
+            get(super::handlers::statistics::migration),
+        )
         // Cold snapshot management
         .route(
             "/snapshots/cold",
@@ -214,6 +218,10 @@ pub fn create_router<
         .route(
             "/migration/status/{space}/{label}",
             get(schema::migration_status),
+        )
+        .route(
+            "/migration/stream/{space}/{label}",
+            get(crate::http::handlers::migration_progress::migration_progress_stream),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -3,11 +3,45 @@ use graphdb_core::{DataType, Value};
 #[derive(Debug, Clone)]
 pub struct ConversionError {
     pub message: String,
+    pub step_index: Option<usize>,
+    pub source_type: Option<String>,
+    pub target_type: Option<String>,
+}
+
+impl ConversionError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            step_index: None,
+            source_type: None,
+            target_type: None,
+        }
+    }
+
+    pub fn with_step(mut self, idx: usize) -> Self {
+        self.step_index = Some(idx);
+        self
+    }
+
+    pub fn with_types(mut self, source: impl Into<String>, target: impl Into<String>) -> Self {
+        self.source_type = Some(source.into());
+        self.target_type = Some(target.into());
+        self
+    }
 }
 
 impl std::fmt::Display for ConversionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Conversion error: {}", self.message)
+        write!(f, "Conversion error: {}", self.message)?;
+        if let Some(idx) = self.step_index {
+            write!(f, " [step {}]", idx + 1)?;
+        }
+        if let (Some(src), Some(tgt)) = (&self.source_type, &self.target_type) {
+            write!(f, " ({} -> {})", src, tgt)?;
+        } else if let Some(tgt) = &self.target_type {
+            write!(f, " (target {})", tgt)?;
+        }
+        Ok(())
     }
 }
 
@@ -15,7 +49,7 @@ impl std::error::Error for ConversionError {}
 
 macro_rules! conversion_err {
     ($($arg:tt)*) => {
-        ConversionError { message: format!($($arg)*) }
+        ConversionError::new(format!($($arg)*))
     };
 }
 

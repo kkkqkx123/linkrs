@@ -5,6 +5,7 @@ pub mod export;
 pub mod function;
 pub mod health;
 pub mod import;
+pub mod migration_progress;
 pub mod query;
 pub mod schema;
 pub mod session;

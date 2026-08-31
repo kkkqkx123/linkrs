@@ -11,6 +11,8 @@ graphdb-query = { path = "../graphdb-query" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
 graphdb-fulltext = { path = "../graphdb-fulltext" }
+graphdb-migration = { path = "../graphdb-migration" }
+graphdb-metrics = { path = "../graphdb-metrics" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

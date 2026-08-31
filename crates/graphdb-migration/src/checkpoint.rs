@@ -32,6 +32,7 @@ mod tests {
             rows_migrated_after: 10,
             timestamp: now_millis(),
             step_result: StepResult::Success,
+            completed_steps: vec![1],
         };
         cp.save(&plan, tmp.path()).unwrap();
         let loaded = MigrationCheckpoint::load(&plan, tmp.path()).unwrap().unwrap();

@@ -4,7 +4,7 @@ use std::path::Path;
 use fs4::fs_std::FileExt;
 use graphdb_core::StorageError;
 
-use crate::generator::MigrationError;
+use crate::error::MigrationError;
 
 pub struct MigrationFileLock {
     _file: File,
@@ -23,7 +23,7 @@ impl MigrationFileLock {
             })?;
 
         file.try_lock_exclusive().map_err(|e| {
-            MigrationError::Plan(format!(
+            MigrationError::Lock(format!(
                 "migration in progress (lock file: {}): {}",
                 path.display(),
                 e

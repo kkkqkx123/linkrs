@@ -35,6 +35,7 @@ pub mod batch;
 pub mod busy_handler;
 pub mod config;
 pub mod database;
+pub mod migration;
 pub mod result;
 pub mod session;
 pub mod statistics;

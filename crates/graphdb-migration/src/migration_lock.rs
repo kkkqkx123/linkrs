@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::generator::MigrationError;
+use crate::error::MigrationError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationLockRecord {

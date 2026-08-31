@@ -87,6 +87,7 @@ service GraphDBService {
   rpc MigratePlan(MigratePlanRequest) returns (MigratePlanResponse);
   rpc MigrateExecute(MigrateExecuteRequest) returns (MigrateExecuteResponse);
   rpc MigrateRollback(MigrateRollbackRequest) returns (MigrateRollbackResponse);
+  rpc StreamMigrationProgress(StreamMigrationProgressRequest) returns (stream MigrationProgressEvent);
 }
 
 // ============================================================
@@ -1003,4 +1004,19 @@ message MigrateRollbackResponse {
   uint64 rows_migrated = 3;
   repeated string errors = 4;
   string error = 5;
+}
+
+message StreamMigrationProgressRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+}
+
+message MigrationProgressEvent {
+  string event_type = 1;
+  string message = 2;
+  uint64 step_idx = 3;
+  uint64 rows = 4;
+  bool success = 5;
+  string error = 6;
 }

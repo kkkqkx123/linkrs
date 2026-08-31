@@ -671,10 +671,29 @@ pub async fn execute_migration<
 
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
+        let stats = state.server.get_stats_manager();
+        let start = std::time::Instant::now();
+        stats.record_migration_start();
         let mut storage_write = storage.write();
-        let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-
+        let listener = crate::http::handlers::migration_progress::BroadcastEventListener::new(
+            &plan.target.space,
+            &plan.target.label,
+            plan.target.is_edge,
+        );
+        let report = graphdb_migration::execute_migration_plan_with_progress(
+            &mut *storage_write,
+            &plan,
+            &graphdb_migration::NoopProgress,
+            Some(&listener),
+        )
+        .map_err(|e| HttpError::InternalError(e.to_string()));
+        let elapsed = start.elapsed().as_millis() as u64;
+        match &report {
+            Ok(r) if r.success => stats.record_migration_success(r.rows_migrated, elapsed),
+            Ok(_) => stats.record_migration_failure(elapsed),
+            Err(_) => stats.record_migration_failure(elapsed),
+        }
+        let report = report?;
         Ok::<_, HttpError>(serde_json::json!({
             "success": report.success,
             "steps_completed": report.steps_completed,

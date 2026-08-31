@@ -4,6 +4,7 @@
 
 use std::net::SocketAddr;
 use std::time::Instant;
+use tokio_stream::StreamExt;
 use tonic::{transport::Server, Request, Response, Status};
 
 use crate::config::Config;
@@ -27,6 +28,10 @@ use super::proto::*;
 // Type alias for the streaming response
 type ExecuteQueryStreamStream = std::pin::Pin<
     Box<dyn tokio_stream::Stream<Item = Result<StreamResponse, Status>> + Send + 'static>,
+>;
+
+type StreamMigrationProgressStream = std::pin::Pin<
+    Box<dyn tokio_stream::Stream<Item = Result<MigrationProgressEvent, Status>> + Send + 'static>,
 >;
 
 /// GraphDB gRPC service implementation
@@ -85,6 +90,7 @@ impl<
     > GraphDBServiceTrait for GraphDBService<S>
 {
     type ExecuteQueryStreamStream = ExecuteQueryStreamStream;
+    type StreamMigrationProgressStream = StreamMigrationProgressStream;
 
     async fn health_check(
         &self,
@@ -938,13 +944,32 @@ impl<
     ) -> Result<Response<MigrateExecuteResponse>, Status> {
         let req = request.into_inner();
         let storage = self.app_state.server.get_storage();
+        let stats = self.app_state.server.get_stats_manager();
+        let start = std::time::Instant::now();
+        stats.record_migration_start();
         let mut storage_write = storage.write();
 
         let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let listener = crate::http::handlers::migration_progress::BroadcastEventListener::new(
+            &plan.target.space,
+            &plan.target.label,
+            plan.target.is_edge,
+        );
+        let report = graphdb_migration::execute_migration_plan_with_progress(
+            &mut *storage_write,
+            &plan,
+            &graphdb_migration::NoopProgress,
+            Some(&listener),
+        );
+        let elapsed = start.elapsed().as_millis() as u64;
+        match &report {
+            Ok(r) if r.success => stats.record_migration_success(r.rows_migrated, elapsed),
+            Ok(_) => stats.record_migration_failure(elapsed),
+            Err(_) => stats.record_migration_failure(elapsed),
+        }
+        let report = report.map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(MigrateExecuteResponse {
             success: report.success,
@@ -976,6 +1001,92 @@ impl<
             errors: report.errors,
             error: String::new(),
         }))
+    }
+
+    async fn stream_migration_progress(
+        &self,
+        request: Request<StreamMigrationProgressRequest>,
+    ) -> Result<Response<Self::StreamMigrationProgressStream>, Status> {
+        let req = request.into_inner();
+        let rx = crate::http::handlers::migration_progress::subscribe(
+            &req.space,
+            &req.label,
+            req.is_edge,
+        );
+        let rx_stream = tokio_stream::wrappers::BroadcastStream::new(rx);
+        let stream = rx_stream.filter_map(|res| match res {
+            Ok(ev) => {
+                let proto_ev = match ev {
+                    graphdb_migration::MigrationEvent::Started { plan } => {
+                        MigrationProgressEvent {
+                            event_type: "started".to_string(),
+                            message: plan.plan_hash.clone(),
+                            step_idx: 0,
+                            rows: 0,
+                            success: false,
+                            error: String::new(),
+                        }
+                    }
+                    graphdb_migration::MigrationEvent::StepStarted { step_idx } => {
+                        MigrationProgressEvent {
+                            event_type: "step_started".to_string(),
+                            message: String::new(),
+                            step_idx: step_idx as u64,
+                            rows: 0,
+                            success: false,
+                            error: String::new(),
+                        }
+                    }
+                    graphdb_migration::MigrationEvent::StepCompleted { step_idx, rows } => {
+                        MigrationProgressEvent {
+                            event_type: "step_completed".to_string(),
+                            message: String::new(),
+                            step_idx: step_idx as u64,
+                            rows,
+                            success: true,
+                            error: String::new(),
+                        }
+                    }
+                    graphdb_migration::MigrationEvent::Completed { report } => {
+                        MigrationProgressEvent {
+                            event_type: "completed".to_string(),
+                            message: format!(
+                                "{} steps, {} rows",
+                                report.steps_completed, report.rows_migrated
+                            ),
+                            step_idx: 0,
+                            rows: report.rows_migrated,
+                            success: report.success,
+                            error: report.errors.join("; "),
+                        }
+                    }
+                    graphdb_migration::MigrationEvent::Failed { error } => {
+                        MigrationProgressEvent {
+                            event_type: "failed".to_string(),
+                            message: String::new(),
+                            step_idx: 0,
+                            rows: 0,
+                            success: false,
+                            error,
+                        }
+                    }
+                    graphdb_migration::MigrationEvent::RolledBack { report } => {
+                        MigrationProgressEvent {
+                            event_type: "rolled_back".to_string(),
+                            message: String::new(),
+                            step_idx: 0,
+                            rows: report.rows_migrated,
+                            success: report.success,
+                            error: String::new(),
+                        }
+                    }
+                };
+                Some(Ok(proto_ev))
+            }
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => None,
+        });
+        let boxed: Self::StreamMigrationProgressStream = Box::pin(stream);
+        Ok(Response::new(boxed))
     }
 }
 

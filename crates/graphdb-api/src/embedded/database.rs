@@ -3,7 +3,9 @@
 //! Provide the GraphDatabase structure as the main entry point for the embedded API.
 
 use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
-use crate::embedded::config::{DatabaseConfig, EmbeddedVectorEngine};
+use crate::embedded::config::DatabaseConfig;
+#[cfg(feature = "vector")]
+use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use crate::storage::{GraphStorage, StorageClient};
@@ -497,6 +499,11 @@ impl<S: StorageClient + Clone + 'static> GraphDatabase<S> {
     pub fn storage_mut(&self) -> parking_lot::RwLockWriteGuard<'_, S> {
         self.inner.storage.write()
     }
+
+    /// Get stats manager
+    pub fn stats_manager(&self) -> Arc<StatsManager> {
+        self.inner.stats_manager.clone()
+    }
 }
 
 // To support Send + Sync
@@ -550,6 +557,7 @@ impl GraphDatabase<MockStorage> {
             schema_api,
             txn_manager,
             storage,
+            #[cfg(feature = "fulltext")]
             fulltext_manager: None,
             sync_manager: None,
             stats_manager,
