@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::compression::CompressionType;
-use crate::mvcc::SnapshotHandle;
+use crate::SnapshotHandle;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{IdKey, VertexRecord};

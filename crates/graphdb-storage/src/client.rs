@@ -1,7 +1,7 @@
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::engine::background_freeze::FreezeStats;
 use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
-use crate::mvcc::SnapshotHandle;
+use crate::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, PropertyChange};
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
 use graphdb_core::types::TransactionId;

@@ -20,7 +20,7 @@ use super::super::{
     VertexTimestamp,
 };
 use crate::encoding::EncodingSelector;
-use crate::mvcc::SnapshotHandle;
+use crate::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
 use graphdb_core::{StorageError, StorageResult, Value};
 
@@ -804,6 +804,15 @@ impl VertexTable {
         // Property version-chain GC runs every pass regardless of deleted
         // vertices so before-images of overwritten properties are reclaimed.
         let version_removed = self.columns.gc_versions(min_ts);
+        let version_stats = self.columns.version_chain_stats();
+        log::trace!(
+            "vertex gc version stats: total_rows={} total_entries={} max_len={} memory_bytes={} removed={}",
+            version_stats.total_rows,
+            version_stats.total_entries,
+            version_stats.max_len,
+            version_stats.memory_bytes,
+            version_removed
+        );
 
         // Collect all vertices deleted before min_ts
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(min_ts).collect();

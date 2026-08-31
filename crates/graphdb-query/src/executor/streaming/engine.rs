@@ -24,7 +24,6 @@ use crate::executor::streaming::spill::{SpillConfig, SpillManager};
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 
-mod config;
 #[cfg(test)]
 mod tests;
 

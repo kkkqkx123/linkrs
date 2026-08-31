@@ -107,7 +107,10 @@ impl Certifier {
             shard_count.is_power_of_two(),
             "shard_count must be power of two"
         );
-        assert!((1..=256).contains(&shard_count), "shard_count must be 1..=256");
+        assert!(
+            (1..=256).contains(&shard_count),
+            "shard_count must be 1..=256"
+        );
         Self {
             certification_shards: (0..shard_count).map(|_| Mutex::new(())).collect(),
             shard_count,
@@ -134,6 +137,12 @@ impl Certifier {
     /// write transactions that have already passed validation.
     /// After a successful check, the transaction is marked as validated.
     ///
+    /// Fast paths (lock-free, no shard acquisition):
+    /// - Read-only transactions never conflict.
+    /// - SingleWriter mode bypasses certification (exclusive write lease).
+    /// - Empty write sets (and empty read sets for Serializable) bypass certification.
+    ///
+    /// Only transactions that need certification acquire the shard lock.
     /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
     pub fn check_write_set_conflict(
         &self,
@@ -529,5 +538,83 @@ impl Certifier {
 impl Default for Certifier {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::TransactionContext;
+    use crate::types::{TransactionConfig, TransactionId};
+    use dashmap::DashMap;
+    use std::sync::Arc;
+
+    fn make_context(
+        txn_id: u64,
+        read_only: bool,
+        mode: ConcurrencyMode,
+    ) -> Arc<TransactionContext> {
+        let mut config = TransactionConfig::default();
+        config.concurrency_mode = mode;
+        let ctx = if read_only {
+            TransactionContext::new_readonly(TransactionId(txn_id), txn_id, config)
+        } else {
+            TransactionContext::new(TransactionId(txn_id), txn_id, config)
+        };
+        Arc::new(ctx)
+    }
+
+    #[test]
+    fn test_certification_fast_path_read_only() {
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        let ctx = make_context(1, true, ConcurrencyMode::Optimistic);
+        active.insert(TransactionId(1), Arc::clone(&ctx));
+        assert!(certifier
+            .check_write_set_conflict(TransactionId(1), &active, &stats)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_certification_fast_path_single_writer() {
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        let ctx = make_context(2, false, ConcurrencyMode::SingleWriter);
+        active.insert(TransactionId(2), Arc::clone(&ctx));
+        assert!(certifier
+            .check_write_set_conflict(TransactionId(2), &active, &stats)
+            .is_ok());
+        assert!(ctx.is_write_validated());
+    }
+
+    #[test]
+    fn test_certification_fast_path_empty_write_set() {
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        let ctx = make_context(3, false, ConcurrencyMode::Optimistic);
+        active.insert(TransactionId(3), Arc::clone(&ctx));
+        assert!(certifier
+            .check_write_set_conflict(TransactionId(3), &active, &stats)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_certification_detects_write_conflict() {
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        let ctx_a = make_context(10, false, ConcurrencyMode::Optimistic);
+        let ctx_b = make_context(11, false, ConcurrencyMode::Optimistic);
+        let vid = graphdb_core::types::VertexId::from_int64(42);
+        ctx_a.record_vertex_write(vid);
+        ctx_b.record_vertex_write(vid);
+        active.insert(TransactionId(10), Arc::clone(&ctx_a));
+        active.insert(TransactionId(11), Arc::clone(&ctx_b));
+        ctx_a.mark_write_validated();
+        let result = certifier.check_write_set_conflict(TransactionId(11), &active, &stats);
+        assert!(result.is_err());
     }
 }

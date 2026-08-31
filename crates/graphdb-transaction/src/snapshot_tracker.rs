@@ -99,7 +99,7 @@ impl SnapshotTracker {
                     let mut ordered = self.ordered_snapshots.write();
                     ordered.insert(ts, 1);
                 }
-                self.update_min_active_from_tree();
+                self.update_min_active(ts);
             }
         }
 
@@ -126,11 +126,14 @@ impl SnapshotTracker {
                     self.registered_at.remove(&ts);
                     log::trace!("Snapshot {} removed (ref count = 0)", ts);
 
+                    let was_min = self.min_active.load(Ordering::Acquire) == ts;
                     {
                         let mut ordered = self.ordered_snapshots.write();
                         ordered.remove(&ts);
                     }
-                    self.update_min_active_from_tree();
+                    if was_min {
+                        self.recompute_min_active();
+                    }
                 }
                 self.active_references.fetch_sub(1, Ordering::Relaxed);
                 Ok(())
@@ -160,20 +163,26 @@ impl SnapshotTracker {
         self.min_active_snapshot()
     }
 
-    /// Internal: Recalculate and update min_active cache from BTreeMap (O(1))
-    /// Uses read lock to allow concurrent readers during min lookup.
-    fn update_min_active_from_tree(&self) {
+    /// Fast path: atomically lower the cached min without BTree lock.
+    /// Used on insert of a new distinct timestamp.
+    fn update_min_active(&self, ts: Timestamp) {
+        self.min_active.fetch_min(ts, Ordering::AcqRel);
+    }
+
+    /// Recompute min from BTreeMap after removing the previous minimum.
+    fn recompute_min_active(&self) {
         let ordered = self.ordered_snapshots.read();
-        let min = if let Some((&ts, _)) = ordered.iter().next() {
-            ts
-        } else {
-            u64::MAX
-        };
+        let min = ordered.keys().next().copied().unwrap_or(u64::MAX);
         self.min_active.store(min, Ordering::Release);
     }
 
     /// Fast check whether a timestamp is currently active.
     pub fn is_active(&self, ts: Timestamp) -> bool {
+        self.snapshots.contains_key(&ts)
+    }
+
+    /// Contains check for snapshot existence.
+    pub fn contains_snapshot(&self, ts: Timestamp) -> bool {
         self.snapshots.contains_key(&ts)
     }
 
@@ -402,5 +411,23 @@ mod tests {
         // No errors should occur
         assert_eq!(error_count.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+
+    #[test]
+    fn test_atomic_min_cache_fetch_min_optimization() {
+        let tracker = SnapshotTracker::new();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(50).unwrap();
+        // fetch_min should have updated min to 50 without recomputing whole tree
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.add_snapshot(200).unwrap();
+        // min should stay 50
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.release_snapshot(50).unwrap();
+        // recompute should happen only because removed min
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.release_snapshot(200).unwrap();
+        // removing non-min should not recompute (still 100)
+        assert_eq!(tracker.min_active_snapshot(), 100);
     }
 }

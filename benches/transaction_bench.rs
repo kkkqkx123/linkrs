@@ -152,11 +152,82 @@ fn bench_conflict_detection(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_certification_fast_paths(c: &mut Criterion) {
+    let mut group = c.benchmark_group("certification_fast_paths");
+    group.measurement_time(Duration::from_secs(5));
+    group.sample_size(100);
+
+    let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+    group.bench_function("certification_read_only", |b| {
+        b.iter(|| {
+            let txn_id = manager
+                .begin_read_transaction(TransactionOptions::default())
+                .unwrap();
+            black_box(manager.check_write_set_conflict(txn_id).unwrap());
+            manager.commit_transaction(txn_id).unwrap();
+        });
+    });
+
+    group.bench_function("certification_single_writer", |b| {
+        let mut cfg = TransactionManagerConfig::default();
+        cfg.txn_config.concurrency_mode =
+            graphdb::transaction::types::ConcurrencyMode::SingleWriter;
+        let sw_manager = TransactionManager::new(cfg);
+        b.iter(|| {
+            let txn_id = sw_manager
+                .begin_insert_transaction(TransactionOptions::default())
+                .unwrap();
+            black_box(sw_manager.check_write_set_conflict(txn_id).unwrap());
+            sw_manager.commit_transaction(txn_id).unwrap();
+        });
+    });
+
+    group.bench_function("certification_empty_write_set", |b| {
+        b.iter(|| {
+            let txn_id = manager
+                .begin_insert_transaction(TransactionOptions::default())
+                .unwrap();
+            black_box(manager.check_write_set_conflict(txn_id).unwrap());
+            manager.commit_transaction(txn_id).unwrap();
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_snapshot_tracker(c: &mut Criterion) {
+    use graphdb::transaction::SnapshotTracker;
+    let mut group = c.benchmark_group("snapshot_tracker");
+    group.measurement_time(Duration::from_secs(5));
+    group.sample_size(100);
+
+    group.bench_function("min_active_snapshot", |b| {
+        let tracker = SnapshotTracker::new();
+        for i in 0..100 {
+            tracker.add_snapshot(i * 10).unwrap();
+        }
+        b.iter(|| black_box(tracker.min_active_snapshot()));
+    });
+
+    group.bench_function("contains_fast_negative", |b| {
+        let tracker = SnapshotTracker::new();
+        for i in 0..100 {
+            tracker.add_snapshot(i * 10).unwrap();
+        }
+        b.iter(|| black_box(tracker.contains_snapshot(999999)));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transaction_create_commit,
     bench_write_set_operations,
     bench_mvcc_version_management,
     bench_conflict_detection,
+    bench_certification_fast_paths,
+    bench_snapshot_tracker,
 );
 criterion_main!(benches);

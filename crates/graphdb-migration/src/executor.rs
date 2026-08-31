@@ -1741,28 +1741,6 @@ mod tests {
                 .cloned()
                 .unwrap_or_default()
         }
-        #[allow(dead_code)]
-        fn insert_edge(
-            &self,
-            space: &str,
-            edge_type: &str,
-            src: i64,
-            dst: i64,
-            props: HashMap<String, Value>,
-        ) {
-            let mut map = self.edges.lock().unwrap();
-            let entry = map
-                .entry((space.to_string(), edge_type.to_string()))
-                .or_default();
-            let edge = Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64(dst),
-                edge_type: edge_type.to_string(),
-                ranking: 0,
-                props,
-            };
-            entry.push(edge);
-        }
     }
 
     impl StorageReader for TestStorage {

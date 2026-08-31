@@ -25,6 +25,23 @@ pub const MAX_TIMESTAMP: Timestamp = u64::MAX - 1;
 /// Label ID type for vertex and edge type identification
 pub type LabelId = u32;
 
+/// Snapshot handle for MVCC - identifies a consistent snapshot at a specific timestamp
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapshotHandle {
+    /// Timestamp of the snapshot
+    pub ts: Timestamp,
+    /// Monotonically increasing handle to distinguish concurrent snapshots at the same timestamp
+    pub id: u64,
+}
+
+impl SnapshotHandle {
+    /// Create a new snapshot handle
+    #[inline]
+    pub fn new(ts: Timestamp, id: u64) -> Self {
+        Self { ts, id }
+    }
+}
+
 // ============================================================================
 // EdgeId - Newtype Wrapper
 // ============================================================================

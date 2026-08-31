@@ -10,7 +10,7 @@ use graphdb_core::stats::StatsManager;
 use graphdb_core::types::{LabelId, TableId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-use crate::mvcc::SnapshotHandle;
+use crate::SnapshotHandle;
 use crate::StorageOperationContext;
 
 use super::{GraphStorageContext, WriteTimestampLease};
@@ -1015,12 +1015,39 @@ impl GraphStorageContext {
             .get_applied_versions_sorted(space, label, is_edge)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn load_migration_history(&self) -> graphdb_core::StorageResult<()> {
-        if let Some(paths) = self.storage_paths() {
+        if let Some(work_dir) = self.work_dir().as_ref().cloned() {
+            use crate::engine::paths::StoragePaths;
+            use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
+            let checkpoint_root = work_dir.join("checkpoint");
+            let mut candidate_paths = Vec::new();
+            if checkpoint_root.exists() {
+                if let Ok(Some(manifest)) =
+                    CheckpointManifestManager::new(checkpoint_root.join("manifests")).load_latest()
+                {
+                    candidate_paths.push(
+                        StoragePaths::new(manifest.storage_snapshot.path).migration_history_file(),
+                    );
+                }
+            }
+            if let Some(paths) = self.storage_paths() {
+                candidate_paths.push(paths.migration_history_file());
+            }
+            for path in candidate_paths {
+                if path.exists() {
+                    let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(
+                        &path,
+                    )?;
+                    *self.persistent.migration_history.write() = mgr;
+                    break;
+                }
+            }
+        } else if let Some(paths) = self.storage_paths() {
             let path = paths.migration_history_file();
-            let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(&path)?;
-            *self.persistent.migration_history.write() = mgr;
+            if path.exists() {
+                let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(&path)?;
+                *self.persistent.migration_history.write() = mgr;
+            }
         }
         Ok(())
     }

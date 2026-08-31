@@ -17,7 +17,6 @@ pub struct ConstantColumn {
     overrides: HashMap<usize, Option<Value>>,
 }
 
-#[allow(dead_code)]
 impl ConstantColumn {
     pub fn new(value: Option<Value>, count: usize) -> Self {
         Self {
@@ -27,10 +26,12 @@ impl ConstantColumn {
         }
     }
 
+    #[allow(unused)]
     pub fn has_overrides(&self) -> bool {
         !self.overrides.is_empty()
     }
 
+    #[allow(unused)]
     pub fn overrides_len(&self) -> usize {
         self.overrides.len()
     }
@@ -57,6 +58,7 @@ impl ConstantColumn {
         self.count
     }
 
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -142,6 +144,7 @@ impl ConstantColumn {
         }
     }
 
+    #[allow(unused)]
     pub fn append(&mut self, value: Option<&Value>) -> StorageResult<()> {
         self.set(self.count, value)
     }

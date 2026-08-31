@@ -40,13 +40,6 @@ impl RowVisibility {
     }
 
     #[inline]
-    #[allow(dead_code)]
-    pub fn is_visible(&self, row_idx: usize, snapshot_ts: Timestamp) -> bool {
-        let create = self.create_ts.get(row_idx).copied().unwrap_or(0);
-        create <= snapshot_ts
-    }
-
-    #[inline]
     pub fn mark_created(&mut self, row_idx: usize, ts: Timestamp) {
         self.ensure_len(row_idx + 1);
         self.create_ts[row_idx] = ts;
@@ -57,12 +50,6 @@ impl RowVisibility {
 
     pub fn create_ts(&self) -> &[Timestamp] {
         &self.create_ts
-    }
-
-    #[allow(dead_code)]
-    pub fn set_create_ts(&mut self, v: Vec<Timestamp>) {
-        self.len = v.len();
-        self.create_ts = v;
     }
 
     pub fn ensure_len(&mut self, n: usize) {
@@ -90,11 +77,6 @@ impl RowVisibility {
 
     pub fn len(&self) -> usize {
         self.len
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -353,51 +335,15 @@ impl Column {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn version_chains_ref(&self) -> &[Vec<VersionEntry>] {
-        self.version_chains.as_deref().unwrap_or(&[])
-    }
-
     /// Optional accessor for lazy-allocated chains.
     pub fn version_chains_opt(&self) -> Option<&Vec<Vec<VersionEntry>>> {
         self.version_chains.as_ref()
     }
 
-    #[allow(dead_code)]
-    pub fn set_version_chains(&mut self, v: Vec<Vec<VersionEntry>>) {
-        // Lazily keep None if no actual entries exist
-        if v.is_empty() || v.iter().all(|c| c.is_empty()) {
-            self.version_chains = None;
-        } else {
-            self.version_chains = Some(v);
-        }
-        if let Some(chains) = self.version_chains.as_ref() {
-            self.visibility.ensure_len(chains.len());
-        }
-    }
-
     /// Directly set the optional version chains (used by V2 serialization).
-    #[allow(dead_code)]
+    #[allow(unused)]
     pub fn set_version_chains_opt(&mut self, v: Option<Vec<Vec<VersionEntry>>>) {
         self.version_chains = v;
-        if let Some(chains) = self.version_chains.as_ref() {
-            self.visibility.ensure_len(chains.len());
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn visibility(&self) -> &RowVisibility {
-        &self.visibility
-    }
-
-    #[allow(dead_code)]
-    pub fn visibility_mut(&mut self) -> &mut RowVisibility {
-        &mut self.visibility
-    }
-
-    #[allow(dead_code)]
-    pub fn set_visibility(&mut self, vis: RowVisibility) {
-        self.visibility = vis;
         if let Some(chains) = self.version_chains.as_ref() {
             self.visibility.ensure_len(chains.len());
         }

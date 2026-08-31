@@ -374,7 +374,6 @@ impl ColumnStore {
     }
 
     /// Aggregate version-chain statistics across all columns.
-    #[allow(dead_code)]
     pub fn version_chain_stats(&self) -> VersionChainStats {
         let mut total_rows = 0usize;
         let mut total_entries = 0usize;
@@ -411,23 +410,6 @@ impl ColumnStore {
         removed
     }
 
-    /// Fold oldest version-chain entries for a single row across all columns.
-    /// Delegates to each column's [`Column::fold_oldest`] with the given cap
-    /// and retention horizon.
-    #[allow(dead_code)]
-    pub fn fold_oldest_for_row(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
-        if cap == 0 {
-            return;
-        }
-        for col in &mut self.columns {
-            // Fast skip: columns with lazy None have no history to fold.
-            if col.version_chains_opt().is_none() {
-                continue;
-            }
-            col.fold_oldest(row_idx, cap, horizon);
-        }
-    }
-
     /// Fold oldest entries only for the specified columns.
     /// This reduces write amplification when only a subset of columns was updated.
     pub fn fold_oldest_for_row_filtered(
@@ -447,26 +429,6 @@ impl ColumnStore {
                 }
                 col.fold_oldest(row_idx, cap, horizon);
             }
-        }
-    }
-
-    /// Fold oldest entries for a single column by id, used when updating by col_id.
-    #[allow(dead_code)]
-    pub fn fold_oldest_for_column(
-        &mut self,
-        col_id: i32,
-        row_idx: usize,
-        cap: usize,
-        horizon: Timestamp,
-    ) {
-        if cap == 0 {
-            return;
-        }
-        if let Some(col) = self.get_column_by_id_mut(col_id) {
-            if col.version_chains_opt().is_none() {
-                return;
-            }
-            col.fold_oldest(row_idx, cap, horizon);
         }
     }
 
@@ -549,18 +511,6 @@ impl ColumnStore {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
-    }
-
-    #[allow(dead_code)]
-    pub fn columns_mut(&mut self) -> &mut [Column] {
-        &mut self.columns
-    }
-
-    #[allow(dead_code)]
-    pub fn clear_row_version_chains(&mut self, row_idx: usize) {
-        for col in &mut self.columns {
-            col.clear_row_version_chains(row_idx);
-        }
     }
 
     pub fn load_column_from_raw(

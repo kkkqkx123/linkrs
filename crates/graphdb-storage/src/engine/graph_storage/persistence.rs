@@ -41,20 +41,7 @@ fn load_schema_and_index_metadata(ctx: &GraphStorageContext) -> StorageResult<()
             }
         }
 
-        let migration_paths = latest_checkpoint
-            .as_ref()
-            .map(|checkpoint| StoragePaths::new(checkpoint).migration_history_file())
-            .into_iter()
-            .chain(std::iter::once(paths.migration_history_file()));
-        for migration_path in migration_paths {
-            if migration_path.exists() {
-                let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(
-                    &migration_path,
-                )?;
-                *ctx.migration_history().write() = mgr;
-                break;
-            }
-        }
+        ctx.load_migration_history()?;
     }
 
     Ok(())
@@ -954,5 +941,39 @@ mod tests {
 
         let result = read_checkpoint_metadata(&checkpoint_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_migration_history_survives_restart() {
+        use crate::migration_history::{MigrationHistoryRecord, MigrationStatus};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let ctx = create_context(&temp_dir).expect("Failed to create storage context");
+        let record = MigrationHistoryRecord::new(
+            "test_space".to_string(),
+            "person".to_string(),
+            false,
+            1,
+            2,
+            "hash123".to_string(),
+            "safe".to_string(),
+            1,
+            100,
+            MigrationStatus::Applied,
+        );
+        ctx.record_migration_history(record.clone())
+            .expect("Failed to record migration history");
+        let before = ctx.list_all_migration_history();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].space, "test_space");
+        // Simulate restart with same work_dir
+        let ctx2 = create_context(&temp_dir).expect("Failed to create second context");
+        ctx2.load_migration_history()
+            .expect("Failed to load migration history");
+        let after = ctx2.list_all_migration_history();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].space, "test_space");
+        assert_eq!(after[0].label, "person");
+        assert_eq!(after[0].from_version, 1);
+        assert_eq!(after[0].to_version, 2);
     }
 }

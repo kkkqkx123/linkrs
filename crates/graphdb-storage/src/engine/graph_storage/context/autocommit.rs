@@ -13,7 +13,7 @@ use graphdb_transaction::{
 };
 
 use crate::engine::data_store::EdgeTableKey;
-use crate::mvcc::SnapshotHandle;
+use crate::SnapshotHandle;
 use crate::StorageOperationContext;
 
 /// Cumulative gate admission statistics (acquisitions and total wait time).

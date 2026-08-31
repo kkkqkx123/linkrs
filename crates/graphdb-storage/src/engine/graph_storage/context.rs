@@ -393,7 +393,7 @@ impl GraphStorageContext {
     pub(crate) fn ensure_vertex_snapshot_registered(
         &self,
         label: LabelId,
-    ) -> Option<crate::mvcc::SnapshotHandle> {
+    ) -> Option<crate::SnapshotHandle> {
         let operation = self.operation_context.as_ref()?;
         if !operation.auto_commit {
             return None;

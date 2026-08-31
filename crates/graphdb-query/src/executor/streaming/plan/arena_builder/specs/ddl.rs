@@ -567,37 +567,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_user_manage_spe
     })
 }
 
-#[allow(dead_code)]
-pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_plan_spec(
-    space_name: String,
-    label: String,
-    is_edge: bool,
-    from_version: u64,
-    to_version: u64,
-) -> DdlSpec {
-    DdlSpec::MigratePlan {
-        space_name,
-        label,
-        is_edge,
-        from_version,
-        to_version,
-    }
-}
-
-#[allow(dead_code)]
-pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_run_spec(
-    plan_json: String,
-) -> DdlSpec {
-    DdlSpec::MigrateRun { plan_json }
-}
-
-#[allow(dead_code)]
-pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_rollback_spec(
-    plan_json: String,
-) -> DdlSpec {
-    DdlSpec::MigrateRollback { plan_json }
-}
-
 // ── Fulltext spec builders ────────────────────────────────────────────────────
 
 fn fulltext_manage_to_command(
