@@ -50,6 +50,10 @@ impl StoragePaths {
         self.data_dir().join("version")
     }
 
+    pub fn migration_history_file(&self) -> PathBuf {
+        self.root.join("migration_history.json")
+    }
+
     pub fn vertices_dir(&self) -> PathBuf {
         self.data_dir().join("vertices")
     }

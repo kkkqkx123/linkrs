@@ -12,6 +12,7 @@ use crate::storage::{
 };
 use graphdb_api::api_core::{PropertyDef as CorePropertyDef, SpaceConfig};
 use graphdb_core::DataType;
+use graphdb_migration::{generate_edge_plan_with_expand, generate_vertex_plan_with_expand};
 
 // ==================== Space related ====================
 
@@ -561,6 +562,7 @@ pub struct MigrationPlanQuery {
     pub from_version: Option<u64>,
     pub to_version: Option<u64>,
     pub is_edge: Option<bool>,
+    pub expand_contract: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -594,26 +596,49 @@ pub async fn create_migration_plan<
         .to_version
         .ok_or_else(|| HttpError::BadRequest("to_version required".into()))?;
     let is_edge = query.is_edge.unwrap_or(false);
+    let expand_contract = query.expand_contract.unwrap_or(false);
 
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage_read = storage.read();
         let plan = if is_edge {
-            graphdb_migration::generate_edge_plan(
-                &*storage_read,
-                &space,
-                &label,
-                from_version,
-                to_version,
-            )
+            if expand_contract {
+                generate_edge_plan_with_expand(
+                    &*storage_read,
+                    &space,
+                    &label,
+                    from_version,
+                    to_version,
+                    true,
+                )
+            } else {
+                graphdb_migration::generate_edge_plan(
+                    &*storage_read,
+                    &space,
+                    &label,
+                    from_version,
+                    to_version,
+                )
+            }
         } else {
-            graphdb_migration::generate_vertex_plan(
-                &*storage_read,
-                &space,
-                &label,
-                from_version,
-                to_version,
-            )
+            if expand_contract {
+                generate_vertex_plan_with_expand(
+                    &*storage_read,
+                    &space,
+                    &label,
+                    from_version,
+                    to_version,
+                    true,
+                )
+            } else {
+                graphdb_migration::generate_vertex_plan(
+                    &*storage_read,
+                    &space,
+                    &label,
+                    from_version,
+                    to_version,
+                )
+            }
         }
         .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
@@ -690,6 +715,121 @@ pub async fn rollback_migration<
             "steps_completed": report.steps_completed,
             "rows_migrated": report.rows_migrated,
             "errors": report.errors,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+pub async fn dry_run_migration<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(req): Json<MigrationExecuteRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let mut plan: graphdb_migration::MigrationPlan =
+        serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    plan.dry_run = true;
+
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let mut storage_write = storage.write();
+        let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok::<_, HttpError>(serde_json::json!({
+            "success": report.success,
+            "steps_completed": report.steps_completed,
+            "rows_migrated": report.rows_migrated,
+            "errors": report.errors,
+            "preview": true,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+pub async fn migration_history<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path((space, label)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let is_edge = parse_is_edge_param(&query)?;
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage_read = storage.read();
+        let history = storage_read
+            .list_migration_history(&space, &label, is_edge)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let versions = storage_read
+            .get_applied_versions(&space, &label, is_edge)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        Ok::<_, HttpError>(serde_json::json!({
+            "space": space,
+            "label": label,
+            "is_edge": is_edge,
+            "applied_versions": versions,
+            "history": history,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+pub async fn migration_status<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path((space, label)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let is_edge = parse_is_edge_param(&query)?;
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage_read = storage.read();
+        let applied = storage_read
+            .get_applied_versions(&space, &label, is_edge)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let history = storage_read
+            .list_migration_history(&space, &label, is_edge)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let latest = applied.iter().max().copied().unwrap_or(0);
+        Ok::<_, HttpError>(serde_json::json!({
+            "space": space,
+            "label": label,
+            "is_edge": is_edge,
+            "latest_applied_version": latest,
+            "applied_versions": applied,
+            "history_count": history.len(),
         }))
     })
     .await

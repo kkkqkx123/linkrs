@@ -1,0 +1,21 @@
+[package]
+name = "graphdb-migration-cli"
+version.workspace = true
+edition.workspace = true
+description = "CLI for graphdb migration management"
+license.workspace = true
+
+[[bin]]
+name = "graphdb-migration"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+graphdb-core = { path = "../graphdb-core" }
+graphdb-storage = { path = "../graphdb-storage" }
+graphdb-migration = { path = "../graphdb-migration" }

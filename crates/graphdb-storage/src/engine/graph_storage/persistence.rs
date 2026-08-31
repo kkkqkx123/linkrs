@@ -40,6 +40,20 @@ fn load_schema_and_index_metadata(ctx: &GraphStorageContext) -> StorageResult<()
                 break;
             }
         }
+
+        let migration_paths = latest_checkpoint
+            .as_ref()
+            .map(|checkpoint| StoragePaths::new(checkpoint).migration_history_file())
+            .into_iter()
+            .chain(std::iter::once(paths.migration_history_file()));
+        for migration_path in migration_paths {
+            if migration_path.exists() {
+                let mgr =
+                    crate::migration_history::MigrationHistoryManager::load_from_file(&migration_path)?;
+                *ctx.migration_history().write() = mgr;
+                break;
+            }
+        }
     }
 
     Ok(())
@@ -209,6 +223,15 @@ pub(crate) fn create_checkpoint(
             graph
                 .index_metadata_manager()
                 .save_indexes(&checkpoint_paths.index_meta_file())?;
+            // Persist migration history alongside schema.
+            let migration_file = checkpoint_paths.migration_history_file();
+            if let Some(parent) = migration_file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            graph
+                .migration_history()
+                .read()
+                .save_to_file(&migration_file)?;
 
             let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
             std::fs::create_dir_all(&data_dir)?;
@@ -448,6 +471,9 @@ pub(crate) fn save_to_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
         let index_meta_path = paths.index_meta_file();
         ctx.index_metadata_manager()
             .save_indexes(&index_meta_path)?;
+
+        // Persist migration history.
+        ctx.save_migration_history()?;
 
         save_data_to_dir(ctx, paths.root())?;
 

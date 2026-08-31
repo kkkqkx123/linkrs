@@ -65,6 +65,18 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
     fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
+    fn scan_vertices_by_tag_paginated(
+        &self,
+        space: &str,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        let _ = (space, tag, offset, limit);
+        Err(StorageError::not_supported(
+            "Native vertex pagination is not supported by this storage implementation",
+        ))
+    }
     fn scan_vertices_by_prop(
         &self,
         space: &str,
@@ -391,6 +403,47 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
         Err(StorageError::not_supported(
             "Native index cursor is not supported by this storage engine",
+        ))
+    }
+
+    // ── Migration history ──
+
+    fn list_migration_history(
+        &self,
+        _space: &str,
+        _label: &str,
+        _is_edge: bool,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Err(StorageError::not_supported(
+            "Migration history is not supported by this storage implementation",
+        ))
+    }
+
+    fn get_applied_versions(
+        &self,
+        _space: &str,
+        _label: &str,
+        _is_edge: bool,
+    ) -> Result<Vec<u64>, StorageError> {
+        Err(StorageError::not_supported(
+            "Migration history is not supported by this storage implementation",
+        ))
+    }
+
+    fn record_migration_history(
+        &self,
+        _record: crate::MigrationHistoryRecord,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::not_supported(
+            "Migration history is not supported by this storage implementation",
+        ))
+    }
+
+    fn list_all_migration_history(
+        &self,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Err(StorageError::not_supported(
+            "Migration history is not supported by this storage implementation",
         ))
     }
 }

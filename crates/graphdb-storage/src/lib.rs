@@ -15,6 +15,7 @@ pub(crate) mod mvcc;
 pub use mvcc::SnapshotHandle;
 pub(crate) mod naming;
 pub(crate) mod schema;
+pub mod migration_history;
 pub mod stats_reader;
 pub(crate) mod thread_pool;
 
@@ -61,6 +62,7 @@ pub use index::{
     ManifestCatalogStats, ManifestHandle,
 };
 pub use metrics::MetricsStorage;
+pub use migration_history::{MigrationHistoryManager, MigrationHistoryRecord, MigrationStatus};
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
 pub use types::StoragePropertyDef;

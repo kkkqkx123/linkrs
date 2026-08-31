@@ -39,6 +39,7 @@ pub struct MockStorage {
     /// Vertices keyed by space (mirrors the graph storage API used by
     /// executor-level tests for the point-lookup sources).
     vertices: Arc<RwLock<HashMap<String, Vec<Vertex>>>>,
+    migration_history: Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
 }
 
 impl MockStorage {
@@ -53,6 +54,7 @@ impl MockStorage {
             edge_types: Arc::new(RwLock::new(Vec::new())),
             edges: Arc::new(RwLock::new(Vec::new())),
             vertices: Arc::new(RwLock::new(HashMap::new())),
+            migration_history: Arc::new(RwLock::new(crate::migration_history::MigrationHistoryManager::new())),
         })
     }
 
@@ -172,6 +174,55 @@ impl StorageReader for MockStorage {
     mock_stub!(&self, get_edge_schema_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, detect_vertex_breaking_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, detect_edge_breaking_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    fn list_migration_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.migration_history.read().list(space, label, is_edge))
+    }
+    fn get_applied_versions(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<u64>, StorageError> {
+        Ok(self.migration_history.read().get_applied_versions_sorted(space, label, is_edge))
+    }
+    fn record_migration_history(
+        &self,
+        record: crate::MigrationHistoryRecord,
+    ) -> Result<(), StorageError> {
+        self.migration_history.write().record(record)
+    }
+    fn list_all_migration_history(
+        &self,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.migration_history.read().list_all())
+    }
+    fn scan_vertices_by_tag_paginated(
+        &self,
+        space: &str,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        let vertices = self.vertices.read().get(space).cloned().unwrap_or_default();
+        // Filter by tag if vertices have tags
+        let filtered: Vec<Vertex> = vertices.into_iter().filter(|v| v.tags.iter().any(|t| t.name == tag) || tag.is_empty()).collect();
+        Ok(filtered.into_iter().skip(offset).take(limit).collect())
+    }
+    fn scan_edges_by_type_paginated(
+        &self,
+        space: &str,
+        edge_type: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let edges = self.edges.read().clone();
+        Ok(edges.into_iter().skip(offset).take(limit).collect())
+    }
 }
 
 impl StorageWriter for MockStorage {

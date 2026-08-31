@@ -210,6 +210,18 @@ pub enum MigrationStep {
         was_nullable: bool,
         now_nullable: bool,
     },
+    CreateLabel {
+        label_name: String,
+    },
+    DropLabel {
+        label_name: String,
+    },
+    CreateEdgeType {
+        edge_type_name: String,
+    },
+    DropEdgeType {
+        edge_type_name: String,
+    },
 }
 
 impl MigrationStep {
@@ -221,6 +233,10 @@ impl MigrationStep {
             MigrationStep::ConvertType { .. } => SafetyLevel::Warning,
             MigrationStep::SetDefault { .. } => SafetyLevel::Safe,
             MigrationStep::ChangeNullability { .. } => SafetyLevel::Warning,
+            MigrationStep::CreateLabel { .. } => SafetyLevel::Safe,
+            MigrationStep::DropLabel { .. } => SafetyLevel::Dangerous,
+            MigrationStep::CreateEdgeType { .. } => SafetyLevel::Safe,
+            MigrationStep::DropEdgeType { .. } => SafetyLevel::Dangerous,
         }
     }
 
@@ -231,6 +247,16 @@ impl MigrationStep {
                 | MigrationStep::RenameColumn { .. }
                 | MigrationStep::ConvertType { .. }
                 | MigrationStep::SetDefault { .. }
+        )
+    }
+
+    pub fn is_schema_modifying(&self) -> bool {
+        matches!(
+            self,
+            MigrationStep::CreateLabel { .. }
+                | MigrationStep::DropLabel { .. }
+                | MigrationStep::CreateEdgeType { .. }
+                | MigrationStep::DropEdgeType { .. }
         )
     }
 
@@ -282,6 +308,18 @@ impl MigrationStep {
                     name, was_nullable, now_nullable
                 )
             }
+            MigrationStep::CreateLabel { label_name } => {
+                format!("Create label '{}'", label_name)
+            }
+            MigrationStep::DropLabel { label_name } => {
+                format!("Drop label '{}' - all data will be lost", label_name)
+            }
+            MigrationStep::CreateEdgeType { edge_type_name } => {
+                format!("Create edge type '{}'", edge_type_name)
+            }
+            MigrationStep::DropEdgeType { edge_type_name } => {
+                format!("Drop edge type '{}' - all data will be lost", edge_type_name)
+            }
         }
     }
 
@@ -322,6 +360,14 @@ impl MigrationStep {
                 was_nullable: *now_nullable,
                 now_nullable: *was_nullable,
             }),
+            MigrationStep::CreateLabel { label_name } => {
+                Some(MigrationStep::DropLabel { label_name: label_name.clone() })
+            }
+            MigrationStep::DropLabel { .. } => None,
+            MigrationStep::CreateEdgeType { edge_type_name } => Some(MigrationStep::DropEdgeType {
+                edge_type_name: edge_type_name.clone(),
+            }),
+            MigrationStep::DropEdgeType { .. } => None,
         }
     }
 }
@@ -341,6 +387,15 @@ pub struct VersionRange {
     pub to: u64,
 }
 
+fn compute_steps_hash(steps: &[MigrationStep]) -> String {
+    use sha2::{Digest, Sha256};
+    let json = serde_json::to_string(steps).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    let result = hasher.finalize();
+    result.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationPlan {
     pub target: MigrationTarget,
@@ -351,6 +406,14 @@ pub struct MigrationPlan {
     pub rollback_plan: Option<Box<MigrationPlan>>,
     pub batch_size: usize,
     pub completed_steps: Vec<usize>,
+    #[serde(default)]
+    pub plan_hash: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub created_at: Option<u64>,
+    #[serde(default)]
+    pub expand_contract: Option<bool>,
 }
 
 impl MigrationPlan {
@@ -362,6 +425,11 @@ impl MigrationPlan {
         overall_safety: SafetyLevel,
         rollback_plan: Option<Box<MigrationPlan>>,
     ) -> Self {
+        let hash = compute_steps_hash(&steps);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         Self {
             target,
             version_range,
@@ -371,7 +439,19 @@ impl MigrationPlan {
             rollback_plan,
             batch_size: DEFAULT_BATCH_SIZE,
             completed_steps: Vec::new(),
+            plan_hash: hash,
+            dry_run: false,
+            created_at: Some(now),
+            expand_contract: None,
         }
+    }
+
+    pub fn compute_hash(&self) -> String {
+        compute_steps_hash(&self.steps)
+    }
+
+    pub fn refresh_hash(&mut self) {
+        self.plan_hash = compute_steps_hash(&self.steps);
     }
 
     pub fn is_empty(&self) -> bool {

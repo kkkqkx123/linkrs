@@ -206,6 +206,15 @@ pub fn create_router<
         )
         .route("/migration/execute", post(schema::execute_migration))
         .route("/migration/rollback", post(schema::rollback_migration))
+        .route("/migration/dry-run", post(schema::dry_run_migration))
+        .route(
+            "/migration/history/{space}/{label}",
+            get(schema::migration_history),
+        )
+        .route(
+            "/migration/status/{space}/{label}",
+            get(schema::migration_status),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

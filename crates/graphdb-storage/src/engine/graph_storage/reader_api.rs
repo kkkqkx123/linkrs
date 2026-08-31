@@ -39,6 +39,27 @@ impl StorageReader for GraphStorage {
         reader::scan_vertices_by_tag(&self.ctx, space, tag)
     }
 
+    fn scan_vertices_by_tag_paginated(
+        &self,
+        space: &str,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        let options = crate::cursor::ScanOptions::new()
+            .with_tag(tag.to_string())
+            .with_offset(offset)
+            .with_limit(limit);
+        match self.create_vertex_cursor(space, &options) {
+            Ok(mut cursor) => cursor.next_batch(limit),
+            Err(e) if e.kind() == graphdb_core::error::storage::StorageErrorKind::NotSupported => {
+                let all = reader::scan_vertices_by_tag(&self.ctx, space, tag)?;
+                Ok(all.into_iter().skip(offset).take(limit).collect())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn scan_vertices_by_prop(
         &self,
         space: &str,
@@ -475,5 +496,36 @@ impl StorageReader for GraphStorage {
             "Index {} not found in space {}",
             plan.index_id, plan.space
         )))
+    }
+
+    fn list_migration_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.ctx.list_migration_history(space, label, is_edge))
+    }
+
+    fn get_applied_versions(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<u64>, StorageError> {
+        Ok(self.ctx.get_applied_versions(space, label, is_edge))
+    }
+
+    fn record_migration_history(
+        &self,
+        record: crate::MigrationHistoryRecord,
+    ) -> Result<(), StorageError> {
+        self.ctx.record_migration_history(record)
+    }
+
+    fn list_all_migration_history(
+        &self,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.ctx.list_all_migration_history())
     }
 }

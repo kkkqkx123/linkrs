@@ -71,6 +71,8 @@ pub(crate) struct GraphStoragePersistent {
         Arc<RwLock<std::collections::HashMap<LabelId, Arc<VertexIdDomainEvidence>>>>,
     /// SERIAL column allocators (one counter per space + table).
     pub(crate) serial_allocator: crate::engine::graph_storage::serial::SerialAllocator,
+    pub(crate) migration_history:
+        Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
 }
 
 impl GraphStoragePersistent {
@@ -173,6 +175,9 @@ impl GraphStoragePersistent {
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
             serial_allocator: crate::engine::graph_storage::serial::SerialAllocator::new(),
+            migration_history: Arc::new(RwLock::new(
+                crate::migration_history::MigrationHistoryManager::new(),
+            )),
         }
     }
 
@@ -269,6 +274,9 @@ impl GraphStoragePersistent {
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
             serial_allocator: crate::engine::graph_storage::serial::SerialAllocator::new(),
+            migration_history: Arc::new(RwLock::new(
+                crate::migration_history::MigrationHistoryManager::new(),
+            )),
         })
     }
 }
