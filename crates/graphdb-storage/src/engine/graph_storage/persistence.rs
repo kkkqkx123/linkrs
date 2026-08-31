@@ -48,8 +48,9 @@ fn load_schema_and_index_metadata(ctx: &GraphStorageContext) -> StorageResult<()
             .chain(std::iter::once(paths.migration_history_file()));
         for migration_path in migration_paths {
             if migration_path.exists() {
-                let mgr =
-                    crate::migration_history::MigrationHistoryManager::load_from_file(&migration_path)?;
+                let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(
+                    &migration_path,
+                )?;
                 *ctx.migration_history().write() = mgr;
                 break;
             }

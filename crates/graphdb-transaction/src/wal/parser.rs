@@ -209,6 +209,17 @@ impl ParallelWalParser {
             return Err(WalError::InvalidFileHeader);
         }
 
+        if let Some(header_checksum) = file_header.checksum_enabled() {
+            if header_checksum != verify_checksum {
+                log::warn!(
+                    "WAL file {:?} checksum config mismatch: header={}, parser verify={}",
+                    path,
+                    header_checksum,
+                    verify_checksum
+                );
+            }
+        }
+
         let file_start_lsn = file_header.start_lsn();
         parse_wal_file_bytes(&buffer, file_start_lsn, recovery_mode, verify_checksum)
     }
@@ -532,6 +543,17 @@ fn compute_checksum(header: &WalHeader, payload: &[u8]) -> u32 {
     hasher.finalize()
 }
 
+pub fn compute_checksum_public(header: &WalHeader, payload: &[u8]) -> u32 {
+    compute_checksum(header, payload)
+}
+
+pub fn verify_entry_checksum(entry: &ParsedWalEntry) -> bool {
+    if entry.header.checksum == 0 {
+        return true;
+    }
+    compute_checksum(&entry.header, &entry.payload) == entry.header.checksum
+}
+
 fn decompress_payload(payload: &[u8], compression: WalCompression) -> WalResult<Vec<u8>> {
     match compression {
         WalCompression::Zstd => {
@@ -670,6 +692,17 @@ impl LocalWalParser {
 
         if !file_header.is_valid() {
             return Err(WalError::InvalidFileHeader);
+        }
+
+        if let Some(header_checksum) = file_header.checksum_enabled() {
+            if header_checksum != self.verify_checksum {
+                log::warn!(
+                    "WAL file {:?} checksum config mismatch: header={}, parser verify={}",
+                    path,
+                    header_checksum,
+                    self.verify_checksum
+                );
+            }
         }
 
         let file_start_lsn = file_header.start_lsn();

@@ -132,7 +132,14 @@ fn open_storage(path: &std::path::Path) -> anyhow::Result<GraphStorage> {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Plan { space, label, is_edge, from, to, expand_contract } => {
+        Commands::Plan {
+            space,
+            label,
+            is_edge,
+            from,
+            to,
+            expand_contract,
+        } => {
             let storage = open_storage(&cli.db_path)?;
             let plan = if is_edge {
                 if expand_contract {
@@ -151,7 +158,14 @@ fn main() -> anyhow::Result<()> {
             println!("Plan JSON: {}", serde_json::to_string_pretty(&plan)?);
             println!("Plan Hash: {}", plan.plan_hash);
         }
-        Commands::Up { space, label, is_edge, from, to, expand_contract } => {
+        Commands::Up {
+            space,
+            label,
+            is_edge,
+            from,
+            to,
+            expand_contract,
+        } => {
             let mut storage = open_storage(&cli.db_path)?;
             let plan = if is_edge {
                 if expand_contract {
@@ -180,7 +194,12 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Down { space: _, label: _, is_edge: _, plan_json } => {
+        Commands::Down {
+            space: _,
+            label: _,
+            is_edge: _,
+            plan_json,
+        } => {
             let mut storage = open_storage(&cli.db_path)?;
             let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&plan_json)?;
             let lock_path = cli.db_path.join("migration.lock");
@@ -188,10 +207,18 @@ fn main() -> anyhow::Result<()> {
             let report = graphdb_migration::rollback_migration(&mut storage, &plan)?;
             println!("{}", report.print_summary());
         }
-        Commands::Status { space, label, is_edge } => {
+        Commands::Status {
+            space,
+            label,
+            is_edge,
+        } => {
             let storage = open_storage(&cli.db_path)?;
-            let history = storage.list_migration_history(&space, &label, is_edge).unwrap_or_default();
-            let versions = storage.get_applied_versions(&space, &label, is_edge).unwrap_or_default();
+            let history = storage
+                .list_migration_history(&space, &label, is_edge)
+                .unwrap_or_default();
+            let versions = storage
+                .get_applied_versions(&space, &label, is_edge)
+                .unwrap_or_default();
             println!("Space: {} Label: {} is_edge: {}", space, label, is_edge);
             println!("Applied versions: {:?}", versions);
             println!("History records: {}", history.len());
@@ -211,7 +238,14 @@ fn main() -> anyhow::Result<()> {
                 println!("Version history: {:?}", h.get_versions());
             }
         }
-        Commands::DryRun { space, label, is_edge, from, to, expand_contract } => {
+        Commands::DryRun {
+            space,
+            label,
+            is_edge,
+            from,
+            to,
+            expand_contract,
+        } => {
             let mut storage = open_storage(&cli.db_path)?;
             let mut plan = if is_edge {
                 if expand_contract {
@@ -232,11 +266,20 @@ fn main() -> anyhow::Result<()> {
             println!("Dry-run report (preview only): {}", report.print_summary());
             println!("Dry-run does not modify storage data.");
         }
-        Commands::History { space, label, is_edge } => {
+        Commands::History {
+            space,
+            label,
+            is_edge,
+        } => {
             let storage = open_storage(&cli.db_path)?;
-            let history = storage.list_migration_history(&space, &label, is_edge).unwrap_or_default();
+            let history = storage
+                .list_migration_history(&space, &label, is_edge)
+                .unwrap_or_default();
             if history.is_empty() {
-                println!("No migration history for {}/{} (is_edge={})", space, label, is_edge);
+                println!(
+                    "No migration history for {}/{} (is_edge={})",
+                    space, label, is_edge
+                );
             } else {
                 for rec in history {
                     println!(

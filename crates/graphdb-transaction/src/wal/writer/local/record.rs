@@ -8,8 +8,8 @@ use crate::wal::writer::compression::{self as compression_mod};
 use crate::wal::writer::sync::elapsed_since;
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::types::{
-    Lsn, RecordType, WalCompression, WalError, WalHeader, WalOpType, WalResult,
-    WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
+    Lsn, RecordType, WalCompression, WalError, WalHeader, WalOpType, WalResult, WAL_HEADER_SIZE,
+    WAL_MAX_RECORD_SIZE,
 };
 
 use super::{LocalWalWriter, WalHeaderParams};

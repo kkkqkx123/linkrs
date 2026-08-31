@@ -13,9 +13,9 @@ pub mod memory_watermark;
 pub(crate) mod mvcc;
 
 pub use mvcc::SnapshotHandle;
+pub mod migration_history;
 pub(crate) mod naming;
 pub(crate) mod schema;
-pub mod migration_history;
 pub mod stats_reader;
 pub(crate) mod thread_pool;
 

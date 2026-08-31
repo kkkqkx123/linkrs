@@ -89,9 +89,10 @@ impl TransactionManager {
             Arc::clone(&checkpoint_gate),
             Arc::clone(&stats),
         );
+        let cert_shard_count = config.cert_shard_count;
         let manager = Self {
             version_manager,
-            config,
+            config: config.clone(),
             active_transactions: DashMap::new(),
             id_generator: AtomicU64::new(1),
             stats,
@@ -102,7 +103,7 @@ impl TransactionManager {
             sync_manager: None,
             commit_sink: None,
             checkpoint_gate,
-            certifier: Certifier::new(),
+            certifier: Certifier::with_shard_count(cert_shard_count),
             write_exclusion_owner: AtomicU64::new(0),
             recovery: RecoveryManager::new(),
             cleaner,
@@ -218,6 +219,23 @@ impl TransactionManager {
 
     pub fn with_commit_sink(mut self, commit_sink: Arc<dyn TransactionCommitSink>) -> Self {
         self.commit_sink = Some(commit_sink);
+        self
+    }
+
+    /// Whether this manager runs in in-memory mode (WAL and checkpoint skipped).
+    pub fn is_in_memory(&self) -> bool {
+        self.config.in_memory
+    }
+
+    /// Create a manager in in-memory mode (skip WAL/checkpoint for testing).
+    pub fn in_memory(mut self) -> Self {
+        self.config.in_memory = true;
+        self
+    }
+
+    /// Enable or disable in-memory mode.
+    pub fn with_in_memory(mut self, in_memory: bool) -> Self {
+        self.config.in_memory = in_memory;
         self
     }
 
@@ -385,13 +403,18 @@ impl TransactionManager {
         }
 
         // Checkpoint gate: refuse new writes during checkpoint drain.
-        self.checkpoint_gate.acquire_write()?;
+        // In-memory mode skips the gate entirely (no WAL/checkpoint).
+        if !self.config.in_memory {
+            self.checkpoint_gate.acquire_write()?;
+        }
 
         self.maybe_cleanup_expired_transactions();
 
         let active_count = self.active_transactions.len();
         if active_count >= self.config.max_concurrent_transactions {
-            self.checkpoint_gate.release_write();
+            if !self.config.in_memory {
+                self.checkpoint_gate.release_write();
+            }
             return Err(TransactionError::too_many_transactions());
         }
 
@@ -400,7 +423,9 @@ impl TransactionManager {
             .version_manager
             .acquire_insert_timestamp()
             .map_err(|e| {
-                self.checkpoint_gate.release_write();
+                if !self.config.in_memory {
+                    self.checkpoint_gate.release_write();
+                }
                 TransactionError::internal(e.to_string())
             })?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
@@ -420,7 +445,9 @@ impl TransactionManager {
         if context.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
             let prev = self.write_exclusion_owner.swap(txn_id.0, Ordering::SeqCst);
             if prev != 0 {
-                self.checkpoint_gate.release_write();
+                if !self.config.in_memory {
+                    self.checkpoint_gate.release_write();
+                }
                 self.active_transactions.remove(&txn_id);
                 return Err(TransactionError::write_transaction_conflict());
             }

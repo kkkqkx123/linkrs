@@ -327,6 +327,25 @@ impl WalFileHeader {
     pub fn start_lsn(&self) -> Lsn {
         Lsn(self.start_lsn)
     }
+
+    /// Whether checksums were enabled when this file was created.
+    /// Stored in `reserved[0]` (0 = disabled, 1 = enabled, 0xFF = unknown/legacy).
+    pub fn checksum_enabled(&self) -> Option<bool> {
+        match self.reserved[0] {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+
+    pub fn set_checksum_enabled(&mut self, enabled: bool) {
+        self.reserved[0] = if enabled { 1 } else { 0 };
+    }
+
+    pub fn with_checksum_enabled(mut self, enabled: bool) -> Self {
+        self.set_checksum_enabled(enabled);
+        self
+    }
 }
 
 #[repr(C)]
@@ -774,6 +793,10 @@ pub struct WalConfig {
     pub circular_buffer: bool,
     pub circular_buffer_size: usize,
     pub group_commit_enabled: bool,
+    pub group_commit_timeout_ms: u64,
+    pub group_commit_batch_size: usize,
+    /// When true, WAL is skipped entirely (in-memory mode).
+    pub in_memory: bool,
 }
 
 impl Default for WalConfig {
@@ -794,6 +817,9 @@ impl Default for WalConfig {
             circular_buffer: false,
             circular_buffer_size: 16 * 1024 * 1024,
             group_commit_enabled: true,
+            group_commit_timeout_ms: 30_000,
+            group_commit_batch_size: 32,
+            in_memory: false,
         }
     }
 }
@@ -890,6 +916,29 @@ impl WalConfig {
     pub fn with_group_commit(mut self, enabled: bool) -> Self {
         self.group_commit_enabled = enabled;
         self
+    }
+
+    pub fn with_group_commit_timeout(mut self, timeout: Duration) -> Self {
+        self.group_commit_timeout_ms = timeout.as_millis() as u64;
+        self
+    }
+
+    pub fn group_commit_timeout(&self) -> Duration {
+        Duration::from_millis(self.group_commit_timeout_ms)
+    }
+
+    pub fn with_group_commit_batch_size(mut self, size: usize) -> Self {
+        self.group_commit_batch_size = size;
+        self
+    }
+
+    pub fn with_in_memory(mut self, in_memory: bool) -> Self {
+        self.in_memory = in_memory;
+        self
+    }
+
+    pub fn is_in_memory(&self) -> bool {
+        self.in_memory
     }
 }
 

@@ -712,8 +712,8 @@ mod tests {
 
     #[test]
     fn test_property_read_by_edge_id() {
-        use crate::edge::CsrWithProperties;
         use crate::edge::property_schema::PropertySchema;
+        use crate::edge::CsrWithProperties;
 
         let schemas = vec![
             PropertySchema::new("name".to_string(), 0, graphdb_core::DataType::String),
@@ -740,7 +740,9 @@ mod tests {
         assert_eq!(props[1].1, Value::Int(30));
 
         // Missing edge_id returns None
-        assert!(pt.read_properties_by_edge_id(graphdb_core::types::EdgeId(999)).is_none());
+        assert!(pt
+            .read_properties_by_edge_id(graphdb_core::types::EdgeId(999))
+            .is_none());
     }
 
     #[test]
@@ -855,7 +857,10 @@ mod tests {
         let loaded = ColdSnapshot::open(&path).unwrap();
         assert_eq!(loaded.edge_count(), 50);
         let nbr = loaded.get_out_edges(10)[0];
-        let props = loaded.properties().read_properties_by_edge_id(nbr.edge_id).unwrap();
+        let props = loaded
+            .properties()
+            .read_properties_by_edge_id(nbr.edge_id)
+            .unwrap();
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].1, Value::string("repeated-pattern-3"));
     }

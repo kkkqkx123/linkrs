@@ -138,7 +138,11 @@ impl CsrWithProperties {
 
     /// Allocate a new row and populate it with the given values.
     /// Returns the row index (0-based).
-    fn allocate_row(&mut self, values: &[(String, Value)], create_ts: Timestamp) -> StorageResult<usize> {
+    fn allocate_row(
+        &mut self,
+        values: &[(String, Value)],
+        create_ts: Timestamp,
+    ) -> StorageResult<usize> {
         let row_idx = if let Some(free_off) = self.free_list.pop() {
             let idx = free_off as usize;
             if idx >= self.visibility.len() {
@@ -179,7 +183,9 @@ impl CsrWithProperties {
             } else {
                 let _ = col.set_versioned(row_idx, None, create_ts);
             }
-            if self.version_chain_cap != 0 && col.version_chain_len(row_idx) > self.version_chain_cap {
+            if self.version_chain_cap != 0
+                && col.version_chain_len(row_idx) > self.version_chain_cap
+            {
                 col.fold_oldest(row_idx, self.version_chain_cap, self.retention_horizon);
             }
         }
@@ -383,7 +389,10 @@ impl CsrWithProperties {
             .ok_or_else(|| StorageError::invalid_offset(0))?;
         let idx = prop_id.as_usize();
         if idx >= self.property_schema.len() {
-            return Err(StorageError::column_not_found(format!("prop_id={}", prop_id.0)));
+            return Err(StorageError::column_not_found(format!(
+                "prop_id={}",
+                prop_id.0
+            )));
         }
         let name = self.property_schema[idx].name.clone();
         self.set_property_at_row(pos as usize, &name, value, ts)
@@ -410,7 +419,9 @@ impl CsrWithProperties {
             return Ok(());
         }
         if self.visibility[row_idx].delete_ts.is_some() {
-            return Err(StorageError::invalid_operation("record already marked deleted"));
+            return Err(StorageError::invalid_operation(
+                "record already marked deleted",
+            ));
         }
         self.visibility[row_idx].mark_deleted(ts);
         Ok(())
@@ -485,7 +496,8 @@ impl CsrWithProperties {
             return Err(StorageError::column_already_exists(name));
         }
         let prop_id = self.property_schema.len() as i32;
-        let schema = PropertySchema::new(name.clone(), prop_id, data_type.clone()).nullable(nullable);
+        let schema =
+            PropertySchema::new(name.clone(), prop_id, data_type.clone()).nullable(nullable);
         self.property_schema.push(schema);
         let mut col = Column::new(name, prop_id, data_type, nullable);
         let rows = self.visibility.len();
@@ -570,7 +582,9 @@ impl CsrWithProperties {
                 .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let col = &mut self.property_columns[col_idx];
             col.set_versioned(row_idx, Some(value), ts)?;
-            if self.version_chain_cap != 0 && col.version_chain_len(row_idx) > self.version_chain_cap {
+            if self.version_chain_cap != 0
+                && col.version_chain_len(row_idx) > self.version_chain_cap
+            {
                 col.fold_oldest(row_idx, self.version_chain_cap, self.retention_horizon);
             }
         }
@@ -578,8 +592,16 @@ impl CsrWithProperties {
     }
 
     pub fn compaction_stats(&self) -> crate::edge::property_schema::PropertyCompactionStats {
-        let tombstone_count = self.visibility.iter().filter(|v| v.delete_ts.is_some()).count();
-        let live_records = self.visibility.iter().filter(|v| v.create_ts != 0 && v.delete_ts.is_none()).count();
+        let tombstone_count = self
+            .visibility
+            .iter()
+            .filter(|v| v.delete_ts.is_some())
+            .count();
+        let live_records = self
+            .visibility
+            .iter()
+            .filter(|v| v.create_ts != 0 && v.delete_ts.is_none())
+            .count();
         let mut reclaimable_bytes = 0usize;
         for v in &self.visibility {
             if v.delete_ts.is_some() {
@@ -640,7 +662,8 @@ impl CsrWithProperties {
         total += self.offsets.capacity() * std::mem::size_of::<u32>();
         total += self.lengths.capacity() * std::mem::size_of::<u32>();
         total += self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
-        total += self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
+        total +=
+            self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
         total += self.free_list.capacity() * std::mem::size_of::<u32>();
         for col in &self.property_columns {
             total += col.memory_size();
@@ -759,7 +782,8 @@ impl CsrWithProperties {
             });
         }
         if offset + 4 <= data.len() {
-            self.row_count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            self.row_count =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
         }
         if offset + 4 <= data.len() {
@@ -778,7 +802,8 @@ impl CsrWithProperties {
             }
         }
         if offset + 4 <= data.len() {
-            let free_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            let free_len =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             self.free_list.clear();
             for _ in 0..free_len {
@@ -821,17 +846,20 @@ impl CsrWithProperties {
             offset += 8;
         }
         if offset + 4 <= data.len() {
-            self.vertex_capacity = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            self.vertex_capacity =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
         }
         if offset + 4 <= data.len() {
-            let col_count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            let col_count =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             for _ in 0..col_count {
                 if offset + 4 > data.len() {
                     break;
                 }
-                let name_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+                let name_len =
+                    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
                 if offset + name_len > data.len() {
                     break;
@@ -841,7 +869,8 @@ impl CsrWithProperties {
                 if offset + 4 > data.len() {
                     break;
                 }
-                let rows = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+                let rows =
+                    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
                 if let Some(col_idx) = self.property_schema.iter().position(|s| s.name == name) {
                     let col = &mut self.property_columns[col_idx];
@@ -858,7 +887,9 @@ impl CsrWithProperties {
                             if offset + 4 > data.len() {
                                 break;
                             }
-                            let vlen = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+                            let vlen =
+                                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+                                    as usize;
                             offset += 4;
                             if offset + vlen > data.len() {
                                 break;
@@ -884,7 +915,9 @@ impl CsrWithProperties {
                             if offset + 4 > data.len() {
                                 break;
                             }
-                            let vlen = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+                            let vlen =
+                                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+                                    as usize;
                             offset += 4;
                             if offset + vlen <= data.len() {
                                 offset += vlen;
@@ -907,7 +940,11 @@ impl CsrWithProperties {
         removed
     }
 
-    pub fn reclaim_slots(&mut self, valid_edge_ids: &HashSet<EdgeId>, retention_bound: Timestamp) -> usize {
+    pub fn reclaim_slots(
+        &mut self,
+        valid_edge_ids: &HashSet<EdgeId>,
+        retention_bound: Timestamp,
+    ) -> usize {
         if retention_bound == Timestamp::MAX {
             return 0;
         }
@@ -917,7 +954,10 @@ impl CsrWithProperties {
                 continue;
             }
             // Find the edge_id that maps to this row, if any.
-            let has_live_edge = self.edge_to_row.iter().any(|(eid, &p)| p as usize == idx && valid_edge_ids.contains(eid));
+            let has_live_edge = self
+                .edge_to_row
+                .iter()
+                .any(|(eid, &p)| p as usize == idx && valid_edge_ids.contains(eid));
             if has_live_edge {
                 continue;
             }
@@ -970,11 +1010,17 @@ mod tests {
         csr.insert_properties(0, eid1, &[("weight".to_string(), Value::Double(2.5))], 10)
             .unwrap();
         let p0 = csr.get_properties(0, 0, 10).unwrap();
-        assert!(p0.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.5))));
+        assert!(p0
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.5))));
         let p1 = csr.get_properties(0, 1, 10).unwrap();
-        assert!(p1.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
+        assert!(p1
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
         let by_id = csr.get_by_edge_id(eid1, 10).unwrap();
-        assert!(by_id.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
+        assert!(by_id
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
     }
 
     #[test]
@@ -999,8 +1045,12 @@ mod tests {
         csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
             .unwrap();
         let old = csr.get_by_edge_id(eid, 150).unwrap();
-        assert!(old.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
+        assert!(old
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
         let ne = csr.get_by_edge_id(eid, 250).unwrap();
-        assert!(ne.iter().any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        assert!(ne
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
     }
 }

@@ -81,8 +81,8 @@ impl MigrationFileRegistry {
         for entry in std::fs::read_dir(&dir)
             .map_err(|e| MigrationError::Plan(format!("failed to read migration dir: {e}")))?
         {
-            let entry =
-                entry.map_err(|e| MigrationError::Plan(format!("failed to read dir entry: {e}")))?;
+            let entry = entry
+                .map_err(|e| MigrationError::Plan(format!("failed to read dir entry: {e}")))?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
@@ -131,8 +131,9 @@ impl MigrationFileRegistry {
     /// Delete a migration file.
     pub fn delete_file(&self, entry: &MigrationFileEntry) -> Result<(), MigrationError> {
         if entry.file_path.exists() {
-            std::fs::remove_file(&entry.file_path)
-                .map_err(|e| MigrationError::Plan(format!("failed to delete migration file: {e}")))?;
+            std::fs::remove_file(&entry.file_path).map_err(|e| {
+                MigrationError::Plan(format!("failed to delete migration file: {e}"))
+            })?;
         }
         Ok(())
     }
@@ -140,7 +141,13 @@ impl MigrationFileRegistry {
 
 fn sanitize_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .split('_')
         .filter(|s| !s.is_empty())

@@ -40,20 +40,20 @@ pub mod property_schema;
 pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
-use graphdb_core::{Edge, Value};
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
+pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
 pub use edge_table::snapshot::ExportedEdgeSnapshot;
 pub use edge_table::EdgeStore;
 pub use fragmentation_stats::FragmentationStats;
 pub use graphdb_core::types::EdgeStrategy;
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{Edge, Value};
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator, MutableCsrRegion};
-pub use csr_with_properties::CsrWithProperties;
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use graphdb_core::types::INVALID_EDGE_ID;

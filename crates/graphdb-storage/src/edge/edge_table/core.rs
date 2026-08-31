@@ -9,8 +9,8 @@ use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
-use crate::edge::CsrWithProperties;
 use crate::edge::property_schema::PropertySchema;
+use crate::edge::CsrWithProperties;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType};
 use crate::types::{PropertyId, StoragePropertyDef};
@@ -112,7 +112,8 @@ impl TimeTravelEdgeStore {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone()).nullable(p.nullable)
+                PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
+                    .nullable(p.nullable)
             })
             .collect();
         let mut properties = CsrWithProperties::new(config.initial_vertex_capacity, prop_schemas);
@@ -586,7 +587,8 @@ impl TimeTravelEdgeStore {
         }
 
         if !converted_values.is_empty() {
-            self.properties.insert_for_edge(edge_id, &converted_values, ts)?;
+            self.properties
+                .insert_for_edge(edge_id, &converted_values, ts)?;
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);

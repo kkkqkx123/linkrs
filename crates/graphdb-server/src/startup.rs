@@ -333,6 +333,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
             auto_commit: config.transaction.auto_commit,
             ..TransactionConfig::default()
         },
+        ..TransactionManagerConfig::default()
     };
 
     let mut transaction_manager = TransactionManager::with_shared_version_manager(

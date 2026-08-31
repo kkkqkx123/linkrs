@@ -17,9 +17,8 @@ use super::context::TransactionContext;
 use super::error::TransactionError;
 use super::types::*;
 
-/// Number of certification lock shards. Must be a power of two for efficient
-/// modulo via bitmask (though the compiler optimizes `% 64` anyway).
-const CERT_SHARD_COUNT: usize = 64;
+/// Default certification shard count.
+const DEFAULT_CERT_SHARD_COUNT: usize = 64;
 
 /// Maps a resource reference to its committed write timestamps + transaction IDs.
 type ConflictMap<V> = HashMap<V, Vec<(Timestamp, TransactionId)>>;
@@ -77,9 +76,10 @@ impl SsiTracker {
 pub struct Certifier {
     /// Sharded certification locks. Each shard serializes certification +
     /// committed_write_sets push for a single transaction. Shard selection
-    /// is by `txn_id % CERT_SHARD_COUNT`, so non-conflicting transactions
+    /// is by `txn_id % shard_count`, so non-conflicting transactions
     /// can certify in parallel.
-    certification_shards: [Mutex<()>; CERT_SHARD_COUNT],
+    certification_shards: Vec<Mutex<()>>,
+    shard_count: usize,
     /// Committed write sets retained until no transaction can have started
     /// before the corresponding commit timestamp.
     committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
@@ -99,8 +99,18 @@ pub struct Certifier {
 
 impl Certifier {
     pub fn new() -> Self {
+        Self::with_shard_count(DEFAULT_CERT_SHARD_COUNT)
+    }
+
+    pub fn with_shard_count(shard_count: usize) -> Self {
+        assert!(
+            shard_count.is_power_of_two(),
+            "shard_count must be power of two"
+        );
+        assert!((1..=256).contains(&shard_count), "shard_count must be 1..=256");
         Self {
-            certification_shards: std::array::from_fn(|_| Mutex::new(())),
+            certification_shards: (0..shard_count).map(|_| Mutex::new(())).collect(),
+            shard_count,
             committed_write_sets: Mutex::new(Vec::new()),
             committed_vertex_writes: Mutex::new(HashMap::new()),
             committed_edge_writes: Mutex::new(HashMap::new()),
@@ -110,8 +120,12 @@ impl Certifier {
         }
     }
 
+    pub fn shard_count(&self) -> usize {
+        self.shard_count
+    }
+
     fn cert_shard(&self, txn_id: TransactionId) -> &Mutex<()> {
-        &self.certification_shards[txn_id.0 as usize % CERT_SHARD_COUNT]
+        &self.certification_shards[txn_id.0 as usize % self.shard_count]
     }
 
     /// Check for write-set based conflicts with active transactions.
@@ -127,7 +141,8 @@ impl Certifier {
         active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
         stats: &TransactionStats,
     ) -> Result<(), TransactionError> {
-        let _certification_guard = self.cert_shard(txn_id).lock();
+        // Lock-free fast path: check read-only / single-writer / empty without acquiring shard.
+        // This avoids certification lock contention for read-only and SingleWriter transactions.
         let ctx = active_transactions
             .get(&txn_id)
             .ok_or_else(|| TransactionError::transaction_not_found(txn_id))?;
@@ -136,7 +151,6 @@ impl Certifier {
             return Ok(());
         }
 
-        // SingleWriter mode guarantees serialization via the exclusive write lock.
         if ctx.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
             ctx.mark_write_validated();
             return Ok(());
@@ -148,6 +162,13 @@ impl Certifier {
         if txn_write_set.is_empty() && (!serializable || txn_read_set.is_empty()) {
             return Ok(());
         }
+
+        // Only acquire shard lock for transactions that require certification.
+        let _certification_guard = self.cert_shard(txn_id).lock();
+        // Re-fetch context after acquiring lock to ensure consistency (context may have been removed)
+        let ctx = active_transactions
+            .get(&txn_id)
+            .ok_or_else(|| TransactionError::transaction_not_found(txn_id))?;
 
         // SSI: register read locks for all entities in the read set.
         // This enables O(1) dangerous-structure detection when other
@@ -384,6 +405,7 @@ impl Certifier {
     /// `start_timestamp` to catch cross-shard certification races.
     ///
     /// On conflict, returns `Err` and publishes nothing.
+    /// Lock-free bypass for empty write sets or in-memory read-only transactions.
     pub fn publish(
         &self,
         txn_id: TransactionId,
@@ -393,6 +415,11 @@ impl Certifier {
         active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
         stats: &TransactionStats,
     ) -> Result<(), TransactionError> {
+        if write_set.is_empty() {
+            // SSI: still unregister read locks even for empty writes
+            self.ssi_tracker.unregister_reads(txn_id);
+            return Ok(());
+        }
         // Lock order: cert_shard → committed_write_sets → *
         let _cert_guard = self.cert_shard(txn_id).lock();
         let mut committed = self.committed_write_sets.lock();

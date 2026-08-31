@@ -181,8 +181,8 @@ fn test_parse_migrate_edge() {
 
 #[test]
 fn test_ddl_migrate_plan_operator() {
-    use graphdb::query::executor::streaming::operators::spec::DdlSpec;
     use graphdb::query::executor::streaming::operators::ddl_operator::DdlOperator;
+    use graphdb::query::executor::streaming::operators::spec::DdlSpec;
     use graphdb::query::executor::streaming::slot::SlotLayout;
     use std::sync::Arc;
     let spec = DdlSpec::MigratePlan {

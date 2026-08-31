@@ -23,13 +23,15 @@ impl MigrationMetrics {
         self.total_migrations.fetch_add(1, Ordering::Relaxed);
         self.successful_migrations.fetch_add(1, Ordering::Relaxed);
         self.total_rows_migrated.fetch_add(rows, Ordering::Relaxed);
-        self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_duration_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self, duration_ms: u64) {
         self.total_migrations.fetch_add(1, Ordering::Relaxed);
         self.failed_migrations.fetch_add(1, Ordering::Relaxed);
-        self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_duration_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> MigrationMetricsSnapshot {

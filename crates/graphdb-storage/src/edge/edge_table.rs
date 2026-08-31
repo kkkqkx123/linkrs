@@ -1014,8 +1014,13 @@ impl core::TimeTravelEdgeStore {
             let p = persistence::load_csr_properties(&props_path)?;
             let mut new_props = p;
             // Rebuild columns to match current schema if needed
-            let current_schema_names: std::collections::HashSet<_> = self.schema.properties.iter().map(|p| &p.name).collect();
-            let existing_names: std::collections::HashSet<_> = new_props.property_schema().iter().map(|s| &s.name).collect();
+            let current_schema_names: std::collections::HashSet<_> =
+                self.schema.properties.iter().map(|p| &p.name).collect();
+            let existing_names: std::collections::HashSet<_> = new_props
+                .property_schema()
+                .iter()
+                .map(|s| &s.name)
+                .collect();
             if current_schema_names != existing_names {
                 // Schema mismatch: rebuild from schema
                 let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
@@ -1032,7 +1037,8 @@ impl core::TimeTravelEdgeStore {
                         .nullable(p.nullable)
                     })
                     .collect();
-                let mut rebuilt = crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
+                let mut rebuilt =
+                    crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
                 rebuilt.set_version_chain_cap(self.config.version_chain_cap);
                 new_props = rebuilt;
             }

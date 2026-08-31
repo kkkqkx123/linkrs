@@ -26,7 +26,12 @@ impl GraphDatabase<GraphStorage> {
     ) -> CoreResult<MigrationPlan> {
         let storage = self.storage();
         graphdb_migration::generate_vertex_plan_with_expand(
-            &*storage, space, tag, from_version, to_version, expand_contract,
+            &*storage,
+            space,
+            tag,
+            from_version,
+            to_version,
+            expand_contract,
         )
         .map_err(|e| CoreError::Internal(e.to_string()))
     }
@@ -53,15 +58,17 @@ impl GraphDatabase<GraphStorage> {
     ) -> CoreResult<MigrationPlan> {
         let storage = self.storage();
         graphdb_migration::generate_edge_plan_with_expand(
-            &*storage, space, edge_type, from_version, to_version, expand_contract,
+            &*storage,
+            space,
+            edge_type,
+            from_version,
+            to_version,
+            expand_contract,
         )
         .map_err(|e| CoreError::Internal(e.to_string()))
     }
 
-    pub fn execute_migration_plan(
-        &self,
-        plan: &MigrationPlan,
-    ) -> CoreResult<MigrationReport> {
+    pub fn execute_migration_plan(&self, plan: &MigrationPlan) -> CoreResult<MigrationReport> {
         let mut storage = self.storage_mut();
         let start = std::time::Instant::now();
         self.stats_manager().record_migration_start();
@@ -88,8 +95,9 @@ impl GraphDatabase<GraphStorage> {
         let mut storage = self.storage_mut();
         let start = std::time::Instant::now();
         self.stats_manager().record_migration_start();
-        let res = graphdb_migration::execute_migration_plan_with_config(&mut *storage, plan, config)
-            .map_err(|e| CoreError::Internal(e.to_string()));
+        let res =
+            graphdb_migration::execute_migration_plan_with_config(&mut *storage, plan, config)
+                .map_err(|e| CoreError::Internal(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;
         match &res {
             Ok(report) if report.success => {
@@ -103,10 +111,7 @@ impl GraphDatabase<GraphStorage> {
         res
     }
 
-    pub fn rollback_migration(
-        &self,
-        plan: &MigrationPlan,
-    ) -> CoreResult<MigrationReport> {
+    pub fn rollback_migration(&self, plan: &MigrationPlan) -> CoreResult<MigrationReport> {
         let mut storage = self.storage_mut();
         graphdb_migration::rollback_migration(&mut *storage, plan)
             .map_err(|e| CoreError::Internal(e.to_string()))

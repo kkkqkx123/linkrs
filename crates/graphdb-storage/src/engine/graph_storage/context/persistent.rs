@@ -71,8 +71,7 @@ pub(crate) struct GraphStoragePersistent {
         Arc<RwLock<std::collections::HashMap<LabelId, Arc<VertexIdDomainEvidence>>>>,
     /// SERIAL column allocators (one counter per space + table).
     pub(crate) serial_allocator: crate::engine::graph_storage::serial::SerialAllocator,
-    pub(crate) migration_history:
-        Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
+    pub(crate) migration_history: Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
 }
 
 impl GraphStoragePersistent {

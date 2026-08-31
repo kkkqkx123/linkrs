@@ -1017,16 +1017,14 @@ impl<
         let stream = rx_stream.filter_map(|res| match res {
             Ok(ev) => {
                 let proto_ev = match ev {
-                    graphdb_migration::MigrationEvent::Started { plan } => {
-                        MigrationProgressEvent {
-                            event_type: "started".to_string(),
-                            message: plan.plan_hash.clone(),
-                            step_idx: 0,
-                            rows: 0,
-                            success: false,
-                            error: String::new(),
-                        }
-                    }
+                    graphdb_migration::MigrationEvent::Started { plan } => MigrationProgressEvent {
+                        event_type: "started".to_string(),
+                        message: plan.plan_hash.clone(),
+                        step_idx: 0,
+                        rows: 0,
+                        success: false,
+                        error: String::new(),
+                    },
                     graphdb_migration::MigrationEvent::StepStarted { step_idx } => {
                         MigrationProgressEvent {
                             event_type: "step_started".to_string(),
@@ -1060,16 +1058,14 @@ impl<
                             error: report.errors.join("; "),
                         }
                     }
-                    graphdb_migration::MigrationEvent::Failed { error } => {
-                        MigrationProgressEvent {
-                            event_type: "failed".to_string(),
-                            message: String::new(),
-                            step_idx: 0,
-                            rows: 0,
-                            success: false,
-                            error,
-                        }
-                    }
+                    graphdb_migration::MigrationEvent::Failed { error } => MigrationProgressEvent {
+                        event_type: "failed".to_string(),
+                        message: String::new(),
+                        step_idx: 0,
+                        rows: 0,
+                        success: false,
+                        error,
+                    },
                     graphdb_migration::MigrationEvent::RolledBack { report } => {
                         MigrationProgressEvent {
                             event_type: "rolled_back".to_string(),

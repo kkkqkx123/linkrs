@@ -117,7 +117,7 @@ impl TransactionManager {
     ) -> Result<(), TransactionError> {
         let max_retries = self.config.abort_retry_attempts;
 
-        if context.txn_type != TransactionType::Checkpoint {
+        if !self.config.in_memory && context.txn_type != TransactionType::Checkpoint {
             if let Some(ref commit_sink) = self.commit_sink {
                 let mut last_error = None;
                 for attempt in 0..=max_retries {
@@ -196,7 +196,9 @@ impl TransactionManager {
                 if context.has_pessimistic_lock() {
                     self.write_exclusion_owner.store(0, Ordering::SeqCst);
                 }
-                self.checkpoint_gate.release_write();
+                if !self.config.in_memory {
+                    self.checkpoint_gate.release_write();
+                }
             }
         }
         // SSI: unregister read locks on abort.

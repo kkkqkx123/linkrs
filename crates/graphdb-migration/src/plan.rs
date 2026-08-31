@@ -320,7 +320,10 @@ impl MigrationStep {
                 format!("Create edge type '{}'", edge_type_name)
             }
             MigrationStep::DropEdgeType { edge_type_name } => {
-                format!("Drop edge type '{}' - all data will be lost", edge_type_name)
+                format!(
+                    "Drop edge type '{}' - all data will be lost",
+                    edge_type_name
+                )
             }
         }
     }
@@ -362,9 +365,9 @@ impl MigrationStep {
                 was_nullable: *now_nullable,
                 now_nullable: *was_nullable,
             }),
-            MigrationStep::CreateLabel { label_name } => {
-                Some(MigrationStep::DropLabel { label_name: label_name.clone() })
-            }
+            MigrationStep::CreateLabel { label_name } => Some(MigrationStep::DropLabel {
+                label_name: label_name.clone(),
+            }),
             MigrationStep::DropLabel { .. } => None,
             MigrationStep::CreateEdgeType { edge_type_name } => Some(MigrationStep::DropEdgeType {
                 edge_type_name: edge_type_name.clone(),

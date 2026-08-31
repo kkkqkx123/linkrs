@@ -32,6 +32,10 @@ pub struct SavepointInfo {
     pub read_set: WriteSet,
     /// Staged redo metadata boundary at savepoint creation.
     pub redo_log_index: usize,
+    /// Local WAL buffer entry count at savepoint creation.
+    pub local_wal_entry_len: usize,
+    /// Local WAL buffer intent count at savepoint creation.
+    pub local_wal_intent_len: usize,
     /// Modified-table metadata as of savepoint creation.
     pub modified_tables: Vec<String>,
 }
@@ -217,5 +221,7 @@ pub(crate) struct SavepointParams {
     pub write_set: WriteSet,
     pub read_set: WriteSet,
     pub redo_log_index: usize,
+    pub local_wal_entry_len: usize,
+    pub local_wal_intent_len: usize,
     pub modified_tables: Vec<String>,
 }

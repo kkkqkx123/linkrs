@@ -21,8 +21,8 @@ pub mod wal_replay;
 
 pub(crate) use checkpoint::{
     build_edge_index_data, build_vertex_index_data, generation_output_paths,
-    remove_generation_build_state, resolve_crash_recovery,
-    save_generation_build_state, write_generation_checkpoint,
+    remove_generation_build_state, resolve_crash_recovery, save_generation_build_state,
+    write_generation_checkpoint,
 };
 pub(crate) use wal_replay::{replay_wal_partition, wal_intents_for_index};
 
@@ -989,8 +989,8 @@ mod tests {
         // Remove
         super::remove_generation_build_state(&ctx, space_id, index_name)
             .expect("build state should remove");
-        let after_remove = load_generation_build_state(&ctx, space_id, index_name)
-            .expect("load should succeed");
+        let after_remove =
+            load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
         assert!(after_remove.is_none());
     }
 
@@ -1053,8 +1053,8 @@ mod tests {
         // Recover (should discard incomplete build)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = load_generation_build_state(&ctx, space_id, index_name)
-            .expect("load should succeed");
+        let after =
+            load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
         assert!(
             after.is_none(),
             "Building state should be discarded on crash recovery"
@@ -1078,8 +1078,8 @@ mod tests {
         // Recover (should discard incomplete catch-up)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = load_generation_build_state(&ctx, space_id, index_name)
-            .expect("load should succeed");
+        let after =
+            load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
         assert!(
             after.is_none(),
             "CatchingUp state should be discarded on crash recovery"
@@ -1106,8 +1106,8 @@ mod tests {
         // Recover (should NOT discard Publishing state since the manifest may be published)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = load_generation_build_state(&ctx, space_id, index_name)
-            .expect("load should succeed");
+        let after =
+            load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
         assert!(
             after.is_some(),
             "Publishing state should be preserved on crash recovery"
@@ -1121,8 +1121,8 @@ mod tests {
         let space_id = 1u64;
         let index_name = "nonexistent_idx";
 
-        let result = load_generation_build_state(&ctx, space_id, index_name)
-            .expect("load should succeed");
+        let result =
+            load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
         assert!(result.is_none());
     }
 

@@ -22,9 +22,7 @@ pub mod evidence;
 pub mod persistent;
 
 pub use autocommit::{AutoCommitBatchWindow, WriteGateStats};
-pub(crate) use autocommit::{
-    AutoCommitMutationRecorder, AutoCommitWriteLease,
-};
+pub(crate) use autocommit::{AutoCommitMutationRecorder, AutoCommitWriteLease};
 pub(crate) use evidence::VertexIdDomainEvidence;
 pub(crate) use persistent::GraphStoragePersistent;
 
@@ -507,10 +505,8 @@ mod tests {
     use std::thread;
 
     use graphdb_core::types::EdgeIdentifier;
-    use graphdb_transaction::{
-        MutationEntityKey, MutationResult, VertexId,
-    };
     use graphdb_transaction::TransactionMutationRecorder;
+    use graphdb_transaction::{MutationEntityKey, MutationResult, VertexId};
 
     use super::autocommit::AutoCommitWriteGate;
 

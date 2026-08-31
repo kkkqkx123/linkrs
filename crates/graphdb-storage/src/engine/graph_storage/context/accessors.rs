@@ -996,7 +996,10 @@ impl GraphStorageContext {
         label: &str,
         is_edge: bool,
     ) -> Vec<crate::migration_history::MigrationHistoryRecord> {
-        self.persistent.migration_history.read().list(space, label, is_edge)
+        self.persistent
+            .migration_history
+            .read()
+            .list(space, label, is_edge)
     }
 
     pub fn list_all_migration_history(
@@ -1005,12 +1008,7 @@ impl GraphStorageContext {
         self.persistent.migration_history.read().list_all()
     }
 
-    pub fn get_applied_versions(
-        &self,
-        space: &str,
-        label: &str,
-        is_edge: bool,
-    ) -> Vec<u64> {
+    pub fn get_applied_versions(&self, space: &str, label: &str, is_edge: bool) -> Vec<u64> {
         self.persistent
             .migration_history
             .read()
@@ -1030,7 +1028,10 @@ impl GraphStorageContext {
     pub(crate) fn save_migration_history(&self) -> graphdb_core::StorageResult<()> {
         if let Some(paths) = self.storage_paths() {
             let path = paths.migration_history_file();
-            self.persistent.migration_history.read().save_to_file(&path)?;
+            self.persistent
+                .migration_history
+                .read()
+                .save_to_file(&path)?;
         }
         Ok(())
     }

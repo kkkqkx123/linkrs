@@ -15,6 +15,7 @@ use super::participant::TransactionMutationRecorder;
 use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
+use super::wal::buffer::LocalWalBuffer;
 use super::wal::Timestamp;
 use graphdb_core::types::CommitLsn;
 use graphdb_core::types::VertexId;
@@ -72,6 +73,8 @@ pub struct TransactionContext {
     read_set: Mutex<WriteSet>,
     /// Redo metadata retained for savepoint and certification boundaries.
     redo_entries: RwLock<Vec<crate::wal::TransactionWalEntry>>,
+    /// Two-tier WAL: in-memory local buffer flushed at commit.
+    local_wal: Mutex<LocalWalBuffer>,
     /// Whether this transaction has passed write set conflict validation
     write_validated: AtomicCell<bool>,
     /// Whether a failed statement requires the transaction to be aborted.
@@ -160,6 +163,8 @@ impl SavepointManager {
             write_set: params.write_set,
             read_set: params.read_set,
             redo_log_index: params.redo_log_index,
+            local_wal_entry_len: params.local_wal_entry_len,
+            local_wal_intent_len: params.local_wal_intent_len,
             modified_tables: params.modified_tables,
         };
         self.savepoints.insert(id, info);
@@ -216,6 +221,7 @@ impl TransactionContext {
             write_set: Mutex::new(WriteSet::new()),
             read_set: Mutex::new(WriteSet::new()),
             redo_entries: RwLock::new(Vec::new()),
+            local_wal: Mutex::new(LocalWalBuffer::new()),
             write_validated: AtomicCell::new(false),
             rollback_only: AtomicCell::new(false),
             resources_released: AtomicCell::new(false),
@@ -270,6 +276,7 @@ impl TransactionContext {
             write_set: Mutex::new(WriteSet::new()),
             read_set: Mutex::new(WriteSet::new()),
             redo_entries: RwLock::new(Vec::new()),
+            local_wal: Mutex::new(LocalWalBuffer::new()),
             write_validated: AtomicCell::new(false),
             rollback_only: AtomicCell::new(false),
             resources_released: AtomicCell::new(false),
@@ -632,6 +639,40 @@ impl TransactionContext {
         self.redo_entries.write().truncate(index);
     }
 
+    /// Access the two-tier local WAL buffer for direct manipulation.
+    pub fn local_wal_buffer(&self) -> parking_lot::MutexGuard<'_, LocalWalBuffer> {
+        self.local_wal.lock()
+    }
+
+    /// Number of buffered local WAL bytes (for metrics / backpressure).
+    pub fn local_wal_bytes(&self) -> usize {
+        self.local_wal.lock().buffered_bytes()
+    }
+
+    /// Whether the local WAL buffer is empty.
+    pub fn is_local_wal_empty(&self) -> bool {
+        self.local_wal.lock().is_empty()
+    }
+
+    /// Append a redo entry to both the canonical redo log and the local WAL buffer.
+    pub fn append_local_wal_entry(&self, entry: crate::wal::TransactionWalEntry) {
+        self.redo_entries.write().push(entry.clone());
+        let _ = self
+            .local_wal
+            .lock()
+            .append_entry(entry.op_type, entry.timestamp, entry.payload);
+    }
+
+    /// Flush the local WAL buffer to a global writer (used by storage commit path).
+    pub fn flush_local_wal(
+        &self,
+        writer: &mut crate::wal::LocalWalWriter,
+    ) -> Result<CommitLsn, TransactionError> {
+        let mut buf = self.local_wal.lock();
+        buf.flush_to_writer(writer, self.id, self.durability)
+            .map_err(|e| TransactionError::internal(e.to_string()))
+    }
+
     /// Check if operation can be executed
     pub fn can_execute(&self) -> Result<(), TransactionError> {
         let state = self.state.load();
@@ -823,10 +864,22 @@ impl TransactionContext {
             self.add_undo_log(entry)?;
         }
         if let Some(entry) = mutation.redo_entry {
+            let cloned = entry.clone();
             self.redo_entries.write().push(entry);
+            let _ = self.local_wal.lock().append_entry(
+                cloned.op_type,
+                cloned.timestamp,
+                cloned.payload,
+            );
         }
-        for intent in mutation.index_intents {
+        for intent in &mutation.index_intents {
             self.record_index_write(&format!("{}", intent.mutation.ordering_key));
+        }
+        {
+            let mut local = self.local_wal.lock();
+            for intent in mutation.index_intents {
+                let _ = local.append_intent(intent);
+            }
         }
         if let Some(table) = mutation.modified_table {
             self.record_table_modification(&table);
@@ -872,6 +925,10 @@ impl TransactionContext {
 
     /// Create savepoint
     pub fn create_savepoint(&self, name: Option<String>, sync_sequence: u64) -> SavepointId {
+        let (local_entry_len, local_intent_len) = {
+            let buf = self.local_wal.lock();
+            (buf.entry_count(), buf.intent_count())
+        };
         let params = SavepointParams {
             name,
             operation_log_index: self.operation_log_len(),
@@ -880,6 +937,8 @@ impl TransactionContext {
             write_set: self.get_write_set(),
             read_set: self.get_read_set(),
             redo_log_index: self.redo_log_len(),
+            local_wal_entry_len: local_entry_len,
+            local_wal_intent_len: local_intent_len,
             modified_tables: self.get_modified_tables(),
         };
         let mut manager = self.savepoint_manager.write();
@@ -976,6 +1035,10 @@ impl TransactionContext {
         self.restore_write_set(savepoint_info.write_set);
         self.restore_read_set(savepoint_info.read_set);
         self.truncate_redo_log(savepoint_info.redo_log_index);
+        self.local_wal.lock().truncate(
+            savepoint_info.local_wal_entry_len,
+            savepoint_info.local_wal_intent_len,
+        );
         {
             let mut tables = self.modified_tables.lock();
             *tables = savepoint_info.modified_tables;
@@ -1050,6 +1113,7 @@ impl TransactionContext {
             manager.clear();
         }
         self.truncate_redo_log(0);
+        self.local_wal.lock().clear();
         self.restore_read_set(WriteSet::new());
         Ok(())
     }

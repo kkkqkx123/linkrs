@@ -271,6 +271,16 @@ pub struct TransactionManagerConfig {
     /// Default per-transaction resource budget. Individual transactions inherit
     /// these limits unless overridden.
     pub txn_config: TransactionConfig,
+    /// When true, WAL writes and checkpoint coordination are skipped.
+    /// Useful for unit tests, benchmarks and temporary in-memory graphs.
+    pub in_memory: bool,
+    /// When true, WAL group commit is used to batch fsync across concurrent commits.
+    pub group_commit_enabled: bool,
+    /// Timeout for group commit follower wait.
+    pub group_commit_timeout: Duration,
+    /// Number of certification shards for write-set conflict detection.
+    /// Must be a power of two. Default 64.
+    pub cert_shard_count: usize,
 }
 
 impl Default for TransactionManagerConfig {
@@ -282,6 +292,39 @@ impl Default for TransactionManagerConfig {
             commit_retry_attempts: 3,
             abort_retry_attempts: 3,
             txn_config: TransactionConfig::default(),
+            in_memory: false,
+            group_commit_enabled: true,
+            group_commit_timeout: Duration::from_secs(30),
+            cert_shard_count: 64,
         }
+    }
+}
+
+impl TransactionManagerConfig {
+    /// Enable in-memory mode (skip WAL and checkpoint).
+    pub fn with_in_memory(mut self, in_memory: bool) -> Self {
+        self.in_memory = in_memory;
+        self
+    }
+
+    pub fn with_group_commit(mut self, enabled: bool) -> Self {
+        self.group_commit_enabled = enabled;
+        self
+    }
+
+    pub fn with_group_commit_timeout(mut self, timeout: Duration) -> Self {
+        self.group_commit_timeout = timeout;
+        self
+    }
+
+    pub fn with_cert_shard_count(mut self, count: usize) -> Self {
+        assert!(count.is_power_of_two(), "cert_shard_count must be power of two");
+        assert!(count > 0 && count <= 256, "cert_shard_count must be 1..=256");
+        self.cert_shard_count = count;
+        self
+    }
+
+    pub fn is_in_memory(&self) -> bool {
+        self.in_memory
     }
 }

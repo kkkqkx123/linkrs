@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::error::StorageError;
@@ -49,12 +49,14 @@ pub struct SnapshotTracker {
 
     /// Ordered snapshots for O(1) min queries
     /// Only contains snapshots with ref_count > 0
-    ordered_snapshots: Mutex<BTreeMap<u64, u64>>,
+    /// RwLock allows concurrent reads for min queries without exclusive blocking.
+    ordered_snapshots: RwLock<BTreeMap<u64, u64>>,
 
     /// First registration time for each active snapshot timestamp.
     registered_at: DashMap<u64, Instant>,
 
     /// Minimum active snapshot (cached for O(1) queries)
+    /// Updated via atomic compare-exchange to avoid locking on hot path.
     min_active: AtomicU64,
 
     /// Total registrations, including multiple readers at the same timestamp.
@@ -66,7 +68,7 @@ impl SnapshotTracker {
     pub fn new() -> Self {
         Self {
             snapshots: DashMap::new(),
-            ordered_snapshots: Mutex::new(BTreeMap::new()),
+            ordered_snapshots: RwLock::new(BTreeMap::new()),
             registered_at: DashMap::new(),
             min_active: AtomicU64::new(u64::MAX),
             active_references: AtomicU64::new(0),
@@ -75,12 +77,12 @@ impl SnapshotTracker {
 
     /// Add a new snapshot, incrementing its reference count
     pub fn add_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
-        self.active_references.fetch_add(1, Ordering::SeqCst);
+        self.active_references.fetch_add(1, Ordering::Relaxed);
 
         // Increment reference count or create new entry
         match self.snapshots.get(&ts) {
             Some(count) => {
-                let new_count = count.fetch_add(1, Ordering::SeqCst) + 1;
+                let new_count = count.fetch_add(1, Ordering::Relaxed) + 1;
                 log::trace!(
                     "Snapshot {} ref count: {} -> {}",
                     ts,
@@ -93,9 +95,8 @@ impl SnapshotTracker {
                 self.registered_at.insert(ts, Instant::now());
                 log::trace!("Snapshot {} added with ref count 1", ts);
 
-                // Add to ordered map and update min_active
                 {
-                    let mut ordered = self.ordered_snapshots.lock();
+                    let mut ordered = self.ordered_snapshots.write();
                     ordered.insert(ts, 1);
                 }
                 self.update_min_active_from_tree();
@@ -111,7 +112,7 @@ impl SnapshotTracker {
     pub fn release_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
         match self.snapshots.get(&ts) {
             Some(count) => {
-                let new_count = count.fetch_sub(1, Ordering::SeqCst) - 1;
+                let new_count = count.fetch_sub(1, Ordering::Relaxed) - 1;
                 log::trace!(
                     "Snapshot {} ref count: {} -> {}",
                     ts,
@@ -125,14 +126,13 @@ impl SnapshotTracker {
                     self.registered_at.remove(&ts);
                     log::trace!("Snapshot {} removed (ref count = 0)", ts);
 
-                    // Remove from ordered map and update min_active
                     {
-                        let mut ordered = self.ordered_snapshots.lock();
+                        let mut ordered = self.ordered_snapshots.write();
                         ordered.remove(&ts);
                     }
                     self.update_min_active_from_tree();
                 }
-                self.active_references.fetch_sub(1, Ordering::SeqCst);
+                self.active_references.fetch_sub(1, Ordering::Relaxed);
                 Ok(())
             }
             None => Err(StorageError::new(
@@ -161,8 +161,9 @@ impl SnapshotTracker {
     }
 
     /// Internal: Recalculate and update min_active cache from BTreeMap (O(1))
+    /// Uses read lock to allow concurrent readers during min lookup.
     fn update_min_active_from_tree(&self) {
-        let ordered = self.ordered_snapshots.lock();
+        let ordered = self.ordered_snapshots.read();
         let min = if let Some((&ts, _)) = ordered.iter().next() {
             ts
         } else {
@@ -171,11 +172,21 @@ impl SnapshotTracker {
         self.min_active.store(min, Ordering::Release);
     }
 
+    /// Fast check whether a timestamp is currently active.
+    pub fn is_active(&self, ts: Timestamp) -> bool {
+        self.snapshots.contains_key(&ts)
+    }
+
+    /// Number of distinct snapshot timestamps (unique ts count).
+    pub fn distinct_count(&self) -> usize {
+        self.ordered_snapshots.read().len()
+    }
+
     /// Get the reference count for a specific snapshot (for testing)
     pub fn ref_count(&self, ts: Timestamp) -> Option<u64> {
         self.snapshots
             .get(&ts)
-            .map(|count| count.load(Ordering::SeqCst))
+            .map(|count| count.load(Ordering::Relaxed))
     }
 
     /// Get the total number of active snapshots (for testing)

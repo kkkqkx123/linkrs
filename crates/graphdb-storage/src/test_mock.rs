@@ -54,7 +54,9 @@ impl MockStorage {
             edge_types: Arc::new(RwLock::new(Vec::new())),
             edges: Arc::new(RwLock::new(Vec::new())),
             vertices: Arc::new(RwLock::new(HashMap::new())),
-            migration_history: Arc::new(RwLock::new(crate::migration_history::MigrationHistoryManager::new())),
+            migration_history: Arc::new(RwLock::new(
+                crate::migration_history::MigrationHistoryManager::new(),
+            )),
         })
     }
 
@@ -188,7 +190,10 @@ impl StorageReader for MockStorage {
         label: &str,
         is_edge: bool,
     ) -> Result<Vec<u64>, StorageError> {
-        Ok(self.migration_history.read().get_applied_versions_sorted(space, label, is_edge))
+        Ok(self
+            .migration_history
+            .read()
+            .get_applied_versions_sorted(space, label, is_edge))
     }
     fn record_migration_history(
         &self,
@@ -210,7 +215,10 @@ impl StorageReader for MockStorage {
     ) -> Result<Vec<Vertex>, StorageError> {
         let vertices = self.vertices.read().get(space).cloned().unwrap_or_default();
         // Filter by tag if vertices have tags
-        let filtered: Vec<Vertex> = vertices.into_iter().filter(|v| v.tags.iter().any(|t| t.name == tag) || tag.is_empty()).collect();
+        let filtered: Vec<Vertex> = vertices
+            .into_iter()
+            .filter(|v| v.tags.iter().any(|t| t.name == tag) || tag.is_empty())
+            .collect();
         Ok(filtered.into_iter().skip(offset).take(limit).collect())
     }
     fn scan_edges_by_type_paginated(

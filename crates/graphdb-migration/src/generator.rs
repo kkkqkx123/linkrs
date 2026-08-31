@@ -167,7 +167,14 @@ pub fn generate_vertex_plan_with_expand<R: StorageReader + ?Sized>(
     } else {
         None
     };
-    let mut plan = MigrationPlan::new(target, version_range, steps, estimated_rows, overall_safety, rollback_plan);
+    let mut plan = MigrationPlan::new(
+        target,
+        version_range,
+        steps,
+        estimated_rows,
+        overall_safety,
+        rollback_plan,
+    );
     plan.expand_contract = Some(expand_contract);
     plan.refresh_hash();
     Ok(plan)
@@ -218,7 +225,14 @@ pub fn generate_edge_plan_with_expand<R: StorageReader + ?Sized>(
     } else {
         None
     };
-    let mut plan = MigrationPlan::new(target, version_range, steps, estimated_rows, overall_safety, rollback_plan);
+    let mut plan = MigrationPlan::new(
+        target,
+        version_range,
+        steps,
+        estimated_rows,
+        overall_safety,
+        rollback_plan,
+    );
     plan.expand_contract = Some(expand_contract);
     plan.refresh_hash();
     Ok(plan)
@@ -353,10 +367,10 @@ fn calculate_safety(steps: &[MigrationStep]) -> SafetyLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::{DataType, Value};
-    use graphdb_storage::{LabelVersionHistory, StorageReader};
     use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
+    use graphdb_core::{DataType, Value};
     use graphdb_core::{Edge, EdgeDirection, StorageError, Vertex};
+    use graphdb_storage::{LabelVersionHistory, StorageReader};
     use std::collections::HashMap;
 
     #[derive(Debug)]
@@ -376,7 +390,14 @@ mod tests {
                 count_edges: 5,
             }
         }
-        fn with_vertex_change(mut self, space: &str, tag: &str, from: u64, to: u64, details: ChangeDetails) -> Self {
+        fn with_vertex_change(
+            mut self,
+            space: &str,
+            tag: &str,
+            from: u64,
+            to: u64,
+            details: ChangeDetails,
+        ) -> Self {
             let key = (space.to_string(), tag.to_string(), from, to);
             let pc = PropertyChange {
                 version: to,
@@ -386,7 +407,14 @@ mod tests {
             self.vertex_changes.entry(key).or_default().push(pc);
             self
         }
-        fn with_edge_change(mut self, space: &str, edge: &str, from: u64, to: u64, details: ChangeDetails) -> Self {
+        fn with_edge_change(
+            mut self,
+            space: &str,
+            edge: &str,
+            from: u64,
+            to: u64,
+            details: ChangeDetails,
+        ) -> Self {
             let key = (space.to_string(), edge.to_string(), from, to);
             let pc = PropertyChange {
                 version: to,
@@ -399,68 +427,260 @@ mod tests {
     }
 
     impl StorageReader for MockReader {
-        fn get_vertex(&self, _space: &str, _id: &VertexId) -> Result<Option<Vertex>, StorageError> { Ok(None) }
-        fn scan_vertices(&self, _space: &str) -> Result<Vec<Vertex>, StorageError> { Ok(Vec::new()) }
-        fn scan_vertices_by_tag(&self, _space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError> { Ok(Vec::new()) }
-        fn scan_vertices_by_prop(&self, _space: &str, _tag: &str, _prop: &str, _value: &Value) -> Result<Vec<Vertex>, StorageError> { Ok(Vec::new()) }
-        fn get_edge(&self, _space: &str, _src: &VertexId, _dst: &VertexId, _edge_type: &str, _rank: i64) -> Result<Option<Edge>, StorageError> { Ok(None) }
-        fn get_node_edges(&self, _space: &str, _node_id: &VertexId, _direction: EdgeDirection) -> Result<Vec<Edge>, StorageError> { Ok(Vec::new()) }
-        fn neighbor_dst_ids_batch(&self, _space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError> { Ok(Vec::new()) }
-        fn out_degree_batch(&self, _space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<usize>, StorageError> { Ok(Vec::new()) }
-        fn scan_edges_by_type(&self, _space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError> { Ok(Vec::new()) }
-        fn scan_all_edges(&self, _space: &str) -> Result<Vec<Edge>, StorageError> { Ok(Vec::new()) }
-        fn count_vertices_by_tag(&self, _space: &str, _tag: &str) -> Result<u64, StorageError> { Ok(self.count_vertices) }
-        fn count_edges_by_type(&self, _space: &str, _edge_type: &str) -> Result<u64, StorageError> { Ok(self.count_edges) }
-        fn lookup_index(&self, _space: &str, _index: &str, _value: &Value) -> Result<Vec<Value>, StorageError> { Ok(Vec::new()) }
-        fn get_vertex_with_schema(&self, _space: &str, _tag: &str, _id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError> { Ok(None) }
-        fn get_edge_with_schema(&self, _space: &str, _edge_type: &str, _src: &Value, _dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError> { Ok(None) }
-        fn scan_vertices_with_schema(&self, _space: &str, _tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError> { Ok(Vec::new()) }
-        fn scan_edges_with_schema(&self, _space: &str, _edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError> { Ok(Vec::new()) }
-        fn get_space(&self, _space: &str) -> Result<Option<SpaceInfo>, StorageError> { Ok(None) }
-        fn get_space_by_id(&self, _space_id: u64) -> Result<Option<SpaceInfo>, StorageError> { Ok(None) }
-        fn list_spaces(&self) -> Result<Vec<SpaceInfo>, StorageError> { Ok(Vec::new()) }
-        fn get_space_id(&self, _space: &str) -> Result<u64, StorageError> { Ok(1) }
-        fn space_exists(&self, _space: &str) -> bool { false }
-        fn get_tag(&self, _space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError> { Ok(None) }
-        fn list_tags(&self, _space: &str) -> Result<Vec<TagInfo>, StorageError> { Ok(Vec::new()) }
-        fn get_edge_type(&self, _space: &str, _edge_type: &str) -> Result<Option<EdgeTypeInfo>, StorageError> { Ok(None) }
-        fn list_edge_types(&self, _space: &str) -> Result<Vec<EdgeTypeInfo>, StorageError> { Ok(Vec::new()) }
-        fn get_tag_index(&self, _space: &str, _index: &str) -> Result<Option<Index>, StorageError> { Ok(None) }
-        fn list_tag_indexes(&self, _space: &str) -> Result<Vec<Index>, StorageError> { Ok(Vec::new()) }
-        fn get_edge_index(&self, _space: &str, _index: &str) -> Result<Option<Index>, StorageError> { Ok(None) }
-        fn list_edge_indexes(&self, _space: &str) -> Result<Vec<Index>, StorageError> { Ok(Vec::new()) }
-        fn get_vertex_version_history(&self, _space: &str, _tag: &str) -> Result<Option<LabelVersionHistory>, StorageError> { Ok(None) }
-        fn get_edge_version_history(&self, _space: &str, _edge_type: &str) -> Result<Option<LabelVersionHistory>, StorageError> { Ok(None) }
-        fn get_vertex_schema_changes(&self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<PropertyChange>, StorageError> {
+        fn get_vertex(&self, _space: &str, _id: &VertexId) -> Result<Option<Vertex>, StorageError> {
+            Ok(None)
+        }
+        fn scan_vertices(&self, _space: &str) -> Result<Vec<Vertex>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn scan_vertices_by_tag(
+            &self,
+            _space: &str,
+            _tag: &str,
+        ) -> Result<Vec<Vertex>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn scan_vertices_by_prop(
+            &self,
+            _space: &str,
+            _tag: &str,
+            _prop: &str,
+            _value: &Value,
+        ) -> Result<Vec<Vertex>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_edge(
+            &self,
+            _space: &str,
+            _src: &VertexId,
+            _dst: &VertexId,
+            _edge_type: &str,
+            _rank: i64,
+        ) -> Result<Option<Edge>, StorageError> {
+            Ok(None)
+        }
+        fn get_node_edges(
+            &self,
+            _space: &str,
+            _node_id: &VertexId,
+            _direction: EdgeDirection,
+        ) -> Result<Vec<Edge>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn neighbor_dst_ids_batch(
+            &self,
+            _space: &str,
+            _src_ids: &[VertexId],
+            _direction: EdgeDirection,
+            _edge_types: &[String],
+        ) -> Result<Vec<Vec<VertexId>>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn out_degree_batch(
+            &self,
+            _space: &str,
+            _src_ids: &[VertexId],
+            _direction: EdgeDirection,
+            _edge_types: &[String],
+        ) -> Result<Vec<usize>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn scan_edges_by_type(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Vec<Edge>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn scan_all_edges(&self, _space: &str) -> Result<Vec<Edge>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn count_vertices_by_tag(&self, _space: &str, _tag: &str) -> Result<u64, StorageError> {
+            Ok(self.count_vertices)
+        }
+        fn count_edges_by_type(&self, _space: &str, _edge_type: &str) -> Result<u64, StorageError> {
+            Ok(self.count_edges)
+        }
+        fn lookup_index(
+            &self,
+            _space: &str,
+            _index: &str,
+            _value: &Value,
+        ) -> Result<Vec<Value>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_vertex_with_schema(
+            &self,
+            _space: &str,
+            _tag: &str,
+            _id: &Value,
+        ) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError> {
+            Ok(None)
+        }
+        fn get_edge_with_schema(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+            _src: &Value,
+            _dst: &Value,
+        ) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError> {
+            Ok(None)
+        }
+        fn scan_vertices_with_schema(
+            &self,
+            _space: &str,
+            _tag: &str,
+        ) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn scan_edges_with_schema(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_space(&self, _space: &str) -> Result<Option<SpaceInfo>, StorageError> {
+            Ok(None)
+        }
+        fn get_space_by_id(&self, _space_id: u64) -> Result<Option<SpaceInfo>, StorageError> {
+            Ok(None)
+        }
+        fn list_spaces(&self) -> Result<Vec<SpaceInfo>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_space_id(&self, _space: &str) -> Result<u64, StorageError> {
+            Ok(1)
+        }
+        fn space_exists(&self, _space: &str) -> bool {
+            false
+        }
+        fn get_tag(&self, _space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError> {
+            Ok(None)
+        }
+        fn list_tags(&self, _space: &str) -> Result<Vec<TagInfo>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_edge_type(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Option<EdgeTypeInfo>, StorageError> {
+            Ok(None)
+        }
+        fn list_edge_types(&self, _space: &str) -> Result<Vec<EdgeTypeInfo>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_tag_index(&self, _space: &str, _index: &str) -> Result<Option<Index>, StorageError> {
+            Ok(None)
+        }
+        fn list_tag_indexes(&self, _space: &str) -> Result<Vec<Index>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_edge_index(
+            &self,
+            _space: &str,
+            _index: &str,
+        ) -> Result<Option<Index>, StorageError> {
+            Ok(None)
+        }
+        fn list_edge_indexes(&self, _space: &str) -> Result<Vec<Index>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn get_vertex_version_history(
+            &self,
+            _space: &str,
+            _tag: &str,
+        ) -> Result<Option<LabelVersionHistory>, StorageError> {
+            Ok(None)
+        }
+        fn get_edge_version_history(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Option<LabelVersionHistory>, StorageError> {
+            Ok(None)
+        }
+        fn get_vertex_schema_changes(
+            &self,
+            space: &str,
+            tag: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError> {
             let key = (space.to_string(), tag.to_string(), from_version, to_version);
             Ok(self.vertex_changes.get(&key).cloned().unwrap_or_default())
         }
-        fn get_edge_schema_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<PropertyChange>, StorageError> {
-            let key = (space.to_string(), edge_type.to_string(), from_version, to_version);
+        fn get_edge_schema_changes(
+            &self,
+            space: &str,
+            edge_type: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError> {
+            let key = (
+                space.to_string(),
+                edge_type.to_string(),
+                from_version,
+                to_version,
+            );
             Ok(self.edge_changes.get(&key).cloned().unwrap_or_default())
         }
-        fn detect_vertex_breaking_changes(&self, _space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError> { Ok(Vec::new()) }
-        fn detect_edge_breaking_changes(&self, _space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError> { Ok(Vec::new()) }
+        fn detect_vertex_breaking_changes(
+            &self,
+            _space: &str,
+            _tag: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn detect_edge_breaking_changes(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError> {
+            Ok(Vec::new())
+        }
     }
 
     #[test]
     fn test_generate_add_column_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyAdded {
-            name: "email".into(),
-            data_type: DataType::String,
-            nullable: true,
-            default_value: None,
-        });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyAdded {
+                name: "email".into(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert_eq!(plan.steps.len(), 1);
-        assert!(matches!(plan.steps[0], MigrationStep::AddColumn { ref name, .. } if name == "email"));
+        assert!(
+            matches!(plan.steps[0], MigrationStep::AddColumn { ref name, .. } if name == "email")
+        );
         assert_eq!(plan.overall_safety, SafetyLevel::Safe);
         assert_eq!(plan.estimated_rows, 10);
     }
 
     #[test]
     fn test_generate_drop_column_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyRemoved { name: "old".into(), data_type: DataType::String });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyRemoved {
+                name: "old".into(),
+                data_type: DataType::String,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert_eq!(plan.steps.len(), 1);
         assert!(matches!(plan.steps[0], MigrationStep::DropColumn { ref name } if name == "old"));
@@ -470,20 +690,42 @@ mod tests {
 
     #[test]
     fn test_generate_rename_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyRenamed { old_name: "a".into(), new_name: "b".into() });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyRenamed {
+                old_name: "a".into(),
+                new_name: "b".into(),
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert_eq!(plan.steps.len(), 1);
-        assert!(matches!(plan.steps[0], MigrationStep::RenameColumn { ref old_name, ref new_name } if old_name=="a" && new_name=="b"));
+        assert!(
+            matches!(plan.steps[0], MigrationStep::RenameColumn { ref old_name, ref new_name } if old_name=="a" && new_name=="b")
+        );
         assert_eq!(plan.overall_safety, SafetyLevel::Warning);
     }
 
     #[test]
     fn test_generate_expand_contract_rename_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyRenamed { old_name: "a".into(), new_name: "b".into() });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyRenamed {
+                old_name: "a".into(),
+                new_name: "b".into(),
+            },
+        );
         let plan = generate_vertex_plan_with_expand(&reader, "s", "User", 1, 2, true).unwrap();
         assert_eq!(plan.steps.len(), 3);
         assert!(matches!(plan.steps[0], MigrationStep::AddColumn { ref name, .. } if name == "b"));
-        assert!(matches!(plan.steps[1], MigrationStep::RenameColumn { ref old_name, ref new_name } if old_name == "a" && new_name == "b"));
+        assert!(
+            matches!(plan.steps[1], MigrationStep::RenameColumn { ref old_name, ref new_name } if old_name == "a" && new_name == "b")
+        );
         assert!(matches!(plan.steps[2], MigrationStep::DropColumn { ref name } if name == "a"));
         assert_eq!(plan.overall_safety, SafetyLevel::Dangerous);
         assert_eq!(plan.expand_contract, Some(true));
@@ -491,22 +733,56 @@ mod tests {
 
     #[test]
     fn test_generate_type_convert_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyTypeModified { name: "age".into(), old_type: DataType::Int, new_type: DataType::BigInt });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyTypeModified {
+                name: "age".into(),
+                old_type: DataType::Int,
+                new_type: DataType::BigInt,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
-        assert!(matches!(plan.steps[0], MigrationStep::ConvertType { ref name, .. } if name=="age"));
+        assert!(
+            matches!(plan.steps[0], MigrationStep::ConvertType { ref name, .. } if name=="age")
+        );
         assert_eq!(plan.overall_safety, SafetyLevel::Warning);
     }
 
     #[test]
     fn test_generate_nullability_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyNullabilityChanged { name: "x".into(), was_nullable: true, now_nullable: false });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyNullabilityChanged {
+                name: "x".into(),
+                was_nullable: true,
+                now_nullable: false,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
-        assert!(matches!(plan.steps[0], MigrationStep::ChangeNullability { ref name, .. } if name=="x"));
+        assert!(
+            matches!(plan.steps[0], MigrationStep::ChangeNullability { ref name, .. } if name=="x")
+        );
     }
 
     #[test]
     fn test_generate_default_plan() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyDefaultValueChanged { name: "y".into(), old_default: None, new_default: Some(Value::Int(5)) });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyDefaultValueChanged {
+                name: "y".into(),
+                old_default: None,
+                new_default: Some(Value::Int(5)),
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert!(matches!(plan.steps[0], MigrationStep::SetDefault { ref name, .. } if name=="y"));
         assert_eq!(plan.overall_safety, SafetyLevel::Safe);
@@ -514,7 +790,16 @@ mod tests {
 
     #[test]
     fn test_primary_key_changed_error() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PrimaryKeyChanged { old_property: "id1".into(), new_property: "id2".into() });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PrimaryKeyChanged {
+                old_property: "id1".into(),
+                new_property: "id2".into(),
+            },
+        );
         let result = generate_vertex_plan(&reader, "s", "User", 1, 2);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Primary key"));
@@ -523,8 +808,28 @@ mod tests {
     #[test]
     fn test_safety_level_calculation_mixed() {
         let reader = MockReader::new()
-            .with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyAdded { name: "a".into(), data_type: DataType::String, nullable: true, default_value: None })
-            .with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyRenamed { old_name: "b".into(), new_name: "c".into() });
+            .with_vertex_change(
+                "s",
+                "User",
+                1,
+                2,
+                ChangeDetails::PropertyAdded {
+                    name: "a".into(),
+                    data_type: DataType::String,
+                    nullable: true,
+                    default_value: None,
+                },
+            )
+            .with_vertex_change(
+                "s",
+                "User",
+                1,
+                2,
+                ChangeDetails::PropertyRenamed {
+                    old_name: "b".into(),
+                    new_name: "c".into(),
+                },
+            );
         // manually inject second change via second call: need to push both; our mock with_vertex_change for same key will append.
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert_eq!(plan.steps.len(), 2);
@@ -533,7 +838,18 @@ mod tests {
 
     #[test]
     fn test_generate_edge_plan() {
-        let reader = MockReader::new().with_edge_change("s", "knows", 1, 2, ChangeDetails::PropertyAdded { name: "since".into(), data_type: DataType::String, nullable: true, default_value: None });
+        let reader = MockReader::new().with_edge_change(
+            "s",
+            "knows",
+            1,
+            2,
+            ChangeDetails::PropertyAdded {
+                name: "since".into(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            },
+        );
         let plan = generate_edge_plan(&reader, "s", "knows", 1, 2).unwrap();
         assert!(plan.target.is_edge);
         assert_eq!(plan.steps.len(), 1);
@@ -541,16 +857,39 @@ mod tests {
 
     #[test]
     fn test_rollback_plan_generated_for_safe() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyAdded { name: "email".into(), data_type: DataType::String, nullable: true, default_value: None });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyAdded {
+                name: "email".into(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert!(plan.rollback_plan.is_some());
         let rollback = plan.rollback_plan.unwrap();
-        assert!(matches!(rollback.steps[0], MigrationStep::DropColumn { .. }));
+        assert!(matches!(
+            rollback.steps[0],
+            MigrationStep::DropColumn { .. }
+        ));
     }
 
     #[test]
     fn test_no_rollback_for_dangerous() {
-        let reader = MockReader::new().with_vertex_change("s", "User", 1, 2, ChangeDetails::PropertyRemoved { name: "old".into(), data_type: DataType::String });
+        let reader = MockReader::new().with_vertex_change(
+            "s",
+            "User",
+            1,
+            2,
+            ChangeDetails::PropertyRemoved {
+                name: "old".into(),
+                data_type: DataType::String,
+            },
+        );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert!(plan.rollback_plan.is_none());
     }

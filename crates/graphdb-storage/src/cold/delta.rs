@@ -448,7 +448,11 @@ impl ColdSnapshot {
                 }
                 let nbr = Nbr::new(e.endpoint, e.rank, e.edge_id);
                 if let Some(update) = updates.get(&key) {
-                    let _ = properties.update_properties_for_edge(e.edge_id, &update.properties, delta.delta_ts);
+                    let _ = properties.update_properties_for_edge(
+                        e.edge_id,
+                        &update.properties,
+                        delta.delta_ts,
+                    );
                 }
                 out_entries.push((src_u32, nbr, e.timestamp));
             }
@@ -483,7 +487,11 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::new(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id),
+                    Nbr::new(
+                        dst_ep_vid.as_int64().unwrap_or(0) as u32,
+                        dst_rank,
+                        nbr.edge_id,
+                    ),
                     *create_ts,
                 ));
             }
@@ -716,7 +724,10 @@ mod tests {
         let nbr = merged
             .get_edge_to_dst(0, 1)
             .expect("0->1 must survive update");
-        let props = merged.properties().read_properties_by_edge_id(nbr.edge_id).unwrap();
+        let props = merged
+            .properties()
+            .read_properties_by_edge_id(nbr.edge_id)
+            .unwrap();
         assert!(props.contains(&("weight".to_string(), Value::Double(1.5))));
         // 0->2 removed
         assert!(merged.get_edge_to_dst(0, 2).is_none());

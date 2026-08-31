@@ -42,7 +42,10 @@ fn bench_lazy_allocation() {
     }
     let elapsed = start.elapsed();
     let stats = table.version_chain_stats();
-    println!("  inserted 10k rows (10 cols, 1 col with value) in {:?}", start.elapsed());
+    println!(
+        "  inserted 10k rows (10 cols, 1 col with value) in {:?}",
+        start.elapsed()
+    );
     println!("  updated c0 for 10k rows in {:?}", elapsed);
     println!(
         "  version_chains: total_rows={}, total_entries={}, max_len={}, memory_bytes={}",
@@ -142,7 +145,9 @@ fn bench_memory() {
             .unwrap();
         for upd in 1..10u64 {
             let v = Value::Int((row as i32) * 10 + upd as i32);
-            table.set_property_for_edge(eid, "a", Some(v), 100 + upd).unwrap();
+            table
+                .set_property_for_edge(eid, "a", Some(v), 100 + upd)
+                .unwrap();
         }
     }
     let elapsed = start.elapsed();

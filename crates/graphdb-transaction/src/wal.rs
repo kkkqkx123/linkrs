@@ -30,8 +30,10 @@
 //! See the [`LocalWalParser`](parser/struct.LocalWalParser.html) docs for
 //! recovery examples.
 
+pub mod buffer;
 pub mod checkpoint;
 pub mod commit;
+pub mod dry_replay;
 pub mod filter;
 pub mod parser;
 pub mod recovery;
@@ -51,6 +53,8 @@ pub use parser::{
 pub use recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager, RecoveryStats};
 
 // Re-export core types for callers working in wal context
+pub use buffer::{LocalWalBuffer, LocalWalBufferConfig};
+pub use dry_replay::{dry_replay, DryReplayResult, DryReplayStats};
 pub use graphdb_core::types::{ColumnId, EdgeId, LabelId, Timestamp, VertexId};
 pub use writer::{LocalWalWriter, WalWriter};
 

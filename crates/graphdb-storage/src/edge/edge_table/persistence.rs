@@ -6,8 +6,8 @@
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
 use super::segment::{CsrSegment, DeletionInfo};
-use crate::edge::EdgeSchema;
 use crate::edge::CsrWithProperties;
+use crate::edge::EdgeSchema;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
@@ -151,7 +151,10 @@ pub fn serialize_csr(
     Ok(())
 }
 
-pub fn serialize_csr_properties(properties: &CsrWithProperties, buf: &mut Vec<u8>) -> StorageResult<()> {
+pub fn serialize_csr_properties(
+    properties: &CsrWithProperties,
+    buf: &mut Vec<u8>,
+) -> StorageResult<()> {
     write_header_to(buf, section::EDGE_PROPERTIES)
         .map_err(|e| StorageError::io_error(format!("Failed to write properties header: {}", e)))?;
     let data = properties.dump();

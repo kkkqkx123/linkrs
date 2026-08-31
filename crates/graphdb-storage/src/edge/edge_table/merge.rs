@@ -180,7 +180,12 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
                     if vid < current_pos.len() {
                         let pos_out = current_pos[vid] as usize;
                         if pos_out < edges.len() {
-                            edges[pos_out] = ImmutableNbr::with_timestamp(nbr.endpoint, nbr.rank, nbr.edge_id, nbr.timestamp);
+                            edges[pos_out] = ImmutableNbr::with_timestamp(
+                                nbr.endpoint,
+                                nbr.rank,
+                                nbr.edge_id,
+                                nbr.timestamp,
+                            );
                             current_pos[vid] += 1;
                             if collect_edge_ids {
                                 merged_edge_ids.push(edge_id);

@@ -26,6 +26,7 @@ pub mod certify;
 pub mod checkpoint;
 pub mod cleaner;
 pub mod conflict;
+pub mod connection;
 pub mod context;
 pub mod error;
 pub mod manager;
@@ -51,9 +52,10 @@ pub use self::mvcc::{
     VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
 };
 pub use self::snapshot_tracker::SnapshotTracker;
-pub use checkpoint::{CheckpointGate, CheckpointTransaction};
+pub use checkpoint::{CheckpointGate, CheckpointTransaction, ShadowPageManager};
 pub use cleaner::TransactionCleaner;
 pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
+pub use connection::{ConnectionContext, ConnectionId, ConnectionManager, TransactionMode};
 pub use context::TransactionContext;
 pub use error::{
     RetryableTransactionError, TransactionError, TransactionErrorKind, TransactionResult,
@@ -76,8 +78,9 @@ pub use undo_log::{
     UpdateVertexPropUndo,
 };
 pub use wal::{
-    ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,
-    InsertEdgeRedo, InsertVertexRedo, LabelId, LocalWalParser, LocalWalWriter, Timestamp,
+    dry_replay, ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo,
+    DeleteVertexRedo, DryReplayResult, DryReplayStats, EdgeId, InsertEdgeRedo, InsertVertexRedo,
+    LabelId, LocalWalBuffer, LocalWalBufferConfig, LocalWalParser, LocalWalWriter, Timestamp,
     UpdateEdgePropRedo, UpdateVertexPropRedo, VertexId, WalConfig, WalEntryIter, WalError,
     WalHeader, WalOpType, WalParser, WalParserFactory, WalResult, WalWriter,
 };

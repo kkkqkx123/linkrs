@@ -47,6 +47,11 @@ impl GroupCommitCoordinator {
     }
 
     pub fn new(file: File, start_lsn: u64) -> Self {
+        Self::with_timeout(file, start_lsn, GROUP_COMMIT_TIMEOUT)
+    }
+
+    pub fn with_timeout(file: File, start_lsn: u64, timeout: Duration) -> Self {
+        let _ = timeout;
         Self {
             inner: Arc::new(GroupCommitState {
                 file: Mutex::new(file),
@@ -57,6 +62,10 @@ impl GroupCommitCoordinator {
                 commit_condvar: Condvar::new(),
             }),
         }
+    }
+
+    pub fn with_config(file: File, start_lsn: u64, config: &graphdb_core::wal::types::WalConfig) -> Self {
+        Self::with_timeout(file, start_lsn, config.group_commit_timeout())
     }
 
     /// Update the file handle (e.g., after WAL rotation).

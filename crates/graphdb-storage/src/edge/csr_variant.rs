@@ -615,13 +615,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(
-            0u32,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1
-)
-        .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -630,13 +625,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(
-            0u32,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1
-)
-        .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -650,13 +640,8 @@ mod tests {
         )
         .unwrap();
 
-        csr.insert_edge(
-            0u32,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1
-)
-        .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -665,13 +650,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(
-            0u32,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1
-)
-        .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -687,12 +667,7 @@ mod tests {
 
         // None variant should reject all insertions
         assert!(csr
-            .insert_edge(
-                0u32,
-                VertexId::from_int64(1),
-                EdgeId(100),
-                1
-)
+            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
         assert_eq!(csr.edge_count(), 0);
 
@@ -737,12 +712,7 @@ mod tests {
         // After loading, should be None variant
         assert_eq!(csr2.edge_count(), 0);
         assert!(csr2
-            .insert_edge(
-                0,
-                VertexId::from_int64(1),
-                EdgeId(100),
-                1
-)
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
     }
 
@@ -750,13 +720,8 @@ mod tests {
     fn test_clone() {
         let mut csr1 =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-        csr1.insert_edge(
-            0u32,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1
-)
-        .unwrap();
+        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
 
         let csr2 = csr1.clone();
         assert_eq!(csr2.edge_count(), 1);
@@ -770,12 +735,7 @@ mod tests {
 
         assert_eq!(csr2.edge_count(), 0);
         assert!(csr2
-            .insert_edge(
-                0,
-                VertexId::from_int64(1),
-                EdgeId(100),
-                1
-)
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
     }
 }

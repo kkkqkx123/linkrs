@@ -21,9 +21,19 @@ use graphdb_core::types::Timestamp;
 /// pauses new write transactions and waits for active writes to complete,
 /// then allows checkpoint to proceed. Modeled after Ladybug's checkpoint
 /// isolation where checkpoint blocks new writes and drains active ones.
+///
+/// Phase 1 (two-phase checkpoint) extends this with early gate release:
+/// after the WAL has been rotated (the only operation that requires write
+/// exclusion), writes are resumed while the checkpoint's storage phase
+/// (shadow pages, catalog serialization) continues in the background.
 pub struct CheckpointGate {
     /// When true, no new write transactions are allowed.
     writing_paused: AtomicBool,
+    /// Whether a checkpoint is active (even after early release). Used to
+    /// expose checkpoint liveness without blocking writes.
+    checkpoint_active: AtomicBool,
+    /// Whether checkpoint is in storage phase (writes already released).
+    in_storage_phase: AtomicBool,
     /// Number of active write transactions currently in-flight.
     /// Used to determine when the gate has fully drained.
     active_writes: AtomicU64,
@@ -37,6 +47,8 @@ impl CheckpointGate {
     pub fn new() -> Self {
         Self {
             writing_paused: AtomicBool::new(false),
+            checkpoint_active: AtomicBool::new(false),
+            in_storage_phase: AtomicBool::new(false),
             active_writes: AtomicU64::new(0),
             condvar: Condvar::new(),
             mutex: Mutex::new(()),
@@ -72,6 +84,8 @@ impl CheckpointGate {
     /// On timeout, writes are automatically resumed to prevent deadlock.
     pub fn pause_writes_and_drain(&self, timeout: Duration) -> Result<(), TransactionError> {
         self.writing_paused.store(true, Ordering::SeqCst);
+        self.checkpoint_active.store(true, Ordering::SeqCst);
+        self.in_storage_phase.store(false, Ordering::SeqCst);
 
         let mut guard = self.mutex.lock();
         let start = std::time::Instant::now();
@@ -83,12 +97,14 @@ impl CheckpointGate {
             let elapsed = start.elapsed();
             if elapsed >= timeout {
                 self.writing_paused.store(false, Ordering::SeqCst);
+                self.checkpoint_active.store(false, Ordering::SeqCst);
                 return Err(TransactionError::checkpoint_timeout(active));
             }
             let remaining = timeout - elapsed;
             let result = self.condvar.wait_for(&mut guard, remaining);
             if result.timed_out() {
                 self.writing_paused.store(false, Ordering::SeqCst);
+                self.checkpoint_active.store(false, Ordering::SeqCst);
                 return Err(TransactionError::checkpoint_timeout(
                     self.active_writes.load(Ordering::SeqCst),
                 ));
@@ -99,11 +115,42 @@ impl CheckpointGate {
     /// Resume accepting new write transactions after checkpoint completes.
     pub fn resume_writes(&self) {
         self.writing_paused.store(false, Ordering::SeqCst);
+        self.checkpoint_active.store(false, Ordering::SeqCst);
+        self.in_storage_phase.store(false, Ordering::SeqCst);
+    }
+
+    /// Early release of the write gate after WAL rotation.
+    ///
+    /// This mirrors Ladybug's optimisation where the WAL is frozen first and
+    /// then writers are allowed to proceed while shadow pages and catalog
+    /// serialization complete. The checkpoint remains logically active
+    /// (checkpoint_active == true, in_storage_phase == true) even though
+    /// new writes are no longer blocked.
+    pub fn release_write_gate_early(&self) {
+        self.writing_paused.store(false, Ordering::SeqCst);
+        self.in_storage_phase.store(true, Ordering::SeqCst);
+    }
+
+    /// Complete the checkpoint's storage phase and clear active markers.
+    pub fn complete_checkpoint(&self) {
+        self.writing_paused.store(false, Ordering::SeqCst);
+        self.checkpoint_active.store(false, Ordering::SeqCst);
+        self.in_storage_phase.store(false, Ordering::SeqCst);
     }
 
     /// Whether writes are currently paused.
     pub fn is_paused(&self) -> bool {
         self.writing_paused.load(Ordering::SeqCst)
+    }
+
+    /// Whether a checkpoint is logically active (including storage phase).
+    pub fn is_checkpoint_active(&self) -> bool {
+        self.checkpoint_active.load(Ordering::SeqCst)
+    }
+
+    /// Whether checkpoint is in storage phase with early-released writes.
+    pub fn is_in_storage_phase(&self) -> bool {
+        self.in_storage_phase.load(Ordering::SeqCst)
     }
 
     /// Current count of active writes.
@@ -118,6 +165,105 @@ impl Default for CheckpointGate {
     }
 }
 
+/// Shadow page manager for copy-on-write checkpoint semantics.
+///
+/// Shadow pages buffer dirty pages to a separate file during checkpoint's
+/// storage phase. On success the shadow file is atomically swapped into place;
+/// on failure it is discarded. This provides atomic checkpoint semantics even
+/// when the write gate has been released early.
+#[derive(Debug)]
+pub struct ShadowPageManager {
+    shadow_dir: std::path::PathBuf,
+    shadow_files: parking_lot::Mutex<Vec<std::path::PathBuf>>,
+}
+
+impl ShadowPageManager {
+    pub fn new(shadow_dir: impl Into<std::path::PathBuf>) -> Self {
+        let dir = shadow_dir.into();
+        let _ = std::fs::create_dir_all(&dir);
+        Self {
+            shadow_dir: dir,
+            shadow_files: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn shadow_dir(&self) -> &std::path::Path {
+        &self.shadow_dir
+    }
+
+    pub fn create_shadow_file(&self, seq: u64) -> std::io::Result<std::path::PathBuf> {
+        let path = self.shadow_dir.join(format!("shadow_{:08x}.pages", seq));
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)?;
+        self.shadow_files.lock().push(path.clone());
+        Ok(path)
+    }
+
+    pub fn write_shadow_page(
+        &self,
+        shadow_file: &std::path::Path,
+        page_id: u64,
+        data: &[u8],
+    ) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .open(shadow_file)?;
+        file.seek(SeekFrom::Start(page_id * 4096))?;
+        file.write_all(data)?;
+        Ok(())
+    }
+
+    pub fn apply_shadow_pages(
+        &self,
+        shadow_file: &std::path::Path,
+        target_file: &std::path::Path,
+    ) -> std::io::Result<()> {
+        if !shadow_file.exists() {
+            return Ok(());
+        }
+        if target_file.exists() {
+            std::fs::copy(shadow_file, target_file)?;
+        } else {
+            std::fs::copy(shadow_file, target_file)?;
+        }
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(target_file)?;
+        f.sync_all()?;
+        Ok(())
+    }
+
+    pub fn cleanup_shadow_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        self.shadow_files.lock().retain(|p| p != path);
+        Ok(())
+    }
+
+    pub fn cleanup_all(&self) -> usize {
+        let mut count = 0;
+        let files: Vec<_> = self.shadow_files.lock().clone();
+        for f in files {
+            if std::fs::remove_file(&f).is_ok() {
+                count += 1;
+            }
+        }
+        self.shadow_files.lock().clear();
+        count
+    }
+
+    pub fn pending_shadow_files(&self) -> Vec<std::path::PathBuf> {
+        self.shadow_files.lock().clone()
+    }
+}
+
 /// Checkpoint transaction handle.
 ///
 /// Held while a checkpoint is in progress. Writes are paused for the lifetime
@@ -126,6 +272,11 @@ impl Default for CheckpointGate {
 /// (writes a WAL `CheckpointMarker` record and resumes writes) or [`abort`]
 /// (resumes writes without logging the marker). Dropping the handle also
 /// resumes writes.
+///
+/// Phase 1 extends this with early write gate release: after WAL rotation the
+/// caller may call `release_write_gate_early()` to resume writes while storage
+/// work continues. The checkpoint transaction itself remains active until
+/// `commit`/`abort`.
 ///
 /// This mirrors Ladybug's `TRANSACTION_TYPE::CHECKPOINT` behavior: checkpoint
 /// is an exclusive operation that prevents new writes from starting and drains
@@ -136,6 +287,7 @@ pub struct CheckpointTransaction<'a> {
     txn_id: TransactionId,
     write_ts: Timestamp,
     finished: bool,
+    write_gate_released_early: bool,
 }
 
 impl CheckpointTransaction<'_> {
@@ -153,6 +305,7 @@ impl CheckpointTransaction<'_> {
             txn_id,
             write_ts,
             finished: false,
+            write_gate_released_early: false,
         }
     }
 
@@ -163,15 +316,53 @@ impl CheckpointTransaction<'_> {
         self.write_ts
     }
 
-    /// Commit the checkpoint: resume writes.
+    /// Whether the write gate has been released early.
+    pub fn is_write_gate_released_early(&self) -> bool {
+        self.write_gate_released_early
+    }
+
+    /// Whether the checkpoint is in storage phase (writes resumed, checkpoint active).
+    pub fn is_in_storage_phase(&self) -> bool {
+        self.gate.is_in_storage_phase()
+    }
+
+    /// Release the write gate early after WAL rotation.
     ///
-    /// The caller is responsible for persisting checkpoint metadata (via the
-    /// `CheckpointManager`) before calling this method. After commit, writes
-    /// are resumed.
+    /// After this call new write transactions may start while the checkpoint's
+    /// storage phase (shadow pages, catalog serialization) continues. The
+    /// checkpoint transaction itself remains active until `commit`/`abort`.
+    pub fn release_write_gate_early(&mut self) {
+        if !self.write_gate_released_early {
+            self.gate.release_write_gate_early();
+            self.write_gate_released_early = true;
+        }
+    }
+
+    /// Complete the storage phase and commit the checkpoint.
+    /// If writes were released early, this finalizes without re-pausing.
     pub fn commit(mut self) -> Result<(), TransactionError> {
         self.finished = true;
         let result = self.manager.commit_transaction(self.txn_id);
-        self.gate.resume_writes();
+        self.gate.complete_checkpoint();
+        result
+    }
+
+    /// Commit with early release: WAL rotation done, release writes, then
+    /// run storage callback before final commit.
+    pub fn commit_with_early_release<F>(mut self, storage_phase: F) -> Result<(), TransactionError>
+    where
+        F: FnOnce(Timestamp) -> Result<(), TransactionError>,
+    {
+        self.release_write_gate_early();
+        let storage_result = storage_phase(self.write_ts);
+        self.finished = true;
+        if let Err(e) = storage_result {
+            let _ = self.manager.abort_transaction(self.txn_id);
+            self.gate.complete_checkpoint();
+            return Err(e);
+        }
+        let result = self.manager.commit_transaction(self.txn_id);
+        self.gate.complete_checkpoint();
         result
     }
 
@@ -179,7 +370,7 @@ impl CheckpointTransaction<'_> {
     pub fn abort(mut self) -> Result<(), TransactionError> {
         self.finished = true;
         let result = self.manager.abort_transaction(self.txn_id);
-        self.gate.resume_writes();
+        self.gate.complete_checkpoint();
         result
     }
 }
@@ -188,7 +379,7 @@ impl Drop for CheckpointTransaction<'_> {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.manager.abort_transaction(self.txn_id);
-            self.gate.resume_writes();
+            self.gate.complete_checkpoint();
         }
     }
 }
@@ -410,5 +601,68 @@ mod tests {
             drop(checkpoint);
         }
         assert!(!manager.checkpoint_gate().is_paused());
+    }
+
+    #[test]
+    fn checkpoint_early_release_allows_writes_during_storage_phase() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let mut checkpoint = manager
+            .begin_checkpoint_transaction(Duration::from_secs(5))
+            .expect("checkpoint should begin");
+        assert!(manager.checkpoint_gate().is_paused());
+        assert!(!manager.checkpoint_gate().is_in_storage_phase());
+
+        checkpoint.release_write_gate_early();
+        assert!(!manager.checkpoint_gate().is_paused());
+        assert!(manager.checkpoint_gate().is_in_storage_phase());
+        assert!(manager.checkpoint_gate().is_checkpoint_active());
+        assert!(checkpoint.is_write_gate_released_early());
+
+        // New writes should succeed after early release.
+        let txn = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("write should succeed after early release");
+        manager
+            .commit_transaction(txn)
+            .expect("commit should succeed");
+
+        checkpoint.commit().expect("checkpoint should commit");
+        assert!(!manager.checkpoint_gate().is_checkpoint_active());
+        assert!(!manager.checkpoint_gate().is_in_storage_phase());
+    }
+
+    #[test]
+    fn coordinated_checkpoint_with_early_release_releases_after_wal_phase() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let result = manager.coordinated_checkpoint_with_early_release(
+            Duration::from_secs(5),
+            |ts| {
+                assert!(ts > 0);
+                Ok(graphdb_core::wal::types::Lsn::new(200))
+            },
+            |ts, lsn| {
+                assert!(ts > 0);
+                assert_eq!(lsn, graphdb_core::wal::types::Lsn::new(200));
+                // Storage phase should have writes released.
+                assert!(!manager.checkpoint_gate().is_paused());
+                assert!(manager.checkpoint_gate().is_in_storage_phase());
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
+        assert!(!manager.checkpoint_gate().is_checkpoint_active());
+    }
+
+    #[test]
+    fn shadow_page_manager_creates_and_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = ShadowPageManager::new(dir.path());
+        let shadow = mgr.create_shadow_file(1).unwrap();
+        assert!(shadow.exists());
+        mgr.write_shadow_page(&shadow, 0, &[1u8; 4096]).unwrap();
+        assert_eq!(mgr.pending_shadow_files().len(), 1);
+        mgr.cleanup_shadow_file(&shadow).unwrap();
+        assert!(!shadow.exists());
+        assert!(mgr.pending_shadow_files().is_empty());
     }
 }

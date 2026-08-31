@@ -11,7 +11,8 @@ impl LocalWalWriter {
     /// Write WAL file header
     pub(crate) fn write_file_header(&mut self) -> WalResult<()> {
         let current_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
-        let header = WalFileHeader::new(self.thread_id, self.checkpoint_seq, current_lsn);
+        let header = WalFileHeader::new(self.thread_id, self.checkpoint_seq, current_lsn)
+            .with_checksum_enabled(self.config.checksum_enabled);
         self.persist_file_header(header, true)
     }
 

@@ -323,10 +323,12 @@ mod tests {
     use graphdb_core::types::{
         IdempotencyKey, IndexGeneration, OrderingKey, TargetId, TransactionId, VertexId,
     };
+    use graphdb_core::wal::types::{
+        ArchiveMode, WalHeader, WAL_FILE_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
+    };
     use graphdb_core::wal::{
         EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION,
     };
-    use graphdb_core::wal::types::{ArchiveMode, WalHeader, WAL_FILE_HEADER_SIZE, WAL_MAX_RECORD_SIZE};
     use tempfile::TempDir;
 
     #[test]

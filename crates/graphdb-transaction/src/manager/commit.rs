@@ -77,40 +77,47 @@ impl TransactionManager {
         let mut commit_lsn = CommitLsn::ZERO;
 
         if context.txn_type != TransactionType::Checkpoint {
-            if let Some(ref commit_sink) = self.commit_sink {
-                let max_retries = self.config.commit_retry_attempts;
-                let mut last_error = None;
+            if !self.config.in_memory {
+                if let Some(ref commit_sink) = self.commit_sink {
+                    let max_retries = self.config.commit_retry_attempts;
+                    let mut last_error = None;
 
-                for attempt in 0..=max_retries {
-                    match commit_sink.commit_transaction_with_descriptor(&descriptor) {
-                        Ok(lsn) => {
-                            commit_lsn = lsn;
-                            last_error = None;
-                            break;
-                        }
-                        Err(e) => {
-                            last_error = Some(e);
-                            if attempt < max_retries {
-                                std::thread::sleep(Self::backoff_delay(attempt));
+                    for attempt in 0..=max_retries {
+                        match commit_sink.commit_transaction_with_descriptor(&descriptor) {
+                            Ok(lsn) => {
+                                commit_lsn = lsn;
+                                last_error = None;
+                                break;
+                            }
+                            Err(e) => {
+                                last_error = Some(e);
+                                if attempt < max_retries {
+                                    std::thread::sleep(Self::backoff_delay(attempt));
+                                }
                             }
                         }
                     }
-                }
 
-                if let Some(err) = last_error {
-                    if let Err(abort_error) = self.abort_transaction_internal(&context) {
-                        log::error!(
-                            "Commit failure for transaction {} also failed abort finalization: {}",
-                            txn_id,
-                            abort_error
-                        );
-                        self.stats.increment_cleanup_failure();
+                    if let Some(err) = last_error {
+                        if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                            log::error!(
+                                "Commit failure for transaction {} also failed abort finalization: {}",
+                                txn_id,
+                                abort_error
+                            );
+                            self.stats.increment_cleanup_failure();
+                        }
+                        return Err(TransactionError::commit_failed(format!(
+                            "Failed to persist transaction {} after {} retries: {}",
+                            txn_id, max_retries, err
+                        )));
                     }
-                    return Err(TransactionError::commit_failed(format!(
-                        "Failed to persist transaction {} after {} retries: {}",
-                        txn_id, max_retries, err
-                    )));
                 }
+            } else {
+                // In-memory mode: skip WAL durability, assign synthetic LSN
+                commit_lsn = CommitLsn::new(context.timestamp());
+                // Clear local WAL buffer without I/O
+                let _ = context.local_wal_buffer().clear();
             }
         }
 
@@ -150,13 +157,15 @@ impl TransactionManager {
                 if context.has_pessimistic_lock() {
                     self.write_exclusion_owner.store(0, Ordering::SeqCst);
                 }
-                self.checkpoint_gate.release_write();
+                if !self.config.in_memory {
+                    self.checkpoint_gate.release_write();
+                }
             }
             TransactionType::Checkpoint => {}
         }
         context.mark_commit_published(commit_lsn);
 
-        if context.txn_type != TransactionType::Checkpoint {
+        if context.txn_type != TransactionType::Checkpoint && !self.config.in_memory {
             if let Some(ref commit_sink) = self.commit_sink {
                 let max_retries = self.config.commit_retry_attempts;
                 let mut last_error = None;

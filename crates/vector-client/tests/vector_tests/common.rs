@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use graphdb_embedding::{EmbeddingError, EmbeddingProvider};
 use std::sync::RwLock;
 use tempfile::TempDir;
 use vector_client::engine::VectorEngine;
 use vector_client::error::{Result, VectorClientError};
 use vector_client::types::IndexMetadata;
 use vector_client::types::*;
-use graphdb_embedding::{EmbeddingError, EmbeddingProvider};
 
 const MOCK_ENGINE_VERSION: &str = "1.0.0-mock";
 

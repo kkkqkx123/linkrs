@@ -1,5 +1,5 @@
 use crate::index::key_codec::KeyParser;
-use crate::index::manifest::{ManifestCatalog};
+use crate::index::manifest::ManifestCatalog;
 use crate::index::shard_runtime::{IndexBarrierRegistry, IndexMaps, IndexRuntime};
 use crate::index::types::IndexIdentity;
 use graphdb_core::stats::StatsManager;

@@ -19,7 +19,8 @@ type Receiver = tokio::sync::broadcast::Receiver<MigrationEvent>;
 static HUB: std::sync::OnceLock<Arc<RwLock<HashMap<String, Sender>>>> = std::sync::OnceLock::new();
 
 fn hub() -> Arc<RwLock<HashMap<String, Sender>>> {
-    HUB.get_or_init(|| Arc::new(RwLock::new(HashMap::new()))).clone()
+    HUB.get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
+        .clone()
 }
 
 fn hub_key(space: &str, label: &str, is_edge: bool) -> String {
@@ -80,9 +81,7 @@ fn migration_event_to_sse(event: MigrationEvent) -> Event {
                 "label": plan.target.label,
                 "is_edge": plan.target.is_edge,
             });
-            Event::default()
-                .event("started")
-                .data(data.to_string())
+            Event::default().event("started").data(data.to_string())
         }
         MigrationEvent::StepStarted { step_idx } => {
             let data = serde_json::json!({
@@ -111,9 +110,7 @@ fn migration_event_to_sse(event: MigrationEvent) -> Event {
                 "rows_migrated": report.rows_migrated,
                 "errors": report.errors,
             });
-            Event::default()
-                .event("completed")
-                .data(data.to_string())
+            Event::default().event("completed").data(data.to_string())
         }
         MigrationEvent::Failed { error } => {
             let data = serde_json::json!({
@@ -129,9 +126,7 @@ fn migration_event_to_sse(event: MigrationEvent) -> Event {
                 "steps_completed": report.steps_completed,
                 "rows_migrated": report.rows_migrated,
             });
-            Event::default()
-                .event("rolled_back")
-                .data(data.to_string())
+            Event::default().event("rolled_back").data(data.to_string())
         }
     }
 }

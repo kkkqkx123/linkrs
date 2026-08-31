@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::engine::graph_storage::context::GraphStorageContext;
-use crate::engine::graph_storage::ops::{serialize_properties, value_to_string, vertex_record_to_vertex};
+use crate::engine::graph_storage::ops::{
+    serialize_properties, value_to_string, vertex_record_to_vertex,
+};
 use graphdb_core::types::{TagInfo, VertexId};
 use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{StorageError, StorageResult, Value, Vertex};

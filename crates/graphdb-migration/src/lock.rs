@@ -18,9 +18,7 @@ impl MigrationFileLock {
             .create(true)
             .truncate(true)
             .open(path)
-            .map_err(|e| {
-                MigrationError::Storage(Box::new(StorageError::from(e)))
-            })?;
+            .map_err(|e| MigrationError::Storage(Box::new(StorageError::from(e))))?;
 
         file.try_lock_exclusive().map_err(|e| {
             MigrationError::Lock(format!(

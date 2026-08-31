@@ -6,7 +6,6 @@ use crate::parser::TokenKind;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::Span;
 
-
 pub(crate) fn parse_function_call(
     name: String,
     span: Span,

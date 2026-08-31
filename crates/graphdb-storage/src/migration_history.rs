@@ -99,8 +99,10 @@ impl MigrationHistoryManager {
     fn rebuild_index(&mut self) {
         self.index.clear();
         for (idx, r) in self.records.iter().enumerate() {
-            self.index
-                .insert((r.space.clone(), r.label.clone(), r.is_edge, r.to_version), idx);
+            self.index.insert(
+                (r.space.clone(), r.label.clone(), r.is_edge, r.to_version),
+                idx,
+            );
         }
         if let Some(max_id) = self.records.iter().map(|r| r.id).max() {
             self.next_id = max_id + 1;
@@ -110,7 +112,12 @@ impl MigrationHistoryManager {
     }
 
     pub fn record(&mut self, mut rec: MigrationHistoryRecord) -> StorageResult<()> {
-        let key = (rec.space.clone(), rec.label.clone(), rec.is_edge, rec.to_version);
+        let key = (
+            rec.space.clone(),
+            rec.label.clone(),
+            rec.is_edge,
+            rec.to_version,
+        );
         if self.index.contains_key(&key) {
             return Err(StorageError::already_exists(format!(
                 "migration_history unique violation: space={} label={} is_edge={} to_version={}",
@@ -125,12 +132,7 @@ impl MigrationHistoryManager {
         Ok(())
     }
 
-    pub fn list(
-        &self,
-        space: &str,
-        label: &str,
-        is_edge: bool,
-    ) -> Vec<MigrationHistoryRecord> {
+    pub fn list(&self, space: &str, label: &str, is_edge: bool) -> Vec<MigrationHistoryRecord> {
         self.records
             .iter()
             .filter(|r| r.space == space && r.label == label && r.is_edge == is_edge)
@@ -142,12 +144,7 @@ impl MigrationHistoryManager {
         self.records.clone()
     }
 
-    pub fn get_applied_versions(
-        &self,
-        space: &str,
-        label: &str,
-        is_edge: bool,
-    ) -> HashSet<u64> {
+    pub fn get_applied_versions(&self, space: &str, label: &str, is_edge: bool) -> HashSet<u64> {
         self.records
             .iter()
             .filter(|r| {
@@ -160,13 +157,11 @@ impl MigrationHistoryManager {
             .collect()
     }
 
-    pub fn get_applied_versions_sorted(
-        &self,
-        space: &str,
-        label: &str,
-        is_edge: bool,
-    ) -> Vec<u64> {
-        let mut v: Vec<u64> = self.get_applied_versions(space, label, is_edge).into_iter().collect();
+    pub fn get_applied_versions_sorted(&self, space: &str, label: &str, is_edge: bool) -> Vec<u64> {
+        let mut v: Vec<u64> = self
+            .get_applied_versions(space, label, is_edge)
+            .into_iter()
+            .collect();
         v.sort_unstable();
         v
     }
@@ -179,7 +174,9 @@ impl MigrationHistoryManager {
         to_version: u64,
     ) -> Option<MigrationHistoryRecord> {
         let key = (space.to_string(), label.to_string(), is_edge, to_version);
-        self.index.get(&key).and_then(|&idx| self.records.get(idx).cloned())
+        self.index
+            .get(&key)
+            .and_then(|&idx| self.records.get(idx).cloned())
     }
 
     pub fn save_to_file(&self, path: &Path) -> StorageResult<()> {
@@ -196,12 +193,13 @@ impl MigrationHistoryManager {
         if !path.exists() {
             return Ok(Self::new());
         }
-        let data = std::fs::read_to_string(path).map_err(|e| StorageError::io_error(e.to_string()))?;
+        let data =
+            std::fs::read_to_string(path).map_err(|e| StorageError::io_error(e.to_string()))?;
         if data.trim().is_empty() {
             return Ok(Self::new());
         }
-        let records: Vec<MigrationHistoryRecord> =
-            serde_json::from_str(&data).map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+        let records: Vec<MigrationHistoryRecord> = serde_json::from_str(&data)
+            .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         let mut mgr = Self {
             records,
             next_id: 1,
@@ -259,7 +257,10 @@ mod tests {
         );
         mgr.record(rec.clone()).unwrap();
         let err = mgr.record(rec).unwrap_err();
-        assert_eq!(err.kind(), graphdb_core::error::storage::StorageErrorKind::AlreadyExists);
+        assert_eq!(
+            err.kind(),
+            graphdb_core::error::storage::StorageErrorKind::AlreadyExists
+        );
     }
 
     #[test]

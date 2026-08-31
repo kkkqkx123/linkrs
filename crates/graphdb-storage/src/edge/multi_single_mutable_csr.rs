@@ -526,27 +526,12 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert multiple edges for same vertex
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(2),
-            EdgeId(101),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(3),
-            EdgeId(102),
-            1,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 1)
+            .unwrap();
 
         assert_eq!(csr.edge_count(), 3);
 
@@ -562,28 +547,13 @@ mod tests {
     fn test_multi_single_capacity_exceeded() {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 2);
 
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(2),
-            EdgeId(101),
-            1,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
         // Third insertion should fail due to capacity
         assert!(csr
-            .insert_edge(
-                0,
-                VertexId::from_int64(3),
-                EdgeId(102),
-                1,
-            )
+            .insert_edge(0, VertexId::from_int64(3), EdgeId(102), 1,)
             .is_err());
 
         assert_eq!(csr.edge_count(), 2);
@@ -593,20 +563,10 @@ mod tests {
     fn test_multi_single_delete_and_revert() {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(2),
-            EdgeId(101),
-            1,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
 
         // Delete first edge
         assert!(csr.delete_edge_by_offset(0, 0, 2));
@@ -626,34 +586,14 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(5, 3);
 
         // Insert edges across multiple vertices
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(10),
-            EdgeId(1),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(11),
-            EdgeId(2),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            1,
-            VertexId::from_int64(20),
-            EdgeId(3),
-            1,
-        )
-        .unwrap();
-        csr.insert_edge(
-            2,
-            VertexId::from_int64(30),
-            EdgeId(4),
-            1,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1)
+            .unwrap();
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 1)
+            .unwrap();
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 1)
+            .unwrap();
 
         // Collect via iterator
         let edges_from_iter: Vec<_> = csr.iter(999).collect();
@@ -675,27 +615,12 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert edges at different timestamps
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            10,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(2),
-            EdgeId(101),
-            20,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(3),
-            EdgeId(102),
-            30,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 10)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 20)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 30)
+            .unwrap();
 
         // Query at different timestamps
         assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge
@@ -716,27 +641,12 @@ mod tests {
         let mut csr = MultiSingleMutableCsr::with_capacity(10, 4);
 
         // Insert edges
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(1),
-            EdgeId(100),
-            5,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(2),
-            EdgeId(101),
-            10,
-        )
-        .unwrap();
-        csr.insert_edge(
-            0,
-            VertexId::from_int64(3),
-            EdgeId(102),
-            15,
-        )
-        .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 5)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 10)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 15)
+            .unwrap();
 
         // Delete some edges
         assert!(csr.delete_edge(0, EdgeId(100), 20).unwrap());
@@ -760,13 +670,8 @@ mod tests {
 
         // Add to each vertex (with limited capacity)
         for src in 0..5 {
-            csr.insert_edge(
-                src,
-                VertexId::from_int64(100),
-                EdgeId(src as u64 * 2),
-                1,
-            )
-            .unwrap();
+            csr.insert_edge(src, VertexId::from_int64(100), EdgeId(src as u64 * 2), 1)
+                .unwrap();
             csr.insert_edge(
                 src,
                 VertexId::from_int64(101),

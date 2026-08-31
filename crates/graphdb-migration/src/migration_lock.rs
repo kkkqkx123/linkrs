@@ -127,7 +127,12 @@ fn generate_id() -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     t.as_nanos().hash(&mut hasher);
     std::thread::current().id().hash(&mut hasher);
-    format!("{:x}-{:x}-{:x}", t.as_secs(), t.subsec_nanos(), hasher.finish() as u32)
+    format!(
+        "{:x}-{:x}-{:x}",
+        t.as_secs(),
+        t.subsec_nanos(),
+        hasher.finish() as u32
+    )
 }
 
 #[cfg(test)]

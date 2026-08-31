@@ -36,6 +36,9 @@ pub struct RecoveryConfig {
     pub parallel_recovery: bool,
     pub verify_checksum: bool,
     pub start_lsn: Option<Lsn>,
+    /// Whether to throw on any WAL corruption (mirrors Ladybug's
+    /// `throwOnWalReplayFailure`). When false, torn tails are truncated.
+    pub throw_on_wal_replay_failure: bool,
 }
 
 impl Default for RecoveryConfig {
@@ -47,6 +50,7 @@ impl Default for RecoveryConfig {
             parallel_recovery: true,
             verify_checksum: true,
             start_lsn: None,
+            throw_on_wal_replay_failure: false,
         }
     }
 }
@@ -105,6 +109,23 @@ impl RecoveryManager {
         self.stats.last_lsn = self.config.start_lsn.unwrap_or(Lsn::ZERO);
 
         let wal_result = self.parse_wal_files()?;
+        let (wal_result, dry_stats) = self.apply_dry_replay_filter(wal_result)?;
+        if let Some(dry) = dry_stats {
+            log::info!(
+                "Dry replay: scanned={}, consistent={}, truncated_tail={}, corrupted={}, last_consistent_lsn={}",
+                dry.total_scanned,
+                dry.consistent_entries.len(),
+                dry.truncated_tail,
+                dry.corrupted_count,
+                dry.last_consistent_lsn
+            );
+            if dry.truncated_tail > 0 {
+                log::warn!(
+                    "WAL dry replay truncated {} torn-tail entries",
+                    dry.truncated_tail
+                );
+            }
+        }
         self.stats.max_timestamp = wal_result.last_timestamp;
         self.stats.max_transaction_id = self.max_transaction_id(&wal_result);
         self.stats.errors_encountered = wal_result
@@ -122,6 +143,49 @@ impl RecoveryManager {
         self.stats.recovery_time_ms = start.elapsed().as_millis() as u64;
 
         Ok(self.stats.clone())
+    }
+
+    /// Run a dry replay scan without applying mutations, returning the
+    /// last consistent commit boundary. Mirrors Ladybug's
+    /// `WALReplayer::dryReplay`.
+    pub fn dry_replay(&self) -> StorageResult<crate::wal::dry_replay::DryReplayResult> {
+        crate::wal::dry_replay::dry_replay(
+            &self.config.wal_dir,
+            self.config.verify_checksum,
+            self.config.throw_on_wal_replay_failure,
+        )
+        .map_err(|e| StorageError::wal_error(format!("Dry replay failed: {}", e)))
+    }
+
+    fn apply_dry_replay_filter(
+        &self,
+        wal_result: RecoveryResult,
+    ) -> StorageResult<(
+        RecoveryResult,
+        Option<crate::wal::dry_replay::DryReplayResult>,
+    )> {
+        if self.config.throw_on_wal_replay_failure {
+            return Ok((wal_result, None));
+        }
+        let dry = crate::wal::dry_replay::find_last_consistent_commit(
+            wal_result,
+            self.config.throw_on_wal_replay_failure,
+        );
+        let total = dry.total_scanned;
+        let truncated = dry.truncated_tail;
+        let corrupted = dry.corrupted_count;
+        let last_lsn = dry.last_consistent_lsn;
+        let last_ts = dry.last_consistent_timestamp;
+        let consistent_entries = dry.consistent_entries.clone();
+        let filtered = RecoveryResult {
+            all_entries: consistent_entries,
+            last_timestamp: last_ts,
+            last_lsn,
+            corrupted_count: corrupted,
+            skipped_count: truncated,
+        };
+        let _ = total;
+        Ok((filtered, Some(dry)))
     }
 
     fn max_transaction_id(&self, wal_result: &RecoveryResult) -> u64 {
@@ -747,6 +811,7 @@ mod tests {
             parallel_recovery: false,
             verify_checksum: true,
             start_lsn: Some(Lsn::new(first_lsn.get())),
+            ..Default::default()
         });
 
         let applier = RecordingApplier::default();
@@ -781,6 +846,7 @@ mod tests {
             parallel_recovery: false,
             verify_checksum: true,
             start_lsn: Some(last_lsn),
+            ..Default::default()
         });
 
         let applier = RecordingApplier::default();
@@ -828,6 +894,7 @@ mod tests {
             parallel_recovery: false,
             verify_checksum: true,
             start_lsn: None,
+            ..Default::default()
         });
         let applier = RecordingApplier::default();
         manager
