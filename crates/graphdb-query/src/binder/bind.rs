@@ -103,6 +103,8 @@ impl Default for Binder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binder::bound::BoundExpression;
+    use graphdb_core::error::DBError;
     use std::sync::Arc;
 
     #[allow(clippy::arc_with_non_send_sync)]

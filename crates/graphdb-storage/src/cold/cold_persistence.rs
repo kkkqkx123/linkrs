@@ -6,7 +6,7 @@ use memmap2::Mmap;
 use crate::cold::cold_property_index::ColdPropertyIndex;
 use crate::cold::cold_snapshot::ColdSnapshot;
 use crate::edge::edge_table::snapshot::ExportedEdgeSnapshot;
-use crate::edge::{Csr, CsrBase, EdgeSchema, PropertyTable};
+use crate::edge::{Csr, CsrBase, CsrWithProperties, EdgeSchema};
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
@@ -129,6 +129,15 @@ impl ColdSnapshot {
             None
         };
 
+        // Skip legacy edge_prop_map section if present (backward compat with old files).
+        // New files no longer write this section since properties are stored in CsrWithProperties.
+        if pos + 8 <= data.len() - 4 {
+            let remaining_before_crc = data.len() - pos - 4;
+            if remaining_before_crc >= 8 {
+                let _map_section = read_section(data, &mut pos)?;
+            }
+        }
+
         // CRC32 verification
         let stored_crc = u32::from_le_bytes(read_arr::<4>(data, &mut pos));
         let computed_crc = crc32fast::hash(&data[..pos - 4]);
@@ -143,13 +152,27 @@ impl ColdSnapshot {
         let out_csr = decode_csr_section(out_data)?;
         let in_csr = decode_csr_section(in_data)?;
 
-        let mut properties = PropertyTable::new();
-        properties.load(&prop_data)?;
-
         let schema_json = std::str::from_utf8(schema_data)
             .map_err(|e| StorageError::deserialize_error(format!("invalid schema utf-8: {}", e)))?;
         let schema: EdgeSchema = serde_json::from_str(schema_json)
             .map_err(|e| StorageError::deserialize_error(format!("invalid schema json: {}", e)))?;
+
+        // Build property schemas from EdgeSchema so columns match during load
+        let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = schema
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                crate::edge::property_schema::PropertySchema::new(
+                    p.name.clone(),
+                    i as i32,
+                    p.data_type.clone(),
+                )
+                .nullable(p.nullable)
+            })
+            .collect();
+        let mut properties = CsrWithProperties::new(vertex_capacity.max(1), prop_schemas);
+        properties.load(&prop_data)?;
 
         Ok(Self {
             snapshot_ts,
@@ -240,7 +263,7 @@ impl ColdSnapshot {
             label,
             out_csr: Csr::new(),
             in_csr: Csr::new(),
-            properties: PropertyTable::new(),
+            properties: CsrWithProperties::new(1, Vec::new()),
             schema,
         };
         Self::create(&exported, path)
@@ -295,7 +318,7 @@ impl ColdSnapshot {
         vertex_capacity: usize,
         out_csr: Csr,
         in_csr: Csr,
-        properties: PropertyTable,
+        properties: CsrWithProperties,
         schema: EdgeSchema,
         property_index: Option<ColdPropertyIndex>,
     ) -> Self {
@@ -386,10 +409,11 @@ fn write_section(buf: &mut Vec<u8>, data: &[u8]) {
 }
 
 /// Serialize CSR/property data into the `.lkcs` file layout (header + sections + CRC).
+#[allow(clippy::too_many_arguments)]
 fn encode_snapshot(
     out_csr: &Csr,
     in_csr: &Csr,
-    properties: &PropertyTable,
+    properties: &CsrWithProperties,
     schema: &EdgeSchema,
     snapshot_ts: Timestamp,
     label: LabelId,
@@ -444,6 +468,10 @@ fn encode_snapshot(
     for word in &presence {
         buf.extend_from_slice(&word.to_le_bytes());
     }
+
+    // Edge property map section: write empty section for backward compat.
+    // New files no longer need this section since properties are in CsrWithProperties.
+    write_section(&mut buf, &[]);
 
     let checksum = crc32fast::hash(&buf);
     buf.extend_from_slice(&checksum.to_le_bytes());
@@ -641,12 +669,7 @@ pub(crate) fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
             let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
             entries.push((
                 v as u32,
-                crate::edge::Nbr::with_prop_offset(
-                    endpoint_vid.as_int64().unwrap_or(0) as u32,
-                    rank,
-                    edge_id,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                ),
+                crate::edge::Nbr::new(endpoint_vid.as_int64().unwrap_or(0) as u32, rank, edge_id),
                 ts,
             ));
         }

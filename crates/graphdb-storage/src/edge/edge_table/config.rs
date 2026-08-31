@@ -98,7 +98,7 @@ impl Default for EdgeTableConfig {
             merge_keep_newest: 5,
             auto_maintenance: AutoMaintenanceConfig::default(),
             region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
-            version_chain_cap: crate::edge::property_table::DEFAULT_VERSION_CHAIN_CAP,
+            version_chain_cap: crate::edge::property_schema::DEFAULT_VERSION_CHAIN_CAP,
             calibrator: CalibratorConfig::default(),
             max_regions_per_freeze: 8,
             freeze_density_threshold: 0.05,

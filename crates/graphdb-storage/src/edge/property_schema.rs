@@ -9,6 +9,9 @@ use graphdb_core::DataType;
 /// Sentinel value meaning "no properties"
 pub const PROP_OFFSET_NONE: u32 = 0;
 
+/// Default version chain capacity for property storage
+pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
+
 /// Convert a property offset to a row index
 /// Offset 0 is the sentinel for "no properties", so row index = offset - 1
 pub fn prop_offset_to_index(offset: u32) -> Option<usize> {

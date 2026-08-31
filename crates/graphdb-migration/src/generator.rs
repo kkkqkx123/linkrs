@@ -354,9 +354,7 @@ fn calculate_safety(steps: &[MigrationStep]) -> SafetyLevel {
 mod tests {
     use super::*;
     use graphdb_core::{DataType, Value};
-    use graphdb_storage::{
-        LabelVersionHistory, MigrationHistoryManager, MigrationHistoryRecord, StorageReader,
-    };
+    use graphdb_storage::{LabelVersionHistory, StorageReader};
     use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
     use graphdb_core::{Edge, EdgeDirection, StorageError, Vertex};
     use std::collections::HashMap;

@@ -5,7 +5,7 @@
 
 use super::super::{Csr, CsrBase, EdgeSchema, LabelId, Nbr, VertexId};
 use super::segment::CsrSegment;
-use crate::edge::PropertyTable;
+use crate::edge::CsrWithProperties;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
@@ -40,8 +40,8 @@ pub struct ExportedEdgeSnapshot {
     pub out_csr: Csr,
     /// Read-only incoming edges
     pub in_csr: Csr,
-    /// Edge properties (cloned for independence)
-    pub properties: PropertyTable,
+    /// Decoupled columnar property store (ladybug-style, no prop_offset indirection).
+    pub properties: CsrWithProperties,
     /// Edge schema metadata
     pub schema: EdgeSchema,
 }
@@ -56,7 +56,9 @@ impl ExportedEdgeSnapshot {
             .edges_of(src)
             .iter()
             .map(|edge| {
-                Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+                let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
+                nbr.create_ts = edge.timestamp;
+                nbr
             })
             .collect()
     }
@@ -69,7 +71,9 @@ impl ExportedEdgeSnapshot {
             .edges_of(dst)
             .iter()
             .map(|edge| {
-                Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+                let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
+                nbr.create_ts = edge.timestamp;
+                nbr
             })
             .collect()
     }
@@ -77,7 +81,9 @@ impl ExportedEdgeSnapshot {
     /// Get a specific edge in the snapshot (if it exists)
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr.get_edge(src, dst).map(|edge| {
-            Nbr::with_prop_offset(edge.endpoint, edge.rank, edge.edge_id, edge.prop_offset)
+            let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
+            nbr.create_ts = edge.timestamp;
+            nbr
         })
     }
 
@@ -160,12 +166,8 @@ impl SnapshotBuilder {
             }
 
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let nbr = Nbr::with_prop_offset(
-                immutable_nbr.endpoint,
-                immutable_nbr.rank,
-                edge_id,
-                immutable_nbr.prop_offset,
-            );
+            let mut nbr = Nbr::new(immutable_nbr.endpoint, immutable_nbr.rank, edge_id);
+            nbr.create_ts = immutable_nbr.timestamp;
             self.edge_map
                 .insert((src_u32, edge_id), (src_u32, nbr, immutable_nbr.timestamp));
         }

@@ -229,7 +229,6 @@ impl CsrBase for MultiSingleMutableCsr {
                 edge_id,
                 create_ts: 0,
                 delete_ts,
-                prop_offset: crate::edge::property_schema::PROP_OFFSET_NONE,
             });
         }
 
@@ -252,7 +251,6 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
-        prop_offset: u32,
     ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
             let min_capacity = src_vid as usize + 1;
@@ -266,12 +264,11 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
             // Update existing edge if timestamp is newer
             if ts > self.edges[slot].create_ts {
                 let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-                self.edges[slot] = Nbr::with_create_ts_and_prop(
+                self.edges[slot] = Nbr::with_create_ts(
                     endpoint_vid.as_int64().unwrap_or(0) as u32,
                     rank,
                     edge_id,
                     ts,
-                    prop_offset,
                 );
                 return Ok(());
             }
@@ -284,12 +281,11 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         // Try to insert in empty slot
         if let Some(slot) = self.find_empty_slot(src_vid) {
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.edges[slot] = Nbr::with_create_ts_and_prop(
+            self.edges[slot] = Nbr::with_create_ts(
                 endpoint_vid.as_int64().unwrap_or(0) as u32,
                 rank,
                 edge_id,
                 ts,
-                prop_offset,
             );
             self.counts[src_vid as usize] += 1;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
@@ -535,7 +531,6 @@ mod tests {
             VertexId::from_int64(1),
             EdgeId(100),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -543,7 +538,6 @@ mod tests {
             VertexId::from_int64(2),
             EdgeId(101),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -551,7 +545,6 @@ mod tests {
             VertexId::from_int64(3),
             EdgeId(102),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
 
@@ -574,7 +567,6 @@ mod tests {
             VertexId::from_int64(1),
             EdgeId(100),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -582,7 +574,6 @@ mod tests {
             VertexId::from_int64(2),
             EdgeId(101),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         // Third insertion should fail due to capacity
@@ -592,7 +583,6 @@ mod tests {
                 VertexId::from_int64(3),
                 EdgeId(102),
                 1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
             )
             .is_err());
 
@@ -608,7 +598,6 @@ mod tests {
             VertexId::from_int64(1),
             EdgeId(100),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -616,7 +605,6 @@ mod tests {
             VertexId::from_int64(2),
             EdgeId(101),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
 
@@ -643,7 +631,6 @@ mod tests {
             VertexId::from_int64(10),
             EdgeId(1),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -651,7 +638,6 @@ mod tests {
             VertexId::from_int64(11),
             EdgeId(2),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -659,7 +645,6 @@ mod tests {
             VertexId::from_int64(20),
             EdgeId(3),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -667,7 +652,6 @@ mod tests {
             VertexId::from_int64(30),
             EdgeId(4),
             1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
 
@@ -696,7 +680,6 @@ mod tests {
             VertexId::from_int64(1),
             EdgeId(100),
             10,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -704,7 +687,6 @@ mod tests {
             VertexId::from_int64(2),
             EdgeId(101),
             20,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -712,7 +694,6 @@ mod tests {
             VertexId::from_int64(3),
             EdgeId(102),
             30,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
 
@@ -740,7 +721,6 @@ mod tests {
             VertexId::from_int64(1),
             EdgeId(100),
             5,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -748,7 +728,6 @@ mod tests {
             VertexId::from_int64(2),
             EdgeId(101),
             10,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
         csr.insert_edge(
@@ -756,7 +735,6 @@ mod tests {
             VertexId::from_int64(3),
             EdgeId(102),
             15,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
         )
         .unwrap();
 
@@ -787,7 +765,6 @@ mod tests {
                 VertexId::from_int64(100),
                 EdgeId(src as u64 * 2),
                 1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
             )
             .unwrap();
             csr.insert_edge(
@@ -795,7 +772,6 @@ mod tests {
                 VertexId::from_int64(101),
                 EdgeId(src as u64 * 2 + 1),
                 1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
             )
             .unwrap();
             // Third edge should fail (capacity is 2)
@@ -805,7 +781,6 @@ mod tests {
                     VertexId::from_int64(102),
                     EdgeId(src as u64 * 2 + 2),
                     1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
                 )
                 .is_err());
         }

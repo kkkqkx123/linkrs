@@ -183,9 +183,9 @@ impl RecoveryApplier for GraphStorageContext {
 mod tests {
     use crate::engine::graph_storage::GraphStorageContext;
     use crate::engine::{EdgeOperationParams, InsertEdgeParams};
-    use graphdb_core::types::{DataType, LabelId, Timestamp, VertexId};
+    use graphdb_core::types::VertexId;
     use graphdb_core::wal::traits::RecoveryApplier;
-    use graphdb_core::{StorageResult, Value};
+    use graphdb_core::Value;
     use graphdb_transaction::wal::{
         AddEdgePropRedo, AddVertexPropRedo, CreateEdgeTypeRedo, CreateVertexTypeRedo,
         DeleteEdgePropRedo, DeleteVertexPropRedo, RenameEdgePropRedo, RenameVertexPropRedo,

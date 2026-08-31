@@ -346,13 +346,12 @@ impl MutableCsrTrait for CsrVariant {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
-        prop_offset: u32,
     ) -> StorageResult<()> {
         match self {
-            CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts, prop_offset),
-            CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts, prop_offset),
-            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, ts, prop_offset),
-            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts, prop_offset),
+            CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::None { .. } => Err(StorageError::invalid_operation(
                 "no edges stored for this edge type".to_string(),
             )),
@@ -620,9 +619,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -636,9 +634,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -657,9 +654,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -673,9 +669,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -696,9 +691,8 @@ mod tests {
                 0u32,
                 VertexId::from_int64(1),
                 EdgeId(100),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
-            )
+                1
+)
             .is_err());
         assert_eq!(csr.edge_count(), 0);
 
@@ -747,9 +741,8 @@ mod tests {
                 0,
                 VertexId::from_int64(1),
                 EdgeId(100),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
-            )
+                1
+)
             .is_err());
     }
 
@@ -761,9 +754,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         let csr2 = csr1.clone();
@@ -782,9 +774,8 @@ mod tests {
                 0,
                 VertexId::from_int64(1),
                 EdgeId(100),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
-            )
+                1
+)
             .is_err());
     }
 }

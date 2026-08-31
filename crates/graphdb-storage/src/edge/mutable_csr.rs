@@ -521,7 +521,6 @@ impl MutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
-        prop_offset: u32,
     ) -> StorageResult<()> {
         let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
         let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
@@ -579,7 +578,7 @@ impl MutableCsr {
 
         // Record create_ts in the Nbr before writing
         let nbr_with_ts =
-            Nbr::with_create_ts_and_prop(decoded_endpoint, decoded_rank, edge_id, ts, prop_offset);
+            Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
 
         // Write to primary if space available and overflow not yet allocated
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
@@ -1542,9 +1541,8 @@ impl MutableCsrTrait for MutableCsr {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
-        prop_offset: u32,
     ) -> StorageResult<()> {
-        MutableCsr::insert_edge(self, src_vid, dst, edge_id, ts, prop_offset)
+        MutableCsr::insert_edge(self, src_vid, dst, edge_id, ts)
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
@@ -1622,25 +1620,22 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             1u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         assert!(csr
@@ -1648,9 +1643,8 @@ mod tests {
                 0u32,
                 VertexId::from_int64(1),
                 EdgeId(103),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
-            )
+                1
+)
             .is_err());
 
         assert_eq!(csr.edge_count(), 3);
@@ -1664,17 +1658,15 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
@@ -1689,9 +1681,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            10,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            10
+)
         .unwrap();
 
         // First delete succeeds.
@@ -1719,25 +1710,22 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr1.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr1.insert_edge(
             1u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         let data = csr1.dump();
@@ -1757,17 +1745,15 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             100u32,
             VertexId::from_int64(1),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         assert!(csr.vertex_capacity() >= 101);
@@ -1781,25 +1767,22 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             1u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         let edges: Vec<_> = csr.iter(1).collect();
@@ -1814,41 +1797,36 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(4),
             EdgeId(103),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(5),
             EdgeId(104),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         assert_eq!(csr.edge_count(), 5);
@@ -1861,9 +1839,8 @@ mod tests {
                 0u32,
                 VertexId::from_int64(5),
                 EdgeId(105),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE
-            )
+                1
+)
             .is_err());
 
         assert!(csr.delete_edge(0u32, EdgeId(104), 2).unwrap());
@@ -1879,9 +1856,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -1910,9 +1886,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -1940,9 +1915,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
         csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
@@ -1971,9 +1945,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
         csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
@@ -1997,18 +1970,16 @@ mod tests {
                 0u32,
                 VertexId::from_int64(i),
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
         csr.insert_edge(
             1u32,
             VertexId::from_int64(1),
             EdgeId(7),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         let removed = csr.compact_with_ts(3, 1.0);
@@ -2032,9 +2003,8 @@ mod tests {
                 0u32,
                 VertexId::from_int64(i),
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
         let removed = csr.compact_with_ts(3, 0.0);
@@ -2053,9 +2023,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -2071,9 +2040,8 @@ mod tests {
                 0,
                 VertexId::from_int64(i as i64 + 1),
                 EdgeId(i + 1),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -2093,9 +2061,8 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.total_edge_capacity, 4);
 
@@ -2104,9 +2071,8 @@ mod tests {
             10_000u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         assert_eq!(csr.vertex_capacity(), 12_502);
         assert_eq!(csr.total_edge_capacity, 8);
@@ -2135,9 +2101,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -2156,9 +2121,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -2181,9 +2145,8 @@ mod tests {
                 0u32,
                 dst,
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
 
@@ -2213,41 +2176,36 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(4),
             EdgeId(103),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(5),
             EdgeId(104),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         // Test iter_edges_of yields same neighbors as edges_of without allocation
@@ -2273,25 +2231,22 @@ mod tests {
             0u32,
             VertexId::from_int64(1),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(2),
             EdgeId(101),
-            2,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            2
+)
         .unwrap();
         csr.insert_edge(
             0u32,
             VertexId::from_int64(3),
             EdgeId(102),
-            3,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            3
+)
         .unwrap();
 
         // Delete the second edge at ts=2
@@ -2324,9 +2279,8 @@ mod tests {
                     vid,
                     dst,
                     EdgeId(vid as u64 * 10 + i as u64),
-                    1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                )
+                    1
+)
                 .unwrap();
             }
         }
@@ -2355,9 +2309,8 @@ mod tests {
                     vid,
                     dst,
                     EdgeId(vid as u64 * 10 + i as u64),
-                    1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                )
+                    1
+)
                 .unwrap();
             }
         }
@@ -2371,9 +2324,8 @@ mod tests {
                     vid,
                     dst,
                     EdgeId(1000 + vid as u64 * 10 + i as u64),
-                    1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                )
+                    1
+)
                 .unwrap();
             }
         }
@@ -2398,9 +2350,8 @@ mod tests {
                     vid,
                     dst,
                     EdgeId(vid as u64 * 10 + i as u64),
-                    1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                )
+                    1
+)
                 .unwrap();
             }
         }
@@ -2428,9 +2379,8 @@ mod tests {
                     vid,
                     dst,
                     EdgeId(vid as u64 * 10 + i as u64),
-                    1,
-                    crate::edge::property_schema::PROP_OFFSET_NONE,
-                )
+                    1
+)
                 .unwrap();
             }
         }
@@ -2452,18 +2402,16 @@ mod tests {
                 0,
                 VertexId::from_int64(i + 1),
                 EdgeId(i as u64),
-                1,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                1
+)
             .unwrap();
         }
         csr.insert_edge(
             2048,
             VertexId::from_int64(100),
             EdgeId(100),
-            1,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            1
+)
         .unwrap();
 
         let regions = csr.regions_with_ts(1024, Some(1));
@@ -2490,18 +2438,16 @@ mod tests {
                 0,
                 VertexId::from_int64(i as i64 + 1),
                 EdgeId(i as u64),
-                10,
-                crate::edge::property_schema::PROP_OFFSET_NONE,
-            )
+                10
+)
             .unwrap();
         }
         csr.insert_edge(
             2048,
             VertexId::from_int64(999),
             EdgeId(1000),
-            10,
-            crate::edge::property_schema::PROP_OFFSET_NONE,
-        )
+            10
+)
         .unwrap();
 
         assert_eq!(csr.edge_count(), 21);

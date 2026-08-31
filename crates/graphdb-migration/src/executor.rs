@@ -1593,11 +1593,15 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
+    type VertexMap = Arc<Mutex<HashMap<(String, String), Vec<Vertex>>>>;
+    type EdgeMap = Arc<Mutex<HashMap<(String, String), Vec<Edge>>>>;
+    type HistoryVec = Arc<Mutex<Vec<MigrationHistoryRecord>>>;
+
     #[derive(Debug, Clone)]
     struct TestStorage {
-        vertices: Arc<Mutex<HashMap<(String, String), Vec<Vertex>>>>,
-        edges: Arc<Mutex<HashMap<(String, String), Vec<Edge>>>>,
-        migration_history: Arc<Mutex<Vec<MigrationHistoryRecord>>>,
+        vertices: VertexMap,
+        edges: EdgeMap,
+        migration_history: HistoryVec,
     }
 
     impl TestStorage {
@@ -1618,6 +1622,7 @@ mod tests {
         fn get_vertices(&self, space: &str, label: &str) -> Vec<Vertex> {
             self.vertices.lock().unwrap().get(&(space.to_string(), label.to_string())).cloned().unwrap_or_default()
         }
+        #[allow(dead_code)]
         fn insert_edge(&self, space: &str, edge_type: &str, src: i64, dst: i64, props: HashMap<String, Value>) {
             let mut map = self.edges.lock().unwrap();
             let entry = map.entry((space.to_string(), edge_type.to_string())).or_default();

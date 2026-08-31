@@ -8,8 +8,8 @@
 //! - `Csr`: Read-only immutable CSR for frozen segments and snapshots
 //! - `SingleMutableCsr`: Optimized mutable CSR for single-edge scenarios
 //! - `CsrVariant`: Enum wrapper for runtime CSR selection (mutable variants only)
+//! - `CsrWithProperties`: Ladybug-style columnar property storage
 //! - `EdgeTable`: Edge table combining out/in CSRs and property storage
-//! - `PropertyTable`: Edge property storage
 //!
 //! ## CSR Type Selection
 //!
@@ -30,20 +30,18 @@ pub mod bloom_filter;
 pub mod csr;
 pub mod csr_trait;
 pub mod csr_variant;
+pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
 pub mod labeled_mutable_csr;
 pub mod multi_single_mutable_csr;
 pub mod mutable_csr;
 pub mod property_schema;
-pub mod property_table;
 pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
-use property_schema::PROP_OFFSET_NONE;
-
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
@@ -55,7 +53,7 @@ pub use graphdb_core::types::EdgeStrategy;
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator, MutableCsrRegion};
-pub use property_table::PropertyTable;
+pub use csr_with_properties::CsrWithProperties;
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use graphdb_core::types::INVALID_EDGE_ID;
@@ -229,10 +227,11 @@ impl EdgeSchema {
 /// `create_ts` is the creation timestamp for MVCC visibility checks.
 /// `delete_ts` is the deletion timestamp (`Timestamp::MAX` means alive).
 ///
-/// `prop_offset` is the PropertyTable row offset for this edge's properties.
-/// Storing it here enables direct property access from CSR scan results
-/// without the HashMap\<EdgeId, offset\> indirection (Phase 3 optimization).
-/// A value of [`PROP_OFFSET_NONE`] (0) means no properties are associated.
+/// Topology and properties are decoupled: the CSR entry carries only the
+/// topology (endpoint, rank, edge_id, timestamps). Edge properties are
+/// stored in a separate columnar store indexed by `EdgeId` (or by CSR
+/// position for frozen segments) — no `prop_offset` indirection is stored
+/// per edge.
 ///
 /// Use [`Nbr::to_vertex_id`] to reconstruct the full `VertexId` at the API boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,7 +241,6 @@ pub struct Nbr {
     pub edge_id: EdgeId,
     pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
-    pub prop_offset: u32,
 }
 
 impl Nbr {
@@ -254,19 +252,6 @@ impl Nbr {
             edge_id,
             create_ts: 0,
             delete_ts: Timestamp::MAX,
-            prop_offset: PROP_OFFSET_NONE,
-        }
-    }
-
-    /// Create a new alive edge with an associated property offset.
-    pub fn with_prop_offset(endpoint: u32, rank: i64, edge_id: EdgeId, prop_offset: u32) -> Self {
-        Self {
-            endpoint,
-            rank,
-            edge_id,
-            create_ts: 0,
-            delete_ts: Timestamp::MAX,
-            prop_offset,
         }
     }
 
@@ -278,25 +263,6 @@ impl Nbr {
             edge_id,
             create_ts,
             delete_ts: Timestamp::MAX,
-            prop_offset: PROP_OFFSET_NONE,
-        }
-    }
-
-    /// Create with explicit create timestamp and property offset.
-    pub fn with_create_ts_and_prop(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        create_ts: Timestamp,
-        prop_offset: u32,
-    ) -> Self {
-        Self {
-            endpoint,
-            rank,
-            edge_id,
-            create_ts,
-            delete_ts: Timestamp::MAX,
-            prop_offset,
         }
     }
 
@@ -313,25 +279,6 @@ impl Nbr {
             edge_id,
             create_ts: 0,
             delete_ts,
-            prop_offset: PROP_OFFSET_NONE,
-        }
-    }
-
-    /// Create with explicit delete timestamp and property offset.
-    pub fn with_timestamps_and_prop(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        delete_ts: Timestamp,
-        prop_offset: u32,
-    ) -> Self {
-        Self {
-            endpoint,
-            rank,
-            edge_id,
-            create_ts: 0,
-            delete_ts,
-            prop_offset,
         }
     }
 
@@ -365,15 +312,14 @@ impl Nbr {
 /// pair. The `timestamp` field records the creation timestamp (used for
 /// time-travel queries on frozen CSR data).
 ///
-/// `prop_offset` is the PropertyTable row offset for this edge's properties,
-/// enabling direct property access without HashMap indirection.
+/// Topology and properties are decoupled: properties are retrieved via
+/// `EdgeId` lookup or CSR position, not from an inline `prop_offset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImmutableNbr {
     pub endpoint: u32,
     pub rank: i64,
     pub edge_id: EdgeId,
     pub timestamp: Timestamp,
-    pub prop_offset: u32,
 }
 
 impl ImmutableNbr {
@@ -387,24 +333,6 @@ impl ImmutableNbr {
             rank,
             edge_id,
             timestamp,
-            prop_offset: PROP_OFFSET_NONE,
-        }
-    }
-
-    /// Create with explicit property offset.
-    pub fn with_timestamp_and_prop(
-        endpoint: u32,
-        rank: i64,
-        edge_id: EdgeId,
-        timestamp: Timestamp,
-        prop_offset: u32,
-    ) -> Self {
-        Self {
-            endpoint,
-            rank,
-            edge_id,
-            timestamp,
-            prop_offset,
         }
     }
 

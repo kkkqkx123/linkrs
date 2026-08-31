@@ -121,9 +121,9 @@ enum Commands {
     },
 }
 
-fn open_storage(path: &PathBuf) -> anyhow::Result<GraphStorage> {
+fn open_storage(path: &std::path::Path) -> anyhow::Result<GraphStorage> {
     if path.exists() {
-        Ok(GraphStorage::open(path.clone())?)
+        Ok(GraphStorage::open(path.to_path_buf())?)
     } else {
         Ok(GraphStorage::new()?)
     }

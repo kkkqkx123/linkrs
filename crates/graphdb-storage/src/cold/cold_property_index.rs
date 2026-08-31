@@ -43,7 +43,7 @@ impl ColdPropertyIndex {
             for nbr in exported.out_csr.edges_of(src_u32) {
                 let dst_internal = nbr.endpoint;
                 let rank = nbr.rank;
-                let Some(props) = exported.properties.read_properties(nbr.prop_offset) else {
+                let Some(props) = exported.properties.read_properties_by_edge_id(nbr.edge_id) else {
                     continue;
                 };
                 for (name, value) in props {

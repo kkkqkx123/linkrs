@@ -20,9 +20,10 @@ pub trait CsrBase: std::fmt::Debug + Send + Sync {
 pub trait MutableCsrTrait: CsrBase {
     /// Insert an edge.
     ///
-    /// `prop_offset` is the PropertyTable row offset for this edge's properties.
-    /// Storing it in the CSR entry enables direct property access from scan
-    /// results without the HashMap\<EdgeId, offset\> indirection.
+    /// Topology and properties are decoupled: the CSR stores only the
+    /// topology (neighbor, edge_id, timestamps). Properties are stored
+    /// separately indexed by `EdgeId` or by CSR position for frozen
+    /// segments.
     ///
     /// Returns `Ok(())` on success, or an error explaining why insertion failed:
     ///
@@ -37,7 +38,6 @@ pub trait MutableCsrTrait: CsrBase {
         dst: VertexId,
         edge_id: EdgeId,
         ts: Timestamp,
-        prop_offset: u32,
     ) -> StorageResult<()>;
 
     /// Delete an edge by edge_id.

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::cold::cold_persistence::build_presence_bitmap;
 use crate::cold::cold_property_index::ColdPropertyIndex;
 use crate::edge::edge_table::remap::remap_immutable_csr;
-use crate::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
+use crate::edge::{Csr, CsrBase, CsrWithProperties, EdgeRecord, EdgeSchema, Nbr};
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageResult, Value};
 
@@ -62,7 +62,7 @@ pub struct ColdSnapshot {
     pub(crate) vertex_capacity: usize,
     pub(crate) out_csr: Csr,
     pub(crate) in_csr: Csr,
-    pub(crate) properties: PropertyTable,
+    pub(crate) properties: CsrWithProperties,
     pub(crate) schema: EdgeSchema,
     pub(crate) property_index: Option<ColdPropertyIndex>,
     /// Bit v set = row v holds at least one out edge. Lets full scans skip
@@ -97,7 +97,7 @@ impl ColdSnapshot {
         &self.in_csr
     }
 
-    pub fn properties(&self) -> &PropertyTable {
+    pub fn properties(&self) -> &CsrWithProperties {
         &self.properties
     }
 
@@ -118,7 +118,7 @@ impl ColdSnapshot {
         self.out_csr
             .edges_of(src)
             .iter()
-            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
             .collect()
     }
 
@@ -126,14 +126,14 @@ impl ColdSnapshot {
         self.in_csr
             .edges_of(dst)
             .iter()
-            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
             .collect()
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         self.out_csr
             .get_edge(src, dst)
-            .map(|e| Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset))
+            .map(|e| Nbr::new(e.endpoint, e.rank, e.edge_id))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -144,12 +144,7 @@ impl ColdSnapshot {
         self.out_csr.edges_of(src).iter().find_map(|e| {
             let decoded = VertexId::from_int64(e.endpoint as i64);
             if decoded.as_int64() == Some(dst as i64) {
-                Some(Nbr::with_prop_offset(
-                    e.endpoint,
-                    e.rank,
-                    e.edge_id,
-                    e.prop_offset,
-                ))
+                Some(Nbr::new(e.endpoint, e.rank, e.edge_id))
             } else {
                 None
             }
@@ -174,12 +169,7 @@ impl ColdSnapshot {
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
-                    nbr: Nbr::with_prop_offset(
-                        nbr.endpoint,
-                        nbr.rank,
-                        nbr.edge_id,
-                        nbr.prop_offset,
-                    ),
+                    nbr: Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id),
                     rank,
                     properties: None,
                 });
@@ -215,7 +205,7 @@ impl ColdSnapshot {
         let rank = nbr.rank;
         let properties = self
             .properties
-            .read_properties(nbr.prop_offset)
+            .read_properties_by_edge_id(nbr.edge_id)
             .unwrap_or_default();
         EdgeRecord {
             src_vid,
@@ -721,17 +711,20 @@ mod tests {
     }
 
     #[test]
-    fn test_property_table_read_properties() {
-        use crate::edge::PropertyTable;
+    fn test_property_read_by_edge_id() {
+        use crate::edge::CsrWithProperties;
+        use crate::edge::property_schema::PropertySchema;
 
-        let mut pt = PropertyTable::new();
-        pt.add_property("name".to_string(), graphdb_core::DataType::String, false)
-            .unwrap();
-        pt.add_property("age".to_string(), graphdb_core::DataType::Int, false)
-            .unwrap();
+        let schemas = vec![
+            PropertySchema::new("name".to_string(), 0, graphdb_core::DataType::String),
+            PropertySchema::new("age".to_string(), 1, graphdb_core::DataType::Int),
+        ];
+        let mut pt = CsrWithProperties::new(1, schemas);
 
+        let edge_id = graphdb_core::types::EdgeId(42);
         let offset = pt
-            .insert(
+            .insert_for_edge(
+                edge_id,
                 &[
                     ("name".to_string(), Value::String("Alice".into())),
                     ("age".to_string(), Value::Int(30)),
@@ -740,15 +733,15 @@ mod tests {
             )
             .unwrap();
 
-        let props = pt.read_properties(offset).unwrap();
+        let props = pt.read_properties_by_edge_id(edge_id).unwrap();
         assert_eq!(props.len(), 2);
         assert_eq!(props[0].0, "name");
         assert_eq!(props[0].1, Value::String("Alice".into()));
         assert_eq!(props[1].0, "age");
         assert_eq!(props[1].1, Value::Int(30));
 
-        // Missing offset returns None
-        assert!(pt.read_properties(u32::MAX).is_none());
+        // Missing edge_id returns None
+        assert!(pt.read_properties_by_edge_id(graphdb_core::types::EdgeId(999)).is_none());
     }
 
     #[test]
@@ -863,10 +856,7 @@ mod tests {
         let loaded = ColdSnapshot::open(&path).unwrap();
         assert_eq!(loaded.edge_count(), 50);
         let nbr = loaded.get_out_edges(10)[0];
-        let props = loaded
-            .properties()
-            .read_properties(nbr.prop_offset)
-            .unwrap();
+        let props = loaded.properties().read_properties_by_edge_id(nbr.edge_id).unwrap();
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].1, Value::string("repeated-pattern-3"));
     }

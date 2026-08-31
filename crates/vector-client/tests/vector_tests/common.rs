@@ -13,7 +13,7 @@ use vector_client::engine::VectorEngine;
 use vector_client::error::{Result, VectorClientError};
 use vector_client::types::IndexMetadata;
 use vector_client::types::*;
-use vector_client::{EmbeddingError, EmbeddingProvider};
+use graphdb_embedding::{EmbeddingError, EmbeddingProvider};
 
 const MOCK_ENGINE_VERSION: &str = "1.0.0-mock";
 

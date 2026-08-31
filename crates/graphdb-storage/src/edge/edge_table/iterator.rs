@@ -57,12 +57,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     {
                         records.push(table.edge_record_from_nbr(
                             src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::with_prop_offset(
-                                edge.endpoint,
-                                edge.rank,
-                                edge.edge_id,
-                                edge.prop_offset,
-                            ),
+                            Nbr::new(edge.endpoint, edge.rank, edge.edge_id),
                             ts,
                         ));
 

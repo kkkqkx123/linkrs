@@ -45,7 +45,8 @@ use crate::edge::edge_table::snapshot::max_edge_row;
 use crate::persistence::write_header_to;
 use graphdb_core::types::CompactConfig;
 use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult, Value};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -491,19 +492,56 @@ impl core::TimeTravelEdgeStore {
 
         let out_csr = {
             let cap = max_edge_row(&out_edges, self.out_csr.vertex_capacity());
-            SnapshotBuilder::build_csr(out_edges, cap)?
+            SnapshotBuilder::build_csr(out_edges.clone(), cap)?
         };
         let in_csr = {
             let cap = max_edge_row(&in_edges, self.in_csr.vertex_capacity());
-            SnapshotBuilder::build_csr(in_edges, cap)?
+            SnapshotBuilder::build_csr(in_edges.clone(), cap)?
         };
+
+        // Build snapshot CsrWithProperties from existing CsrWithProperties (convert at ts)
+        let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
+            .schema
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                crate::edge::property_schema::PropertySchema::new(
+                    p.name.clone(),
+                    i as i32,
+                    p.data_type.clone(),
+                )
+                .nullable(p.nullable)
+            })
+            .collect();
+        let mut snap_props = crate::edge::CsrWithProperties::new(
+            out_csr.vertex_capacity().max(in_csr.vertex_capacity()),
+            prop_schemas,
+        );
+        snap_props.set_version_chain_cap(self.config.version_chain_cap);
+        let mut seen_ids = std::collections::HashSet::new();
+        for (_, nbr, _) in out_edges.iter().chain(in_edges.iter()) {
+            if !seen_ids.insert(nbr.edge_id) {
+                continue;
+            }
+            let props_opt = self.properties.get_by_edge_id(nbr.edge_id, ts);
+            if let Some(props) = props_opt {
+                let values: Vec<(String, Value)> = props
+                    .into_iter()
+                    .filter_map(|(k, v)| v.map(|val| (k, val)))
+                    .collect();
+                if !values.is_empty() {
+                    let _ = snap_props.insert_for_edge(nbr.edge_id, &values, ts);
+                }
+            }
+        }
 
         Ok(ExportedEdgeSnapshot {
             snapshot_ts: ts,
             label: self.label,
             out_csr,
             in_csr,
-            properties: self.properties.clone(),
+            properties: snap_props,
             schema: self.schema.clone(),
         })
     }
@@ -872,7 +910,7 @@ impl core::TimeTravelEdgeStore {
         )?;
 
         let mut props_payload = Vec::new();
-        persistence::serialize_properties(&self.properties, &mut props_payload)?;
+        persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
         let edge_count = self.next_edge_id.0 as u32;
         persistence::write_pages_to_file(
             &path.join("properties.bin"),
@@ -973,7 +1011,36 @@ impl core::TimeTravelEdgeStore {
         self.in_csr.rebuild_create_ts(create_ts_vec.into_iter());
 
         let props_path = path.join("properties.bin");
-        self.properties = persistence::load_properties(&props_path)?;
+        self.properties = match persistence::load_csr_properties(&props_path) {
+            Ok(p) => {
+                let mut new_props = p;
+                // Rebuild columns to match current schema if needed
+                let current_schema_names: std::collections::HashSet<_> = self.schema.properties.iter().map(|p| &p.name).collect();
+                let existing_names: std::collections::HashSet<_> = new_props.property_schema().iter().map(|s| &s.name).collect();
+                if current_schema_names != existing_names {
+                    // Schema mismatch: rebuild from schema
+                    let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
+                        .schema
+                        .properties
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            crate::edge::property_schema::PropertySchema::new(
+                                p.name.clone(),
+                                i as i32,
+                                p.data_type.clone(),
+                            )
+                            .nullable(p.nullable)
+                        })
+                        .collect();
+                    let mut rebuilt = crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
+                    rebuilt.set_version_chain_cap(self.config.version_chain_cap);
+                    new_props = rebuilt;
+                }
+                new_props
+            }
+            Err(e) => return Err(e),
+        };
 
         if self.next_edge_id.0 == 0 {
             let ts = Timestamp::MAX;

@@ -180,52 +180,13 @@ impl TimeTravelEdgeStore {
     ///
     /// This method only removes properties that are no longer referenced by any edge.
     pub fn compact_properties(&mut self, ts: Timestamp) {
+        // Valid property rows are those whose EdgeId is still live at `ts`
+        // (not tombstoned) via the internal CsrWithProperties mapping.
         let mut valid_offsets = std::collections::HashSet::new();
-
-        // Collect valid prop_offsets from out CSR delta
-        for (_, nbr) in self.out_csr.iter(ts) {
-            valid_offsets.insert(nbr.prop_offset);
-        }
-
-        // Collect valid prop_offsets from out segments
-        for segment in &self.out_segments {
-            let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
-            if has_dirty_region || segment.regions.is_empty() {
-                for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
-                        valid_offsets.insert(nbr.prop_offset);
-                    }
-                }
-            } else {
-                // All regions clean: no tombstone check needed
-                for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts {
-                        valid_offsets.insert(nbr.prop_offset);
-                    }
-                }
-            }
-        }
-
-        // Collect valid prop_offsets from in CSR delta
-        for (_, nbr) in self.in_csr.iter(ts) {
-            valid_offsets.insert(nbr.prop_offset);
-        }
-
-        // Collect valid prop_offsets from in segments
-        for segment in &self.in_segments {
-            let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
-            if has_dirty_region || segment.regions.is_empty() {
-                for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts && !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
-                        valid_offsets.insert(nbr.prop_offset);
-                    }
-                }
-            } else {
-                for (_, nbr) in segment.csr.read().iter() {
-                    if nbr.timestamp <= ts {
-                        valid_offsets.insert(nbr.prop_offset);
-                    }
-                }
+        for (edge_id, pos) in self.properties.edge_mappings() {
+            if !self.mvcc.is_tombstoned(*edge_id, ts) {
+                let off = crate::edge::property_schema::prop_index_to_offset(*pos as usize);
+                valid_offsets.insert(off);
             }
         }
 

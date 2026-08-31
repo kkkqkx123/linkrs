@@ -735,6 +735,7 @@ fn build_correlated_right_subtree(
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use graphdb_core::types::operators::UnaryOperator;
     use graphdb_core::Value;
 
     fn prop(var: &str, name: &str) -> Expression {

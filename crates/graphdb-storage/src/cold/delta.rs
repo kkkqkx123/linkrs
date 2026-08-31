@@ -153,15 +153,14 @@ impl ColdDelta {
                         neighbor: nbr.to_vertex_id(),
                     }),
                     Some(latest_nbr) => {
-                        // Property payloads may change in place at the same
-                        // offset, so compare the values, not the offsets.
+                        // Property payloads may change in place, so compare the values.
                         let base_props = base
                             .properties()
-                            .read_properties(nbr.prop_offset)
+                            .read_properties_by_edge_id(nbr.edge_id)
                             .unwrap_or_default();
                         let latest_props = latest
                             .properties()
-                            .read_properties(latest_nbr.prop_offset)
+                            .read_properties_by_edge_id(latest_nbr.edge_id)
                             .unwrap_or_default();
                         if base_props != latest_props {
                             delta.property_updates.push(DeltaPropertyUpdate {
@@ -186,7 +185,7 @@ impl ColdDelta {
                 }
                 let properties = latest
                     .properties()
-                    .read_properties(nbr.prop_offset)
+                    .read_properties_by_edge_id(nbr.edge_id)
                     .unwrap_or_default();
                 delta.added.push(DeltaAddedEdge {
                     src_internal: src_u32,
@@ -447,30 +446,24 @@ impl ColdSnapshot {
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let nbr = Nbr::with_prop_offset(e.endpoint, e.rank, e.edge_id, e.prop_offset);
+                let nbr = Nbr::new(e.endpoint, e.rank, e.edge_id);
                 if let Some(update) = updates.get(&key) {
-                    properties.update(nbr.prop_offset, &update.properties, delta.delta_ts)?;
+                    let _ = properties.update_properties_for_edge(e.edge_id, &update.properties, delta.delta_ts);
                 }
                 out_entries.push((src_u32, nbr, e.timestamp));
             }
         }
 
-        // Added edges: properties go into the merged table, offsets remapped.
+        // Added edges: properties go into the merged table via edge_id mapping.
         for edge in &delta.added {
-            let mut prop_offset = crate::edge::property_schema::PROP_OFFSET_NONE;
             if !edge.properties.is_empty() {
-                prop_offset = properties.insert(&edge.properties, edge.timestamp)?;
-            };
+                let _ = properties.insert_for_edge(edge.edge_id, &edge.properties, edge.timestamp);
+            }
             out_entries.push((
                 edge.src_internal,
                 {
                     let (ep_vid, rank) = edge.neighbor.decode_edge_endpoint();
-                    Nbr::with_prop_offset(
-                        ep_vid.as_int64().unwrap_or(0) as u32,
-                        rank,
-                        edge.edge_id,
-                        prop_offset,
-                    )
+                    Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, rank, edge.edge_id)
                 },
                 edge.timestamp,
             ));
@@ -490,12 +483,7 @@ impl ColdSnapshot {
                 max_row = max_row.max(dst_row as usize + 1);
                 in_rows.push((
                     dst_row,
-                    Nbr::with_prop_offset(
-                        dst_ep_vid.as_int64().unwrap_or(0) as u32,
-                        dst_rank,
-                        nbr.edge_id,
-                        nbr.prop_offset,
-                    ),
+                    Nbr::new(dst_ep_vid.as_int64().unwrap_or(0) as u32, dst_rank, nbr.edge_id),
                     *create_ts,
                 ));
             }
@@ -728,10 +716,7 @@ mod tests {
         let nbr = merged
             .get_edge_to_dst(0, 1)
             .expect("0->1 must survive update");
-        let props = merged
-            .properties()
-            .read_properties(nbr.prop_offset)
-            .unwrap();
+        let props = merged.properties().read_properties_by_edge_id(nbr.edge_id).unwrap();
         assert!(props.contains(&("weight".to_string(), Value::Double(1.5))));
         // 0->2 removed
         assert!(merged.get_edge_to_dst(0, 2).is_none());

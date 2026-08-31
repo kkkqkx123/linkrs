@@ -210,13 +210,8 @@ impl Csr {
             }
             let pos = current_pos[idx] as usize;
             if pos < self.edges.len() {
-                self.edges[pos] = ImmutableNbr::with_timestamp_and_prop(
-                    nbr.endpoint,
-                    nbr.rank,
-                    nbr.edge_id,
-                    *create_ts,
-                    nbr.prop_offset,
-                );
+                self.edges[pos] =
+                    ImmutableNbr::with_timestamp(nbr.endpoint, nbr.rank, nbr.edge_id, *create_ts);
                 current_pos[idx] += 1;
             }
         }
@@ -337,8 +332,8 @@ impl Csr {
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
-        // Format version (u32) —adds prop_offset per edge.
-        result.extend_from_slice(&2u32.to_le_bytes());
+        // Decoupled properties (no prop_offset per edge).
+        result.extend_from_slice(&1u32.to_le_bytes());
 
         result.extend_from_slice(&self.edge_count.to_le_bytes());
 
@@ -352,7 +347,6 @@ impl Csr {
             write_endpoint_rank(&mut result, edge.endpoint, edge.rank);
             result.extend_from_slice(&edge.edge_id.to_le_bytes());
             result.extend_from_slice(&edge.timestamp.to_le_bytes());
-            result.extend_from_slice(&edge.prop_offset.to_le_bytes());
         }
 
         result
@@ -368,11 +362,10 @@ impl Csr {
 
         let mut offset = 0usize;
 
-        // Read format version (u32). Current format is version 2.
         let format_version = read_u32_le(data, &mut offset)?;
-        if format_version < 2 {
+        if format_version != 1 {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported immutable CSR format version: {format_version} (requires >= 2)"
+                "Unsupported immutable CSR format version: {format_version} (requires 1)"
             )));
         }
 
@@ -392,14 +385,12 @@ impl Csr {
             let (endpoint, rank) = read_endpoint_rank(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let timestamp = read_u64_le(data, &mut offset)?;
-            let prop_offset = read_u32_le(data, &mut offset)?;
 
-            edges.push(ImmutableNbr::with_timestamp_and_prop(
+            edges.push(ImmutableNbr::with_timestamp(
                 endpoint,
                 rank,
                 EdgeId(raw_edge_id),
                 timestamp,
-                prop_offset,
             ));
         }
 
