@@ -597,7 +597,7 @@ mod tests {
         let backend = create_vector_backend(&config, runtime.handle())
             .expect("local engine construction must succeed");
         assert!(
-            backend.as_local().is_some(),
+            backend.as_ref().and_then(|b| b.as_local()).is_some(),
             "file databases default to the local engine"
         );
 

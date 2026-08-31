@@ -384,6 +384,10 @@ impl VectorReceiver {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "vector")]
+    use crate::VectorReceiver;
+    #[cfg(feature = "vector")]
+    use graphdb_core::types::CommitLsn;
     #[tokio::test]
     #[cfg(feature = "vector")]
     async fn vector_receiver_rejects_late_arrival() {

@@ -1,7 +1,7 @@
 use super::SyncWrapper;
 use crate::engine::graph_storage::AutoCommitBatchWindow;
 use crate::StorageClient;
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::StorageResult;
 use std::sync::Arc;
 
 impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps for SyncWrapper<S> {

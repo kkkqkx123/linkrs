@@ -1,9 +1,7 @@
 use crate::index::helpers::{
     edge_entity_ref, flush_split_generation, merge_split_wal_changes, vertex_entity_ref,
 };
-use crate::index::key_codec::key_types::{
-    SecondaryIndexKey, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE,
-};
+use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
 use crate::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
@@ -22,16 +20,14 @@ use graphdb_core::types::{
 use graphdb_core::value::ordered_codec::OrderedCodec;
 use graphdb_core::wal::{EntityRef, OutboxIntent};
 use graphdb_core::{StorageError, StorageResult, Value};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::remove_dir_if_empty;
 use super::IndexDataManagerImpl;
-use super::PendingDelta;
-use super::PendingExistingScan;
 
 impl IndexDataManagerImpl {
     /// Number of retired generations awaiting reclamation across all indexes.

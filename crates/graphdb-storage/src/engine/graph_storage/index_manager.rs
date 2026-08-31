@@ -21,7 +21,7 @@ pub mod wal_replay;
 
 pub(crate) use checkpoint::{
     build_edge_index_data, build_vertex_index_data, generation_output_paths,
-    load_generation_build_state, remove_generation_build_state, resolve_crash_recovery,
+    remove_generation_build_state, resolve_crash_recovery,
     save_generation_build_state, write_generation_checkpoint,
 };
 pub(crate) use wal_replay::{replay_wal_partition, wal_intents_for_index};
@@ -592,6 +592,8 @@ mod tests {
     use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
     use graphdb_core::Value;
 
+    use super::checkpoint::load_generation_build_state;
+
     fn setup_context() -> GraphStorageContext {
         GraphStorageContext::new()
     }
@@ -976,7 +978,7 @@ mod tests {
         assert!(state.barrier_lsn.is_none());
 
         // Load
-        let loaded = super::load_generation_build_state(&ctx, space_id, index_name)
+        let loaded = load_generation_build_state(&ctx, space_id, index_name)
             .expect("build state should load")
             .expect("build state should exist");
         assert_eq!(loaded.generation, state.generation);
@@ -987,7 +989,7 @@ mod tests {
         // Remove
         super::remove_generation_build_state(&ctx, space_id, index_name)
             .expect("build state should remove");
-        let after_remove = super::load_generation_build_state(&ctx, space_id, index_name)
+        let after_remove = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed");
         assert!(after_remove.is_none());
     }
@@ -1010,7 +1012,7 @@ mod tests {
         super::save_generation_build_state(&ctx, space_id, index_name, &state)
             .expect("CatchingUp state should save");
 
-        let loaded = super::load_generation_build_state(&ctx, space_id, index_name)
+        let loaded = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed")
             .expect("build state should exist");
         assert_eq!(loaded.state, GenerationState::CatchingUp);
@@ -1024,7 +1026,7 @@ mod tests {
         super::save_generation_build_state(&ctx, space_id, index_name, &state)
             .expect("Publishing state should save");
 
-        let loaded = super::load_generation_build_state(&ctx, space_id, index_name)
+        let loaded = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed")
             .expect("build state should exist");
         assert_eq!(loaded.state, GenerationState::Publishing);
@@ -1051,7 +1053,7 @@ mod tests {
         // Recover (should discard incomplete build)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = super::load_generation_build_state(&ctx, space_id, index_name)
+        let after = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed");
         assert!(
             after.is_none(),
@@ -1076,7 +1078,7 @@ mod tests {
         // Recover (should discard incomplete catch-up)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = super::load_generation_build_state(&ctx, space_id, index_name)
+        let after = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed");
         assert!(
             after.is_none(),
@@ -1104,7 +1106,7 @@ mod tests {
         // Recover (should NOT discard Publishing state since the manifest may be published)
         super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
-        let after = super::load_generation_build_state(&ctx, space_id, index_name)
+        let after = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed");
         assert!(
             after.is_some(),
@@ -1119,7 +1121,7 @@ mod tests {
         let space_id = 1u64;
         let index_name = "nonexistent_idx";
 
-        let result = super::load_generation_build_state(&ctx, space_id, index_name)
+        let result = load_generation_build_state(&ctx, space_id, index_name)
             .expect("load should succeed");
         assert!(result.is_none());
     }

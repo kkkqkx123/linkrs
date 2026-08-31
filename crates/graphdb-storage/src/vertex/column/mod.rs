@@ -8,6 +8,7 @@
 //! - `VariableWidthColumn`: For variable-length types (String)
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
+#[allow(clippy::module_inception)]
 pub mod column;
 pub mod column_store;
 pub mod encoding;

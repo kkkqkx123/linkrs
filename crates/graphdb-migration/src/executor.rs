@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use graphdb_core::error::storage::StorageErrorKind;
-use graphdb_core::StorageError;
 use graphdb_core::types::{EdgeTypeInfo, TagInfo};
 use graphdb_core::{Edge, Tag, Value, Vertex};
 use graphdb_storage::{
@@ -1059,66 +1058,6 @@ where
     })
 }
 
-/// Commit a batch of fully-staged rows atomically.
-///
-/// All rows are written through a single auto-commit group window: the
-/// engine assigns one shared write timestamp and undo log, so either every
-/// row becomes visible (one commit point in `finalize_auto_commit_group`)
-/// or none does (`rollback_auto_commit_group` replays the shared undo log).
-/// Storage backends without group support fall back to per-row auto-commit;
-/// that path keeps the previous all-or-nothing guarantee for transformation
-/// errors only, and a mid-loop failure may leave earlier rows committed.
-#[allow(dead_code)]
-fn commit_staged_rows<T, S>(
-    storage: &mut S,
-    staged: Vec<T>,
-    mut write_one: impl FnMut(&mut dyn StorageWriter, T) -> Result<(), StorageError>,
-) -> Result<(), MigrationError>
-where
-    S: StorageWriter + AutoCommitGroupOps + AutoCommitBatchOps,
-{
-    let window = match storage.begin_auto_commit_group() {
-        Ok(window) => Some(window),
-        Err(e) if e.kind() == StorageErrorKind::NotSupported => {
-            log::warn!(
-                "Storage backend does not support auto-commit groups; \
-                 falling back to per-row commits for migration"
-            );
-            None
-        }
-        Err(e) => return Err(MigrationError::Storage(Box::new(e))),
-    };
-
-    let Some(window) = window else {
-        for row in staged {
-            write_one(&mut *storage, row).map_err(MigrationError::from)?;
-        }
-        return Ok(());
-    };
-
-    let result = (|| {
-        let mut writer = storage
-            .bind_auto_commit_writer(&window)
-            .map_err(MigrationError::from)?;
-        for row in staged {
-            write_one(&mut *writer, row).map_err(MigrationError::from)?;
-        }
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => storage
-            .finalize_auto_commit_group(&window)
-            .map_err(MigrationError::from),
-        Err(error) => {
-            if let Err(rollback_error) = storage.rollback_auto_commit_group(&window) {
-                log::error!("Migration rollback failed: {rollback_error}");
-            }
-            Err(error)
-        }
-    }
-}
-
 pub fn rollback_migration<S>(
     storage: &mut S,
     plan: &MigrationPlan,
@@ -1223,7 +1162,23 @@ fn apply_step_to_vertex(
                     .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
             );
         }
-        MigrationStep::ChangeNullability { .. } => return Ok(None),
+        MigrationStep::ChangeNullability {
+            name,
+            was_nullable,
+            now_nullable,
+        } => {
+            if *was_nullable && !now_nullable {
+                for (prop_name, val) in tag.properties.iter() {
+                    if prop_name == name && matches!(val, Value::Null(_)) {
+                        return Err(format!(
+                            "cannot set column '{}' NOT NULL: found NULL values",
+                            name
+                        ));
+                    }
+                }
+            }
+            return Ok(None);
+        }
         MigrationStep::AddColumn {
             name,
             data_type: _,
@@ -1305,7 +1260,23 @@ fn apply_step_to_edge(edge: &Edge, step: &MigrationStep) -> Result<HashMap<Strin
             );
             Ok(props)
         }
-        MigrationStep::ChangeNullability { .. } => Ok(edge.props.clone()),
+        MigrationStep::ChangeNullability {
+            name,
+            was_nullable,
+            now_nullable,
+        } => {
+            if *was_nullable && !now_nullable {
+                for (prop_name, val) in edge.props.iter() {
+                    if prop_name == name && matches!(val, Value::Null(_)) {
+                        return Err(format!(
+                            "cannot set column '{}' NOT NULL: found NULL values",
+                            name
+                        ));
+                    }
+                }
+            }
+            Ok(edge.props.clone())
+        }
         MigrationStep::AddColumn {
             name,
             data_type: _,

@@ -1,8 +1,6 @@
 //! Recursive assembly of operators and fragment DAG edges.
 
-use super::super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, JoinSpec, SetSpec, SourceSpec, TxnSpec,
-};
+use super::super::super::super::operators::spec::BlockingSpec;
 use super::super::super::super::subquery::SubqueryRunnerSpec;
 use super::super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::super::types::{

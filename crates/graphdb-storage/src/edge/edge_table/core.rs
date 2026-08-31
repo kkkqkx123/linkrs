@@ -4,7 +4,7 @@
 //! querying, property management, and basic maintenance operations.
 
 use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
-use super::calibrator::{CalibratedThreshold, CalibratorConfig, CalibratorTree, DensityStats};
+use super::calibrator::{CalibratedThreshold, CalibratorTree, DensityStats};
 use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;

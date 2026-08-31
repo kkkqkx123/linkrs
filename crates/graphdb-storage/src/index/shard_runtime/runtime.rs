@@ -4,7 +4,6 @@ use graphdb_core::types::{CommitLsn, IndexGeneration};
 use graphdb_core::{StorageError, StorageResult};
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -190,6 +189,7 @@ impl IndexRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn manifest() -> IndexManifest {
         IndexManifest::new(

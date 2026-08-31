@@ -43,3 +43,4 @@ harness = false
 
 [dev-dependencies]
 tempfile.workspace = true
+graphdb-config = { path = "../graphdb-config" }

@@ -1,6 +1,8 @@
 use graphdb_core::{DataType, Value};
 use serde::{Deserialize, Serialize};
 
+use crate::generator::MigrationError;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,5 +525,78 @@ impl MigrationReport {
             }
         }
         out
+    }
+}
+
+pub fn checkpoint_now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StepResult {
+    Success,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationCheckpoint {
+    pub completed_step_index: usize,
+    pub rows_migrated_before: u64,
+    pub rows_migrated_after: u64,
+    pub timestamp: u64,
+    pub step_result: StepResult,
+}
+
+impl MigrationCheckpoint {
+    pub fn save(
+        &self,
+        plan: &MigrationPlan,
+        storage_path: &std::path::Path,
+    ) -> Result<(), MigrationError> {
+        let checkpoint_file = storage_path.join(format!(
+            "checkpoint_{}_{}_{}.json",
+            plan.target.space, plan.target.label, plan.plan_hash
+        ));
+        let content = serde_json::to_string_pretty(self)
+            .map_err(|e| MigrationError::Plan(format!("serialize checkpoint: {e}")))?;
+        std::fs::write(&checkpoint_file, content)
+            .map_err(|e| MigrationError::Plan(format!("write checkpoint: {e}")))?;
+        Ok(())
+    }
+
+    pub fn load(
+        plan: &MigrationPlan,
+        storage_path: &std::path::Path,
+    ) -> Result<Option<Self>, MigrationError> {
+        let checkpoint_file = storage_path.join(format!(
+            "checkpoint_{}_{}_{}.json",
+            plan.target.space, plan.target.label, plan.plan_hash
+        ));
+        if !checkpoint_file.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&checkpoint_file)
+            .map_err(|e| MigrationError::Plan(format!("read checkpoint: {e}")))?;
+        let checkpoint: Self = serde_json::from_str(&content)
+            .map_err(|e| MigrationError::Plan(format!("parse checkpoint: {e}")))?;
+        Ok(Some(checkpoint))
+    }
+
+    pub fn cleanup(
+        plan: &MigrationPlan,
+        storage_path: &std::path::Path,
+    ) -> Result<(), MigrationError> {
+        let checkpoint_file = storage_path.join(format!(
+            "checkpoint_{}_{}_{}.json",
+            plan.target.space, plan.target.label, plan.plan_hash
+        ));
+        if checkpoint_file.exists() {
+            std::fs::remove_file(&checkpoint_file)
+                .map_err(|e| MigrationError::Plan(format!("remove checkpoint: {e}")))?;
+        }
+        Ok(())
     }
 }

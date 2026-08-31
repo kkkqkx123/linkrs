@@ -23,7 +23,7 @@ pub(crate) mod generation;
 pub(crate) mod runtime;
 pub(crate) mod shard;
 
-pub(crate) use bloom::RangeBloom;
 pub(crate) use generation::{generation_from_maps_with_pool_capacity, GenerationRuntime};
 pub(crate) use runtime::IndexRuntime;
+#[allow(unused_imports)]
 pub(crate) use shard::ShardRuntime;

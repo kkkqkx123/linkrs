@@ -1017,6 +1017,7 @@ impl GraphStorageContext {
             .get_applied_versions_sorted(space, label, is_edge)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn load_migration_history(&self) -> graphdb_core::StorageResult<()> {
         if let Some(paths) = self.storage_paths() {
             let path = paths.migration_history_file();

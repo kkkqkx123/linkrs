@@ -1,4 +1,4 @@
-use super::{parse_expression, ParseResult};
+use super::parse_expression;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;

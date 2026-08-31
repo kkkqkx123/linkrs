@@ -19,7 +19,7 @@ use graphdb::api::embedded::{
     BatchConfig, BatchError, BatchItemType, BatchResult, DatabaseConfig, GraphDatabase,
     QueryResult, ResultMetadata, Row, SyncMode, TransactionConfig,
 };
-use graphdb::core::types::VertexId;
+use graphdb::core::types::{DataSet, VertexId};
 use graphdb::core::{Edge, Value, Vertex};
 use graphdb::storage::GraphStorage;
 
@@ -725,16 +725,18 @@ fn test_batch_error_create() {
 
 #[test]
 fn test_query_result_empty() {
-    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
-        columns: vec![],
-        rows: vec![],
-        metadata: graphdb::api::api_core::ExecutionMetadata {
+    let core_result = graphdb::api::api_core::QueryResult::new(
+        graphdb::query::executor::base::ExecutionResult::DataSet {
+            data: DataSet::new(),
+        },
+        graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
         },
-    });
+    );
+    let result = QueryResult::from_core(core_result);
     assert!(result.is_empty());
     assert_eq!(result.len(), 0);
     assert!(result.first().is_none());
@@ -744,41 +746,36 @@ fn test_query_result_empty() {
 #[test]
 fn test_query_result_columns() {
     let columns = vec!["id".to_string(), "name".to_string()];
-    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
-        columns: columns.clone(),
-        rows: vec![],
-        metadata: graphdb::api::api_core::ExecutionMetadata {
+    let data = DataSet::with_columns(columns.clone());
+    let core_result = graphdb::api::api_core::QueryResult::new(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data },
+        graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
         },
-    });
+    );
+    let result = QueryResult::from_core(core_result);
     assert_eq!(result.columns(), &columns);
 }
 
 #[test]
 fn test_query_result_metadata() {
-    let mut values1 = HashMap::new();
-    values1.insert("id".to_string(), Value::Int(1));
-
-    let mut values2 = HashMap::new();
-    values2.insert("id".to_string(), Value::Int(2));
-
-    let core_row1 = graphdb::api::api_core::Row { values: values1 };
-    let core_row2 = graphdb::api::api_core::Row { values: values2 };
-    let rows = vec![core_row1, core_row2];
-
-    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
-        columns: vec!["id".to_string()],
-        rows,
-        metadata: graphdb::api::api_core::ExecutionMetadata {
+    let columns = vec!["id".to_string()];
+    let mut data = DataSet::with_columns(columns.clone());
+    data.add_row(vec![Value::Int(1)]);
+    data.add_row(vec![Value::Int(2)]);
+    let core_result = graphdb::api::api_core::QueryResult::new(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data },
+        graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 100,
             rows_scanned: 100,
             rows_returned: 10,
             cache_hit: false,
         },
-    });
+    );
+    let result = QueryResult::from_core(core_result);
     assert_eq!(result.metadata().rows_returned, 2);
     assert_eq!(result.metadata().rows_scanned, 100);
     assert_eq!(result.metadata().execution_time, Duration::from_millis(100));
@@ -787,20 +784,18 @@ fn test_query_result_metadata() {
 #[test]
 fn test_query_result_iterator() {
     let columns = vec!["id".to_string()];
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(1));
-    let core_row = graphdb::api::api_core::Row { values };
-
-    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
-        columns,
-        rows: vec![core_row],
-        metadata: graphdb::api::api_core::ExecutionMetadata {
+    let mut data = DataSet::with_columns(columns.clone());
+    data.add_row(vec![Value::Int(1)]);
+    let core_result = graphdb::api::api_core::QueryResult::new(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data },
+        graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,
         },
-    });
+    );
+    let result = QueryResult::from_core(core_result);
     assert_eq!(result.len(), 1);
 
     let count = result.iter().count();
@@ -810,20 +805,18 @@ fn test_query_result_iterator() {
 #[test]
 fn test_query_result_into_iterator() {
     let columns = vec!["id".to_string()];
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(1));
-    let core_row = graphdb::api::api_core::Row { values };
-
-    let result = QueryResult::from_core(graphdb::api::api_core::QueryResult {
-        columns,
-        rows: vec![core_row],
-        metadata: graphdb::api::api_core::ExecutionMetadata {
+    let mut data = DataSet::with_columns(columns.clone());
+    data.add_row(vec![Value::Int(1)]);
+    let core_result = graphdb::api::api_core::QueryResult::new(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data },
+        graphdb::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,
         },
-    });
+    );
+    let result = QueryResult::from_core(core_result);
     let count = result.into_iter().count();
     assert_eq!(count, 1);
 }
@@ -832,10 +825,7 @@ fn test_query_result_into_iterator() {
 
 #[test]
 fn test_row_get() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["id".to_string()], &[Value::Int(42)]);
 
     let value = row.get("id");
     assert!(value.is_some());
@@ -844,11 +834,10 @@ fn test_row_get() {
 
 #[test]
 fn test_row_get_by_index() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(
+        &["id".to_string(), "name".to_string()],
+        &[Value::Int(42), Value::string("测试")],
+    );
 
     let value = row.get_by_index(0);
     assert!(value.is_some());
@@ -856,11 +845,10 @@ fn test_row_get_by_index() {
 
 #[test]
 fn test_row_columns() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(
+        &["id".to_string(), "name".to_string()],
+        &[Value::Int(42), Value::string("测试")],
+    );
 
     let columns = row.columns();
     assert_eq!(columns.len(), 2);
@@ -870,10 +858,7 @@ fn test_row_columns() {
 
 #[test]
 fn test_row_has_column() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["id".to_string()], &[Value::Int(42)]);
 
     assert!(row.has_column("id"));
     assert!(!row.has_column("name"));
@@ -881,10 +866,7 @@ fn test_row_has_column() {
 
 #[test]
 fn test_row_get_string() {
-    let mut values = HashMap::new();
-    values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["name".to_string()], &[Value::string("测试")]);
 
     let value = row.get_string("name");
     assert_eq!(value, Some("测试".to_string()));
@@ -892,10 +874,7 @@ fn test_row_get_string() {
 
 #[test]
 fn test_row_get_int() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["id".to_string()], &[Value::Int(42)]);
 
     let value = row.get_int("id");
     assert_eq!(value, Some(42));
@@ -903,10 +882,7 @@ fn test_row_get_int() {
 
 #[test]
 fn test_row_get_float() {
-    let mut values = HashMap::new();
-    values.insert("score".to_string(), Value::Float(2.5_f32));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["score".to_string()], &[Value::Float(2.5_f32)]);
 
     let value = row.get_float("score");
     assert_eq!(value, Some(2.5_f64));
@@ -914,10 +890,7 @@ fn test_row_get_float() {
 
 #[test]
 fn test_row_get_bool() {
-    let mut values = HashMap::new();
-    values.insert("active".to_string(), Value::Bool(true));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["active".to_string()], &[Value::Bool(true)]);
 
     let value = row.get_bool("active");
     assert_eq!(value, Some(true));
@@ -926,10 +899,7 @@ fn test_row_get_bool() {
 #[test]
 fn test_row_get_vertex() {
     let vertex = Vertex::with_vid(VertexId::from_int64(1));
-    let mut values = HashMap::new();
-    values.insert("v".to_string(), Value::Vertex(Box::new(vertex)));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["v".to_string()], &[Value::Vertex(Box::new(vertex))]);
 
     let value = row.get_vertex("v");
     assert!(value.is_some());
@@ -944,10 +914,7 @@ fn test_row_get_edge() {
         0,
         HashMap::new(),
     );
-    let mut values = HashMap::new();
-    values.insert("e".to_string(), Value::Edge(Box::new(edge)));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&["e".to_string()], &[Value::Edge(Box::new(edge))]);
 
     let value = row.get_edge("e");
     assert!(value.is_some());
@@ -955,20 +922,17 @@ fn test_row_get_edge() {
 
 #[test]
 fn test_row_len() {
-    let mut values = HashMap::new();
-    values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::string("测试"));
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(
+        &["id".to_string(), "name".to_string()],
+        &[Value::Int(42), Value::string("测试")],
+    );
 
     assert_eq!(row.len(), 2);
 }
 
 #[test]
 fn test_row_is_empty() {
-    let values = HashMap::new();
-    let core_row = graphdb::api::api_core::Row { values };
-    let row = Row::from_core(core_row);
+    let row = Row::from_columns(&[], &[]);
 
     assert!(row.is_empty());
 }

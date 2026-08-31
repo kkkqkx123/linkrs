@@ -1,37 +1,15 @@
-use crate::index::helpers::{
-    edge_entity_ref, flush_split_generation, merge_split_wal_changes, vertex_entity_ref,
-};
-use crate::index::key_codec::key_types::{
-    SecondaryIndexKey, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE,
-};
-use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{
-    GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
-    ManifestHandle,
-};
-use crate::index::shard_runtime::{
-    generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps,
-    IndexRuntime,
-};
-use crate::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
-use crate::persistence::{read_versioned_payload, write_versioned_payload};
-use graphdb_core::stats::StatsManager;
-use graphdb_core::types::{
-    CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
-};
-use graphdb_core::value::ordered_codec::OrderedCodec;
-use graphdb_core::wal::{EntityRef, OutboxIntent};
-use graphdb_core::{StorageError, StorageResult, Value};
-use parking_lot::{Mutex, RwLock};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use crate::index::key_codec::key_types::{KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE};
+use crate::index::key_codec::KeyBuilder;
+use crate::index::manifest::{IndexManifest, IndexShard};
+use crate::index::shard_runtime::{GenerationRuntime, IndexMaps};
+use crate::index::types::IndexIdentity;
+use crate::index::types::IndexRecord;
+use graphdb_core::types::{IndexGeneration, IndexType, Timestamp};
+use graphdb_core::{StorageError, StorageResult};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::Ordering;
 
-use super::remove_dir_if_empty;
 use super::IndexDataManagerImpl;
-use super::PendingDelta;
-use super::PendingExistingScan;
 
 impl IndexDataManagerImpl {
     /// Compute key prefixes for the given index identity.

@@ -11,6 +11,12 @@ use crate::parser::TokenKind;
 /// Explain / Profile / Analyze Parser
 pub struct ExplainParser;
 
+impl Default for ExplainParser {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl ExplainParser {
     pub fn new() -> Self {
         Self

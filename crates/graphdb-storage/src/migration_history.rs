@@ -42,6 +42,7 @@ pub struct MigrationHistoryRecord {
 }
 
 impl MigrationHistoryRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         space: String,
         label: String,

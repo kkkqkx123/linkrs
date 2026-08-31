@@ -4,7 +4,6 @@ use crate::index::shard_runtime::IndexMaps;
 use graphdb_core::types::{IndexGeneration, Timestamp};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};

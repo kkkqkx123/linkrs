@@ -81,6 +81,7 @@ fn resolve_fallback(
     tables.first().map(|t| t.id.clone()).unwrap_or_default()
 }
 
+#[allow(dead_code)]
 pub fn reconstruct_join_tree(
     original_root: &PlanNodeEnum,
     chain: &FlattenedJoinChain,
@@ -330,6 +331,7 @@ fn try_optimize_join_tree(
     )
 }
 
+#[allow(dead_code)]
 pub fn walk_and_optimize_joins(
     root: &PlanNodeEnum,
     stats: &StatsView,

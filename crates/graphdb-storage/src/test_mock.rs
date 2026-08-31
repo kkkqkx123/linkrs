@@ -215,8 +215,8 @@ impl StorageReader for MockStorage {
     }
     fn scan_edges_by_type_paginated(
         &self,
-        space: &str,
-        edge_type: &str,
+        _space: &str,
+        _edge_type: &str,
         offset: usize,
         limit: usize,
     ) -> Result<Vec<Edge>, StorageError> {

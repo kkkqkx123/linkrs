@@ -3,7 +3,7 @@ use graphdb::migration::{
     convert_value, generate_edge_plan, generate_vertex_plan, is_compatible_type, MigrationPlan,
     MigrationReport, MigrationTarget, SafetyLevel, VersionRange,
 };
-use graphdb::storage::{MockStorage, StorageReader};
+use graphdb::storage::MockStorage;
 use graphdb_core::value::null::NullType;
 
 #[test]

@@ -4,12 +4,12 @@ use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use crate::wal::writer::compression::{self as compression_mod, create_compressor, Compressor};
+use crate::wal::writer::compression::{self as compression_mod};
 use crate::wal::writer::sync::elapsed_since;
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::types::{
-    Lsn, RecordType, WalCompression, WalError, WalHeader, WalOpType, WalResult, WalStats,
-    WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
+    Lsn, RecordType, WalCompression, WalError, WalHeader, WalOpType, WalResult,
+    WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
 };
 
 use super::{LocalWalWriter, WalHeaderParams};

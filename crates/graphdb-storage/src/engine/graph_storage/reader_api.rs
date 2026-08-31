@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use graphdb_core::types::{EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
+use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
 use graphdb_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};

@@ -12,6 +12,12 @@ use crate::parser::TokenKind;
 /// Session Parser
 pub struct SessionParser;
 
+impl Default for SessionParser {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl SessionParser {
     pub fn new() -> Self {
         Self

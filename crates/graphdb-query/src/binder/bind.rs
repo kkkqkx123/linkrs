@@ -12,12 +12,11 @@ use std::sync::Arc;
 
 use crate::parser::ast::stmt::Ast;
 use crate::parser::ast::Stmt;
-use graphdb_core::error::DBError;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::DBResult;
 
-use super::bound::{BoundExpression, BoundStatement};
+use super::bound::BoundStatement;
 use super::scope::BinderScope;
 
 use crate::executor::streaming::interner::StrInterner;

@@ -1,8 +1,5 @@
-use crate::cache::config::{CachePriority, PlanCacheConfig};
-use crate::cache::stats::PlanCacheStats;
 use crate::planning::plan::execution_plan::PartitionSpec;
 use std::hash::Hasher;
-use std::time::{Duration, Instant};
 
 /// Parameter location information
 #[derive(Debug, Clone)]

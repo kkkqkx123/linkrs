@@ -14,8 +14,8 @@ use crate::wal::parser::{LocalWalParser, WalParser};
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::traits::WalWriter;
 use graphdb_core::wal::types::{
-    ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
-    WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
+    Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalOpType, WalResult,
+    WalStats,
 };
 mod file_ops;
 mod header;
@@ -326,6 +326,7 @@ mod tests {
     use graphdb_core::wal::{
         EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION,
     };
+    use graphdb_core::wal::types::{ArchiveMode, WalHeader, WAL_FILE_HEADER_SIZE, WAL_MAX_RECORD_SIZE};
     use tempfile::TempDir;
 
     #[test]

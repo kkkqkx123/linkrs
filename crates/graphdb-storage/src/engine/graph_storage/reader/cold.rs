@@ -1,19 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::cold::{ColdIndexEntry, ColdSnapshot};
-use crate::edge::{EdgeRecord, EdgeStore, Nbr};
-use crate::engine::data_store::EdgeTableKey;
-use crate::engine::graph_storage::context::helpers;
+use crate::edge::Nbr;
 use crate::engine::graph_storage::context::GraphStorageContext;
-use crate::engine::graph_storage::ops::{
-    edge_record_to_edge, edge_record_to_edge_projected, endpoint_label_id, serialize_properties,
-    value_to_string, vertex_record_to_vertex,
-};
-use crate::engine::params::EdgeOperationParams;
-use graphdb_core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use crate::engine::graph_storage::ops::edge_record_to_edge;
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::{Edge, EdgeDirection, StorageResult};
 
 use crate::engine::graph_storage::reader::utils::*;
 

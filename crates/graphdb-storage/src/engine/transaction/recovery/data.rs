@@ -140,10 +140,7 @@ pub(crate) fn replay_delete_vertex(
     ts: Timestamp,
 ) -> StorageResult<()> {
     ctx.data_store().with_vertex_tables_mut(|vertex_tables| {
-        match TransactionOps::delete_vertex_by_external_vid(vertex_tables, label, vid, ts) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
+        let _ = TransactionOps::delete_vertex_by_external_vid(vertex_tables, label, vid, ts);
         Ok(())
     })?;
     ctx.mark_vertex_modified(label);

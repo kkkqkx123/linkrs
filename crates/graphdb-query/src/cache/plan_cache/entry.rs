@@ -1,4 +1,4 @@
-use crate::cache::config::{CachePriority, PlanCacheConfig};
+use crate::cache::config::CachePriority;
 use crate::cache::plan_cache::key::ParamPosition;
 use crate::executor::streaming::plan::PhysicalPlan;
 use std::sync::Arc;

@@ -1,34 +1,21 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
 use crate::cold::ColdSnapshot;
 use crate::engine::background_freeze::BackgroundFreezeManager;
-use crate::engine::cache_manager::CacheManager;
 use crate::engine::config::PropertyGraphConfig;
-use crate::engine::data_store::{EdgeTableKey, GraphDataStore};
+use crate::engine::data_store::GraphDataStore;
 use crate::engine::paths::StoragePaths;
-use crate::engine::persistence_coordinator::PersistenceCoordinator;
-use crate::engine::resource_budget::{MemoryAccounting, MemoryBudget};
-use crate::engine::spiller::Spiller;
 use crate::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
-use crate::mvcc::SnapshotHandle;
-use crate::vertex::{gc_manager::VertexGcManager, IdKey};
+use crate::vertex::gc_manager::VertexGcManager;
 use crate::StorageOperationContext;
-use graphdb_core::metadata::{IndexManager, SchemaManager};
-use graphdb_core::stats::StatsManager;
-use graphdb_core::types::EdgeIdentifier;
-use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
-use graphdb_core::UserStorage;
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_transaction::undo_log::UndoLogManager;
 use graphdb_transaction::VersionManager;
-use graphdb_transaction::{
-    MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
-};
 
 pub mod autocommit;
 pub mod evidence;
@@ -36,9 +23,9 @@ pub mod persistent;
 
 pub use autocommit::{AutoCommitBatchWindow, WriteGateStats};
 pub(crate) use autocommit::{
-    AutoCommitMutationRecorder, AutoCommitWriteGate, AutoCommitWriteLease,
+    AutoCommitMutationRecorder, AutoCommitWriteLease,
 };
-pub(crate) use evidence::{LayoutVersion, VertexIdDomainEvidence};
+pub(crate) use evidence::VertexIdDomainEvidence;
 pub(crate) use persistent::GraphStoragePersistent;
 
 #[derive(Clone)]
@@ -519,7 +506,13 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::thread;
 
+    use graphdb_core::types::EdgeIdentifier;
+    use graphdb_transaction::{
+        MutationEntityKey, MutationResult, VertexId,
+    };
     use graphdb_transaction::TransactionMutationRecorder;
+
+    use super::autocommit::AutoCommitWriteGate;
 
     #[test]
     fn test_auto_commit_write_gate_mutual_exclusion() {

@@ -45,6 +45,7 @@ pub(super) fn open_window(state: &mut Option<WindowState>) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_window_function(
     window_exprs: &[Expression],
     partition_by_exprs: &[Expression],
@@ -286,6 +287,7 @@ pub(super) fn next_window_function(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_window(
     window_exprs: &[Expression],
     partition_by_exprs: &[Expression],

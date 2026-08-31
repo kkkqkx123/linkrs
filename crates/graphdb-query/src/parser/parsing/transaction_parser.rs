@@ -11,6 +11,12 @@ use crate::parser::TokenKind;
 /// Transaction Parser
 pub struct TransactionParser;
 
+impl Default for TransactionParser {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl TransactionParser {
     pub fn new() -> Self {
         Self

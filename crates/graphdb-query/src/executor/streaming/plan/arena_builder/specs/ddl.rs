@@ -567,6 +567,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_user_manage_spe
     })
 }
 
+#[allow(dead_code)]
 pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_plan_spec(
     space_name: String,
     label: String,
@@ -583,12 +584,14 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_plan_sp
     }
 }
 
+#[allow(dead_code)]
 pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_run_spec(
     plan_json: String,
 ) -> DdlSpec {
     DdlSpec::MigrateRun { plan_json }
 }
 
+#[allow(dead_code)]
 pub(in crate::executor::streaming::plan::arena_builder) fn build_migrate_rollback_spec(
     plan_json: String,
 ) -> DdlSpec {

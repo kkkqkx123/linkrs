@@ -13,6 +13,12 @@ use crate::parser::TokenKind;
 /// SHOW Statement Parser
 pub struct ShowParser;
 
+impl Default for ShowParser {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl ShowParser {
     pub fn new() -> Self {
         Self

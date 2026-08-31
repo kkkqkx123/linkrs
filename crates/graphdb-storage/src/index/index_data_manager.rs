@@ -1,31 +1,15 @@
-use crate::index::helpers::{
-    edge_entity_ref, flush_split_generation, merge_split_wal_changes, vertex_entity_ref,
-};
-use crate::index::key_codec::key_types::{
-    SecondaryIndexKey, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE,
-};
-use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{
-    GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
-    ManifestHandle,
-};
-use crate::index::shard_runtime::{
-    generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps,
-    IndexRuntime,
-};
-use crate::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
-use crate::persistence::{read_versioned_payload, write_versioned_payload};
+use crate::index::key_codec::KeyParser;
+use crate::index::manifest::{ManifestCatalog};
+use crate::index::shard_runtime::{IndexBarrierRegistry, IndexMaps, IndexRuntime};
+use crate::index::types::IndexIdentity;
 use graphdb_core::stats::StatsManager;
-use graphdb_core::types::{
-    CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
-};
+use graphdb_core::types::{Index, IndexGeneration, IndexType, Timestamp};
 use graphdb_core::value::ordered_codec::OrderedCodec;
-use graphdb_core::wal::{EntityRef, OutboxIntent};
-use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::Value;
 use parking_lot::{Mutex, RwLock};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
 #[derive(Clone)]

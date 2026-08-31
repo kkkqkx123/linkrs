@@ -1,16 +1,8 @@
 use std::sync::Arc;
 
-use super::super::super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, JoinSpec, SetSpec, SourceSpec, TxnSpec,
-};
-use super::super::super::super::super::subquery::SubqueryRunnerSpec;
-use super::super::super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
+use super::super::super::super::super::operators::spec::{ApplySpec, JoinSpec, SetSpec};
 use super::super::super::super::types::{
-    FragmentId, FragmentKind, FragmentSpec, InputContract, LogicalNodeId, OperatorKindSpec,
-    PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec, StateOwnership,
-};
-use super::super::super::metadata::{
-    estimate_source_cardinality, source_explain_name, source_output_layout,
+    FragmentId, FragmentSpec, PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec,
 };
 use super::super::super::specs::*;
 use super::super::fragment_ops::FragmentCtx;
@@ -20,9 +12,7 @@ use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::plan::PhysicalPlanBuildContext;
 use crate::executor::streaming::plan::PhysicalPlanBuilder;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, SingleInputNode,
-};
+use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
 impl ArenaPlanAssembler {
     pub(crate) fn convert_join_node(

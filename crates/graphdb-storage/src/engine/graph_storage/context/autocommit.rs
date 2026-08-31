@@ -9,7 +9,7 @@ use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::undo_log::UndoLogManager;
 use graphdb_transaction::{
-    MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VersionManager, VertexId,
+    MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
 };
 
 use crate::engine::data_store::EdgeTableKey;

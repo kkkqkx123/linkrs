@@ -3,9 +3,7 @@
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 
-use graphdb_core::wal::types::{
-    Lsn, WalError, WalFileHeader, WalResult, WalStats, WAL_FILE_HEADER_SIZE,
-};
+use graphdb_core::wal::types::{Lsn, WalError, WalFileHeader, WalResult, WAL_FILE_HEADER_SIZE};
 
 use super::LocalWalWriter;
 

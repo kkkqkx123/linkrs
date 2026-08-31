@@ -3,10 +3,6 @@
 //! Plan nodes related to data processing, including Union, Unwind, Dedup, etc.
 
 use crate::define_plan_node_with_deps;
-use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
-use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
-use crate::planning::statements::clauses::exists_planner::PlannedSubquery;
-use graphdb_core::types::expr::contextual::ContextualExpression;
 
 define_plan_node_with_deps! {
     pub struct MaterializeNode {

@@ -43,7 +43,7 @@ use crate::planning::statements::pattern_planner::{self, PlanningContext};
 use crate::planning::statements::plan_combiner;
 use crate::QueryContext;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use graphdb_core::types::operators::{AggregateFunction, BinaryOperator};
 use graphdb_core::types::{ContextualExpression, Expression};
 
 pub use exists_types::{

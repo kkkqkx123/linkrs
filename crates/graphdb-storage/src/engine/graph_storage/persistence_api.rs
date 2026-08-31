@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use graphdb_core::types::{CommitLsn, CompactConfig};
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::StorageResult;
 
 use crate::StoragePersistenceOps;
 
