@@ -205,3 +205,19 @@ pub struct DropEdgeIndexRedo {
 // A struct exists for completeness but carries no payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactRedo;
+
+// ============================================================================
+// Sequence Operations
+// ============================================================================
+
+/// Redo record for sequence (auto-increment) counter updates.
+///
+/// When a transaction allocates SERIAL values, the counter state is logged
+/// to the WAL so that recovery can re-seed the allocator to at least the
+/// allocated high-water mark, preventing duplicate id generation after crash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSequenceRedo {
+    pub space_id: u64,
+    pub table_name: String,
+    pub next_value: u64,
+}

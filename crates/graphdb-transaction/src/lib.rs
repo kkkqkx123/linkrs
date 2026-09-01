@@ -58,7 +58,7 @@ pub use self::mvcc::{
 };
 pub use self::mvcc_watermarks::{capture_watermarks, MvccWatermarks, NO_ACTIVE_SNAPSHOT};
 pub use self::snapshot_tracker::SnapshotTracker;
-pub use checkpoint::{CheckpointGate, CheckpointTransaction, ShadowPageManager};
+pub use checkpoint::{CheckpointGate, CheckpointTransaction};
 pub use cleaner::TransactionCleaner;
 pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
 pub use connection::{ConnectionContext, ConnectionId, ConnectionManager, TransactionMode};

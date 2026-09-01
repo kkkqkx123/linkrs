@@ -1,7 +1,6 @@
 //! Transaction Rollback Module
 //!
-//! Provides rollback functionality for transactions using both OperationLog and UndoLog mechanisms.
-//! The UndoLog-based rollback is the recommended approach for NeuG architecture.
+//! Provides rollback functionality for transactions using UndoLog mechanisms.
 
 use crate::undo_log::{UndoLogEntry, UndoTarget};
 use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
@@ -11,25 +10,6 @@ pub use crate::undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, RelatedEdgeInfo,
     RemoveEdgeUndo, RemoveVertexUndo, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
-
-/// Operation logging context trait
-///
-/// Define the basic operations required for operation log rollbacks.
-/// This is used for savepoint rollback functionality.
-pub(crate) trait OperationLogContext {
-    fn operation_log_len(&self) -> usize;
-    fn truncate_operation_log(&self, index: usize);
-}
-
-impl OperationLogContext for crate::context::TransactionContext {
-    fn operation_log_len(&self) -> usize {
-        self.operation_log_len()
-    }
-
-    fn truncate_operation_log(&self, index: usize) {
-        self.truncate_operation_log(index);
-    }
-}
 
 /// Undo log context trait
 ///
@@ -94,13 +74,12 @@ impl<'a, T: UndoLogContext> UndoLogRollback<'a, T> {
 
 /// Combined Rollback Processor
 ///
-/// Provides both OperationLog and UndoLog rollback capabilities.
-/// Used for transactions that need to support both mechanisms.
-pub(crate) struct CombinedRollback<'a, T: OperationLogContext + UndoLogContext> {
+/// Provides UndoLog rollback capabilities for savepoint handling.
+pub(crate) struct CombinedRollback<'a, T: UndoLogContext> {
     ctx: &'a T,
 }
 
-impl<'a, T: OperationLogContext + UndoLogContext> CombinedRollback<'a, T> {
+impl<'a, T: UndoLogContext> CombinedRollback<'a, T> {
     pub fn new(ctx: &'a T) -> Self {
         Self { ctx }
     }
@@ -112,20 +91,6 @@ impl<'a, T: OperationLogContext + UndoLogContext> CombinedRollback<'a, T> {
         start_index: usize,
     ) -> Result<(), StorageError> {
         self.ctx.execute_undo_logs_from_index(target, start_index)
-    }
-
-    pub fn rollback_operation_log_to_index(&self, index: usize) -> Result<(), StorageError> {
-        let current_len = self.ctx.operation_log_len();
-
-        if index > current_len {
-            return Err(StorageError::db_error(format!(
-                "Invalid rollback index: {}, operation log length: {}",
-                index, current_len
-            )));
-        }
-
-        self.ctx.truncate_operation_log(index);
-        Ok(())
     }
 }
 

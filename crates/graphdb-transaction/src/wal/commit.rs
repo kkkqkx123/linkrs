@@ -81,25 +81,14 @@ pub fn collect_committed_transactions(
             WalOpType::TransactionCommit => {
                 let commit: TransactionCommit = postcard::from_bytes(&entry.payload)?;
                 commit.validate().map_err(WalError::InvalidOperation)?;
-                // During the migration window, legacy records can precede a
-                // transactional batch in the same WAL stream. The writer's
-                // checksum covers only the transactional suffix, so locate
-                // that exact suffix instead of accidentally treating legacy
-                // records as part of the batch. A missing match remains a
-                // hard corruption error.
-                let batch_start = (0..=pending.len())
-                    .rev()
-                    .find(|start| {
-                        parsed_batch_checksum(&pending[*start..])
-                            .map(|checksum| checksum == commit.batch_checksum)
-                            .unwrap_or(false)
-                    })
-                    .ok_or_else(|| WalError::ChecksumMismatch {
+                let actual_checksum = parsed_batch_checksum(&pending).unwrap_or_default();
+                if actual_checksum != commit.batch_checksum {
+                    return Err(WalError::ChecksumMismatch {
                         expected: commit.batch_checksum,
-                        actual: parsed_batch_checksum(&pending).unwrap_or_default(),
-                    })?;
-                let batch = pending.split_off(batch_start);
-                pending.clear();
+                        actual: actual_checksum,
+                    });
+                }
+                let batch = std::mem::take(&mut pending);
                 let mut redo_entries = Vec::new();
                 let mut intents = Vec::new();
                 for pending_entry in batch {
@@ -134,34 +123,14 @@ pub fn collect_committed_transactions(
                         )));
                     }
                 }
-                if commit.entry_count != 0 && redo_entries.len() as u32 != commit.entry_count {
+                if redo_entries.len() as u32 != commit.entry_count {
                     return Err(WalError::InvalidOperation(format!(
                         "Commit expected {} redo entries, recovered {}",
                         commit.entry_count,
                         redo_entries.len()
                     )));
                 }
-                // Sequence contiguity validation: when the commit carries
-                // first_sequence and entry_count, the redo batch must be
-                // contiguous. A gap or mismatch indicates a torn batch.
-                // Legacy commits (first_sequence == 0 && entry_count == 0)
-                // skip this check for backward compatibility.
                 if commit.entry_count > 0 && commit.first_sequence > 0 {
-                    // The entry_count == redo_entries.len() check above already
-                    // ensures the correct number of entries. We additionally
-                    // verify that first_sequence is nonzero and consistent:
-                    // the committed batch must start at first_sequence and
-                    // contain exactly entry_count entries, implying the last
-                    // entry has sequence first_sequence + entry_count - 1.
-                    //
-                    // Per-entry mutation_sequence is embedded in the payload
-                    // and decoded at write time; during recovery we rely on
-                    // DryReplay's sequence_gap detection for fine-grained
-                    // validation. The entry_count check here is the coarse
-                    // contiguity proxy that catches torn batches.
-                    //
-                    // Reject batches where first_sequence is zero but
-                    // entry_count is nonzero (inconsistent metadata).
                     if commit.first_sequence == 0 {
                         return Err(WalError::InvalidOperation(format!(
                             "Commit has zero first_sequence with entry_count={}",

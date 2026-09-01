@@ -13,7 +13,6 @@ use parking_lot::{Mutex, RwLock};
 use super::error::TransactionError;
 use super::mutation_journal::{MutationJournal, MutationResource, TransactionMutationRecord};
 use super::participant::TransactionMutationRecorder;
-use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
 use super::wal::buffer::LocalWalBuffer;
@@ -60,8 +59,6 @@ pub struct TransactionContext {
     query_count: AtomicU64,
     /// Durability level
     pub durability: DurabilityLevel,
-    /// Operation log (using RwLock to optimize read-heavy write-light scenarios)
-    operation_logs: RwLock<Vec<OperationLog>>,
     /// Modified tables
     modified_tables: Mutex<Vec<String>>,
     /// Savepoint manager
@@ -161,7 +158,6 @@ impl SavepointManager {
             name: params.name,
             created_at: Instant::now(),
             sequence,
-            operation_log_index: params.operation_log_index,
             undo_log_index: params.undo_log_index,
             sync_sequence: params.sync_sequence,
             write_set: params.write_set,
@@ -220,7 +216,6 @@ impl TransactionContext {
             statement_start: AtomicCell::new(now),
             query_count: AtomicU64::new(0),
             durability: config.durability,
-            operation_logs: RwLock::new(Vec::new()),
             modified_tables: Mutex::new(Vec::new()),
             savepoint_manager: RwLock::new(SavepointManager::new()),
             undo_logs: RwLock::new(UndoLogManager::new()),
@@ -276,7 +271,6 @@ impl TransactionContext {
             statement_start: AtomicCell::new(now),
             query_count: AtomicU64::new(0),
             durability: config.durability,
-            operation_logs: RwLock::new(Vec::new()),
             modified_tables: Mutex::new(Vec::new()),
             savepoint_manager: RwLock::new(SavepointManager::new()),
             undo_logs: RwLock::new(UndoLogManager::new()),
@@ -735,54 +729,6 @@ impl TransactionContext {
         }
     }
 
-    /// Add operation log
-    pub fn add_operation_log(&self, operation: OperationLog) {
-        let mut logs = self.operation_logs.write();
-        logs.push(operation);
-    }
-
-    /// Batch add operation logs
-    pub fn add_operation_logs(&self, operations: Vec<OperationLog>) {
-        let mut logs = self.operation_logs.write();
-        logs.extend(operations);
-    }
-
-    /// Get operation logs
-    pub fn get_operation_logs(&self) -> Vec<OperationLog> {
-        let logs = self.operation_logs.read();
-        logs.clone()
-    }
-
-    /// Get operation log length
-    pub fn operation_log_len(&self) -> usize {
-        let logs = self.operation_logs.read();
-        logs.len()
-    }
-
-    /// Get operation log at specified index
-    pub fn get_operation_log(&self, index: usize) -> Option<OperationLog> {
-        let logs = self.operation_logs.read();
-        logs.get(index).cloned()
-    }
-
-    /// Get operation logs in specified range
-    pub fn get_operation_logs_range(&self, start: usize, end: usize) -> Vec<OperationLog> {
-        let logs = self.operation_logs.read();
-        if start >= logs.len() {
-            return Vec::new();
-        }
-        let end = end.min(logs.len());
-        logs[start..end].to_vec()
-    }
-
-    /// Truncate operation logs to specified index
-    pub fn truncate_operation_log(&self, index: usize) {
-        let mut logs = self.operation_logs.write();
-        if index < logs.len() {
-            logs.truncate(index);
-        }
-    }
-
     /// Record a vertex write in the write set
     pub fn record_vertex_write(&self, vid: VertexId) {
         self.write_set.lock().record_vertex(vid);
@@ -901,22 +847,6 @@ impl TransactionContext {
             }
         }
 
-        let sequence = self
-            .mutation_journal
-            .read()
-            .records()
-            .last()
-            .map(|r| r.sequence);
-        let operation_log = OperationLog::Mutation {
-            entities: entity_keys
-                .iter()
-                .map(|entity| format!("{entity:?}").into_bytes())
-                .collect(),
-            table: mutation.modified_table.clone(),
-            sequence,
-        };
-        self.add_operation_log(operation_log);
-
         for entity in entity_keys {
             match entity {
                 MutationEntityKey::Vertex(vertex_id) => self.record_vertex_write(vertex_id),
@@ -1016,12 +946,6 @@ impl TransactionContext {
         self.write_validated.store(false);
     }
 
-    /// Clear operation logs
-    pub fn clear_operation_log(&self) {
-        let mut logs = self.operation_logs.write();
-        logs.clear();
-    }
-
     /// Record table modification
     pub fn record_table_modification(&self, table_name: &str) {
         let mut tables = self.modified_tables.lock();
@@ -1048,7 +972,6 @@ impl TransactionContext {
         };
         let params = SavepointParams {
             name,
-            operation_log_index: self.operation_log_len(),
             undo_log_index: self.undo_log_len(),
             sync_sequence,
             write_set: self.get_write_set(),
@@ -1125,7 +1048,6 @@ impl TransactionContext {
             let position = crate::mutation_journal::MutationJournalPosition {
                 journal_len: savepoint_info.journal_len,
                 next_sequence: savepoint_info.journal_next_sequence,
-                operation_log_index: savepoint_info.operation_log_index,
                 undo_log_index: savepoint_info.undo_log_index,
                 redo_log_index: savepoint_info.redo_log_index,
                 local_wal_entry_len: savepoint_info.local_wal_entry_len,
@@ -1142,21 +1064,9 @@ impl TransactionContext {
                     e
                 )));
             }
-            // Enforce that OperationLog length is derived from journal, not independent.
-            if savepoint_info.operation_log_index != savepoint_info.journal_len
-                && savepoint_info.operation_log_index > journal.len()
-            {
-                return Err(TransactionError::rollback_failed(
-                    "savepoint OperationLog index inconsistent with journal",
-                ));
-            }
         }
 
-        // Use CombinedRollback for comprehensive savepoint rollback
-        let rollback = CombinedRollback::new(self);
-        rollback
-            .rollback_operation_log_to_index(savepoint_info.operation_log_index)
-            .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
+        // Use undo rollback for savepoint
 
         {
             let mut manager = self.savepoint_manager.write();
@@ -1176,12 +1086,7 @@ impl TransactionContext {
             }
         }
 
-        rollback
-            .execute_undo_rollback_from_index(
-                target,
-                self.start_timestamp,
-                savepoint_info.undo_log_index,
-            )
+        self.execute_undo_logs_from_index(target, savepoint_info.undo_log_index)
             .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
 
         self.restore_write_set(savepoint_info.write_set);
@@ -1271,7 +1176,6 @@ impl TransactionContext {
     /// Clear all state
     pub fn clear(&self) -> Result<(), TransactionError> {
         self.clear_undo_logs()?;
-        self.clear_operation_log();
         {
             let mut write_set = self.write_set.lock();
             *write_set = WriteSet::new();
@@ -1414,21 +1318,5 @@ mod tests {
 
         let sp = ctx.get_savepoint(sp_id).unwrap();
         assert_eq!(sp.name, Some("test".to_string()));
-    }
-
-    #[test]
-    fn test_transaction_context_operation_log() {
-        let config = TransactionConfig::default();
-        let ctx = TransactionContext::new(TransactionId(1), 1, config);
-
-        ctx.add_operation_log(OperationLog::Mutation {
-            entities: vec![vec![1, 2, 3]],
-            table: Some("vertex".to_string()),
-            sequence: Some(0),
-        });
-
-        assert_eq!(ctx.operation_log_len(), 1);
-        assert!(ctx.get_operation_log(0).is_some());
-        assert!(ctx.get_operation_log(0).unwrap().is_canonical());
     }
 }

@@ -9,8 +9,8 @@ use crate::wal::{
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
     InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateVertexPropRedo, WalOpType,
-    WalParser, WalRecoveryMode,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
 };
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
@@ -595,6 +595,18 @@ impl RecoveryManager {
                 WalOpType::Compact => {
                     applier.replay_compact(ts)?;
                     self.stats.wal_entries_replayed += 1;
+                }
+                WalOpType::UpdateSequence => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        UpdateSequenceRedo,
+                        replay_update_sequence
+                    )
                 }
                 WalOpType::OutboxIntent
                 | WalOpType::TransactionCommit

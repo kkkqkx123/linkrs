@@ -5,9 +5,7 @@
 use std::time::Duration;
 
 use crate::context::TransactionContext;
-use crate::types::{
-    DurabilityLevel, OperationLog, TransactionConfig, TransactionId, TransactionState,
-};
+use crate::types::{DurabilityLevel, TransactionConfig, TransactionId, TransactionState};
 use crate::undo_log::{InsertVertexUndo, UndoLogEntry};
 use crate::undo_log::{UndoLogResult, UndoTarget};
 use crate::TransactionErrorKind;
@@ -232,36 +230,6 @@ fn test_transaction_context_modified_tables() {
 }
 
 #[test]
-fn test_transaction_context_operation_log() {
-    let txn_id = TransactionId(1);
-    let timeout = Duration::from_secs(30);
-    let config = create_default_config(timeout);
-
-    let ctx = TransactionContext::new(txn_id, 1, config);
-
-    assert_eq!(ctx.operation_log_len(), 0);
-
-    ctx.add_operation_log(OperationLog::InsertVertex {
-        space: "test".to_string(),
-        vertex_id: vec![1, 2, 3],
-        previous_state: None,
-    });
-
-    assert_eq!(ctx.operation_log_len(), 1);
-
-    ctx.add_operation_log(OperationLog::UpdateVertex {
-        space: "test".to_string(),
-        vertex_id: vec![1, 2, 3],
-        previous_data: vec![4, 5, 6],
-    });
-
-    assert_eq!(ctx.operation_log_len(), 2);
-
-    ctx.truncate_operation_log(1);
-    assert_eq!(ctx.operation_log_len(), 1);
-}
-
-#[test]
 fn test_transaction_context_can_execute() {
     let txn_id = TransactionId(1);
     let timeout = Duration::from_secs(30);
@@ -337,7 +305,7 @@ fn test_savepoint_creation() {
     assert!(savepoint_info.is_some());
     let info = savepoint_info.expect("savepoint info should exist");
     assert_eq!(info.name, Some("sp1".to_string()));
-    assert_eq!(info.operation_log_index, 0);
+    assert_eq!(info.journal_len, 0);
 }
 
 #[test]
@@ -375,7 +343,7 @@ fn test_rollback_to_savepoint() {
     let result = ctx.rollback_to_savepoint(savepoint_id, &mock_target);
     assert!(result.is_ok());
 
-    assert_eq!(ctx.operation_log_len(), 0);
+    assert_eq!(ctx.mutation_journal_len(), 0);
 }
 
 #[test]
@@ -434,29 +402,24 @@ fn test_savepoint_with_operations() {
 
     let sp1 = ctx.create_savepoint(Some("sp1".to_string()), 0);
 
-    let log1 = OperationLog::InsertVertex {
-        space: "test".to_string(),
-        vertex_id: vec![1u8, 2u8, 3u8],
-        previous_state: None,
-    };
-    ctx.add_operation_log(log1);
-
-    let log2 = OperationLog::InsertVertex {
-        space: "test".to_string(),
-        vertex_id: vec![4u8, 5u8, 6u8],
-        previous_state: None,
-    };
-    ctx.add_operation_log(log2);
+    ctx.record_mutation(crate::types::MutationResult::new(
+        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+    ))
+    .expect("record mutation should succeed");
+    ctx.record_mutation(crate::types::MutationResult::new(
+        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(2)),
+    ))
+    .expect("record mutation should succeed");
 
     let _sp2 = ctx.create_savepoint(Some("sp2".to_string()), 0);
 
-    assert_eq!(ctx.operation_log_len(), 2);
+    assert_eq!(ctx.mutation_journal_len(), 2);
 
     let mock_target = MockUndoTarget;
     let result = ctx.rollback_to_savepoint(sp1, &mock_target);
     assert!(result.is_ok());
 
-    assert_eq!(ctx.operation_log_len(), 0);
+    assert_eq!(ctx.mutation_journal_len(), 0);
 }
 
 #[test]
@@ -536,17 +499,16 @@ fn test_clear() {
 
     let ctx = TransactionContext::new(txn_id, 1, config);
 
-    ctx.add_operation_log(OperationLog::InsertVertex {
-        space: "test".to_string(),
-        vertex_id: vec![1, 2, 3],
-        previous_state: None,
-    });
+    ctx.record_mutation(crate::types::MutationResult::new(
+        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+    ))
+    .expect("record mutation should succeed");
     ctx.record_table_modification("vertices");
     ctx.create_savepoint(Some("sp1".to_string()), 0);
 
     ctx.clear().expect("Failed to clear transaction context");
 
-    assert_eq!(ctx.operation_log_len(), 0);
+    assert_eq!(ctx.mutation_journal_len(), 0);
     assert_eq!(ctx.get_modified_tables().len(), 0);
     assert_eq!(ctx.get_all_savepoints().len(), 0);
 }
@@ -596,60 +558,6 @@ fn test_abort_state_transitions() {
 
     assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
     assert_eq!(ctx.state(), TransactionState::Aborted);
-}
-
-#[test]
-fn test_add_operation_logs_batch() {
-    let txn_id = TransactionId(1);
-    let timeout = Duration::from_secs(30);
-    let config = create_default_config(timeout);
-
-    let ctx = TransactionContext::new(txn_id, 1, config);
-
-    let logs = vec![
-        OperationLog::InsertVertex {
-            space: "test".to_string(),
-            vertex_id: vec![1],
-            previous_state: None,
-        },
-        OperationLog::InsertVertex {
-            space: "test".to_string(),
-            vertex_id: vec![2],
-            previous_state: None,
-        },
-        OperationLog::InsertVertex {
-            space: "test".to_string(),
-            vertex_id: vec![3],
-            previous_state: None,
-        },
-    ];
-
-    ctx.add_operation_logs(logs);
-
-    assert_eq!(ctx.operation_log_len(), 3);
-}
-
-#[test]
-fn test_get_operation_log_range() {
-    let txn_id = TransactionId(1);
-    let timeout = Duration::from_secs(30);
-    let config = create_default_config(timeout);
-
-    let ctx = TransactionContext::new(txn_id, 1, config);
-
-    for i in 0..5 {
-        ctx.add_operation_log(OperationLog::InsertVertex {
-            space: "test".to_string(),
-            vertex_id: vec![i],
-            previous_state: None,
-        });
-    }
-
-    let range = ctx.get_operation_logs_range(1, 4);
-    assert_eq!(range.len(), 3);
-
-    let empty_range = ctx.get_operation_logs_range(10, 15);
-    assert_eq!(empty_range.len(), 0);
 }
 
 #[test]

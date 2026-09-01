@@ -7,7 +7,7 @@ use super::redo::{
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 
@@ -148,6 +148,11 @@ pub trait RecoveryApplier {
     fn replay_drop_edge_index(&self, redo: &DropEdgeIndexRedo, ts: Timestamp) -> StorageResult<()>;
 
     fn replay_compact(&self, _ts: Timestamp) -> StorageResult<()> {
+        Ok(())
+    }
+
+    fn replay_update_sequence(&self, redo: &UpdateSequenceRedo, ts: Timestamp) -> StorageResult<()> {
+        let _ = (redo, ts);
         Ok(())
     }
 }

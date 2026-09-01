@@ -51,7 +51,7 @@ impl std::fmt::Display for MutationResource {
 
 impl MutationResource {
     /// Infer resource from WAL operation type when an explicit resource is
-    /// not supplied.  Used as a conservative fallback for legacy paths.
+    /// not supplied.
     pub fn from_wal_op(op: WalOpType) -> Self {
         match op {
             WalOpType::InsertVertex | WalOpType::DeleteVertex => MutationResource::Vertex,
@@ -76,6 +76,7 @@ impl MutationResource {
             | WalOpType::DropTagIndex
             | WalOpType::CreateEdgeIndex
             | WalOpType::DropEdgeIndex => MutationResource::Index,
+            WalOpType::UpdateSequence => MutationResource::Sequence,
             WalOpType::OutboxIntent => MutationResource::SyncIntent,
             _ => MutationResource::Unknown,
         }
@@ -264,8 +265,6 @@ pub struct MutationJournalPosition {
     pub journal_len: usize,
     /// Next sequence that will be assigned (journal_len).
     pub next_sequence: u64,
-    /// Physical log lengths for O(1) truncation (must equal journal projection).
-    pub operation_log_index: usize,
     pub undo_log_index: usize,
     pub redo_log_index: usize,
     pub local_wal_entry_len: usize,

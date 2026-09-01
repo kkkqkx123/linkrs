@@ -14,7 +14,7 @@ pub use redo::{
     CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
     DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
     DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo,
 };
 pub use sync::{
     EntityRef, IndexMutation, IndexOperation, LifecycleMutation, OutboxIntent, TransactionAbort,

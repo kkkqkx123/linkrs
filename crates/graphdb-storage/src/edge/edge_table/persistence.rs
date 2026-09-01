@@ -240,7 +240,7 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
             let create_ts = u64::from_le_bytes(create_ts_bytes);
             let delete_ts = u64::from_le_bytes(delete_ts_bytes);
             // commit_ts may not exist in older format; default to create_ts
-            let commit_ts = if cursor.len() - cursor.position() >= 8 {
+            let commit_ts = if cursor.len() >= 8 {
                 let mut commit_ts_bytes = [0u8; 8];
                 cursor.read_exact(&mut commit_ts_bytes)?;
                 u64::from_le_bytes(commit_ts_bytes)

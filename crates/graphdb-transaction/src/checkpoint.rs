@@ -165,101 +165,6 @@ impl Default for CheckpointGate {
     }
 }
 
-/// Shadow page manager for copy-on-write checkpoint semantics.
-///
-/// Shadow pages buffer dirty pages to a separate file during checkpoint's
-/// storage phase. On success the shadow file is atomically swapped into place;
-/// on failure it is discarded. This provides atomic checkpoint semantics even
-/// when the write gate has been released early.
-#[derive(Debug)]
-pub struct ShadowPageManager {
-    shadow_dir: std::path::PathBuf,
-    shadow_files: parking_lot::Mutex<Vec<std::path::PathBuf>>,
-}
-
-impl ShadowPageManager {
-    pub fn new(shadow_dir: impl Into<std::path::PathBuf>) -> Self {
-        let dir = shadow_dir.into();
-        let _ = std::fs::create_dir_all(&dir);
-        Self {
-            shadow_dir: dir,
-            shadow_files: parking_lot::Mutex::new(Vec::new()),
-        }
-    }
-
-    pub fn shadow_dir(&self) -> &std::path::Path {
-        &self.shadow_dir
-    }
-
-    pub fn create_shadow_file(&self, seq: u64) -> std::io::Result<std::path::PathBuf> {
-        let path = self.shadow_dir.join(format!("shadow_{:08x}.pages", seq));
-        std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&path)?;
-        self.shadow_files.lock().push(path.clone());
-        Ok(path)
-    }
-
-    pub fn write_shadow_page(
-        &self,
-        shadow_file: &std::path::Path,
-        page_id: u64,
-        data: &[u8],
-    ) -> std::io::Result<()> {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .read(true)
-            .open(shadow_file)?;
-        file.seek(SeekFrom::Start(page_id * 4096))?;
-        file.write_all(data)?;
-        Ok(())
-    }
-
-    pub fn apply_shadow_pages(
-        &self,
-        shadow_file: &std::path::Path,
-        target_file: &std::path::Path,
-    ) -> std::io::Result<()> {
-        if !shadow_file.exists() {
-            return Ok(());
-        }
-        std::fs::copy(shadow_file, target_file)?;
-        let f = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(target_file)?;
-        f.sync_all()?;
-        Ok(())
-    }
-
-    pub fn cleanup_shadow_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
-        self.shadow_files.lock().retain(|p| p != path);
-        Ok(())
-    }
-
-    pub fn cleanup_all(&self) -> usize {
-        let mut count = 0;
-        let files: Vec<_> = self.shadow_files.lock().clone();
-        for f in files {
-            if std::fs::remove_file(&f).is_ok() {
-                count += 1;
-            }
-        }
-        self.shadow_files.lock().clear();
-        count
-    }
-
-    pub fn pending_shadow_files(&self) -> Vec<std::path::PathBuf> {
-        self.shadow_files.lock().clone()
-    }
-}
-
 /// Checkpoint transaction handle.
 ///
 /// Held while a checkpoint is in progress. Writes are paused for the lifetime
@@ -647,18 +552,5 @@ mod tests {
         );
         assert!(result.is_ok());
         assert!(!manager.checkpoint_gate().is_checkpoint_active());
-    }
-
-    #[test]
-    fn shadow_page_manager_creates_and_cleans_up() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = ShadowPageManager::new(dir.path());
-        let shadow = mgr.create_shadow_file(1).unwrap();
-        assert!(shadow.exists());
-        mgr.write_shadow_page(&shadow, 0, &[1u8; 4096]).unwrap();
-        assert_eq!(mgr.pending_shadow_files().len(), 1);
-        mgr.cleanup_shadow_file(&shadow).unwrap();
-        assert!(!shadow.exists());
-        assert!(mgr.pending_shadow_files().is_empty());
     }
 }

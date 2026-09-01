@@ -26,6 +26,7 @@ mod writer_api;
 mod tests;
 
 pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
+pub use serial::SerialKey;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

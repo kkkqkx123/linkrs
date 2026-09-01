@@ -22,9 +22,7 @@ pub use config::{
 };
 pub use events::{CommitCallback, RollbackCallback, TransactionEvent};
 pub(crate) use execution::SavepointParams;
-pub use execution::{
-    OperationLog, SavepointId, SavepointInfo, TransactionExecution, TransactionInfo,
-};
+pub use execution::{SavepointId, SavepointInfo, TransactionExecution, TransactionInfo};
 pub use stats::{TransactionMetrics, TransactionResourceMetrics, TransactionStats};
 pub use writeset::{ReadRange, ResourceId, SsiState, WriteSet};
 

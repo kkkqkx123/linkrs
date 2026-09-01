@@ -149,30 +149,6 @@ pub fn find_last_consistent_commit(
         )
     });
 
-    // Legacy WAL without sync envelope: all parsed entries are consistent.
-    // Truncation only applies to torn-tail bytes already excluded by the
-    // parser (reflected in corrupted_count). Return the full prefix.
-    if !has_sync_envelope {
-        let last_lsn = result.last_lsn;
-        let last_ts = result.last_timestamp;
-        let entries = result.all_entries;
-        let is_last_checkpoint = entries
-            .last()
-            .and_then(|e| WalOpType::try_from(e.header.op_type).ok())
-            .map(|op| op == WalOpType::Compact)
-            .unwrap_or(false);
-        return DryReplayResult {
-            consistent_entries: entries,
-            last_consistent_lsn: last_lsn,
-            last_consistent_timestamp: last_ts,
-            is_last_record_checkpoint: is_last_checkpoint,
-            truncated_tail: 0,
-            corrupted_count: corrupted,
-            total_scanned: total,
-            sequence_gaps: 0,
-        };
-    }
-
     // Collect committed transaction boundaries using the canonical commit
     // collector — only transactions terminated by a TransactionCommit record
     // are considered consistent.
@@ -258,8 +234,7 @@ pub fn find_last_consistent_commit(
 
     // Mutation sequence gap detection: count batches where TransactionCommit
     // metadata does not match recovered redo count, indicating a torn or
-    // non-contiguous sequence. Batches with entry_count==0 are legacy and
-    // skipped; only modern batches with explicit entry_count are checked.
+    // non-contiguous sequence.
     let sequence_gaps = {
         let gaps = 0usize;
         // Use the already-collected committed batches to detect gaps without

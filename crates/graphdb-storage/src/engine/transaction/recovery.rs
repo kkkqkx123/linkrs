@@ -12,7 +12,7 @@ use graphdb_transaction::wal::{
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 
 impl RecoveryApplier for GraphStorageContext {
@@ -176,6 +176,12 @@ impl RecoveryApplier for GraphStorageContext {
 
     fn replay_drop_edge_index(&self, redo: &DropEdgeIndexRedo, ts: Timestamp) -> StorageResult<()> {
         index::replay_drop_edge_index(self, redo, ts)
+    }
+
+    fn replay_update_sequence(&self, redo: &UpdateSequenceRedo, _ts: Timestamp) -> StorageResult<()> {
+        self.serial_allocator()
+            .seed(&crate::engine::graph_storage::SerialKey::new(redo.space_id, &redo.table_name), redo.next_value);
+        Ok(())
     }
 }
 
