@@ -54,56 +54,8 @@ impl RowVisibility {
         }
     }
 
-    /// Mark a row as pending (write timestamp allocated but not yet committed).
-    /// The row is visible only to `owner`; other transactions see the previous
-    /// committed value until `mark_committed` publishes the commit timestamp.
-    pub fn mark_created_pending(
-        &mut self,
-        row_idx: usize,
-        write_ts: Timestamp,
-        owner: TransactionId,
-    ) {
-        self.ensure_len(row_idx + 1);
-        self.create_ts[row_idx] = write_ts;
-        self.commit_ts[row_idx] = Timestamp::MAX;
-        self.pending_owner[row_idx] = Some(owner);
-        if row_idx + 1 > self.len {
-            self.len = row_idx + 1;
-        }
-    }
-
-    /// Publish a pending write as committed at `commit_ts`. `write_ts` must
-    /// match the pending write's create timestamp to guard against stale publishes.
-    pub fn mark_committed(&mut self, row_idx: usize, commit_ts: Timestamp) -> bool {
-        if row_idx >= self.len {
-            return false;
-        }
-        if self.commit_ts[row_idx] != Timestamp::MAX {
-            // Already committed; update to latest commit timestamp (e.g. retry).
-            self.commit_ts[row_idx] = commit_ts;
-            return true;
-        }
-        self.commit_ts[row_idx] = commit_ts;
-        self.pending_owner[row_idx] = None;
-        true
-    }
-
     pub fn create_ts(&self) -> &[Timestamp] {
         &self.create_ts
-    }
-
-    pub fn commit_ts(&self) -> &[Timestamp] {
-        &self.commit_ts
-    }
-
-    pub fn pending_owner(&self, row_idx: usize) -> Option<TransactionId> {
-        self.pending_owner.get(row_idx).copied().flatten()
-    }
-
-    pub fn is_pending(&self, row_idx: usize) -> bool {
-        self.commit_ts
-            .get(row_idx)
-            .is_some_and(|ts| *ts == Timestamp::MAX)
     }
 
     pub fn ensure_len(&mut self, n: usize) {
@@ -168,9 +120,11 @@ impl Column {
     /// not-yet-written value is treated as current.
     pub(super) fn ensure_row_meta(&mut self, n: usize) {
         if self.visibility.len() < n {
-            if let Some(chains) = self.version_chains.as_mut() {
-                chains.resize(n, Vec::new());
-            }
+            self.with_version_chains_write(|chains| {
+                if let Some(chains) = chains.as_mut() {
+                    chains.resize(n, Vec::new());
+                }
+            });
         }
         self.visibility.ensure_len(n);
     }
@@ -197,19 +151,24 @@ impl Column {
         if row_idx < self.len() && old_create < ts {
             let current = self.get(row_idx);
             if current.is_some() || self.is_null(row_idx) {
-                if self.version_chains.is_none() {
-                    self.version_chains = Some(vec![Vec::new(); self.visibility.len()]);
-                }
-                if let Some(chains) = self.version_chains.as_mut() {
-                    if row_idx >= chains.len() {
-                        chains.resize(row_idx + 1, Vec::new());
+                // Capture visibility length before closure to avoid borrow conflict.
+                let vis_len = self.visibility.len();
+                // Use with_version_chains_write for controlled mutable access.
+                self.with_version_chains_write(|chains| {
+                    if chains.is_none() {
+                        *chains = Some(vec![Vec::new(); vis_len]);
                     }
-                    chains[row_idx].push(VersionEntry {
-                        start_ts: old_create,
-                        end_ts: ts,
-                        value: current,
-                    });
-                }
+                    if let Some(chains) = chains.as_mut() {
+                        if row_idx >= chains.len() {
+                            chains.resize(row_idx + 1, Vec::new());
+                        }
+                        chains[row_idx].push(VersionEntry {
+                            start_ts: old_create,
+                            end_ts: ts,
+                            value: current,
+                        });
+                    }
+                });
             }
         }
         self.write_value(row_idx, value)?;
@@ -233,60 +192,50 @@ impl Column {
                 self.inner().get(row_idx)
             };
         }
-        if let Some(chains) = self.version_chains.as_ref() {
-            if let Some(chain) = chains.get(row_idx) {
-                if !chain.is_empty() {
-                    // Version chain is ordered by start_ts ascending (oldest first).
-                    // Binary search finds the candidate interval containing query_ts
-                    // in O(log n) instead of O(n) linear scan.
-                    let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
-                        Ok(i) => i,
-                        Err(i) => {
-                            if i == 0 {
-                                return None;
-                            }
-                            i - 1
+        self.with_version_chains_read(|chains| {
+            chains.and_then(|c| c.get(row_idx)).and_then(|chain| {
+                if chain.is_empty() {
+                    return None;
+                }
+                // Version chain is ordered by start_ts ascending (oldest first).
+                // Binary search finds the candidate interval containing query_ts
+                // in O(log n) instead of O(n) linear scan.
+                let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                    Ok(i) => i,
+                    Err(i) => {
+                        if i == 0 {
+                            return None;
                         }
-                    };
-                    let entry = &chain[idx];
+                        i - 1
+                    }
+                };
+                let entry = &chain[idx];
+                if crate::mvcc_visibility::Visibility::is_version_visible(
+                    query_ts,
+                    entry.start_ts,
+                    entry.end_ts,
+                ) {
+                    return entry.value.clone();
+                }
+                // After folding/GC intervals may have been merged; a single
+                // predecessor check suffices for contiguous chains. Fall back
+                // to neighbour check for the rare folded-gap case.
+                if idx + 1 < chain.len() {
+                    let nxt = &chain[idx + 1];
                     if crate::mvcc_visibility::Visibility::is_version_visible(
                         query_ts,
-                        entry.start_ts,
-                        entry.end_ts,
+                        nxt.start_ts,
+                        nxt.end_ts,
                     ) {
-                        return entry.value.clone();
-                    }
-                    // After folding/GC intervals may have been merged; a single
-                    // predecessor check suffices for contiguous chains. Fall back
-                    // to neighbour check for the rare folded-gap case.
-                    if idx + 1 < chain.len() {
-                        let nxt = &chain[idx + 1];
-                        if crate::mvcc_visibility::Visibility::is_version_visible(
-                            query_ts,
-                            nxt.start_ts,
-                            nxt.end_ts,
-                        ) {
-                            return nxt.value.clone();
-                        }
+                        return nxt.value.clone();
                     }
                 }
-            }
-        }
-        None
+                None
+            })
+        })
     }
 
-    /// Garbage-collect using unified watermarks. `watermarks` is the single
-    /// GC frontier captured at pass start so all table types share the same
-    /// cutoff. `margin` is subtracted conservatively inside this helper.
-    #[allow(dead_code)]
-    pub fn gc_versions_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
-        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
-        self.gc_versions(safe)
-    }
+
 
     /// Garbage-collect version-chain entries no longer visible to any active
     /// snapshot at `min_active_snapshot_ts`. Returns the number of entries
@@ -295,52 +244,54 @@ impl Column {
     /// next retained interval.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         let mut removed = 0;
-        if let Some(chains) = self.version_chains.as_mut() {
-            for chain in chains.iter_mut() {
-                let before = chain.len();
-                if chain.is_empty() {
-                    continue;
-                }
-                let safe = min_active_snapshot_ts;
-                let mut after: Vec<VersionEntry> = Vec::new();
-                let mut last_before: Option<VersionEntry> = None;
-                for entry in chain.drain(..) {
-                    if entry.end_ts > safe {
-                        after.push(entry);
-                    } else {
-                        if last_before
-                            .as_ref()
-                            .is_none_or(|prev| entry.end_ts > prev.end_ts)
-                        {
-                            last_before = Some(entry);
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                for chain in chains.iter_mut() {
+                    let before = chain.len();
+                    if chain.is_empty() {
+                        continue;
+                    }
+                    let safe = min_active_snapshot_ts;
+                    let mut after: Vec<VersionEntry> = Vec::new();
+                    let mut last_before: Option<VersionEntry> = None;
+                    for entry in chain.drain(..) {
+                        if entry.end_ts > safe {
+                            after.push(entry);
+                        } else {
+                            if last_before
+                                .as_ref()
+                                .is_none_or(|prev| entry.end_ts > prev.end_ts)
+                            {
+                                last_before = Some(entry);
+                            }
                         }
                     }
-                }
-                let mut new_chain = after;
-                if let Some(lb) = last_before {
-                    if new_chain.is_empty() {
-                        // No interval covers safe, keep the most recent
-                        // before-image as baseline if it is the only history.
-                        // If the current value starts after safe, this entry
-                        // is still the correct value for queries before that
-                        // start but after safe. Keep it conservatively.
-                        new_chain.push(lb);
-                    } else {
-                        let min_start = new_chain
-                            .iter()
-                            .map(|e| e.start_ts)
-                            .min()
-                            .unwrap_or(u64::MAX);
-                        if min_start > safe {
+                    let mut new_chain = after;
+                    if let Some(lb) = last_before {
+                        if new_chain.is_empty() {
+                            // No interval covers safe, keep the most recent
+                            // before-image as baseline if it is the only history.
+                            // If the current value starts after safe, this entry
+                            // is still the correct value for queries before that
+                            // start but after safe. Keep it conservatively.
                             new_chain.push(lb);
-                            new_chain.sort_by_key(|e| e.start_ts);
+                        } else {
+                            let min_start = new_chain
+                                .iter()
+                                .map(|e| e.start_ts)
+                                .min()
+                                .unwrap_or(u64::MAX);
+                            if min_start > safe {
+                                new_chain.push(lb);
+                                new_chain.sort_by_key(|e| e.start_ts);
+                            }
                         }
                     }
+                    removed += before - new_chain.len();
+                    *chain = new_chain;
                 }
-                removed += before - new_chain.len();
-                *chain = new_chain;
             }
-        }
+        });
         removed
     }
 
@@ -351,11 +302,13 @@ impl Column {
             return;
         }
         self.ensure_row_meta(to + 1);
-        if let Some(chains) = self.version_chains.as_mut() {
-            if from < chains.len() && to < chains.len() {
-                chains[to] = chains[from].clone();
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                if from < chains.len() && to < chains.len() {
+                    chains[to] = chains[from].clone();
+                }
             }
-        }
+        });
         if from < self.visibility.create_ts.len() && to < self.visibility.create_ts.len() {
             let create = self.visibility.create_ts[from];
             let commit = self.visibility.commit_ts[from];
@@ -367,101 +320,101 @@ impl Column {
     }
 
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
-        self.version_chains
-            .as_ref()
-            .and_then(|chains| chains.get(row_idx))
-            .map(|c| c.len())
-            .unwrap_or(0)
+        self.with_version_chains_read(|chains| {
+            chains
+                .and_then(|c| c.get(row_idx))
+                .map(|c| c.len())
+                .unwrap_or(0)
+        })
     }
 
     pub fn version_chain_stats(&self) -> VersionChainStats {
-        let total_rows = self.version_chains.as_ref().map(|v| v.len()).unwrap_or(0);
-        let total_entries: usize = self
-            .version_chains
-            .as_ref()
-            .map(|chains| chains.iter().map(|c| c.len()).sum())
-            .unwrap_or(0);
-        let max_len = self
-            .version_chains
-            .as_ref()
-            .map(|chains| chains.iter().map(|c| c.len()).max().unwrap_or(0))
-            .unwrap_or(0);
-        let avg_len = if total_rows > 0 {
-            total_entries as f64 / total_rows as f64
-        } else {
-            0.0
-        };
-        let memory_bytes = self
-            .version_chains
-            .as_ref()
-            .map(|chains| {
-                chains
-                    .iter()
-                    .map(|chain| {
-                        chain.len() * std::mem::size_of::<VersionEntry>()
-                            + chain
-                                .iter()
-                                .map(|e| {
-                                    e.value
-                                        .as_ref()
-                                        .map(super::value_payload_bytes)
-                                        .unwrap_or(0)
-                                })
-                                .sum::<usize>()
-                    })
-                    .sum::<usize>()
-            })
-            .unwrap_or(0)
-            + self.visibility.memory_usage();
-        VersionChainStats {
-            total_rows,
-            total_entries,
-            max_len,
-            avg_len,
-            memory_bytes,
-        }
+        self.with_version_chains_read(|chains| {
+            let total_rows = chains.map(|v| v.len()).unwrap_or(0);
+            let total_entries: usize = chains
+                .map(|c| c.iter().map(|chain| chain.len()).sum())
+                .unwrap_or(0);
+            let max_len = chains
+                .map(|c| c.iter().map(|chain| chain.len()).max().unwrap_or(0))
+                .unwrap_or(0);
+            let avg_len = if total_rows > 0 {
+                total_entries as f64 / total_rows as f64
+            } else {
+                0.0
+            };
+            let memory_bytes = chains
+                .map(|c| {
+                    c.iter()
+                        .map(|chain| {
+                            chain.len() * std::mem::size_of::<VersionEntry>()
+                                + chain
+                                    .iter()
+                                    .map(|e| {
+                                        e.value
+                                            .as_ref()
+                                            .map(super::value_payload_bytes)
+                                            .unwrap_or(0)
+                                    })
+                                    .sum::<usize>()
+                        })
+                        .sum::<usize>()
+                })
+                .unwrap_or(0)
+                + self.visibility.memory_usage();
+            VersionChainStats {
+                total_rows,
+                total_entries,
+                max_len,
+                avg_len,
+                memory_bytes,
+            }
+        })
     }
 
     pub fn fold_oldest(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
         if cap == 0 {
             return;
         }
-        let Some(chains) = self.version_chains.as_mut() else {
-            return;
-        };
-        let Some(chain) = chains.get_mut(row_idx) else {
-            return;
-        };
-        // Fold from the front: merge the second-newest entry into the newest,
-        // preserving the most recent value while extending its visible time
-        // range. This maintains the expected interval-merge semantics where
-        // recent history stays exact and oldest intervals are folded.
-        while chain.len() > cap {
-            if chain.len() < 2 {
-                break;
-            }
-            let can_fold_horizon = if horizon == Timestamp::MAX {
-                true
-            } else {
-                chain[1].end_ts <= horizon
+        self.with_version_chains_write(|chains| {
+            let Some(chains) = chains.as_mut() else {
+                return;
             };
-            if !can_fold_horizon {
-                break;
+            let Some(chain) = chains.get_mut(row_idx) else {
+                return;
+            };
+            // Fold from the front: merge the second-newest entry into the newest,
+            // preserving the most recent value while extending its visible time
+            // range. This maintains the expected interval-merge semantics where
+            // recent history stays exact and oldest intervals are folded.
+            while chain.len() > cap {
+                if chain.len() < 2 {
+                    break;
+                }
+                let can_fold_horizon = if horizon == Timestamp::MAX {
+                    true
+                } else {
+                    chain[1].end_ts <= horizon
+                };
+                if !can_fold_horizon {
+                    break;
+                }
+                let second = chain.remove(1);
+                if chain[0].end_ts < second.end_ts {
+                    chain[0].end_ts = second.end_ts;
+                }
+                let _ = second;
             }
-            let second = chain.remove(1);
-            if chain[0].end_ts < second.end_ts {
-                chain[0].end_ts = second.end_ts;
-            }
-            let _ = second;
-        }
+        });
     }
 
     pub fn clear_row_version_chains(&mut self, row_idx: usize) {
-        if let Some(chains) = self.version_chains.as_mut() {
-            if row_idx < chains.len() {
-                chains[row_idx].clear();
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                if row_idx < chains.len() {
+                    chains[row_idx].clear();
+                }
             }
-        }
+        });
         if row_idx < self.visibility.create_ts.len() {
             self.visibility.create_ts[row_idx] = 0;
             self.visibility.commit_ts[row_idx] = 0;
@@ -472,6 +425,40 @@ impl Column {
     /// Optional accessor for lazy-allocated chains.
     pub fn version_chains_opt(&self) -> Option<&Vec<Vec<VersionEntry>>> {
         self.version_chains.as_ref()
+    }
+
+    /// Execute a closure with read-only access to the version chains.
+    ///
+    /// This method enables concurrent version chain reads by providing
+    /// controlled access to the internal `Option<Vec<Vec<VersionEntry>>>`.
+    /// Multiple threads can call this method simultaneously since it only
+    /// requires `&self`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let stats = column.with_version_chains_read(|chains| {
+    ///     chains.map(|c| c.iter().map(|chain| chain.len()).sum::<usize>())
+    ///          .unwrap_or(0)
+    /// });
+    /// ```
+    pub fn with_version_chains_read<R>(
+        &self,
+        f: impl FnOnce(Option<&Vec<Vec<VersionEntry>>>) -> R,
+    ) -> R {
+        f(self.version_chains.as_ref())
+    }
+
+    /// Execute a closure with exclusive access to the version chains.
+    ///
+    /// This method provides controlled mutable access to the internal
+    /// `Option<Vec<Vec<VersionEntry>>>`. Only one thread can call this
+    /// method at a time since it requires `&mut self`.
+    pub fn with_version_chains_write<R>(
+        &mut self,
+        f: impl FnOnce(&mut Option<Vec<Vec<VersionEntry>>>) -> R,
+    ) -> R {
+        f(&mut self.version_chains)
     }
 
     /// Directly set the optional version chains (used by V2 serialization).

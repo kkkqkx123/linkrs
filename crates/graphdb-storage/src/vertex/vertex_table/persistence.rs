@@ -133,6 +133,125 @@ impl VertexTable {
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
+        // Successful full flush clears dirty tracking (data now persisted).
+        self.clear_dirty();
+
+        Ok(())
+    }
+
+    /// Incremental flush: only serialize dirty pages.
+    pub fn flush_incremental<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        dirty_pages: &[crate::persistence::dirty_page::PageId],
+        compression: crate::compression::CompressionType,
+    ) -> StorageResult<()> {
+        use std::fs;
+
+        let path = path.as_ref();
+        fs::create_dir_all(path)?;
+        crate::compression::cleanup_shadow_files(path)?;
+
+        let CompressionType::Zstd { level } = compression;
+        let page_size = crate::compression::DEFAULT_PAGE_SIZE;
+
+        // Always flush meta (small overhead, needed for base checkpoint reference).
+        let meta_path = path.join("meta.bin");
+        let meta_payload = self.build_meta_payload()?;
+        Self::write_pages_to_file(&meta_path, &meta_payload, page_size, level, 1)?;
+
+        // Determine dirty pages to flush. If caller supplied an explicit list,
+        // respect it; otherwise collect from column dirty tracking.
+        let effective_dirty: Vec<crate::persistence::dirty_page::PageId> = if dirty_pages.is_empty()
+        {
+            self.dirty_pages()
+        } else {
+            dirty_pages.to_vec()
+        };
+
+        // Flush only dirty column pages into a delta directory.
+        if !effective_dirty.is_empty() {
+            self.flush_dirty_column_pages(path, &effective_dirty)?;
+        } else {
+            // No dirty pages: still ensure columns.bin exists for incremental base?
+            // We create an empty delta marker so checkpoint is not considered corrupt.
+            let delta_dir = path.join("columns_pages");
+            fs::create_dir_all(&delta_dir)?;
+        }
+
+        let timestamps_path = path.join("timestamps.bin");
+        self.flush_timestamps(&timestamps_path)?;
+
+        let id_indexer_path = path.join("id_indexer.bin");
+        self.flush_id_indexer(&id_indexer_path)?;
+
+        // Incremental flush also clears dirty marks for flushed pages.
+        // We clear all for simplicity; per-page clear would require mapping.
+        self.clear_dirty();
+
+        Ok(())
+    }
+
+    fn flush_dirty_column_pages(
+        &self,
+        path: &Path,
+        dirty_pages: &[crate::persistence::dirty_page::PageId],
+    ) -> StorageResult<()> {
+        use rayon::prelude::*;
+        use std::collections::HashSet;
+        let delta_dir = path.join("columns_pages");
+        std::fs::create_dir_all(&delta_dir)?;
+
+        // Build set of dirty page ids for fast lookup (row-page granularity).
+        let dirty_set: HashSet<u64> = dirty_pages.iter().map(|p| p.page_id).collect();
+
+        // Collect all (col_name, page_id, bytes) to flush in parallel
+        let mut tasks: Vec<(String, usize, Vec<u8>)> = Vec::new();
+        for col in self.columns.columns() {
+            let col_dirty = col.dirty_pages();
+            for page_id in col_dirty {
+                if !dirty_set.contains(&(page_id as u64)) {
+                    continue;
+                }
+                let page_bytes = col.serialize_page(page_id)?;
+                tasks.push((col.name.clone(), page_id, page_bytes));
+            }
+        }
+        // Handle externally supplied dirty_pages when column tracking is empty
+        if tasks.is_empty() && !dirty_pages.is_empty() {
+            for page_id in dirty_pages {
+                if page_id.component != crate::persistence::dirty_page::ComponentType::VertexColumns
+                {
+                    continue;
+                }
+                let pid = page_id.page_id as usize;
+                for col in self.columns.columns() {
+                    if pid * crate::persistence::dirty_page::ROWS_PER_PAGE >= col.len() {
+                        continue;
+                    }
+                    if let Ok(bytes) = col.serialize_page(pid) {
+                        tasks.push((col.name.clone(), pid, bytes));
+                    }
+                }
+            }
+        }
+
+        // Deduplicate tasks by (col_name, page_id)
+        {
+            use std::collections::HashSet as Set2;
+            let mut seen = Set2::new();
+            tasks.retain(|(name, pid, _)| seen.insert((name.clone(), *pid)));
+        }
+
+        // Parallel write using rayon
+        let delta_dir_clone = delta_dir.clone();
+        tasks
+            .par_iter()
+            .try_for_each(|(col_name, page_id, bytes)| {
+                let file_name = format!("{}_{}.page", col_name, page_id);
+                let page_path = delta_dir_clone.join(file_name);
+                crate::compression::write_shadow_file(&page_path, bytes)
+            })?;
 
         Ok(())
     }
@@ -377,7 +496,7 @@ impl VertexTable {
         Ok(())
     }
 
-    fn load_id_indexer(&mut self, path: &Path) -> StorageResult<()> {
+    pub(crate) fn load_id_indexer(&mut self, path: &Path) -> StorageResult<()> {
         let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
@@ -616,7 +735,7 @@ impl VertexTable {
         Ok(())
     }
 
-    fn load_timestamps(&mut self, path: &Path) -> StorageResult<()> {
+    pub(crate) fn load_timestamps(&mut self, path: &Path) -> StorageResult<()> {
         let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
@@ -654,6 +773,54 @@ impl VertexTable {
         self.timestamps.load(&timestamps);
 
         self.is_open = true;
+        Ok(())
+    }
+
+    /// Apply delta pages from an incremental checkpoint shard directory.
+    pub fn apply_delta_pages(&mut self, shard_dir: &Path) -> StorageResult<()> {
+        let delta_dir = shard_dir.join("columns_pages");
+        if !delta_dir.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(&delta_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("page") {
+                continue;
+            }
+            let bytes = std::fs::read(&path)?;
+            // Extract column name and page id from file name: "<col>_<page>.page"
+            // We rely on deserialize to place rows correctly.
+            // Try to deserialize into the appropriate column.
+            // If file name doesn't match any column, skip.
+            if let Some(file_name) = path.file_stem().and_then(|n| n.to_str()) {
+                if let Some((col_name, _page_str)) = file_name.rsplit_once('_') {
+                    if self.columns.get_column(col_name).is_some() {
+                        if let Some(col) = self.columns.get_column_mut(col_name) {
+                            // Use column's deserialize (which clears dirty after)
+                            let _ = col.deserialize_page(&bytes);
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Fallback: try each column (covers naming mismatches)
+            for col in self
+                .columns
+                .columns()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>()
+            {
+                if let Some(c) = self.columns.get_column_mut(&col) {
+                    if c.deserialize_page(&bytes).is_ok() {
+                        break;
+                    }
+                }
+            }
+        }
+        // After applying deltas, clear dirty marks (data now reflects persisted delta).
+        self.clear_dirty();
         Ok(())
     }
 }

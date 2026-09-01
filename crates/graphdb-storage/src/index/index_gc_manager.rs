@@ -202,40 +202,8 @@ impl IndexGcManager {
         stats
     }
 
-    /// Unified watermark variant used by `GraphStorageContext::run_unified_gc_pass`.
-    pub fn run_gc_pass_with_watermarks(
-        &self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-    ) -> GcStats {
-        let safe_ts = watermarks.safe_gc_timestamp_with_margin(self.config.timestamp_margin);
-        if safe_ts == 0 {
-            return GcStats::default();
-        }
-        let stats = self
-            .index_manager
-            .gc_tombstones_incremental(safe_ts, self.config.batch_size)
-            .unwrap_or_default();
-        self.last_gc_ts.store(safe_ts, Ordering::Release);
-        self.total_removed
-            .fetch_add(stats.total_removed() as u64, Ordering::Release);
-        if self.needs_compaction() {
-            let compacted = self.run_compaction(safe_ts);
-            if compacted > 0 {
-                tracing::info!(
-                    indexes_compacted = compacted,
-                    "Generational compaction (watermark) completed"
-                );
-            }
-        }
-        let retired = self.index_manager.retire_generations(safe_ts);
-        if retired > 0 {
-            tracing::info!(
-                generations_retired = retired,
-                "Generation retirement (watermark) completed"
-            );
-        }
-        stats
-    }
+
+
 
     /// Run aggressive GC until no more tombstones can be removed
     ///

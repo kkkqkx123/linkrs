@@ -17,6 +17,7 @@ pub use crate::undo_log::{
 /// This is the primary rollback mechanism for NeuG architecture.
 pub(crate) trait UndoLogContext {
     fn execute_undo_logs<T: UndoTarget + ?Sized>(&self, target: &T) -> Result<(), StorageError>;
+    #[allow(dead_code)]
     fn execute_undo_logs_from_index<T: UndoTarget + ?Sized>(
         &self,
         target: &T,
@@ -75,10 +76,12 @@ impl<'a, T: UndoLogContext> UndoLogRollback<'a, T> {
 /// Combined Rollback Processor
 ///
 /// Provides UndoLog rollback capabilities for savepoint handling.
+#[allow(dead_code)]
 pub(crate) struct CombinedRollback<'a, T: UndoLogContext> {
     ctx: &'a T,
 }
 
+#[allow(dead_code)]
 impl<'a, T: UndoLogContext> CombinedRollback<'a, T> {
     pub fn new(ctx: &'a T) -> Self {
         Self { ctx }

@@ -64,6 +64,19 @@ pub enum ColumnInner {
 /// (`visibility.create_ts` + optional `version_chains`), so a snapshot
 /// read at a historical timestamp returns the value visible then instead
 /// of the current one. Old versions are reclaimed by [`Column::gc_versions`].
+///
+/// # Concurrency Model
+///
+/// Version chain access follows a shared/exclusive pattern:
+/// - **Reads** ([`Column::get_at_ts`], [`Column::with_version_chains_read`]):
+///   Take `&self`, allowing multiple concurrent readers.
+/// - **Writes** ([`Column::set_versioned`], [`Column::gc_versions`]):
+///   Take `&mut self`, exclusive access required.
+///
+/// The table-level `RwLock<ShardedVertexTable>` provides shard-granularity
+/// concurrency. Within a shard, version chain operations are serialized by
+/// `&mut self`. For future optimization, version chains can be wrapped in
+/// `parking_lot::RwLock` to allow concurrent reads during metadata updates.
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
@@ -84,6 +97,7 @@ pub struct Column {
     /// Lightweight row-level visibility metadata (Layer 1).
     /// Always present; used for fast transaction isolation checks.
     pub(super) visibility: super::mvcc::RowVisibility,
+    pub(super) dirty_tracker: crate::persistence::dirty_page::DirtyPageTracker,
 }
 
 impl Column {
@@ -105,6 +119,7 @@ impl Column {
             zone_maps: Vec::new(),
             version_chains: None,
             visibility: super::mvcc::RowVisibility::new(),
+            dirty_tracker: crate::persistence::dirty_page::DirtyPageTracker::new(0),
         }
     }
 
@@ -122,6 +137,111 @@ impl Column {
         }
     }
 
+    /// Mark the page containing `row_idx` as dirty.
+    #[inline]
+    pub fn mark_dirty(&mut self, row_idx: usize) {
+        let page_id = crate::persistence::dirty_page::DirtyPageTracker::row_to_page(row_idx);
+        self.dirty_tracker.mark_page(page_id);
+        self.dirty_tracker.ensure_rows(self.len().max(row_idx + 1));
+    }
+
+    pub fn dirty_pages(&self) -> Vec<usize> {
+        self.dirty_tracker.dirty_pages()
+    }
+
+    pub fn dirty_count(&self) -> usize {
+        self.dirty_tracker.dirty_count()
+    }
+
+    pub fn clear_dirty(&mut self) {
+        self.dirty_tracker.clear();
+    }
+
+    /// Serialize a single page for incremental checkpoint.
+    /// Returns `PageData` serialized bytes including header + payload.
+    pub fn serialize_page(&self, page_id: usize) -> StorageResult<Vec<u8>> {
+        let rows_per_page = crate::persistence::dirty_page::ROWS_PER_PAGE;
+        let start = page_id * rows_per_page;
+        let total = self.len();
+        if start >= total {
+            return Err(StorageError::invalid_input(format!(
+                "page {} out of range (total rows {})",
+                page_id, total
+            )));
+        }
+        let end = (start + rows_per_page).min(total);
+        let mut values = Vec::with_capacity(end - start);
+        for row in start..end {
+            values.push(self.get(row));
+        }
+        let payload = postcard::to_allocvec(&values)
+            .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+        let page_data =
+            crate::persistence::dirty_page::PageData::new(page_id as u32, payload, false);
+        Ok(page_data.serialize())
+    }
+
+    /// Deserialize and apply a single page. Does not mark the page dirty
+    /// (clean after checkpoint load).
+    pub fn deserialize_page(&mut self, data: &[u8]) -> StorageResult<()> {
+        let page =
+            crate::persistence::dirty_page::PageData::deserialize(data).ok_or_else(|| {
+                StorageError::deserialize_error(
+                    "invalid page data or checksum mismatch".to_string(),
+                )
+            })?;
+        let values: Vec<Option<Value>> = postcard::from_bytes(&page.data)
+            .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+        let rows_per_page = crate::persistence::dirty_page::ROWS_PER_PAGE;
+        let start = page.header.page_id as usize * rows_per_page;
+        // Ensure column can hold the restored rows without marking dirty.
+        if start + values.len() > self.len() {
+            self.resize(start + values.len());
+        }
+        for (offset, val) in values.into_iter().enumerate() {
+            let row_idx = start + offset;
+            self.write_value_without_dirty(row_idx, val.as_ref())?;
+        }
+        // Mark page clean after successful restore (was dirtied by writes if any).
+        self.dirty_tracker.clear_page(page.header.page_id as usize);
+        Ok(())
+    }
+
+    /// Internal write without dirty marking (used by page deserialization).
+    fn write_value_without_dirty(
+        &mut self,
+        row_idx: usize,
+        value: Option<&Value>,
+    ) -> StorageResult<()> {
+        if self.encoding.is_encoded() {
+            if self.encoding.set(row_idx, value).is_ok() {
+                if row_idx >= self.len() {
+                    self.sync_row_count_from_encoding();
+                }
+                self.update_zone_maps(row_idx, value);
+                return Ok(());
+            }
+            self.decode_encoding_to_raw()?;
+        }
+        if let Some(v) = value {
+            if v.is_null() {
+                if !self.nullable {
+                    return Err(StorageError::null_value_not_allowed(self.name.clone()));
+                }
+                self.inner_mut().set(row_idx, None)?;
+            } else {
+                self.inner_mut().set(row_idx, Some(v))?;
+            }
+        } else {
+            if !self.nullable {
+                return Err(StorageError::null_value_not_allowed(self.name.clone()));
+            }
+            self.inner_mut().set(row_idx, None)?;
+        }
+        self.update_zone_maps(row_idx, value);
+        Ok(())
+    }
+
     /// Write `value` into the column, handling the encoded and raw paths.
     /// Does not touch the MVCC metadata.
     pub(super) fn write_value(
@@ -129,6 +249,7 @@ impl Column {
         row_idx: usize,
         value: Option<&Value>,
     ) -> StorageResult<()> {
+        self.mark_dirty(row_idx);
         if self.encoding.is_encoded() {
             if self.encoding.set(row_idx, value).is_ok() {
                 if row_idx >= self.len() {
@@ -170,11 +291,13 @@ impl Column {
         // Plain set treats the value as "current from the beginning": it
         // resets the row's MVCC metadata (no historical version recorded).
         self.ensure_row_meta(row_idx + 1);
-        if let Some(chains) = self.version_chains.as_mut() {
-            if row_idx < chains.len() {
-                chains[row_idx].clear();
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                if row_idx < chains.len() {
+                    chains[row_idx].clear();
+                }
             }
-        }
+        });
         self.visibility.mark_created(row_idx, 0);
         self.write_value(row_idx, value)
     }
@@ -207,29 +330,28 @@ impl Column {
     }
 
     pub fn memory_usage(&self) -> usize {
-        let version_bytes = self
-            .version_chains
-            .as_ref()
-            .map(|chains| {
-                chains
-                    .iter()
-                    .map(|chain| {
-                        chain.len() * std::mem::size_of::<super::mvcc::VersionEntry>()
-                            + chain
-                                .iter()
-                                .map(|entry| {
-                                    entry
-                                        .value
-                                        .as_ref()
-                                        .map(super::value_payload_bytes)
-                                        .unwrap_or(0)
-                                })
-                                .sum::<usize>()
-                    })
-                    .sum::<usize>()
-            })
-            .unwrap_or(0)
-            + self.visibility.memory_usage();
+        let version_bytes = self.with_version_chains_read(|chains| {
+            chains
+                .map(|c| {
+                    c.iter()
+                        .map(|chain| {
+                            chain.len() * std::mem::size_of::<super::mvcc::VersionEntry>()
+                                + chain
+                                    .iter()
+                                    .map(|entry| {
+                                        entry
+                                            .value
+                                            .as_ref()
+                                            .map(super::value_payload_bytes)
+                                            .unwrap_or(0)
+                                    })
+                                    .sum::<usize>()
+                        })
+                        .sum::<usize>()
+                })
+                .unwrap_or(0)
+                + self.visibility.memory_usage()
+        });
         self.inner().memory_usage() + self.encoding.memory_usage() + version_bytes
     }
 
@@ -247,27 +369,40 @@ impl Column {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
         self.zone_maps.clear();
-        self.version_chains = None;
+        self.with_version_chains_write(|chains| {
+            *chains = None;
+        });
         self.visibility.clear();
+        self.dirty_tracker.clear();
+        self.dirty_tracker.set_total_pages(0);
     }
 
     /// Pre-allocate capacity for `additional` more rows in the underlying
     /// storage buffers (used by batch inserts).
     pub fn reserve(&mut self, additional: usize) {
         self.inner_mut().reserve(additional);
-        if let Some(chains) = self.version_chains.as_mut() {
-            chains.reserve(additional);
-        }
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                chains.reserve(additional);
+            }
+        });
         self.visibility.reserve(additional);
+        let needed =
+            (self.len() + additional).div_ceil(crate::persistence::dirty_page::ROWS_PER_PAGE);
+        self.dirty_tracker
+            .set_total_pages(self.dirty_tracker.total_pages().max(needed));
     }
 
     pub fn resize(&mut self, new_count: usize) {
         self.inner_mut().resize(new_count);
         self.ensure_row_meta(new_count);
-        if let Some(chains) = self.version_chains.as_mut() {
-            chains.resize(new_count, Vec::new());
-        }
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                chains.resize(new_count, Vec::new());
+            }
+        });
         self.visibility.resize(new_count);
+        self.dirty_tracker.ensure_rows(new_count);
     }
 
     pub fn load_data_from_raw(
@@ -282,6 +417,8 @@ impl Column {
         // MVCC metadata is intentionally left untouched: a freshly-loaded
         // column starts with empty metadata (rows read as "current"), and
         // in-memory decode paths must preserve existing version chains.
+        self.dirty_tracker.clear();
+        self.dirty_tracker.ensure_rows(self.len());
     }
 
     pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {

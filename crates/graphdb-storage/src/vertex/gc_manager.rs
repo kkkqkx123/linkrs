@@ -142,31 +142,8 @@ impl VertexGcManager {
         total_removed
     }
 
-    /// Unified watermark variant used by `GraphStorageContext::run_unified_gc_pass`.
-    pub fn run_gc_pass_with_watermarks(
-        &self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-    ) -> usize {
-        let safe_ts = watermarks.safe_gc_timestamp_with_margin(self.config.timestamp_margin);
-        if safe_ts == 0 {
-            return 0;
-        }
-        let mut total_removed = 0usize;
-        if let Err(e) = self.data_store.with_vertex_tables_mut(|tables| {
-            for table in tables.values() {
-                match table.gc(safe_ts) {
-                    Ok(c) => total_removed += c,
-                    Err(err) => log::warn!("Vertex table GC (watermark) failed: {}", err),
-                }
-            }
-            Ok(())
-        }) {
-            log::warn!("Vertex table GC (watermark) error: {}", e);
-        }
-        self.total_removed
-            .fetch_add(total_removed as u64, Ordering::Release);
-        total_removed
-    }
+
+
 
     /// Start the background GC task on the shared thread pool.
     ///

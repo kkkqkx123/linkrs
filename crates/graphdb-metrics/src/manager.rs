@@ -187,6 +187,16 @@ pub enum MetricType {
     MigrationDurationMs,
     MigrationErrorsTotal,
     MigrationActiveCount,
+    // Dirty page / incremental checkpoint metrics
+    DirtyPagesTotal,
+    DirtyPagesCount,
+    DirtyPageRatioPermille,
+    CheckpointDirtyPages,
+    CheckpointStrategyIncremental,
+    CheckpointStrategyHybrid,
+    CheckpointStrategyFull,
+    CheckpointIncrementalDurationUs,
+    CheckpointIncrementalBytesFlushed,
 }
 
 /// Reason a checkpoint was triggered.
@@ -1355,6 +1365,58 @@ impl StatsManager {
             MetricType::CheckpointTriggeredExplicit,
             MetricType::CheckpointRequestsDeduplicated,
             MetricType::CheckpointRequestsBlocked,
+            MetricType::CheckpointDirtyPages,
+            MetricType::CheckpointStrategyIncremental,
+            MetricType::CheckpointStrategyHybrid,
+            MetricType::CheckpointStrategyFull,
+            MetricType::CheckpointIncrementalDurationUs,
+            MetricType::CheckpointIncrementalBytesFlushed,
+        ] {
+            if let Some(v) = self.get_value(mt) {
+                out.insert(mt, v);
+            }
+        }
+        out
+    }
+
+    // ========== Dirty page metrics ==========
+
+    pub fn record_dirty_pages(&self, dirty: u64, total: u64) {
+        self.set_value(MetricType::DirtyPagesCount, dirty);
+        self.set_value(MetricType::DirtyPagesTotal, total);
+        let ratio_permille = if total == 0 {
+            0
+        } else {
+            (dirty as f64 / total as f64 * 1000.0) as u64
+        };
+        self.set_value(MetricType::DirtyPageRatioPermille, ratio_permille);
+        self.set_value(MetricType::CheckpointDirtyPages, dirty);
+    }
+
+    pub fn record_checkpoint_strategy_by_name(&self, strategy: &str) {
+        match strategy {
+            "incremental" => self.add_value(MetricType::CheckpointStrategyIncremental),
+            "hybrid" => self.add_value(MetricType::CheckpointStrategyHybrid),
+            "full" => self.add_value(MetricType::CheckpointStrategyFull),
+            _ => {}
+        }
+    }
+
+    pub fn record_incremental_checkpoint(&self, duration: Duration, bytes: u64) {
+        self.add_value_with_amount(
+            MetricType::CheckpointIncrementalDurationUs,
+            duration.as_micros() as u64,
+        );
+        self.add_value_with_amount(MetricType::CheckpointIncrementalBytesFlushed, bytes);
+    }
+
+    pub fn get_dirty_page_metrics(&self) -> HashMap<MetricType, u64> {
+        let mut out = HashMap::new();
+        for mt in [
+            MetricType::DirtyPagesTotal,
+            MetricType::DirtyPagesCount,
+            MetricType::DirtyPageRatioPermille,
+            MetricType::CheckpointDirtyPages,
         ] {
             if let Some(v) = self.get_value(mt) {
                 out.insert(mt, v);

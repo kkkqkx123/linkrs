@@ -178,9 +178,15 @@ impl RecoveryApplier for GraphStorageContext {
         index::replay_drop_edge_index(self, redo, ts)
     }
 
-    fn replay_update_sequence(&self, redo: &UpdateSequenceRedo, _ts: Timestamp) -> StorageResult<()> {
-        self.serial_allocator()
-            .seed(&crate::engine::graph_storage::SerialKey::new(redo.space_id, &redo.table_name), redo.next_value);
+    fn replay_update_sequence(
+        &self,
+        redo: &UpdateSequenceRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.serial_allocator().seed(
+            &crate::engine::graph_storage::SerialKey::new(redo.space_id, &redo.table_name),
+            redo.next_value,
+        );
         Ok(())
     }
 }

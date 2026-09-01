@@ -10,8 +10,10 @@ use graphdb_sync::checkpoint_manifest::{
 use graphdb_transaction::wal::Lsn;
 
 use crate::engine::snapshot_manager::SnapshotOptions;
+use crate::persistence::dirty_page::{CheckpointStrategy, IncrementalCheckpointMeta};
 
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
+pub const INCREMENTAL_CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CheckpointFileEntry {
@@ -46,6 +48,12 @@ pub struct CheckpointData {
     pub vertex_count: u64,
     pub edge_count: u64,
     pub data_size: u64,
+}
+
+impl Default for CheckpointStrategy {
+    fn default() -> Self {
+        Self::Full
+    }
 }
 
 impl crate::engine::persistence_coordinator::PersistenceCoordinator {
@@ -293,7 +301,28 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             crate::engine::persistence_coordinator::PersistenceFaultPoint::CheckpointIntentMid,
         )?;
         let files = Self::collect_checkpoint_files(&temporary_dir)?;
-        self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
+        // Check if incremental checkpoint meta was produced by flush (Shadow Page CoW)
+        let incremental_meta_path = temporary_dir.join("incremental.meta");
+        if incremental_meta_path.exists() {
+            if let Ok(bytes) = std::fs::read(&incremental_meta_path) {
+                if let Ok(meta) = serde_json::from_slice::<IncrementalCheckpointMeta>(&bytes) {
+                    self.save_checkpoint_metadata_extended(
+                        &temporary_dir,
+                        &checkpoint,
+                        &data,
+                        &files,
+                        Some(&meta),
+                    )?;
+                    // Also keep incremental.meta file for load_incremental_checkpoint_metadata (already there)
+                } else {
+                    self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
+                }
+            } else {
+                self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
+            }
+        } else {
+            self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
+        }
         self.fail_if_injected(
             crate::engine::persistence_coordinator::PersistenceFaultPoint::CheckpointCommitMid,
         )?;
@@ -408,13 +437,29 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         data: &CheckpointData,
         files: &[CheckpointFileEntry],
     ) -> StorageResult<()> {
+        self.save_checkpoint_metadata_extended(dir, checkpoint, data, files, None)
+    }
+
+    fn save_checkpoint_metadata_extended(
+        &self,
+        dir: &Path,
+        checkpoint: &graphdb_transaction::wal::Checkpoint,
+        data: &CheckpointData,
+        files: &[CheckpointFileEntry],
+        incremental: Option<&IncrementalCheckpointMeta>,
+    ) -> StorageResult<()> {
         use std::fs::File;
         use std::io::Write;
 
         let metadata_path = dir.join("checkpoint.meta");
         let mut file = File::create(metadata_path)?;
 
-        writeln!(file, "format_version={}", CHECKPOINT_FORMAT_VERSION)?;
+        let version = if incremental.is_some() {
+            INCREMENTAL_CHECKPOINT_FORMAT_VERSION
+        } else {
+            CHECKPOINT_FORMAT_VERSION
+        };
+        writeln!(file, "format_version={}", version)?;
         writeln!(file, "checkpoint_id={}", checkpoint.seq)?;
         writeln!(file, "timestamp={}", checkpoint.timestamp)?;
         writeln!(file, "wal_lsn={}", checkpoint.lsn.0)?;
@@ -422,6 +467,34 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         writeln!(file, "edge_count={}", data.edge_count)?;
         writeln!(file, "data_size={}", data.data_size)?;
         writeln!(file, "created_at={:?}", SystemTime::now())?;
+        if let Some(meta) = incremental {
+            writeln!(file, "strategy={}", meta.strategy.as_str())?;
+            if let Some(base) = meta.base_checkpoint_id {
+                writeln!(file, "base_checkpoint_id={}", base)?;
+            }
+            writeln!(file, "dirty_pages={}", meta.dirty_pages.len())?;
+            for page in &meta.dirty_pages {
+                writeln!(
+                    file,
+                    "dirty_page={}:{}",
+                    page.component.as_str(),
+                    page.page_id
+                )?;
+            }
+            for (page, checksum) in &meta.page_checksums {
+                writeln!(
+                    file,
+                    "page_checksum={}:{}:{}",
+                    page.component.as_str(),
+                    page.page_id,
+                    checksum
+                )?;
+            }
+            writeln!(file, "total_pages={}", meta.total_pages)?;
+            writeln!(file, "dirty_ratio={}", meta.dirty_ratio)?;
+        } else {
+            writeln!(file, "strategy=full")?;
+        }
         for entry in files {
             writeln!(
                 file,
@@ -435,6 +508,8 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
 
         Ok(())
     }
+
+
 
     pub(crate) fn collect_checkpoint_files(root: &Path) -> StorageResult<Vec<CheckpointFileEntry>> {
         fn visit(
@@ -676,11 +751,18 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             }
         }
 
-        if format_version != Some(CHECKPOINT_FORMAT_VERSION) {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported checkpoint format version: {:?}",
-                format_version
-            )));
+        if !matches!(
+            format_version,
+            Some(CHECKPOINT_FORMAT_VERSION) | Some(INCREMENTAL_CHECKPOINT_FORMAT_VERSION)
+        ) {
+            // For backward compatibility, allow missing format_version to be treated as 1
+            // but if present and unsupported, error.
+            if format_version.is_some() {
+                return Err(StorageError::deserialize_error(format!(
+                    "Unsupported checkpoint format version: {:?}",
+                    format_version
+                )));
+            }
         }
         if files.is_empty() {
             return Err(StorageError::deserialize_error(
@@ -706,6 +788,9 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             files,
         ))
     }
+
+
+
 
     /// Publish a combined checkpoint manifest that atomically references the
     /// storage snapshot, outbox snapshot (if provided), and index manifests.

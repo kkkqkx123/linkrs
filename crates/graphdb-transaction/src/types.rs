@@ -121,31 +121,60 @@ pub enum TransactionState {
 
 /// Logical transaction category.
 ///
-/// The first three variants are user-visible. `Recovery` and `Dummy` are
-/// internal lifecycle markers that must not be treated as regular user
-/// transactions: `Recovery` is reserved for WAL replay, `Dummy` for
-/// operations without a user transaction context.
+/// User-visible types (`ReadOnly`, `Write`) follow standard transaction
+/// semantics with begin/commit/abort lifecycle.
+///
+/// System types provide internal lifecycle markers:
+/// - `Checkpoint`: Exclusive operation that pauses new writes and drains
+///   in-flight writes to capture a consistent snapshot. Created via
+///   [`TransactionManager::begin_checkpoint_transaction`]. Writes a WAL
+///   checkpoint marker on commit.
+/// - `Recovery`: Reserved for WAL replay during crash recovery. Created
+///   via [`TransactionContext::new_recovery`]. Does not acquire MVCC
+///   read/write slots.
+/// - `Dummy`: Operations without a user transaction context (e.g.,
+///   background GC). Does not participate in MVCC or WAL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionType {
+    /// Read-only transaction (MVCC snapshot at start timestamp).
     ReadOnly,
+    /// Read-write transaction (OCC with write-set certification).
     Write,
+    /// Checkpoint transaction (exclusive, pauses writes for snapshot).
     Checkpoint,
+    /// Recovery transaction (WAL replay, no MVCC slots).
     Recovery,
+    /// Dummy transaction (background ops, no MVCC/WAL).
     Dummy,
 }
 
 impl TransactionType {
+    /// Returns true for user-initiated transactions (ReadOnly, Write).
+    /// System transactions (Checkpoint, Recovery, Dummy) return false.
     pub fn is_user_transaction(&self) -> bool {
         matches!(self, TransactionType::ReadOnly | TransactionType::Write)
     }
+
+    /// Returns true for system-internal transactions (Checkpoint, Recovery, Dummy).
+    /// These must not be exposed to user-facing APIs.
     pub fn is_system(&self) -> bool {
         matches!(
             self,
             TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy
         )
     }
+
+    /// Returns true if this transaction type writes to WAL.
+    /// Write transactions log redo records; Checkpoint transactions log
+    /// checkpoint markers. Recovery and Dummy do not write WAL.
     pub fn requires_wal(&self) -> bool {
         matches!(self, TransactionType::Write | TransactionType::Checkpoint)
+    }
+
+    /// Returns true if this transaction type acquires MVCC read/write slots.
+    /// Recovery and Dummy transactions operate outside MVCC isolation.
+    pub fn uses_mvcc(&self) -> bool {
+        matches!(self, TransactionType::ReadOnly | TransactionType::Write)
     }
 }
 

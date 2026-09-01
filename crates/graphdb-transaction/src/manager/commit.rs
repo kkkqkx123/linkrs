@@ -52,7 +52,7 @@ impl TransactionManager {
             ctx
         };
 
-        if context.txn_type != TransactionType::Checkpoint {
+        if context.txn_type.is_user_transaction() {
             if let Err(conflict) = self.check_write_set_conflict(txn_id) {
                 if let Err(error) = self.abort_transaction_internal(&context) {
                     log::error!(
@@ -79,7 +79,7 @@ impl TransactionManager {
         let descriptor = context.build_commit_descriptor();
         let mut commit_lsn = CommitLsn::ZERO;
 
-        if context.txn_type != TransactionType::Checkpoint {
+        if context.txn_type.is_user_transaction() {
             if !self.config.in_memory {
                 if let Some(ref commit_sink) = self.commit_sink {
                     let max_retries = self.config.commit_retry_attempts;
@@ -168,7 +168,7 @@ impl TransactionManager {
         }
         context.mark_commit_published(commit_lsn);
 
-        if context.txn_type != TransactionType::Checkpoint && !self.config.in_memory {
+        if context.txn_type.is_user_transaction() && !self.config.in_memory {
             if let Some(ref commit_sink) = self.commit_sink {
                 let max_retries = self.config.commit_retry_attempts;
                 let mut last_error = None;

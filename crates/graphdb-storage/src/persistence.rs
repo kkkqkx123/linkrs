@@ -3,6 +3,8 @@
 //! Provides standardized file headers with magic bytes and versioning
 //! for all persistence files in the storage layer.
 
+pub mod dirty_page;
+
 use graphdb_core::error::StorageError;
 use graphdb_core::StorageResult;
 use std::path::Path;

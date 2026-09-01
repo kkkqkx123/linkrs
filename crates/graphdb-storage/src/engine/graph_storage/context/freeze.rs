@@ -76,19 +76,6 @@ impl GraphStorageContext {
         self.trigger_auto_edge_maintenance_with_watermarks(&wm)
     }
 
-    /// Run the storage-level automatic maintenance pass on every edge
-    /// partition: tombstone GC, property compaction, and delta freeze
-    /// based on each table's configured thresholds.
-    /// Uses the unified `GcCoordinator` watermark so the cutoff is shared
-    /// with vertex and index GC in the same epoch.
-    fn trigger_auto_edge_maintenance(&self) -> StorageResult<()> {
-        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-            self.persistent.version_manager.clone(),
-        );
-        let wm = gc.capture_watermarks();
-        self.trigger_auto_edge_maintenance_with_watermarks(&wm)
-    }
-
     fn trigger_auto_edge_maintenance_with_watermarks(
         &self,
         wm: &graphdb_transaction::MvccWatermarks,
@@ -128,18 +115,6 @@ impl GraphStorageContext {
             })?;
         log::info!("Edge retention floor set to {} on all partitions", ts);
         Ok(())
-    }
-
-    /// Compact vertex tables whose deleted-vertex ID holes exceed the
-    /// configured thresholds (absolute count and ratio), with a cooldown
-    /// between runs. Deletions at or before the snapshot cleanup threshold
-    /// are reclaimed so active snapshot time-travel stays intact.
-    fn maybe_auto_compact_vertices(&self) -> StorageResult<()> {
-        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-            self.persistent.version_manager.clone(),
-        );
-        let wm = gc.capture_watermarks();
-        self.maybe_auto_compact_vertices_with_watermarks(&wm)
     }
 
     fn maybe_auto_compact_vertices_with_watermarks(

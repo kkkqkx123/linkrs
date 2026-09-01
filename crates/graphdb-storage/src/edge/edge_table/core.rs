@@ -1686,24 +1686,22 @@ impl TimeTravelEdgeStore {
 
         if cfg.tombstone_gc_threshold > 0
             && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
+            && bound < Timestamp::MAX
+            && (bound != self.last_gc_min_snapshot_ts
+                || (cfg.gc_min_serial > 0
+                    && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
         {
-            if bound < Timestamp::MAX
-                && (bound != self.last_gc_min_snapshot_ts
-                    || (cfg.gc_min_serial > 0
-                        && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
-            {
-                let cleaned = self.mvcc.gc_tombstones(bound);
-                self.last_gc_min_snapshot_ts = bound;
-                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-                if cleaned > 0 {
-                    maintenance_ran += 1;
-                    log::debug!(
-                        "Auto-maintenance GC (watermark): removed {} tombstones (bound={}, total={})",
-                        cleaned,
-                        bound,
-                        self.mvcc.total_tombstone_count()
-                    );
-                }
+            let cleaned = self.mvcc.gc_tombstones(bound);
+            self.last_gc_min_snapshot_ts = bound;
+            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+            if cleaned > 0 {
+                maintenance_ran += 1;
+                log::debug!(
+                    "Auto-maintenance GC (watermark): removed {} tombstones (bound={}, total={})",
+                    cleaned,
+                    bound,
+                    self.mvcc.total_tombstone_count()
+                );
             }
         }
 

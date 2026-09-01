@@ -699,12 +699,15 @@ pub(super) fn rollback_context_timestamp(
     version_manager: &VersionManager,
     context: &TransactionContext,
 ) {
+    if !context.txn_type.uses_mvcc() {
+        return;
+    }
     match context.txn_type {
         TransactionType::ReadOnly => {
             version_manager.release_read_timestamp_at(context.start_timestamp)
         }
         TransactionType::Write => version_manager.abort_write_timestamp(context.timestamp()),
-        TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy => {}
+        _ => {}
     }
 }
 

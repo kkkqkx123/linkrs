@@ -130,14 +130,6 @@ pub fn collect_committed_transactions(
                         redo_entries.len()
                     )));
                 }
-                if commit.entry_count > 0 && commit.first_sequence > 0 {
-                    if commit.first_sequence == 0 {
-                        return Err(WalError::InvalidOperation(format!(
-                            "Commit has zero first_sequence with entry_count={}",
-                            commit.entry_count
-                        )));
-                    }
-                }
                 committed.push(CommittedWalTransaction {
                     transaction_id: commit.transaction_id,
                     commit_lsn: CommitLsn::new(entry.lsn.as_u64()),

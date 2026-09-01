@@ -400,23 +400,6 @@ impl ColumnStore {
         }
     }
 
-    /// Garbage-collect using unified watermarks. Captures the same safe
-    /// timestamp for every column in one pass so a prefix reclaim cannot
-    /// change the cutoff for a later column.
-    #[allow(dead_code)]
-    pub fn gc_versions_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
-        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
-        let mut removed = 0;
-        for col in &mut self.columns {
-            removed += col.gc_versions(safe);
-        }
-        removed
-    }
-
     /// Garbage-collect version chains across all columns, returning the total
     /// number of before-images removed.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
@@ -528,6 +511,36 @@ impl ColumnStore {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    /// Collect all dirty pages across columns.
+    pub fn collect_dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
+        let mut pages = Vec::new();
+        for col in &self.columns {
+            for pid in col.dirty_pages() {
+                pages.push(crate::persistence::dirty_page::PageId::new(
+                    crate::persistence::dirty_page::ComponentType::VertexColumns,
+                    pid as u64,
+                ));
+            }
+        }
+        pages
+    }
+
+    pub fn clear_dirty(&mut self) {
+        for col in &mut self.columns {
+            col.clear_dirty();
+        }
+    }
+
+    pub fn total_dirty_pages(&self) -> usize {
+        self.columns.iter().map(|c| c.dirty_count()).sum()
+    }
+
+    pub fn mark_row_dirty(&mut self, row_idx: usize) {
+        for col in &mut self.columns {
+            col.mark_dirty(row_idx);
+        }
     }
 
     pub fn load_column_from_raw(

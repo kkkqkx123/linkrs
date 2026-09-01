@@ -151,7 +151,11 @@ pub trait RecoveryApplier {
         Ok(())
     }
 
-    fn replay_update_sequence(&self, redo: &UpdateSequenceRedo, ts: Timestamp) -> StorageResult<()> {
+    fn replay_update_sequence(
+        &self,
+        redo: &UpdateSequenceRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
         let _ = (redo, ts);
         Ok(())
     }

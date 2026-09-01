@@ -235,7 +235,7 @@ pub(crate) fn create_checkpoint_with_reason(
             let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
             std::fs::create_dir_all(&data_dir)?;
 
-            graph.flush_tables_to_dir(&data_dir)?;
+            graph.flush_tables_to_checkpoint(&data_dir)?;
             user_storage.save_to_dir(&data_dir)?;
 
             let vertex_count = graph.total_vertex_count() as u64;
@@ -314,7 +314,7 @@ pub(crate) fn create_checkpoint_with_guard(
                 .save_to_file(&migration_file)?;
             let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
             std::fs::create_dir_all(&data_dir)?;
-            graph.flush_tables_to_dir(&data_dir)?;
+            graph.flush_tables_to_checkpoint(&data_dir)?;
             user_storage.save_to_dir(&data_dir)?;
             let vertex_count = graph.total_vertex_count() as u64;
             let edge_count = graph.total_edge_count() as u64;

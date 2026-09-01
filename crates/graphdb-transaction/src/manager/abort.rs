@@ -117,7 +117,7 @@ impl TransactionManager {
     ) -> Result<(), TransactionError> {
         let max_retries = self.config.abort_retry_attempts;
 
-        if !self.config.in_memory && context.txn_type != TransactionType::Checkpoint {
+        if !self.config.in_memory && context.txn_type.is_user_transaction() {
             if let Some(ref commit_sink) = self.commit_sink {
                 let mut last_error = None;
                 for attempt in 0..=max_retries {

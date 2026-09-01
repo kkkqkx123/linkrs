@@ -477,6 +477,7 @@ impl VertexTable {
             .ok_or(StorageError::vertex_not_found())?;
 
         self.timestamps.remove(internal_id, ts);
+        self.mark_row_dirty(internal_id as usize);
         Ok(())
     }
 
@@ -486,6 +487,7 @@ impl VertexTable {
         }
 
         self.timestamps.remove(internal_id, ts);
+        self.mark_row_dirty(internal_id as usize);
         Ok(())
     }
 
@@ -640,6 +642,19 @@ impl VertexTable {
         let allocated = self.next_local_id() as usize;
         let deleted = self.timestamps.iter_deleted(ts).count();
         (allocated.saturating_sub(deleted), allocated)
+    }
+
+    /// Mark all columns' page containing `row_idx` as dirty.
+    pub fn mark_row_dirty(&mut self, row_idx: usize) {
+        self.columns.mark_row_dirty(row_idx);
+    }
+
+    pub fn dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
+        self.columns.collect_dirty_pages()
+    }
+
+    pub fn clear_dirty(&mut self) {
+        self.columns.clear_dirty();
     }
 
     /// Pre-allocate capacity for `additional` more vertices in the ID indexer,
@@ -797,25 +812,6 @@ impl VertexTable {
     /// Perform garbage collection on version data older than min_ts
     ///
     /// Reclaims deleted vertices (from the id indexer / timestamps) and drops
-    #[allow(dead_code)]
-    pub fn gc_column_versions_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
-        self.columns.gc_versions_with_watermarks(watermarks, margin)
-    }
-
-    #[allow(dead_code)]
-    pub fn gc_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> StorageResult<usize> {
-        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
-        self.gc(safe)
-    }
-
     /// property version-chain entries that no active snapshot can observe.
     ///
     /// Returns the number of version entries cleaned up.
