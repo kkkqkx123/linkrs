@@ -150,7 +150,7 @@ impl GraphStorageContext {
         fs::create_dir_all(&vertex_dir)?;
 
         // Compute global dirty ratio to decide incremental vs full flush.
-        let global_dirty_ratio = {
+        let (global_dirty_ratio, global_total_dirty, global_total_pages) = {
             let vertex_tables = self.persistent.data_store.with_vertex_tables(|tables| {
                 tables
                     .iter()
@@ -158,7 +158,7 @@ impl GraphStorageContext {
                     .collect::<Vec<_>>()
             });
             if vertex_tables.is_empty() {
-                0.0
+                (0.0, 0usize, 0usize)
             } else {
                 let mut total_dirty = 0usize;
                 let mut total_pages = 0usize;
@@ -166,17 +166,18 @@ impl GraphStorageContext {
                     total_dirty += table.total_dirty_pages();
                     total_pages += table.total_pages();
                 }
-                if total_pages == 0 {
+                let ratio = if total_pages == 0 {
                     0.0
                 } else {
                     total_dirty as f64 / total_pages as f64
-                }
+                };
+                (ratio, total_dirty, total_pages)
             }
         };
         let strategy =
             crate::persistence::dirty_page::select_checkpoint_strategy(global_dirty_ratio);
         if let Some(stats) = self.persistent.stats_manager.as_ref() {
-            stats.record_dirty_pages((global_dirty_ratio * 1000.0) as u64, 1000);
+            stats.record_dirty_pages(global_total_dirty as u64, global_total_pages as u64);
             stats.record_checkpoint_strategy_by_name(strategy.as_str());
         }
         log::info!(
@@ -334,34 +335,106 @@ impl GraphStorageContext {
 
         // Handle incremental checkpoint chain: if this checkpoint is incremental,
         // first restore its base, then overlay delta pages.
+        // If base restore or delta overlay fails, fall back to loading the
+        // current checkpoint as a best-effort full snapshot.
         if let Some(base_id) = Self::parse_base_checkpoint_id(checkpoint_dir) {
             if let Some(parent) = checkpoint_dir.parent() {
                 let base_path = parent.join(format!("checkpoint_{}", base_id));
                 if base_path.exists() && base_path != checkpoint_dir {
-                    self.restore_from_checkpoint(&base_path)?;
-                    // Overlay delta pages for vertices
-                    let checkpoint_paths = crate::engine::paths::StoragePaths::new(checkpoint_dir);
-                    let vertex_dir = checkpoint_paths.vertices_dir();
-                    if vertex_dir.exists() {
-                        self.persistent
-                            .data_store
-                            .with_vertex_tables_mut(|vertex_tables| {
-                                for entry in fs::read_dir(&vertex_dir)? {
+                    match self.restore_from_checkpoint(&base_path) {
+                        Ok(()) => {
+                            // Base restored successfully; overlay incremental delta
+                            let checkpoint_paths =
+                                crate::engine::paths::StoragePaths::new(checkpoint_dir);
+                            let vertex_dir = checkpoint_paths.vertices_dir();
+                            if vertex_dir.exists() {
+                                if let Err(e) = self.persistent.data_store.with_vertex_tables_mut(
+                                    |vertex_tables| {
+                                        for entry in fs::read_dir(&vertex_dir)? {
+                                            let entry = entry?;
+                                            let path = entry.path();
+                                            if path.is_dir() {
+                                                if let Some(dir_name) = path.file_name() {
+                                                    if let Some(name_str) = dir_name.to_str() {
+                                                        if let Some(label_str) =
+                                                            name_str.strip_prefix("label_")
+                                                        {
+                                                            if let Ok(label_id) =
+                                                                label_str.parse::<LabelId>()
+                                                            {
+                                                                if let Some(table) =
+                                                                    vertex_tables.get(&label_id)
+                                                                {
+                                                                    // Corrupted delta pages are skipped internally with warn
+                                                                    if let Err(err) =
+                                                                        table.apply_delta_pages(&path)
+                                                                    {
+                                                                        log::warn!(
+                                                                            "Failed to apply delta pages for label {} from {}: {}, continuing with base data",
+                                                                            label_id,
+                                                                            path.display(),
+                                                                            err
+                                                                        );
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Ok::<(), graphdb_core::StorageError>(())
+                                    },
+                                ) {
+                                    log::warn!(
+                                        "Failed to overlay vertex delta pages for incremental checkpoint {}: {}",
+                                        checkpoint_dir.display(),
+                                        e
+                                    );
+                                }
+                            }
+                            let edge_dir = checkpoint_paths.edges_dir();
+                            if edge_dir.exists() {
+                                for entry in fs::read_dir(&edge_dir)? {
                                     let entry = entry?;
                                     let path = entry.path();
                                     if path.is_dir() {
                                         if let Some(dir_name) = path.file_name() {
                                             if let Some(name_str) = dir_name.to_str() {
-                                                if let Some(label_str) =
-                                                    name_str.strip_prefix("label_")
-                                                {
-                                                    if let Ok(label_id) =
-                                                        label_str.parse::<LabelId>()
-                                                    {
-                                                        if let Some(table) =
-                                                            vertex_tables.get(&label_id)
+                                                let parts: Vec<&str> =
+                                                    name_str.splitn(3, '_').collect();
+                                                if parts.len() == 3 {
+                                                    if let (
+                                                        Ok(src_label),
+                                                        Ok(dst_label),
+                                                        Ok(edge_label),
+                                                    ) = (
+                                                        parts[0].parse::<LabelId>(),
+                                                        parts[1].parse::<LabelId>(),
+                                                        parts[2].parse::<LabelId>(),
+                                                    ) {
+                                                        let key = EdgeTableKey::new(
+                                                            src_label, dst_label, edge_label,
+                                                        );
+                                                        let data_store =
+                                                            &self.persistent.data_store;
+                                                        if let Some(arc) =
+                                                            data_store.try_get_edge_table_mut(&key)
                                                         {
-                                                            table.apply_delta_pages(&path)?;
+                                                            let mut table = arc.write();
+                                                            if let Err(err) = table.load(&path) {
+                                                                log::warn!(
+                                                                    "Failed to load edge table for incremental checkpoint {}: {}",
+                                                                    path.display(),
+                                                                    err
+                                                                );
+                                                            } else if let Some(stats) =
+                                                                &self.persistent.stats_manager
+                                                            {
+                                                                table.set_stats_manager(
+                                                                    stats.clone(),
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -369,59 +442,41 @@ impl GraphStorageContext {
                                         }
                                     }
                                 }
-                                Ok::<(), graphdb_core::StorageError>(())
-                            })?;
-                    }
-                    // Continue to edge/index handling for incremental (they are currently full)
-                    // Edge loading below will handle current checkpoint's edges (if any)
-                    let checkpoint_paths = crate::engine::paths::StoragePaths::new(checkpoint_dir);
-                    let edge_dir = checkpoint_paths.edges_dir();
-                    if edge_dir.exists() {
-                        for entry in fs::read_dir(&edge_dir)? {
-                            let entry = entry?;
-                            let path = entry.path();
-                            if path.is_dir() {
-                                if let Some(dir_name) = path.file_name() {
-                                    if let Some(name_str) = dir_name.to_str() {
-                                        let parts: Vec<&str> = name_str.splitn(3, '_').collect();
-                                        if parts.len() == 3 {
-                                            if let (Ok(src_label), Ok(dst_label), Ok(edge_label)) = (
-                                                parts[0].parse::<LabelId>(),
-                                                parts[1].parse::<LabelId>(),
-                                                parts[2].parse::<LabelId>(),
-                                            ) {
-                                                let key = EdgeTableKey::new(
-                                                    src_label, dst_label, edge_label,
-                                                );
-                                                let data_store = &self.persistent.data_store;
-                                                if let Some(arc) =
-                                                    data_store.try_get_edge_table_mut(&key)
-                                                {
-                                                    let mut table = arc.write();
-                                                    table.load(&path)?;
-                                                    if let Some(stats) =
-                                                        &self.persistent.stats_manager
-                                                    {
-                                                        table.set_stats_manager(stats.clone());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                            }
+                            let index_dir = checkpoint_paths.data_dir().join("indexes");
+                            if index_dir.exists() {
+                                if let Err(e) = self
+                                    .persistent
+                                    .index_data_manager
+                                    .write()
+                                    .load(&index_dir)
+                                {
+                                    log::warn!(
+                                        "Failed to load indexes for incremental checkpoint {}: {}",
+                                        checkpoint_dir.display(),
+                                        e
+                                    );
                                 }
                             }
+                            if let Err(e) = self.register_loaded_native_indexes() {
+                                log::warn!(
+                                    "Failed to register indexes after incremental restore {}: {}",
+                                    checkpoint_dir.display(),
+                                    e
+                                );
+                            }
+                            self.rebuild_vertex_id_domains();
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to restore incremental base checkpoint {}: {}, falling back to current checkpoint {}",
+                                base_path.display(),
+                                e,
+                                checkpoint_dir.display()
+                            );
                         }
                     }
-                    let index_dir = checkpoint_paths.data_dir().join("indexes");
-                    if index_dir.exists() {
-                        self.persistent
-                            .index_data_manager
-                            .write()
-                            .load(&index_dir)?;
-                    }
-                    self.register_loaded_native_indexes()?;
-                    self.rebuild_vertex_id_domains();
-                    return Ok(());
                 }
             }
         }

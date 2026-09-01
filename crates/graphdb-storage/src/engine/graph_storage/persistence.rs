@@ -831,11 +831,17 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
     let lsn = lsn.ok_or_else(|| {
         StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
     })?;
-    if format_version != Some(CHECKPOINT_FORMAT_VERSION) {
-        return Err(StorageError::deserialize_error(format!(
-            "Unsupported checkpoint format version: {:?}",
-            format_version
-        )));
+    // Accept both v1 (full) and v2 (incremental) checkpoints.
+    // Missing format_version is treated as v1 for backward compatibility.
+    if let Some(v) = format_version {
+        if v != CHECKPOINT_FORMAT_VERSION
+            && v != crate::engine::persistence_coordinator::INCREMENTAL_CHECKPOINT_FORMAT_VERSION
+        {
+            return Err(StorageError::deserialize_error(format!(
+                "Unsupported checkpoint format version: {:?}",
+                format_version
+            )));
+        }
     }
 
     Ok(CheckpointInfo {

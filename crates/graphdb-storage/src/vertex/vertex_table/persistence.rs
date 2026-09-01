@@ -797,14 +797,21 @@ impl VertexTable {
                 if let Some((col_name, _page_str)) = file_name.rsplit_once('_') {
                     if self.columns.get_column(col_name).is_some() {
                         if let Some(col) = self.columns.get_column_mut(col_name) {
-                            // Use column's deserialize (which clears dirty after)
-                            let _ = col.deserialize_page(&bytes);
+                            if let Err(e) = col.deserialize_page(&bytes) {
+                                log::warn!(
+                                    "Skipping corrupted delta page {} for column {}: {}",
+                                    path.display(),
+                                    col_name,
+                                    e
+                                );
+                            }
                             continue;
                         }
                     }
                 }
             }
             // Fallback: try each column (covers naming mismatches)
+            let mut applied = false;
             for col in self
                 .columns
                 .columns()
@@ -814,9 +821,13 @@ impl VertexTable {
             {
                 if let Some(c) = self.columns.get_column_mut(&col) {
                     if c.deserialize_page(&bytes).is_ok() {
+                        applied = true;
                         break;
                     }
                 }
+            }
+            if !applied {
+                log::warn!("Skipping unrecognized or corrupted delta page {}", path.display());
             }
         }
         // After applying deltas, clear dirty marks (data now reflects persisted delta).

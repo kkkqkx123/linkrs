@@ -52,7 +52,10 @@ pub mod config;
 #[path = "persistence/diagnostics.rs"]
 pub mod diagnostics;
 
-pub use checkpoint::{CheckpointData, CheckpointInfo, CheckpointStats, CHECKPOINT_FORMAT_VERSION};
+pub use checkpoint::{
+    CheckpointData, CheckpointInfo, CheckpointStats, CHECKPOINT_FORMAT_VERSION,
+    INCREMENTAL_CHECKPOINT_FORMAT_VERSION,
+};
 pub use checkpoint_scheduler::CheckpointScheduler;
 pub use config::PersistenceConfig;
 pub use diagnostics::{

@@ -914,10 +914,12 @@ impl ShardedVertexTable {
             .iter()
             .map(|s| {
                 let t = s.read();
-                t.columns
-                    .row_count()
-                    .div_ceil(crate::persistence::dirty_page::ROWS_PER_PAGE)
-                    .max(1)
+                let rc = t.columns.row_count();
+                if rc == 0 {
+                    0
+                } else {
+                    rc.div_ceil(crate::persistence::dirty_page::ROWS_PER_PAGE)
+                }
             })
             .sum()
     }
@@ -964,18 +966,24 @@ impl ShardedVertexTable {
                 || shard_dir.join("id_indexer.bin").exists();
             if has_delta && shard_dir.exists() {
                 let mut table = shard.write();
-                // Apply column delta pages if any
+                // Apply column delta pages if any (corrupted pages are skipped internally)
                 if shard_dir.join("columns_pages").exists() {
-                    table.apply_delta_pages(&shard_dir)?;
+                    if let Err(e) = table.apply_delta_pages(&shard_dir) {
+                        log::warn!("Failed to apply delta pages for shard {}: {}, falling back to base", i, e);
+                    }
                 }
                 // For incremental, timestamps and id_indexer are flushed fully; reload them
                 let ts_path = shard_dir.join("timestamps.bin");
                 if ts_path.exists() {
-                    let _ = table.load_timestamps(&ts_path);
+                    if let Err(e) = table.load_timestamps(&ts_path) {
+                        log::warn!("Failed to load timestamps for shard {} from {}: {}", i, ts_path.display(), e);
+                    }
                 }
                 let id_path = shard_dir.join("id_indexer.bin");
                 if id_path.exists() {
-                    let _ = table.load_id_indexer(&id_path);
+                    if let Err(e) = table.load_id_indexer(&id_path) {
+                        log::warn!("Failed to load id_indexer for shard {} from {}: {}", i, id_path.display(), e);
+                    }
                 }
             }
         }
