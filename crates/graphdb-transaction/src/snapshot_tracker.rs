@@ -126,13 +126,32 @@ impl SnapshotTracker {
                     self.registered_at.remove(&ts);
                     log::trace!("Snapshot {} removed (ref count = 0)", ts);
 
+                    // Hold the write lock through remove + recompute to prevent
+                    // a concurrent add_snapshot from inserting a new minimum
+                    // between the remove and the min_active update.
+                    let mut ordered = self.ordered_snapshots.write();
+                    ordered.remove(&ts);
                     let was_min = self.min_active.load(Ordering::Acquire) == ts;
-                    {
-                        let mut ordered = self.ordered_snapshots.write();
-                        ordered.remove(&ts);
-                    }
                     if was_min {
-                        self.recompute_min_active();
+                        let new_min = ordered.keys().next().copied().unwrap_or(u64::MAX);
+                        // Use compare_exchange loop: a concurrent add_snapshot may
+                        // have inserted a smaller entry and lowered min_active via
+                        // fetch_min between our tree read and this update. Only
+                        // update if min_active still equals ts (i.e. no concurrent
+                        // update has occurred). If it has, the loop retries with
+                        // the current value, eventually converging.
+                        let mut current = ts;
+                        while current == ts {
+                            match self.min_active.compare_exchange(
+                                current,
+                                new_min,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current = actual,
+                            }
+                        }
                     }
                 }
                 self.active_references.fetch_sub(1, Ordering::Relaxed);
@@ -167,13 +186,6 @@ impl SnapshotTracker {
     /// Used on insert of a new distinct timestamp.
     fn update_min_active(&self, ts: Timestamp) {
         self.min_active.fetch_min(ts, Ordering::AcqRel);
-    }
-
-    /// Recompute min from BTreeMap after removing the previous minimum.
-    fn recompute_min_active(&self) {
-        let ordered = self.ordered_snapshots.read();
-        let min = ordered.keys().next().copied().unwrap_or(u64::MAX);
-        self.min_active.store(min, Ordering::Release);
     }
 
     /// Fast check whether a timestamp is currently active.

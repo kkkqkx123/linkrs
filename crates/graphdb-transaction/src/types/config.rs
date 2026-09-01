@@ -281,6 +281,11 @@ pub struct TransactionManagerConfig {
     /// Number of certification shards for write-set conflict detection.
     /// Must be a power of two. Default 64.
     pub cert_shard_count: usize,
+    /// Whether to automatically trigger a checkpoint after a successful write
+    /// transaction commit when WAL thresholds are exceeded. The checkpoint is
+    /// initiated via the [`TransactionCommitSink::auto_checkpoint_if_needed`]
+    /// method, which is non-blocking and delegated to the storage layer.
+    pub auto_checkpoint_after_commit: bool,
 }
 
 impl Default for TransactionManagerConfig {
@@ -296,6 +301,7 @@ impl Default for TransactionManagerConfig {
             group_commit_enabled: true,
             group_commit_timeout: Duration::from_secs(30),
             cert_shard_count: 64,
+            auto_checkpoint_after_commit: true,
         }
     }
 }
@@ -321,6 +327,11 @@ impl TransactionManagerConfig {
         assert!(count.is_power_of_two(), "cert_shard_count must be power of two");
         assert!(count > 0 && count <= 256, "cert_shard_count must be 1..=256");
         self.cert_shard_count = count;
+        self
+    }
+
+    pub fn with_auto_checkpoint_after_commit(mut self, enabled: bool) -> Self {
+        self.auto_checkpoint_after_commit = enabled;
         self
     }
 

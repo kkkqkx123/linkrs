@@ -97,4 +97,17 @@ pub trait TransactionCommitSink: Send + Sync {
     fn recover_unfinalized_commits(&self) -> Result<usize, String> {
         Ok(0)
     }
+
+    /// Check whether a checkpoint is needed and trigger one if so.
+    ///
+    /// Called after a successful write transaction commit when
+    /// `auto_checkpoint_after_commit` is enabled in the transaction manager
+    /// config. The implementation should evaluate WAL size, time since last
+    /// checkpoint, or other heuristics and initiate a non-blocking checkpoint
+    /// if thresholds are exceeded.
+    ///
+    /// Default: no-op (safe for sinks that handle checkpointing externally).
+    fn auto_checkpoint_if_needed(&self) -> Result<(), String> {
+        Ok(())
+    }
 }

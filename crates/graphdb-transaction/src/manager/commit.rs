@@ -245,6 +245,21 @@ impl TransactionManager {
             context.timestamp()
         );
 
+        if self.config.auto_checkpoint_after_commit
+            && context.txn_type == TransactionType::Write
+            && !self.config.in_memory
+        {
+            if let Some(ref commit_sink) = self.commit_sink {
+                if let Err(e) = commit_sink.auto_checkpoint_if_needed() {
+                    log::warn!(
+                        "Auto-checkpoint after commit {} failed (non-fatal): {}",
+                        txn_id,
+                        e
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 

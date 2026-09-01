@@ -91,4 +91,11 @@ impl<S: StorageClient + graphdb_transaction::UndoTarget + 'static>
         self.abort_transaction_fact(descriptor.transaction_id)
             .map_err(|error| error.to_string())
     }
+
+    fn auto_checkpoint_if_needed(&self) -> Result<(), String> {
+        use crate::StoragePersistenceOps;
+        let _ = <Self as StoragePersistenceOps>::auto_checkpoint_if_needed(self)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
 }
