@@ -101,6 +101,28 @@ impl EdgeStore {
         self.0.maybe_run_auto_maintenance()
     }
 
+    /// Unified watermark variant. Shares the same safe cutoff across all
+    /// table types in one GC pass so prefix reclaim cannot affect later types.
+    pub fn maybe_run_auto_maintenance_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        self.0
+            .maybe_run_auto_maintenance_with_watermarks(watermarks, margin)
+    }
+
+    /// GC column version chains using unified watermarks.
+    pub fn gc_column_versions_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        self.0
+            .properties
+            .gc_versions_with_watermarks(watermarks, margin)
+    }
+
     /// Get the current tombstone statistics for observability and GC decisions.
     pub fn tombstone_stats(&self) -> stats::TombstoneStats {
         self.0.mvcc.tombstone_stats()

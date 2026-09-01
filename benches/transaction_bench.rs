@@ -164,7 +164,8 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
             let txn_id = manager
                 .begin_read_transaction(TransactionOptions::default())
                 .unwrap();
-            black_box(manager.check_write_set_conflict(txn_id).unwrap());
+            manager.check_write_set_conflict(txn_id).unwrap();
+            black_box(());
             manager.commit_transaction(txn_id).unwrap();
         });
     });
@@ -178,7 +179,8 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
             let txn_id = sw_manager
                 .begin_insert_transaction(TransactionOptions::default())
                 .unwrap();
-            black_box(sw_manager.check_write_set_conflict(txn_id).unwrap());
+            sw_manager.check_write_set_conflict(txn_id).unwrap();
+            black_box(());
             sw_manager.commit_transaction(txn_id).unwrap();
         });
     });
@@ -188,7 +190,8 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
             let txn_id = manager
                 .begin_insert_transaction(TransactionOptions::default())
                 .unwrap();
-            black_box(manager.check_write_set_conflict(txn_id).unwrap());
+            manager.check_write_set_conflict(txn_id).unwrap();
+            black_box(());
             manager.commit_transaction(txn_id).unwrap();
         });
     });

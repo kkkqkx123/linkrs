@@ -73,6 +73,17 @@ impl LocalWalBuffer {
         timestamp: u64,
         payload: Vec<u8>,
     ) -> WalResult<()> {
+        self.append_entry_with_tx(op_type, timestamp, payload, None, None)
+    }
+
+    pub fn append_entry_with_tx(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: u64,
+        payload: Vec<u8>,
+        transaction_id: Option<graphdb_core::types::TransactionId>,
+        mutation_sequence: Option<u64>,
+    ) -> WalResult<()> {
         let entry_len = payload.len() + std::mem::size_of::<WalOpType>() + 8;
         let new_total = self.buffered_bytes.load(Ordering::Relaxed) + entry_len;
         if self.config.max_buffer_bytes != 0 && new_total > self.config.max_buffer_bytes {
@@ -88,7 +99,26 @@ impl LocalWalBuffer {
             op_type,
             timestamp,
             payload,
+            transaction_id,
+            mutation_sequence,
         });
+        self.buffered_bytes.store(new_total, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn append_full_entry(&mut self, entry: TransactionWalEntry) -> WalResult<()> {
+        let entry_len = entry.payload.len() + std::mem::size_of::<WalOpType>() + 8;
+        let new_total = self.buffered_bytes.load(Ordering::Relaxed) + entry_len;
+        if self.config.max_buffer_bytes != 0 && new_total > self.config.max_buffer_bytes {
+            log::warn!(
+                "LocalWAL buffer exceeds limit: {} > {} (entries={}, intents={})",
+                new_total,
+                self.config.max_buffer_bytes,
+                self.entries.len(),
+                self.intents.len()
+            );
+        }
+        self.entries.push(entry);
         self.buffered_bytes.store(new_total, Ordering::Relaxed);
         Ok(())
     }
@@ -240,20 +270,32 @@ impl LocalWalBuffer {
                 op_type: WalOpType::OutboxIntent,
                 timestamp: 0,
                 payload: postcard::to_allocvec(intent)?,
+                transaction_id: Some(transaction_id),
+                mutation_sequence: None,
             });
         }
         if !entries.is_empty() || !self.intents.is_empty() {
             let batch_checksum = super::commit::batch_checksum(&entries);
+            let first_sequence = entries
+                .iter()
+                .filter_map(|e| e.mutation_sequence)
+                .min()
+                .unwrap_or(0);
+            let redo_count = self.entries.len() as u32;
             let commit = graphdb_core::wal::TransactionCommit {
                 wire_version: WAL_SYNC_WIRE_VERSION,
                 transaction_id,
                 intent_count: self.intents.len() as u32,
                 batch_checksum,
+                first_sequence,
+                entry_count: redo_count,
             };
             entries.push(TransactionWalEntry {
                 op_type: WalOpType::TransactionCommit,
                 timestamp: 0,
                 payload: postcard::to_allocvec(&commit)?,
+                transaction_id: Some(transaction_id),
+                mutation_sequence: None,
             });
         }
         Ok(entries)

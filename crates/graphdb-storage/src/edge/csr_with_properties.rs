@@ -932,6 +932,19 @@ impl CsrWithProperties {
         Ok(())
     }
 
+    pub fn gc_versions_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        let mut removed = 0;
+        for col in &mut self.property_columns {
+            removed += col.gc_versions(safe);
+        }
+        removed
+    }
+
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         let mut removed = 0;
         for col in &mut self.property_columns {

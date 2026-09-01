@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 use super::TransactionManager;
 use crate::context::TransactionContext;
 use crate::error::TransactionError;
-use crate::participant::TransactionCommitDescriptor;
 use crate::types::*;
 use graphdb_core::types::CommitLsn;
 
@@ -67,13 +66,17 @@ impl TransactionManager {
             }
         }
 
+        // Distributed transactions with Recovery or Dummy markers must not flow
+        // through the normal user commit path.  Recovery only finalizes
+        // through recover_unfinalized_commits and Dummy never reaches WAL.
+        if context.get_type() == TransactionType::Recovery
+            || context.get_type() == TransactionType::Dummy
+        {
+            return Err(TransactionError::invalid_state_for_commit(context.state()));
+        }
+
         context.transition_to(TransactionState::Committing)?;
-        let descriptor = TransactionCommitDescriptor {
-            transaction_id: context.id,
-            write_timestamp: context.timestamp(),
-            durability: context.durability,
-            write_set: context.get_write_set(),
-        };
+        let descriptor = context.build_commit_descriptor();
         let mut commit_lsn = CommitLsn::ZERO;
 
         if context.txn_type != TransactionType::Checkpoint {
@@ -128,11 +131,11 @@ impl TransactionManager {
             TransactionType::Write => {
                 self.version_manager
                     .commit_write_timestamp(context.timestamp());
+                // Distinguish write vs commit timestamp in the journal so GC
+                // can tell committed-but-not-yet-reclaimed history from
+                // still-pending history.
+                context.publish_commit_timestamp(context.timestamp());
                 if !descriptor.write_set.is_empty() {
-                    // Publish the committed write set into the conflict indices.
-                    // The certifier re-runs the final review under the
-                    // certification shard lock to close the cross-shard
-                    // certification race window.
                     if let Err(conflict) = self.certifier.publish(
                         context.id,
                         descriptor.write_timestamp,
@@ -161,7 +164,7 @@ impl TransactionManager {
                     self.checkpoint_gate.release_write();
                 }
             }
-            TransactionType::Checkpoint => {}
+            TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy => {}
         }
         context.mark_commit_published(commit_lsn);
 

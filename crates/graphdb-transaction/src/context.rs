@@ -11,6 +11,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use super::error::TransactionError;
+use super::mutation_journal::{MutationJournal, MutationResource, TransactionMutationRecord};
 use super::participant::TransactionMutationRecorder;
 use super::rollback::CombinedRollback;
 use super::types::*;
@@ -113,6 +114,9 @@ pub struct TransactionContext {
     serializable_full_scan_threshold: Option<usize>,
     /// SSI (Serializable Snapshot Isolation) state for rw-dependency tracking.
     ssi_state: RwLock<super::types::SsiState>,
+    /// Canonical mutation journal. Sequence is assigned here and every
+    /// other log derives from the same logical entry.
+    mutation_journal: RwLock<MutationJournal>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -166,6 +170,8 @@ impl SavepointManager {
             local_wal_entry_len: params.local_wal_entry_len,
             local_wal_intent_len: params.local_wal_intent_len,
             modified_tables: params.modified_tables,
+            journal_len: params.journal_len,
+            journal_next_sequence: params.journal_next_sequence,
         };
         self.savepoints.insert(id, info);
         id
@@ -241,6 +247,7 @@ impl TransactionContext {
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
             ssi_state: RwLock::new(super::types::SsiState::new()),
+            mutation_journal: RwLock::new(MutationJournal::new()),
         }
     }
 
@@ -296,6 +303,7 @@ impl TransactionContext {
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
             ssi_state: RwLock::new(super::types::SsiState::new()),
+            mutation_journal: RwLock::new(MutationJournal::new()),
         }
     }
 
@@ -627,6 +635,10 @@ impl TransactionContext {
         self.read_set.lock().record_schema_resource(resource);
     }
 
+    pub fn record_index_read(&self, resource: &str) {
+        self.read_set.lock().record_index_resource(resource);
+    }
+
     pub fn record_read_range(&self, range: ReadRange) {
         self.read_set.lock().record_read_range(range);
     }
@@ -795,7 +807,10 @@ impl TransactionContext {
     }
 
     /// Publish a complete mutation result in the canonical metadata order.
+    /// The journal assigns the sequence and is the single source of truth;
+    /// all derived logs are populated from that entry in a fixed order.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        self.can_execute()?;
         let new_count = self.mutation_count.fetch_add(1, Ordering::Relaxed) + 1;
         if self.max_mutation_count > 0 && new_count > self.max_mutation_count {
             return Err(TransactionError::transaction_budget_exceeded(
@@ -844,13 +859,61 @@ impl TransactionContext {
             );
         }
 
-        let entity_keys = mutation.entity_keys;
+        let resource = if mutation.resource != MutationResource::Unknown {
+            mutation.resource
+        } else if mutation.modified_table.is_some() {
+            MutationResource::from_modified_table(mutation.modified_table.as_deref())
+        } else if let Some(ref redo) = mutation.redo_entry {
+            MutationResource::from_wal_op(redo.op_type)
+        } else if !mutation.index_intents.is_empty() {
+            MutationResource::SyncIntent
+        } else {
+            MutationResource::Unknown
+        };
+
+        let entity_keys = mutation.entity_keys.clone();
+        let redo_with_seq = mutation.redo_entry.map(|mut e| {
+            let seq = self.mutation_journal.read().next_sequence();
+            e.transaction_id = Some(self.id);
+            e.mutation_sequence = Some(seq);
+            e
+        });
+        let journal_len_before = self.mutation_journal.read().len() as u64;
+        let record = TransactionMutationRecord {
+            sequence: journal_len_before,
+            transaction_id: self.id,
+            entity_keys: entity_keys.clone(),
+            resource,
+            undo: mutation.undo_entry.clone(),
+            redo: redo_with_seq.clone(),
+            index_intents: mutation.index_intents.clone(),
+            modified_table: mutation.modified_table.clone(),
+            write_timestamp: self.start_timestamp,
+            commit_timestamp: None,
+        };
+        {
+            let mut journal = self.mutation_journal.write();
+            journal.push(record);
+            if cfg!(debug_assertions) {
+                if let Err(e) = journal.check_invariants() {
+                    log::error!("journal invariant violated: {}", e);
+                }
+            }
+        }
+
+        let sequence = self
+            .mutation_journal
+            .read()
+            .records()
+            .last()
+            .map(|r| r.sequence);
         let operation_log = OperationLog::Mutation {
             entities: entity_keys
                 .iter()
                 .map(|entity| format!("{entity:?}").into_bytes())
                 .collect(),
             table: mutation.modified_table.clone(),
+            sequence,
         };
         self.add_operation_log(operation_log);
 
@@ -860,20 +923,25 @@ impl TransactionContext {
                 MutationEntityKey::Edge(edge) => self.record_edge_write(edge),
             }
         }
+        if resource == MutationResource::Schema {
+            if let Some(ref table) = mutation.modified_table {
+                self.write_set.lock().record_schema_resource(table);
+            } else {
+                self.write_set.lock().record_schema_resource("schema");
+            }
+        }
+        if resource == MutationResource::Index || resource == MutationResource::SyncIntent {
+            for intent in &mutation.index_intents {
+                self.record_index_write(&format!("{}", intent.mutation.ordering_key));
+            }
+        }
         if let Some(entry) = mutation.undo_entry {
             self.add_undo_log(entry)?;
         }
-        if let Some(entry) = mutation.redo_entry {
+        if let Some(entry) = redo_with_seq {
             let cloned = entry.clone();
             self.redo_entries.write().push(entry);
-            let _ = self.local_wal.lock().append_entry(
-                cloned.op_type,
-                cloned.timestamp,
-                cloned.payload,
-            );
-        }
-        for intent in &mutation.index_intents {
-            self.record_index_write(&format!("{}", intent.mutation.ordering_key));
+            let _ = self.local_wal.lock().append_full_entry(cloned);
         }
         {
             let mut local = self.local_wal.lock();
@@ -886,6 +954,51 @@ impl TransactionContext {
         }
         self.write_validated.store(false);
         Ok(())
+    }
+
+    pub fn mutation_journal_len(&self) -> usize {
+        self.mutation_journal.read().len()
+    }
+
+    pub fn next_mutation_sequence(&self) -> u64 {
+        self.mutation_journal.read().next_sequence()
+    }
+
+    pub fn check_journal_invariants(&self) -> Result<(), String> {
+        self.mutation_journal.read().check_invariants()
+    }
+
+    /// Publish the commit timestamp into the journal so every mutation that
+    /// carried a write timestamp now also carries its commit timestamp.
+    /// Must be called after the commit frontier has advanced and before
+    /// storage finalization so pending vs committed history can be distinguished.
+    pub fn publish_commit_timestamp(&self, commit_ts: Timestamp) {
+        self.mutation_journal
+            .write()
+            .publish_commit_timestamp(commit_ts);
+    }
+
+    pub fn build_commit_descriptor(&self) -> crate::participant::TransactionCommitDescriptor {
+        let ws = self.get_write_set();
+        let rs = self.get_read_set();
+        let journal = self.mutation_journal.read();
+        let entry_count = journal.total_redo_entries();
+        let intent_count = journal.total_intents();
+        let first_sequence = journal.records().first().map(|r| r.sequence).unwrap_or(0);
+        let range = 0..journal.len();
+        drop(journal);
+        let mut desc = crate::participant::TransactionCommitDescriptor::new(
+            self.id,
+            self.timestamp(),
+            self.durability,
+            ws,
+        );
+        desc.read_set = rs;
+        desc.first_sequence = first_sequence;
+        desc.entry_count = entry_count;
+        desc.intent_count = intent_count;
+        desc.journal_range = range;
+        desc
     }
 
     /// Replace the write set after a savepoint rollback.
@@ -929,6 +1042,10 @@ impl TransactionContext {
             let buf = self.local_wal.lock();
             (buf.entry_count(), buf.intent_count())
         };
+        let (journal_len, journal_next) = {
+            let j = self.mutation_journal.read();
+            (j.len(), j.next_sequence())
+        };
         let params = SavepointParams {
             name,
             operation_log_index: self.operation_log_len(),
@@ -940,6 +1057,8 @@ impl TransactionContext {
             local_wal_entry_len: local_entry_len,
             local_wal_intent_len: local_intent_len,
             modified_tables: self.get_modified_tables(),
+            journal_len,
+            journal_next_sequence: journal_next,
         };
         let mut manager = self.savepoint_manager.write();
         manager.create_savepoint(params)
@@ -1000,6 +1119,39 @@ impl TransactionContext {
                 .ok_or(TransactionError::savepoint_not_found(id))?
         };
 
+        // Validate journal position is the authoritative savepoint boundary.
+        {
+            let journal = self.mutation_journal.read();
+            let position = crate::mutation_journal::MutationJournalPosition {
+                journal_len: savepoint_info.journal_len,
+                next_sequence: savepoint_info.journal_next_sequence,
+                operation_log_index: savepoint_info.operation_log_index,
+                undo_log_index: savepoint_info.undo_log_index,
+                redo_log_index: savepoint_info.redo_log_index,
+                local_wal_entry_len: savepoint_info.local_wal_entry_len,
+                local_wal_intent_len: savepoint_info.local_wal_intent_len,
+                modified_tables: savepoint_info.modified_tables.clone(),
+                write_set_snapshot: savepoint_info.write_set.clone(),
+                read_set_snapshot: savepoint_info.read_set.clone(),
+                sync_sequence: savepoint_info.sync_sequence,
+                savepoint_sequence: savepoint_info.sequence,
+            };
+            if let Err(e) = position.validate_against(&journal) {
+                return Err(TransactionError::rollback_failed(format!(
+                    "savepoint journal invariant violated: {}",
+                    e
+                )));
+            }
+            // Enforce that OperationLog length is derived from journal, not independent.
+            if savepoint_info.operation_log_index != savepoint_info.journal_len
+                && savepoint_info.operation_log_index > journal.len()
+            {
+                return Err(TransactionError::rollback_failed(
+                    "savepoint OperationLog index inconsistent with journal",
+                ));
+            }
+        }
+
         // Use CombinedRollback for comprehensive savepoint rollback
         let rollback = CombinedRollback::new(self);
         rollback
@@ -1041,7 +1193,31 @@ impl TransactionContext {
         );
         {
             let mut tables = self.modified_tables.lock();
-            *tables = savepoint_info.modified_tables;
+            *tables = savepoint_info.modified_tables.clone();
+        }
+        {
+            let mut journal = self.mutation_journal.write();
+            if savepoint_info.journal_len > journal.len() {
+                return Err(TransactionError::rollback_failed(
+                    "savepoint journal length exceeds current journal",
+                ));
+            }
+            journal.truncate(savepoint_info.journal_len);
+            if cfg!(debug_assertions) {
+                if let Err(e) = journal.check_invariants() {
+                    log::error!("journal invariant after savepoint rollback: {}", e);
+                }
+            }
+        }
+        // Recompute mutation count and undo bytes from remaining journal to keep
+        // budgets consistent after truncation.
+        {
+            let journal = self.mutation_journal.read();
+            self.mutation_count
+                .store(journal.len() as u64, Ordering::Relaxed);
+            // undo_bytes is estimated; reset proportionally to remaining entries
+            let remaining = journal.len() as u64 * 64;
+            self.undo_bytes.store(remaining, Ordering::Relaxed);
         }
 
         Ok(())
@@ -1115,7 +1291,30 @@ impl TransactionContext {
         self.truncate_redo_log(0);
         self.local_wal.lock().clear();
         self.restore_read_set(WriteSet::new());
+        self.mutation_journal.write().truncate(0);
+        self.mutation_count.store(0, Ordering::Relaxed);
+        self.undo_bytes.store(0, Ordering::Relaxed);
         Ok(())
+    }
+
+    pub fn new_recovery(
+        id: TransactionId,
+        write_timestamp: Timestamp,
+        config: TransactionConfig,
+    ) -> Self {
+        let mut ctx = Self::new(id, write_timestamp, config);
+        ctx.txn_type = TransactionType::Recovery;
+        ctx
+    }
+
+    pub fn new_dummy(
+        id: TransactionId,
+        write_timestamp: Timestamp,
+        config: TransactionConfig,
+    ) -> Self {
+        let mut ctx = Self::new(id, write_timestamp, config);
+        ctx.txn_type = TransactionType::Dummy;
+        ctx
     }
 }
 
@@ -1162,6 +1361,10 @@ impl TransactionMutationRecorder for TransactionContext {
 
     fn record_schema_read(&self, resource: &str) {
         self.record_schema_read(resource);
+    }
+
+    fn record_index_read(&self, resource: &str) {
+        self.record_index_read(resource);
     }
 }
 
@@ -1218,13 +1421,14 @@ mod tests {
         let config = TransactionConfig::default();
         let ctx = TransactionContext::new(TransactionId(1), 1, config);
 
-        ctx.add_operation_log(OperationLog::InsertVertex {
-            space: "test".to_string(),
-            vertex_id: vec![1, 2, 3],
-            previous_state: None,
+        ctx.add_operation_log(OperationLog::Mutation {
+            entities: vec![vec![1, 2, 3]],
+            table: Some("vertex".to_string()),
+            sequence: Some(0),
         });
 
         assert_eq!(ctx.operation_log_len(), 1);
         assert!(ctx.get_operation_log(0).is_some());
+        assert!(ctx.get_operation_log(0).unwrap().is_canonical());
     }
 }

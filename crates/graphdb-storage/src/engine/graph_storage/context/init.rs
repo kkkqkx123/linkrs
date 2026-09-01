@@ -182,7 +182,9 @@ impl GraphStorageContext {
             .unwrap_or(false)
     }
 
-    pub fn checkpoint_diagnostics(&self) -> Option<crate::engine::persistence_coordinator::CheckpointDiagnostics> {
+    pub fn checkpoint_diagnostics(
+        &self,
+    ) -> Option<crate::engine::persistence_coordinator::CheckpointDiagnostics> {
         let persistence = self.persistent.persistence.as_ref()?.read();
         let pending = self
             .checkpoint_scheduler

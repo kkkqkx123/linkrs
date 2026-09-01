@@ -16,6 +16,32 @@ pub struct TransactionCommitDescriptor {
     pub write_timestamp: Timestamp,
     pub durability: DurabilityLevel,
     pub write_set: WriteSet,
+    pub read_set: WriteSet,
+    pub first_sequence: u64,
+    pub entry_count: usize,
+    pub intent_count: usize,
+    pub journal_range: std::ops::Range<usize>,
+}
+
+impl TransactionCommitDescriptor {
+    pub fn new(
+        transaction_id: TransactionId,
+        write_timestamp: Timestamp,
+        durability: DurabilityLevel,
+        write_set: WriteSet,
+    ) -> Self {
+        Self {
+            transaction_id,
+            write_timestamp,
+            durability,
+            write_set,
+            read_set: WriteSet::new(),
+            first_sequence: 0,
+            entry_count: 0,
+            intent_count: 0,
+            journal_range: 0..0,
+        }
+    }
 }
 
 /// The immutable information required by an abort participant.
@@ -55,6 +81,8 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
     fn record_edge_read(&self, _edge: EdgeIdentifier) {}
 
     fn record_schema_read(&self, _resource: &str) {}
+
+    fn record_index_read(&self, _resource: &str) {}
 }
 
 pub trait TransactionCommitSink: Send + Sync {

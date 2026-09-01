@@ -16,7 +16,14 @@ pub enum DurabilityLevel {
     Sync,
 }
 
-/// Transaction Isolation Level
+/// Transaction Isolation Level (MVCC snapshot / serializable semantics).
+///
+/// This is NOT `graphdb_core::types::space::IsolationLevel` which controls
+/// space storage topology (Shared / Directory / Device). The enum names
+/// collide for historic reasons but the semantics are fully independent.
+/// Storage code must not infer this level from the space topology enum;
+/// the transaction's `TransactionIsolationLevel` is carried explicitly in
+/// `TransactionExecution` / `TransactionContext::isolation_level`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TransactionIsolationLevel {
     /// Repeatable Read - all statements in the transaction see a snapshot as of the start of the transaction

@@ -74,12 +74,17 @@ impl WriteSet {
         false
     }
 
-    /// Check if write set is empty
+    /// Whether the set carries no certification-relevant resources.
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty()
             && self.edges.is_empty()
             && self.schema_resources.is_empty()
             && self.index_resources.is_empty()
+            && self.read_ranges.is_empty()
+    }
+
+    pub fn is_empty_for_certification(&self) -> bool {
+        self.is_empty()
     }
 
     /// Get the number of modified entities

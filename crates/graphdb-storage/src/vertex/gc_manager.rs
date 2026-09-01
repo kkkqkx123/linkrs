@@ -85,17 +85,31 @@ impl VertexGcManager {
 
     /// Run a single GC pass across all vertex tables.
     ///
-    /// Returns the total number of vertex entries removed.
+    /// Returns the total number of vertex entries removed. Uses the unified
+    /// watermark view so all table types in the same pass share the same
+    /// cutoff.
     pub fn run_gc_pass(&self) -> usize {
-        let safe_ts = if self.config.timestamp_margin > 0 {
-            self.version_manager
-                .get_safe_gc_timestamp_with_margin(self.config.timestamp_margin)
-        } else {
-            self.version_manager.get_safe_gc_timestamp()
-        };
+        let coordinator =
+            crate::engine::gc_coordinator::GcCoordinator::new(self.version_manager.clone())
+                .with_margin(self.config.timestamp_margin);
+        let diagnostics = coordinator.diagnostics();
+        let watermarks = diagnostics.watermarks;
+        let safe_ts = diagnostics.safe_gc_timestamp;
 
         if safe_ts == 0 {
             return 0;
+        }
+        if watermarks.has_active_snapshot() {
+            if let Some(age) = watermarks.oldest_age(&self.version_manager) {
+                if age.as_secs() > 30 {
+                    log::warn!(
+                        "GC blocked by long-lived snapshot age={:?} safe_gc={} oldest_active={}",
+                        age,
+                        safe_ts,
+                        watermarks.oldest_active_snapshot
+                    );
+                }
+            }
         }
 
         let mut total_removed = 0usize;
@@ -123,6 +137,32 @@ impl VertexGcManager {
             log::warn!("Vertex table GC encountered error: {}", e);
         }
 
+        self.total_removed
+            .fetch_add(total_removed as u64, Ordering::Release);
+        total_removed
+    }
+
+    /// Unified watermark variant used by `GraphStorageContext::run_unified_gc_pass`.
+    pub fn run_gc_pass_with_watermarks(
+        &self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+    ) -> usize {
+        let safe_ts = watermarks.safe_gc_timestamp_with_margin(self.config.timestamp_margin);
+        if safe_ts == 0 {
+            return 0;
+        }
+        let mut total_removed = 0usize;
+        if let Err(e) = self.data_store.with_vertex_tables_mut(|tables| {
+            for table in tables.values() {
+                match table.gc(safe_ts) {
+                    Ok(c) => total_removed += c,
+                    Err(err) => log::warn!("Vertex table GC (watermark) failed: {}", err),
+                }
+            }
+            Ok(())
+        }) {
+            log::warn!("Vertex table GC (watermark) error: {}", e);
+        }
         self.total_removed
             .fetch_add(total_removed as u64, Ordering::Release);
         total_removed

@@ -38,6 +38,58 @@ impl TimeTravelEdgeStore {
     /// The `ts` parameter is retained for API compatibility but does not gate
     /// removal: the active-snapshot cutoff governs what may be dropped.
     ///
+    /// Unified watermark variant. Caller supplies the GC frontier captured at
+    /// pass start so all sub-systems share the same cutoff.
+    pub fn compact_csr_only_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+        reserve_ratio: f32,
+    ) -> usize {
+        let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
+        let region_n = self.config.region_vertex_count;
+        let calibrated = if self.calibrator.region_count() > 0 {
+            Some(self.calibrated_threshold().effective_deletion_ratio())
+        } else {
+            None
+        };
+        let removed_out = if region_n > 0 {
+            self.out_csr.compact_regions_with_ts_reporting_calibrated(
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+                region_n,
+                calibrated,
+            )
+        } else {
+            self.out_csr.compact_with_ts_reporting(
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+            )
+        };
+        let removed_in = if region_n > 0 {
+            self.in_csr.compact_regions_with_ts_reporting_calibrated(
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+                region_n,
+                calibrated,
+            )
+        } else {
+            self.in_csr.compact_with_ts_reporting(
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+            )
+        };
+        if removed_out + removed_in > 0 {
+            self.out_csr.rebuild_overflow_index();
+            self.in_csr.rebuild_overflow_index();
+        }
+        removed_out + removed_in
+    }
+
     /// Returns number of edges removed.
     pub fn compact_csr_only(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
         let cutoff = self.mvcc.effective_retention_bound();
@@ -179,6 +231,29 @@ impl TimeTravelEdgeStore {
     /// - Physical deletion: Requires segment merge with deletion_filter
     ///
     /// This method only removes properties that are no longer referenced by any edge.
+    pub fn compact_properties_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) {
+        let bound = watermarks.safe_gc_timestamp_with_margin(margin);
+        let mut valid_edge_ids = std::collections::HashSet::new();
+        for (edge_id, _pos) in self.properties.edge_mappings() {
+            if !self.mvcc.is_tombstoned(*edge_id, bound) {
+                valid_edge_ids.insert(*edge_id);
+            }
+        }
+        let reclaimed = self.properties.reclaim_slots(&valid_edge_ids, bound);
+        if reclaimed > 0 {
+            log::debug!(
+                "Property slot reclaim (watermark) recycled {} row(s) bound={}",
+                reclaimed,
+                bound
+            );
+        }
+        self.properties.gc_versions(bound);
+    }
+
     pub fn compact_properties(&mut self, ts: Timestamp) {
         // Valid property rows are those whose EdgeId is still live at `ts`
         // (not tombstoned) via the internal CsrWithProperties mapping.
@@ -290,6 +365,60 @@ impl TimeTravelEdgeStore {
     ///   merge keeps every edge and GC is skipped, preserving full
     ///   time-travel history.
     ///
+    /// Unified watermark variant of `compact_and_freeze`. The safe cutoff is
+    /// fixed at pass start so all sub-systems share the same frontier.
+    pub fn compact_and_freeze_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+        config: &CompactConfig,
+    ) -> usize {
+        let edge_count = self.edge_count() as usize;
+        let reserve_ratio = config.compute_reserve_ratio(edge_count, 0);
+        let bound = watermarks.safe_gc_timestamp_with_margin(margin);
+
+        let removed = self.compact_csr_only_with_watermarks(watermarks, margin, reserve_ratio);
+        self.freeze_csr_only(bound);
+        if config.segment_merge_enabled {
+            let stats = self.mvcc.tombstone_stats();
+            let merge_threshold = config.compute_merge_size_threshold(stats.memory_bytes);
+            let result = if bound < Timestamp::MAX {
+                self.merge_segments_with_config_and_deletion_filter(
+                    config.segment_merge_threshold,
+                    merge_threshold,
+                    Some(bound),
+                )
+            } else {
+                self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold)
+            };
+            if result.metrics.edges_merged > 0 {
+                result.metrics.log();
+                if result.segments_reduced > 0 {
+                    log::debug!("Segments reduced (watermark): {}", result.segments_reduced);
+                }
+            }
+            log::debug!(
+                "Segments total bytes after merge (watermark): {}",
+                self.segments_total_bytes()
+            );
+        }
+        self.compact_properties_with_watermarks(watermarks, margin);
+        if bound < Timestamp::MAX {
+            self.mvcc.gc_tombstones(bound);
+        }
+        if let Some(stats) = &self.stats_manager {
+            let tom_stats = self.mvcc.tombstone_stats();
+            stats.record_tombstone_stats(
+                tom_stats.count as u64,
+                tom_stats.memory_bytes as u64,
+                tom_stats.oldest_delete_ts.map(|ts| ts as u32),
+                tom_stats.newest_delete_ts.map(|ts| ts as u32),
+                self.mvcc.active_snapshots.len() as u64,
+            );
+        }
+        removed
+    }
+
     /// Returns number of edges removed from mutable CSR during Layer 1 compaction.
     pub fn compact_and_freeze(&mut self, ts: Timestamp, config: &CompactConfig) -> usize {
         let edge_count = self.edge_count() as usize;

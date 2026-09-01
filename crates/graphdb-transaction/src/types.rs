@@ -58,6 +58,7 @@ pub struct MutationResult {
     pub redo_entry: Option<TransactionWalEntry>,
     pub modified_table: Option<String>,
     pub index_intents: Vec<graphdb_core::wal::OutboxIntent>,
+    pub resource: crate::mutation_journal::MutationResource,
 }
 
 impl MutationResult {
@@ -75,16 +76,34 @@ impl MutationResult {
 
     pub fn with_redo(mut self, entry: TransactionWalEntry) -> Self {
         self.redo_entry = Some(entry);
+        if self.resource == crate::mutation_journal::MutationResource::Unknown {
+            if let Some(ref e) = self.redo_entry {
+                self.resource = crate::mutation_journal::MutationResource::from_wal_op(e.op_type);
+            }
+        }
         self
     }
 
     pub fn with_table(mut self, table: impl Into<String>) -> Self {
         self.modified_table = Some(table.into());
+        if self.resource == crate::mutation_journal::MutationResource::Unknown {
+            self.resource = crate::mutation_journal::MutationResource::from_modified_table(
+                self.modified_table.as_deref(),
+            );
+        }
+        self
+    }
+
+    pub fn with_resource(mut self, resource: crate::mutation_journal::MutationResource) -> Self {
+        self.resource = resource;
         self
     }
 
     pub fn with_index_intent(mut self, intent: graphdb_core::wal::OutboxIntent) -> Self {
         self.index_intents.push(intent);
+        if self.resource == crate::mutation_journal::MutationResource::Unknown {
+            self.resource = crate::mutation_journal::MutationResource::SyncIntent;
+        }
         self
     }
 }
@@ -103,11 +122,33 @@ pub enum TransactionState {
 }
 
 /// Logical transaction category.
+///
+/// The first three variants are user-visible. `Recovery` and `Dummy` are
+/// internal lifecycle markers that must not be treated as regular user
+/// transactions: `Recovery` is reserved for WAL replay, `Dummy` for
+/// operations without a user transaction context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionType {
     ReadOnly,
     Write,
     Checkpoint,
+    Recovery,
+    Dummy,
+}
+
+impl TransactionType {
+    pub fn is_user_transaction(&self) -> bool {
+        matches!(self, TransactionType::ReadOnly | TransactionType::Write)
+    }
+    pub fn is_system(&self) -> bool {
+        matches!(
+            self,
+            TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy
+        )
+    }
+    pub fn requires_wal(&self) -> bool {
+        matches!(self, TransactionType::Write | TransactionType::Checkpoint)
+    }
 }
 
 impl TransactionState {

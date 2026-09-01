@@ -504,6 +504,31 @@ impl ShardedVertexTable {
             .unwrap_or(Timestamp::MAX)
     }
 
+    #[allow(dead_code)]
+    pub fn gc_column_versions_with_watermarks(
+        &self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let mut total = 0;
+        for shard in &self.shards {
+            total += shard
+                .write()
+                .gc_column_versions_with_watermarks(watermarks, margin);
+        }
+        total
+    }
+
+    #[allow(dead_code)]
+    pub fn gc_with_watermarks(
+        &self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> StorageResult<usize> {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        self.gc(safe)
+    }
+
     pub fn gc(&self, min_ts: Timestamp) -> StorageResult<usize> {
         let mut total = 0;
         for shard in &self.shards {
@@ -532,6 +557,13 @@ impl ShardedVertexTable {
 
     pub fn label_name(&self) -> &str {
         &self.label_name
+    }
+
+    pub fn version_chain_memory_bytes(&self) -> usize {
+        self.shards
+            .iter()
+            .map(|s| s.read().columns.version_chain_stats().memory_bytes)
+            .sum()
     }
 
     pub fn memory_size(&self) -> usize {

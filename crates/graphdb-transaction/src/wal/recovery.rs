@@ -112,17 +112,24 @@ impl RecoveryManager {
         let (wal_result, dry_stats) = self.apply_dry_replay_filter(wal_result)?;
         if let Some(dry) = dry_stats {
             log::info!(
-                "Dry replay: scanned={}, consistent={}, truncated_tail={}, corrupted={}, last_consistent_lsn={}",
+                "Dry replay: scanned={}, consistent={}, truncated_tail={}, corrupted={}, sequence_gaps={}, last_consistent_lsn={}",
                 dry.total_scanned,
                 dry.consistent_entries.len(),
                 dry.truncated_tail,
                 dry.corrupted_count,
+                dry.sequence_gaps,
                 dry.last_consistent_lsn
             );
             if dry.truncated_tail > 0 {
                 log::warn!(
                     "WAL dry replay truncated {} torn-tail entries",
                     dry.truncated_tail
+                );
+            }
+            if dry.sequence_gaps > 0 {
+                log::warn!(
+                    "WAL dry replay detected {} sequence gap(s)",
+                    dry.sequence_gaps
                 );
             }
         }
@@ -745,6 +752,8 @@ mod tests {
                     op_type: WalOpType::InsertVertex,
                     timestamp,
                     payload,
+                    transaction_id: None,
+                    mutation_sequence: None,
                 }],
                 &[],
             )
@@ -780,6 +789,8 @@ mod tests {
                     op_type: WalOpType::InsertVertex,
                     timestamp: 1,
                     payload: first_payload,
+                    transaction_id: None,
+                    mutation_sequence: None,
                 }],
                 &[],
             )
@@ -798,6 +809,8 @@ mod tests {
                     op_type: WalOpType::InsertVertex,
                     timestamp: 2,
                     payload: second_payload,
+                    transaction_id: None,
+                    mutation_sequence: None,
                 }],
                 &[],
             )

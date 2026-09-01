@@ -21,6 +21,15 @@ use super::execution::TransactionInfo;
 /// conflicting transaction has a chance to commit or time out.
 const CONFLICT_WINDOW_BUCKETS: usize = 60;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConflictBreakdown {
+    pub write_write: u64,
+    pub read_write: u64,
+    pub phantom: u64,
+    pub schema_generation: u64,
+    pub index_generation: u64,
+}
+
 /// Transaction Metrics
 #[derive(Debug, Default)]
 pub struct TransactionMetrics {
@@ -47,6 +56,7 @@ pub struct TransactionMetrics {
     pub disconnect_transactions: u64,
     pub cleanup_failure_transactions: u64,
     pub active_statements: u64,
+    pub conflict_breakdown: ConflictBreakdown,
 }
 
 impl TransactionMetrics {
@@ -81,6 +91,12 @@ pub struct TransactionStats {
     pub timeout_transactions: AtomicU64,
     /// Transactions aborted due to write-set conflicts
     pub conflict_transactions: AtomicU64,
+    /// Per-type conflict counters for structured observability.
+    pub conflict_write_write: AtomicU64,
+    pub conflict_read_write: AtomicU64,
+    pub conflict_phantom: AtomicU64,
+    pub conflict_schema_generation: AtomicU64,
+    pub conflict_index_generation: AtomicU64,
     /// Transactions aborted after a client disconnect.
     pub disconnect_transactions: AtomicU64,
     /// Transactions aborted by recovery processing.
@@ -107,6 +123,11 @@ impl Default for TransactionStats {
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
             conflict_transactions: AtomicU64::new(0),
+            conflict_write_write: AtomicU64::new(0),
+            conflict_read_write: AtomicU64::new(0),
+            conflict_phantom: AtomicU64::new(0),
+            conflict_schema_generation: AtomicU64::new(0),
+            conflict_index_generation: AtomicU64::new(0),
             disconnect_transactions: AtomicU64::new(0),
             recovery_abort_transactions: AtomicU64::new(0),
             cleanup_failure_transactions: AtomicU64::new(0),
@@ -194,6 +215,43 @@ impl TransactionStats {
     pub fn record_txn_conflict(&self) {
         self.conflict_transactions.fetch_add(1, Ordering::Relaxed);
         self.record_conflict_in_window();
+    }
+
+    /// Structured per-type conflict counter. Still increments the global
+    /// conflict counter and the sliding window so existing dashboards keep
+    /// working; callers should prefer this over `record_txn_conflict`.
+    pub fn record_txn_conflict_with_type(&self, kind: crate::certify::ConflictType) {
+        self.conflict_transactions.fetch_add(1, Ordering::Relaxed);
+        match kind {
+            crate::certify::ConflictType::WriteWrite => {
+                self.conflict_write_write.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::certify::ConflictType::ReadWrite => {
+                self.conflict_read_write.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::certify::ConflictType::Phantom => {
+                self.conflict_phantom.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::certify::ConflictType::SchemaGeneration => {
+                self.conflict_schema_generation
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            crate::certify::ConflictType::IndexGeneration => {
+                self.conflict_index_generation
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.record_conflict_in_window();
+    }
+
+    pub fn conflict_breakdown(&self) -> ConflictBreakdown {
+        ConflictBreakdown {
+            write_write: self.conflict_write_write.load(Ordering::Relaxed),
+            read_write: self.conflict_read_write.load(Ordering::Relaxed),
+            phantom: self.conflict_phantom.load(Ordering::Relaxed),
+            schema_generation: self.conflict_schema_generation.load(Ordering::Relaxed),
+            index_generation: self.conflict_index_generation.load(Ordering::Relaxed),
+        }
     }
 
     fn record_conflict_in_window(&self) {

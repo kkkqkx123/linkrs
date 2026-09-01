@@ -797,6 +797,25 @@ impl VertexTable {
     /// Perform garbage collection on version data older than min_ts
     ///
     /// Reclaims deleted vertices (from the id indexer / timestamps) and drops
+    #[allow(dead_code)]
+    pub fn gc_column_versions_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        self.columns.gc_versions_with_watermarks(watermarks, margin)
+    }
+
+    #[allow(dead_code)]
+    pub fn gc_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> StorageResult<usize> {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        self.gc(safe)
+    }
+
     /// property version-chain entries that no active snapshot can observe.
     ///
     /// Returns the number of version entries cleaned up.

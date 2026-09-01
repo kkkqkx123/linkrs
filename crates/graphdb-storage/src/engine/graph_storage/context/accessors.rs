@@ -512,6 +512,31 @@ impl GraphStorageContext {
                 snapshot.budget.max_memory_bytes
             );
         }
+        // Version-chain memory diagnostic and long-transaction backpressure
+        // (phase-4). Long-lived snapshots pin history; we warn and surface
+        // blocked bytes but do not force the safe GC frontier forward.
+        {
+            let coordinator = crate::engine::gc_coordinator::GcCoordinator::new(
+                self.persistent.version_manager.clone(),
+            );
+            let diag = coordinator.diagnostics();
+            if diag.is_blocked() {
+                let version_bytes: usize =
+                    self.persistent.data_store.with_vertex_tables(|tables| {
+                        tables
+                            .values()
+                            .map(|t| t.version_chain_memory_bytes())
+                            .sum()
+                    });
+                if version_bytes > 64 * 1024 * 1024 {
+                    log::warn!(
+                        "write admission: long transaction blocks GC ({} bytes version chains, {} snapshots)",
+                        version_bytes,
+                        diag.active_snapshot_count
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -521,13 +546,24 @@ impl GraphStorageContext {
         if active >= self.persistent.config.resources.max_active_snapshots {
             return Err(graphdb_core::StorageError::capacity_exceeded());
         }
-        if tracker
-            .oldest_age()
-            .is_some_and(|age| age >= self.persistent.config.resources.max_snapshot_age)
-        {
-            return Err(graphdb_core::StorageError::invalid_operation(
-                "Oldest active snapshot exceeded max_snapshot_age",
-            ));
+        if let Some(age) = tracker.oldest_age() {
+            if age >= self.persistent.config.resources.max_snapshot_age {
+                return Err(graphdb_core::StorageError::invalid_operation(
+                    "Oldest active snapshot exceeded max_snapshot_age",
+                ));
+            }
+            // Long-transaction diagnostic (phase-4): warn when oldest snapshot
+            // ages past 30s and blocks GC. Does not force watermark forward;
+            // caller may retry or apply backpressure upstream.
+            if age.as_secs() > 30 {
+                let coordinator = crate::engine::gc_coordinator::GcCoordinator::new(
+                    self.persistent.version_manager.clone(),
+                );
+                let diag = coordinator.diagnostics();
+                if let Some(warn) = diag.long_transaction_warning {
+                    log::warn!("snapshot admission blocked by long transaction: {}", warn);
+                }
+            }
         }
         Ok(())
     }
@@ -648,6 +684,8 @@ impl GraphStorageContext {
                 op_type,
                 timestamp,
                 payload,
+                transaction_id: Some(transaction_id),
+                mutation_sequence: None,
             };
             self.persistent
                 .staged_wal
@@ -667,6 +705,8 @@ impl GraphStorageContext {
                     op_type,
                     timestamp,
                     payload,
+                    transaction_id: None,
+                    mutation_sequence: None,
                 });
             }
         }
@@ -675,6 +715,8 @@ impl GraphStorageContext {
             op_type,
             timestamp,
             payload,
+            transaction_id: None,
+            mutation_sequence: None,
         })
     }
 

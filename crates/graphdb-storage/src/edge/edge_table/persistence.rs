@@ -81,6 +81,7 @@ pub fn flush_metadata(
         buf.extend_from_slice(&edge_id.0.to_le_bytes());
         buf.extend_from_slice(&ts.create_ts.to_le_bytes());
         buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
+        buf.extend_from_slice(&ts.commit_ts.to_le_bytes());
     }
 
     Ok(())
@@ -236,11 +237,23 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
             cursor.read_exact(&mut create_ts_bytes)?;
             let mut delete_ts_bytes = [0u8; 8];
             cursor.read_exact(&mut delete_ts_bytes)?;
+            let create_ts = u64::from_le_bytes(create_ts_bytes);
+            let delete_ts = u64::from_le_bytes(delete_ts_bytes);
+            // commit_ts may not exist in older format; default to create_ts
+            let commit_ts = if cursor.len() - cursor.position() >= 8 {
+                let mut commit_ts_bytes = [0u8; 8];
+                cursor.read_exact(&mut commit_ts_bytes)?;
+                u64::from_le_bytes(commit_ts_bytes)
+            } else {
+                create_ts
+            };
             edge_timestamps.insert(
                 EdgeId(u64::from_le_bytes(edge_id_bytes)),
                 EdgeTimestamps {
-                    create_ts: u64::from_le_bytes(create_ts_bytes),
-                    delete_ts: u64::from_le_bytes(delete_ts_bytes),
+                    create_ts,
+                    delete_ts,
+                    commit_ts,
+                    pending_owner: None,
                 },
             );
         }

@@ -704,7 +704,7 @@ pub(super) fn rollback_context_timestamp(
             version_manager.release_read_timestamp_at(context.start_timestamp)
         }
         TransactionType::Write => version_manager.abort_write_timestamp(context.timestamp()),
-        TransactionType::Checkpoint => {}
+        TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy => {}
     }
 }
 

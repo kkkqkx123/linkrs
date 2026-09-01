@@ -50,6 +50,17 @@ pub struct CheckpointManifest {
     pub outbox_snapshot: Option<OutboxSnapshotRef>,
     /// References to native index manifests
     pub index_manifests: Vec<IndexManifestRef>,
+    /// Highest commit timestamp that is fully incorporated in this checkpoint.
+    /// Used by recovery to continue timestamp allocation after the checkpoint
+    /// without reusing or skipping timestamps.
+    #[serde(default)]
+    pub max_commit_timestamp: u64,
+    /// Schema catalog version at checkpoint time.
+    #[serde(default)]
+    pub schema_catalog_version: u64,
+    /// Monotonic sequence (e.g. allocator) version at checkpoint time.
+    #[serde(default)]
+    pub sequence_version: u64,
     /// Checksum of the entire manifest for integrity verification
     pub manifest_checksum: u32,
 }
@@ -116,7 +127,7 @@ pub struct IndexManifestRef {
 
 impl CheckpointManifest {
     /// Current manifest format version
-    pub const CURRENT_FORMAT_VERSION: u32 = 3;
+    pub const CURRENT_FORMAT_VERSION: u32 = 4;
 
     /// Build a storage reference from a fully materialized checkpoint
     /// directory. The file list is part of the combined manifest so recovery
@@ -221,6 +232,9 @@ impl CheckpointManifest {
             storage_snapshot,
             outbox_snapshot,
             index_manifests,
+            max_commit_timestamp: storage_lsn.get(),
+            schema_catalog_version: 0,
+            sequence_version: 0,
             manifest_checksum: 0,
         };
 
@@ -250,7 +264,9 @@ impl CheckpointManifest {
 
     /// Validate the manifest structure and references
     pub fn validate(&self) -> Result<(), String> {
-        if self.format_version != Self::CURRENT_FORMAT_VERSION {
+        if self.format_version != Self::CURRENT_FORMAT_VERSION
+            && self.format_version != Self::CURRENT_FORMAT_VERSION - 1
+        {
             return Err(format!(
                 "Unsupported manifest format version: {}",
                 self.format_version

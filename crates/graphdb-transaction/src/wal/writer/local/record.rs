@@ -343,6 +343,12 @@ impl LocalWalWriter {
         intents: &[graphdb_core::wal::OutboxIntent],
     ) -> WalResult<Vec<crate::wal::TransactionWalEntry>> {
         self.check_poisoned()?;
+        let redo_count = entries.len() as u32;
+        let first_sequence = entries
+            .iter()
+            .filter_map(|e| e.mutation_sequence)
+            .min()
+            .unwrap_or(0);
         for (expected, intent) in intents.iter().enumerate() {
             intent.validate().map_err(WalError::InvalidOperation)?;
             if intent.transaction_id != transaction_id {
@@ -361,8 +367,11 @@ impl LocalWalWriter {
                 op_type: WalOpType::OutboxIntent,
                 timestamp: 0,
                 payload: postcard::to_allocvec(intent)?,
+                transaction_id: Some(transaction_id),
+                mutation_sequence: None,
             });
         }
+        let entry_count = redo_count;
         let commit = graphdb_core::wal::TransactionCommit {
             wire_version: graphdb_core::wal::WAL_SYNC_WIRE_VERSION,
             transaction_id,
@@ -370,11 +379,15 @@ impl LocalWalWriter {
                 WalError::InvalidOperation("Intent count exceeds u32 range".to_string())
             })?,
             batch_checksum: crate::wal::commit::batch_checksum(&entries),
+            first_sequence,
+            entry_count,
         };
         entries.push(crate::wal::TransactionWalEntry {
             op_type: WalOpType::TransactionCommit,
             timestamp: 0,
             payload: postcard::to_allocvec(&commit)?,
+            transaction_id: Some(transaction_id),
+            mutation_sequence: None,
         });
         Ok(entries)
     }

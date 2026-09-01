@@ -237,11 +237,11 @@ fn write_wal_entries(
         let payload = to_allocvec(&redo)?;
         writer.append_transaction_batch(
             graphdb::core::types::TransactionId::new(ts),
-            vec![TransactionWalEntry {
-                op_type: WalOpType::InsertVertex,
-                timestamp: ts,
+            vec![TransactionWalEntry::new(
+                WalOpType::InsertVertex,
+                ts,
                 payload,
-            }],
+            )],
             &[],
         )?;
     }
@@ -258,6 +258,7 @@ fn recover(wal_dir: &Path, data_dir: &Path) -> (ReplayedVertices, ReplayedVertex
         parallel_recovery: false,
         verify_checksum: true,
         start_lsn: None,
+        throw_on_wal_replay_failure: false,
     });
     let applier = RecordingApplier::default();
     manager
@@ -359,11 +360,11 @@ fn test_vertex_properties_preserved_after_recovery() {
     writer
         .append_transaction_batch(
             graphdb::core::types::TransactionId::new(1),
-            vec![TransactionWalEntry {
-                op_type: WalOpType::InsertVertex,
-                timestamp: 1,
+            vec![TransactionWalEntry::new(
+                WalOpType::InsertVertex,
+                1,
                 payload,
-            }],
+            )],
             &[],
         )
         .unwrap();

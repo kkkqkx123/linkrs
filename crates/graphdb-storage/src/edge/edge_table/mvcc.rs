@@ -11,7 +11,7 @@
 
 use super::super::bloom_filter::EdgeDeletionBloomFilter;
 use super::stats::TombstoneStats;
-use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::types::{EdgeId, Timestamp, TransactionId};
 use std::collections::HashMap;
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
@@ -21,10 +21,19 @@ const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 ///
 /// This replaces the inline `create_ts`/`delete_ts` fields that were previously
 /// stored in each `Nbr` entry, eliminating the three-layer MVCC separation.
+///
+/// For uncommitted writes, `commit_ts` is set to `Timestamp::MAX` and
+/// `pending_owner` holds the owning transaction. Only the owner sees the
+/// edge until `mark_committed` publishes the commit timestamp.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
     pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
+    /// Commit timestamp. Before commit, equals `Timestamp::MAX` (pending).
+    /// After commit, equals the commit timestamp visible to all transactions.
+    pub commit_ts: Timestamp,
+    /// Owner transaction while the edge is pending. `None` after commit.
+    pub pending_owner: Option<TransactionId>,
 }
 
 impl EdgeTimestamps {
@@ -32,11 +41,30 @@ impl EdgeTimestamps {
         Self {
             create_ts,
             delete_ts: Timestamp::MAX,
+            commit_ts: create_ts,
+            pending_owner: None,
         }
     }
 
+    /// Mark this edge as pending (owned by `owner`). Other transactions
+    /// will not see it until `mark_committed` is called.
+    pub fn mark_pending(&mut self, owner: TransactionId) {
+        self.commit_ts = Timestamp::MAX;
+        self.pending_owner = Some(owner);
+    }
+
+    /// Publish this edge as committed at `commit_ts`.
+    pub fn mark_committed(&mut self, commit_ts: Timestamp) {
+        self.commit_ts = commit_ts;
+        self.pending_owner = None;
+    }
+
     pub fn is_alive_at(&self, ts: Timestamp) -> bool {
-        self.create_ts <= ts && ts < self.delete_ts
+        crate::mvcc_visibility::Visibility::is_edge_visible(ts, self.commit_ts, self.delete_ts)
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.commit_ts == Timestamp::MAX
     }
 }
 
@@ -158,6 +186,18 @@ impl MVCCManager {
         }
     }
 
+    /// Unified watermark variant. Derives the safe cutoff from the single
+    /// pass watermarks so edge tombstones share the same frontier as vertex
+    /// versions, indexes and WAL. `margin` is subtracted conservatively.
+    pub fn gc_tombstones_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        self.gc_tombstones(safe)
+    }
+
     /// Garbage collect tombstones that are no longer needed for snapshot isolation.
     ///
     /// Removes tombstones with delete_ts < min_active_snapshot_ts.
@@ -168,6 +208,16 @@ impl MVCCManager {
     /// older entries are moved to cold layer (kept sorted by EdgeId for binary search).
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         self.gc_tombstones_batch(min_active_snapshot_ts, usize::MAX)
+    }
+
+    pub fn gc_tombstones_batch_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+        batch_size: usize,
+    ) -> usize {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        self.gc_tombstones_batch(safe, batch_size)
     }
 
     /// Inspect at most `batch_size` tombstones and retain a cold-layer cursor.
@@ -409,9 +459,29 @@ impl MVCCManager {
 
     /// Record edge creation. Called on insert_edge to register the edge's
     /// creation timestamp in the centralized MVCC store.
-    pub fn record_creation(&mut self, edge_id: EdgeId, create_ts: Timestamp) {
-        self.edge_timestamps
-            .insert(edge_id, EdgeTimestamps::new(create_ts));
+    /// When `owner` is provided, the edge is marked as pending (visible only
+    /// to that transaction until commit).
+    pub fn record_creation(
+        &mut self,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+        owner: Option<TransactionId>,
+    ) {
+        let mut ts = EdgeTimestamps::new(create_ts);
+        if let Some(owner) = owner {
+            ts.mark_pending(owner);
+        }
+        self.edge_timestamps.insert(edge_id, ts);
+    }
+
+    /// Publish pending edges as committed at `commit_ts`. Called after a
+    /// transaction commits to make its edges visible to all snapshots.
+    pub fn publish_committed(&mut self, edge_ids: &[EdgeId], commit_ts: Timestamp) {
+        for &edge_id in edge_ids {
+            if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {
+                ts.mark_committed(commit_ts);
+            }
+        }
     }
 
     /// Record edge deletion (logical). Called on delete_edge to set the
@@ -425,12 +495,17 @@ impl MVCCManager {
     }
 
     /// Check if an edge is visible at a given timestamp.
-    /// Combines creation/deletion timestamp check with tombstone check.
+    /// Combines creation/deletion timestamp check with tombstone check via the
+    /// unified `Visibility` helper.
     /// This is the single entry point for all MVCC visibility decisions.
     pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        // Check per-edge timestamps
+        // Check per-edge timestamps via unified visibility (uses commit_ts)
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
-            if !ts_info.is_alive_at(ts) {
+            if !crate::mvcc_visibility::Visibility::is_edge_visible(
+                ts,
+                ts_info.commit_ts,
+                ts_info.delete_ts,
+            ) {
                 return false;
             }
         }

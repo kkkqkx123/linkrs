@@ -38,9 +38,22 @@ pub struct SavepointInfo {
     pub local_wal_intent_len: usize,
     /// Modified-table metadata as of savepoint creation.
     pub modified_tables: Vec<String>,
+    /// Canonical journal length at creation, the authoritative savepoint
+    /// boundary that drives truncation of all derived logs.
+    pub journal_len: usize,
+    pub journal_next_sequence: u64,
 }
 
 /// Operation Log
+///
+/// `Mutation` is the canonical lightweight view derived from `MutationJournal`.
+/// It carries only the entity keys and table name; the full before-image for
+/// rollback remains in `UndoLogManager` and the redo payload in the local WAL.
+/// All six legacy before-image variants are retained solely for backward
+/// compatibility with on-disk logs and existing tests. New code must use
+/// `OperationLog::Mutation` and query by journal sequence via
+/// `MutationJournalPosition`; the legacy variants are considered internal
+/// compat and may be removed after the migration window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationLog {
     /// Canonical mutation boundary recorded by the transaction mutation
@@ -48,37 +61,61 @@ pub enum OperationLog {
     Mutation {
         entities: Vec<Vec<u8>>,
         table: Option<String>,
+        /// Journal sequence of the originating `TransactionMutationRecord`.
+        #[serde(default)]
+        sequence: Option<u64>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     InsertVertex {
         space: String,
         vertex_id: Vec<u8>,
         previous_state: Option<Vec<u8>>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     UpdateVertex {
         space: String,
         vertex_id: Vec<u8>,
         previous_data: Vec<u8>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     DeleteVertex {
         space: String,
         vertex_id: Vec<u8>,
         vertex: Vec<u8>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     InsertEdge {
         space: String,
         edge_id: Vec<u8>,
         previous_state: Option<Vec<u8>>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     UpdateEdge {
         space: String,
         edge_id: Vec<u8>,
         previous_data: Vec<u8>,
     },
+    #[deprecated(note = "Use OperationLog::Mutation; kept for recovery compat only")]
     DeleteEdge {
         space: String,
         edge_id: Vec<u8>,
         edge: Vec<u8>,
     },
+}
+
+impl OperationLog {
+    /// Lightweight accessor for the `Mutation` variant's journal sequence.
+    pub fn mutation_sequence(&self) -> Option<u64> {
+        match self {
+            OperationLog::Mutation { sequence, .. } => *sequence,
+            _ => None,
+        }
+    }
+
+    /// Whether this log entry is the canonical lightweight view.
+    pub fn is_canonical(&self) -> bool {
+        matches!(self, OperationLog::Mutation { .. })
+    }
 }
 
 /// Transaction Info (for monitoring)
@@ -224,4 +261,6 @@ pub(crate) struct SavepointParams {
     pub local_wal_entry_len: usize,
     pub local_wal_intent_len: usize,
     pub modified_tables: Vec<String>,
+    pub journal_len: usize,
+    pub journal_next_sequence: u64,
 }

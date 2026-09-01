@@ -73,6 +73,10 @@ pub struct TransactionCommit {
     pub transaction_id: TransactionId,
     pub intent_count: u32,
     pub batch_checksum: u32,
+    #[serde(default)]
+    pub first_sequence: u64,
+    #[serde(default)]
+    pub entry_count: u32,
 }
 
 impl TransactionCommit {

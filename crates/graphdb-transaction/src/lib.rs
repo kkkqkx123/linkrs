@@ -31,7 +31,9 @@ pub mod context;
 pub mod error;
 pub mod manager;
 pub mod monitor;
+pub mod mutation_journal;
 pub mod mvcc;
+pub mod mvcc_watermarks;
 pub mod participant;
 pub mod recovery;
 pub mod rollback;
@@ -47,10 +49,14 @@ pub mod context_test;
 #[cfg(test)]
 pub mod manager_test;
 
+pub use self::mutation_journal::{
+    MutationJournal, MutationJournalPosition, MutationResource, TransactionMutationRecord,
+};
 pub use self::mvcc::{
     InsertTimestampGuard, ReadTimestampGuard, VersionManager, VersionManagerConfig,
     VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
 };
+pub use self::mvcc_watermarks::{capture_watermarks, MvccWatermarks, NO_ACTIVE_SNAPSHOT};
 pub use self::snapshot_tracker::SnapshotTracker;
 pub use checkpoint::{CheckpointGate, CheckpointTransaction, ShadowPageManager};
 pub use cleaner::TransactionCleaner;

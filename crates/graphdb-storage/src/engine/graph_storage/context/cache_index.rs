@@ -108,6 +108,18 @@ impl GraphStorageContext {
         self.persistent.index_data_manager.read().gc_tombstones(ts)
     }
 
+    /// Unified watermark variant. Derives the safe cutoff from the single
+    /// pass watermarks so index GC shares the same frontier as vertex, edge
+    /// and column GC in the same epoch.
+    pub(crate) fn gc_index_tombstones_with_watermarks(
+        &self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> StorageResult<GcStats> {
+        let safe_ts = watermarks.safe_gc_timestamp_with_margin(margin);
+        self.gc_index_tombstones(safe_ts)
+    }
+
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
         self.persistent
             .data_store

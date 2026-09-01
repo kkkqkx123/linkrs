@@ -357,7 +357,9 @@ mod tests {
             exec_cnt.fetch_add(1, Ordering::Relaxed);
             // Simulate a real checkpoint advancing the baseline so the next
             // poll sees should_checkpoint() == false.
-            coord_for_exec.read().mark_checkpointed(graphdb_transaction::wal::Lsn::new(20));
+            coord_for_exec
+                .read()
+                .mark_checkpointed(graphdb_transaction::wal::Lsn::new(20));
             Ok(CheckpointStats {
                 checkpoint_id: 1,
                 data_flushed: 100,

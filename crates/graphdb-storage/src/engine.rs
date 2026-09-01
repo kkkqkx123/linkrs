@@ -5,6 +5,7 @@ pub mod cache_manager;
 pub mod config;
 pub mod data_store;
 pub mod freeze_decision;
+pub mod gc_coordinator;
 pub mod graph_storage;
 pub(crate) mod params;
 pub mod paths;

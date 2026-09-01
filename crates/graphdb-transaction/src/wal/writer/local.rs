@@ -402,6 +402,8 @@ mod tests {
                     op_type: WalOpType::InsertVertex,
                     timestamp: 3,
                     payload: vec![4, 5, 6],
+                    transaction_id: None,
+                    mutation_sequence: None,
                 }],
                 &[intent],
             )

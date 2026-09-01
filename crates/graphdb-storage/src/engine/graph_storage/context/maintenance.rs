@@ -152,6 +152,98 @@ impl GraphStorageContext {
         Ok(total_vertices_removed)
     }
 
+    /// Unified GC pass: fixes watermarks once and reclaims in the prescribed
+    /// order: column versions → vertex tombstones → edge tombstones → index
+    /// generations → WAL / outbox. A prefix reclaim cannot change the cutoff
+    /// for a later type in the same pass.
+    pub fn run_unified_gc_pass(&self) -> crate::engine::gc_coordinator::GcPassStats {
+        let coordinator = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let diagnostics = coordinator.diagnostics();
+        let watermarks = diagnostics.watermarks;
+        let safe_ts = diagnostics.safe_gc_timestamp;
+        if safe_ts == 0 {
+            return crate::engine::gc_coordinator::GcPassStats::default();
+        }
+        let margin = self.persistent.config.gc_safety_margin;
+
+        // Column versions (vertex properties and edge properties via vertex tables + edge tables).
+        let column_versions_removed: usize = {
+            let vertex_removed: usize = self
+                .persistent
+                .data_store
+                .with_vertex_tables_mut(|tables| {
+                    let mut sum = 0;
+                    for table in tables.values() {
+                        sum += table.gc_column_versions_with_watermarks(&watermarks, margin);
+                    }
+                    Ok(sum)
+                })
+                .unwrap_or(0);
+            let edge_removed: usize = self
+                .persistent
+                .data_store
+                .for_all_edge_partitions_mut(|_, table| {
+                    Ok(table.gc_column_versions_with_watermarks(&watermarks, margin))
+                })
+                .map(|v| v.iter().sum::<usize>())
+                .unwrap_or(0);
+            vertex_removed + edge_removed
+        };
+
+        // Vertex tombstones.
+        let vertex_removed: usize = if let Some(ref gc) = self.runtime.vertex_gc_manager {
+            gc.run_gc_pass_with_watermarks(&watermarks)
+        } else {
+            self.persistent
+                .data_store
+                .with_vertex_tables_mut(|tables| {
+                    let mut sum = 0;
+                    for table in tables.values() {
+                        match table.gc(safe_ts) {
+                            Ok(c) => sum += c,
+                            Err(e) => log::warn!("Vertex GC failed: {}", e),
+                        }
+                    }
+                    Ok(sum)
+                })
+                .unwrap_or(0)
+        };
+
+        // Edge tombstones (with unified watermarks).
+        let edge_removed: usize = self
+            .persistent
+            .data_store
+            .for_all_edge_partitions_mut(|_, table| {
+                Ok(table.maybe_run_auto_maintenance_with_watermarks(&watermarks, margin))
+            })
+            .map(|v| v.iter().sum::<usize>())
+            .unwrap_or(0);
+
+        // Index generations / tombstones.
+        let mut index_removed = 0usize;
+        if let Some(ref gc) = self.runtime.index_gc_manager {
+            let stats = gc.run_gc_pass_with_watermarks(&watermarks);
+            index_removed = stats.total_removed();
+        } else if let Ok(stats) = self.gc_index_tombstones_with_watermarks(&watermarks, margin) {
+            index_removed = stats.total_removed();
+        }
+
+        crate::engine::gc_coordinator::GcPassStats {
+            safe_gc_timestamp: safe_ts,
+            vertex_entries_removed: vertex_removed,
+            edge_tombstones_removed: edge_removed,
+            column_versions_removed,
+            index_entries_removed: index_removed,
+            wal_segments_reclaimable: if diagnostics.watermarks.can_reclaim_wal() {
+                1
+            } else {
+                0
+            },
+        }
+    }
+
     pub(crate) fn compact_maintenance(
         &self,
         config: &CompactConfig,
@@ -161,15 +253,16 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let cleanup_ts = self
-            .persistent
-            .version_manager
-            .snapshot_tracker()
-            .cleanup_threshold();
+        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let wm = gc.capture_watermarks();
+        let cleanup_ts = wm.safe_gc_timestamp();
         log::info!(
-            "Compact maintenance started: compact_ts={}, cleanup_threshold={}",
+            "Compact maintenance started: compact_ts={}, cleanup_threshold={} (watermarks={})",
             ts,
-            cleanup_ts
+            cleanup_ts,
+            wm.safe_gc_timestamp()
         );
 
         let total_vertices_removed = self.compact_vertex_remap(ts)?;

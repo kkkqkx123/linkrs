@@ -526,6 +526,9 @@ pub struct PropertyGraphConfig {
     pub vertex_table_shards: usize,
     /// Automatic cold-hot tiering of edge data
     pub cold_tier: ColdTierConfig,
+    /// Safety margin subtracted from the GC watermark timestamp.
+    /// Higher values are more conservative (keep more history).
+    pub gc_safety_margin: Timestamp,
 }
 
 impl Default for PropertyGraphConfig {
@@ -540,6 +543,7 @@ impl Default for PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
+            gc_safety_margin: 1,
         }
     }
 }
@@ -568,6 +572,7 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
+            gc_safety_margin: 1,
         }
     }
 
@@ -592,6 +597,7 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
+            gc_safety_margin: 1,
         }
     }
 
@@ -620,6 +626,7 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
+            gc_safety_margin: 1,
         }
     }
 
@@ -660,6 +667,7 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
+            gc_safety_margin: 1,
         }
     }
 

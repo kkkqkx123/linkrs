@@ -63,26 +63,45 @@ impl GraphStorageContext {
     /// Run background maintenance synchronously: automatic vertex compaction
     /// followed by the existing delta freeze pass, then per-table automatic
     /// maintenance (tombstone GC, property compaction, delta freeze).
+    /// Captures watermarks once and shares across all sub-passes.
     pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
-        if let Err(e) = self.maybe_auto_compact_vertices() {
+        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let wm = gc.capture_watermarks();
+        if let Err(e) = self.maybe_auto_compact_vertices_with_watermarks(&wm) {
             log::warn!("Automatic vertex compaction failed: {}", e);
         }
-        self.trigger_background_freeze()?;
-        self.trigger_auto_edge_maintenance()
+        self.trigger_background_freeze_with_watermarks(&wm)?;
+        self.trigger_auto_edge_maintenance_with_watermarks(&wm)
     }
 
     /// Run the storage-level automatic maintenance pass on every edge
     /// partition: tombstone GC, property compaction, and delta freeze
     /// based on each table's configured thresholds.
+    /// Uses the unified `GcCoordinator` watermark so the cutoff is shared
+    /// with vertex and index GC in the same epoch.
     fn trigger_auto_edge_maintenance(&self) -> StorageResult<()> {
+        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let wm = gc.capture_watermarks();
+        self.trigger_auto_edge_maintenance_with_watermarks(&wm)
+    }
+
+    fn trigger_auto_edge_maintenance_with_watermarks(
+        &self,
+        wm: &graphdb_transaction::MvccWatermarks,
+    ) -> StorageResult<()> {
+        let margin = self.persistent.config.gc_safety_margin;
         self.persistent
             .data_store
             .for_all_edge_partitions_mut(|_key, table| {
-                let ran = table.maybe_run_auto_maintenance();
+                let ran = table.maybe_run_auto_maintenance_with_watermarks(wm, margin);
                 if ran > 0 && log::log_enabled!(log::Level::Debug) {
                     let stats = table.tombstone_stats();
                     log::debug!(
-                        "Auto edge maintenance ran {} passes on {} (tombstones={})",
+                        "Auto edge maintenance (watermark) ran {} passes on {} (tombstones={})",
                         ran,
                         table.label(),
                         stats.count
@@ -116,6 +135,17 @@ impl GraphStorageContext {
     /// between runs. Deletions at or before the snapshot cleanup threshold
     /// are reclaimed so active snapshot time-travel stays intact.
     fn maybe_auto_compact_vertices(&self) -> StorageResult<()> {
+        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let wm = gc.capture_watermarks();
+        self.maybe_auto_compact_vertices_with_watermarks(&wm)
+    }
+
+    fn maybe_auto_compact_vertices_with_watermarks(
+        &self,
+        wm: &graphdb_transaction::MvccWatermarks,
+    ) -> StorageResult<()> {
         let cfg = &self.persistent.config.auto_compact;
         if !cfg.enable_vertex_compaction {
             return Ok(());
@@ -132,16 +162,12 @@ impl GraphStorageContext {
         }
 
         let (live, allocated) = {
-            let cleanup_ts = self
-                .persistent
-                .version_manager
-                .snapshot_tracker()
-                .cleanup_threshold();
+            let safe_ts = wm.safe_gc_timestamp();
             self.persistent.data_store.with_vertex_tables(|tables| {
                 let mut live = 0;
                 let mut allocated = 0;
                 for table in tables.values() {
-                    let (l, a) = table.id_hole_stats(cleanup_ts);
+                    let (l, a) = table.id_hole_stats(safe_ts);
                     live += l;
                     allocated += a;
                 }
@@ -153,11 +179,7 @@ impl GraphStorageContext {
             return Ok(());
         }
 
-        let cleanup_ts = self
-            .persistent
-            .version_manager
-            .snapshot_tracker()
-            .cleanup_threshold();
+        let cleanup_ts = wm.safe_gc_timestamp();
         let removed = self.compact_vertex_remap(cleanup_ts)?;
         *self.runtime.last_auto_compact.lock() = Some(std::time::Instant::now());
         log::info!(
@@ -177,20 +199,25 @@ impl GraphStorageContext {
     }
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
+        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        let wm = gc.capture_watermarks();
+        self.trigger_background_freeze_with_watermarks(&wm)
+    }
+
+    fn trigger_background_freeze_with_watermarks(
+        &self,
+        wm: &graphdb_transaction::MvccWatermarks,
+    ) -> StorageResult<()> {
         // Reserve ratio 0.5 doubles the compacted capacity (matches the
         // original 2.0 growth intent; 2.0 clamps to 1.0 inside
         // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
         let config = CompactConfig::with_fixed_ratio(true, 0.5).enable_segment_merge(1000);
-        // Freeze incrementally up to the oldest active snapshot timestamp:
-        // with no active snapshots this resolves to `MAX` (full freeze as
-        // before), while an open reader pins `ts` at its snapshot so the
-        // background pass only converts deltas that are already safely below
-        // every active read point instead of one blocking full conversion.
-        let ts = self
-            .persistent
-            .version_manager
-            .snapshot_tracker()
-            .cleanup_threshold();
+        // Freeze incrementally up to the unified GC watermark so all table
+        // types in the same pass share the same cutoff and no prefix reclaim
+        // can change the cutoff for a later type in the same pass.
+        let ts = wm.safe_gc_timestamp();
 
         // Use FreezeGuard to manage freeze statistics
         let mut freeze_guard = self

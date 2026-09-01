@@ -577,7 +577,9 @@ impl TimeTravelEdgeStore {
         // Record edge creation in the centralized MVCC store.
         // This is the authoritative source for edge visibility; the inline
         // timestamps in Nbr are a local cache for MutableCsr operations.
-        self.mvcc.record_creation(edge_id, ts);
+        // Owner is set to None here; the transaction context marks the edge
+        // as pending via mark_pending after creation.
+        self.mvcc.record_creation(edge_id, ts, None);
 
         if self.has_edge(src, dst, rank, ts) {
             return Err(StorageError::edge_already_exists(format!(
@@ -1632,6 +1634,118 @@ impl TimeTravelEdgeStore {
             };
             if density >= effective_ratio {
                 let bound = self.mvcc.effective_retention_bound();
+                let merge_threshold = CompactConfig::default()
+                    .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
+                let result = self.merge_segments_with_config_and_deletion_filter(
+                    self.config.segment_merge_threshold as Timestamp,
+                    merge_threshold,
+                    if bound < Timestamp::MAX {
+                        Some(bound)
+                    } else {
+                        None
+                    },
+                );
+                if result.segments_reduced > 0 {
+                    self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                    maintenance_ran += 1;
+                    log::debug!(
+                        "Auto-maintenance physical merge reduced segments by {} (density={:.2})",
+                        result.segments_reduced,
+                        density
+                    );
+                }
+            }
+        }
+
+        maintenance_ran
+    }
+
+    /// Unified watermark variant of `maybe_run_auto_maintenance`. Caller captures
+    /// `MvccWatermarks` once per GC pass and shares the same safe cutoff across
+    /// all table types so a prefix reclaim cannot change the cutoff for a later
+    /// sub-system in the same pass.
+    pub fn maybe_run_auto_maintenance_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        self.maybe_run_auto_maintenance_inner(watermarks, margin)
+    }
+
+    fn maybe_run_auto_maintenance_inner(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let cfg = self.config.auto_maintenance;
+        if cfg.tombstone_gc_threshold == 0 && cfg.max_delta_memory_bytes == 0 {
+            return 0;
+        }
+        let mut maintenance_ran = 0;
+        let bound = watermarks.safe_gc_timestamp_with_margin(margin);
+
+        if cfg.tombstone_gc_threshold > 0
+            && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
+        {
+            if bound < Timestamp::MAX
+                && (bound != self.last_gc_min_snapshot_ts
+                    || (cfg.gc_min_serial > 0
+                        && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
+            {
+                let cleaned = self.mvcc.gc_tombstones(bound);
+                self.last_gc_min_snapshot_ts = bound;
+                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                if cleaned > 0 {
+                    maintenance_ran += 1;
+                    log::debug!(
+                        "Auto-maintenance GC (watermark): removed {} tombstones (bound={}, total={})",
+                        cleaned,
+                        bound,
+                        self.mvcc.total_tombstone_count()
+                    );
+                }
+            }
+        }
+
+        if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
+            let prop_stats = self.properties.compaction_stats();
+            if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
+                self.compact_properties(bound);
+                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                maintenance_ran += 1;
+            }
+        }
+
+        let freeze_cap = if cfg.max_delta_memory_bytes > 0 {
+            cfg.max_delta_memory_bytes
+        } else {
+            self.config.max_mutable_csr_bytes
+        };
+        if freeze_cap > 0 && self.estimate_memory_usage() > freeze_cap {
+            self.freeze_csr_only(Timestamp::MAX);
+            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+            maintenance_ran += 1;
+        }
+
+        if cfg.deletion_compact_ratio > 0.0 {
+            let del_stats = self.deletion_stats();
+            let density = if del_stats.total_frozen_edges == 0 {
+                0.0
+            } else {
+                self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
+            };
+            if self.config.max_mutable_csr_bytes > 0 {
+                let pressure = (self.estimate_memory_usage() as f64
+                    / self.config.max_mutable_csr_bytes as f64)
+                    .clamp(0.0, 1.0);
+                self.calibrator.set_memory_pressure(pressure);
+            }
+            let effective_ratio = if self.calibrator.region_count() > 0 {
+                self.calibrated_threshold().effective_deletion_ratio()
+            } else {
+                cfg.deletion_compact_ratio
+            };
+            if density >= effective_ratio {
                 let merge_threshold = CompactConfig::default()
                     .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
                 let result = self.merge_segments_with_config_and_deletion_filter(

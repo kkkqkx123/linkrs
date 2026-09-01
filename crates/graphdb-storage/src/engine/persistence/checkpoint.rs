@@ -192,9 +192,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         timestamp: Timestamp,
         reason: CheckpointTriggerReason,
     ) -> StorageResult<CheckpointStats> {
-        let result = self.create_checkpoint_inner_with_guard(
-            guard, flush_data, timestamp, reason,
-        );
+        let result = self.create_checkpoint_inner_with_guard(guard, flush_data, timestamp, reason);
         match &result {
             Ok(_) => *self.last_checkpoint_error.write() = None,
             Err(error) => *self.last_checkpoint_error.write() = Some(error.to_string()),

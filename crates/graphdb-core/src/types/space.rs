@@ -11,7 +11,14 @@ pub struct CharsetInfo {
     pub collation: String,
 }
 
-/// Isolation level for space storage
+/// Isolation level for space storage topology (Shared / Directory / Device).
+///
+/// This is NOT the transaction MVCC isolation level
+/// (`graphdb_core::types::TransactionIsolationLevel` /
+/// `graphdb_transaction::types::IsolationLevel`). The names collide but the
+/// semantics are orthogonal: this enum controls where a space's files live,
+/// while `TransactionIsolationLevel` controls snapshot / serializable
+/// semantics. Do not use this type to decide MVCC snapshot timestamps.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum IsolationLevel {
     /// Shared storage (default) - all spaces share the same base path

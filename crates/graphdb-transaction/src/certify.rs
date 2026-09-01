@@ -17,6 +17,33 @@ use super::context::TransactionContext;
 use super::error::TransactionError;
 use super::types::*;
 
+/// Structured conflict classification for observability and retry policy.
+///
+/// Every certification failure maps to one variant; the error is still
+/// surfaced as a unified `TransactionError` to the client but the
+/// classification is logged and counted in `TransactionStats`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConflictType {
+    WriteWrite,
+    ReadWrite,
+    Phantom,
+    SchemaGeneration,
+    IndexGeneration,
+}
+
+impl std::fmt::Display for ConflictType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ConflictType::WriteWrite => "write_write",
+            ConflictType::ReadWrite => "read_write",
+            ConflictType::Phantom => "phantom",
+            ConflictType::SchemaGeneration => "schema_generation",
+            ConflictType::IndexGeneration => "index_generation",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 /// Default certification shard count.
 const DEFAULT_CERT_SHARD_COUNT: usize = 64;
 
@@ -150,13 +177,18 @@ impl Certifier {
         active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
         stats: &TransactionStats,
     ) -> Result<(), TransactionError> {
-        // Lock-free fast path: check read-only / single-writer / empty without acquiring shard.
-        // This avoids certification lock contention for read-only and SingleWriter transactions.
+        // Lock-free fast path: cheap checks before acquiring shard.
         let ctx = active_transactions
             .get(&txn_id)
             .ok_or_else(|| TransactionError::transaction_not_found(txn_id))?;
 
-        if ctx.read_only {
+        let txn_write_set = ctx.get_write_set();
+        let txn_read_set = ctx.get_read_set();
+        let serializable = ctx.isolation_level == IsolationLevel::Serializable;
+
+        // Read-only fast path: only Serializable with a non-empty read set
+        // needs certification (phantom / schema / index generation checks).
+        if ctx.read_only && (!serializable || txn_read_set.is_empty()) {
             return Ok(());
         }
 
@@ -165,11 +197,12 @@ impl Certifier {
             return Ok(());
         }
 
-        let txn_write_set = ctx.get_write_set();
-        let txn_read_set = ctx.get_read_set();
-        let serializable = ctx.isolation_level == IsolationLevel::Serializable;
         if txn_write_set.is_empty() && (!serializable || txn_read_set.is_empty()) {
-            return Ok(());
+            // Read-only Serializable already handled above; this is the empty
+            // write+read case for write transactions.
+            if !ctx.read_only {
+                return Ok(());
+            }
         }
 
         // Only acquire shard lock for transactions that require certification.
@@ -181,7 +214,8 @@ impl Certifier {
 
         // SSI: register read locks for all entities in the read set.
         // This enables O(1) dangerous-structure detection when other
-        // transactions write to these resources.
+        // transactions write to these resources. Index reads are included so
+        // index generation phantom detection is covered.
         if serializable {
             for vid in txn_read_set.vertices.iter() {
                 self.ssi_tracker.register_read(
@@ -204,6 +238,13 @@ impl Certifier {
                     ctx.start_timestamp,
                 );
             }
+            for resource in txn_read_set.index_resources.iter() {
+                self.ssi_tracker.register_read(
+                    txn_id,
+                    ResourceId::Index(resource.clone()),
+                    ctx.start_timestamp,
+                );
+            }
         }
 
         for entry in active_transactions.iter() {
@@ -221,11 +262,33 @@ impl Certifier {
                 continue;
             }
 
-            if ctx.has_write_conflict_with(other_ctx)
-                || (serializable && txn_read_set.has_conflict_with(&other_ctx.get_write_set()))
-            {
-                stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
+            if ctx.has_write_conflict_with(other_ctx) {
+                stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                log::warn!(
+                    "certification conflict txn={} other={} type={}",
+                    txn_id,
+                    other_id,
+                    ConflictType::WriteWrite
+                );
+                return Err(TransactionError::serialization_failed(format!(
+                    "conflict {} write-write with {}",
+                    ConflictType::WriteWrite,
+                    other_id
+                )));
+            }
+            if serializable && txn_read_set.has_conflict_with(&other_ctx.get_write_set()) {
+                stats.record_txn_conflict_with_type(ConflictType::ReadWrite);
+                log::warn!(
+                    "certification conflict txn={} other={} type={}",
+                    txn_id,
+                    other_id,
+                    ConflictType::ReadWrite
+                );
+                return Err(TransactionError::serialization_failed(format!(
+                    "conflict {} read-write with {}",
+                    ConflictType::ReadWrite,
+                    other_id
+                )));
             }
         }
 
@@ -240,8 +303,18 @@ impl Certifier {
                 {
                     drop(vertex_idx);
                     drop(committed);
-                    stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
+                    stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                    log::warn!(
+                        "certification conflict txn={} type={} resource=vertex:{:?}",
+                        txn_id,
+                        ConflictType::WriteWrite,
+                        vid
+                    );
+                    return Err(TransactionError::serialization_failed(format!(
+                        "conflict {} write-write vertex {:?}",
+                        ConflictType::WriteWrite,
+                        vid
+                    )));
                 }
             }
         }
@@ -258,8 +331,18 @@ impl Certifier {
                 {
                     drop(edge_idx);
                     drop(committed);
-                    stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
+                    stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                    log::warn!(
+                        "certification conflict txn={} type={} resource=edge:{:?}",
+                        txn_id,
+                        ConflictType::WriteWrite,
+                        edge
+                    );
+                    return Err(TransactionError::serialization_failed(format!(
+                        "conflict {} write-write edge {:?}",
+                        ConflictType::WriteWrite,
+                        edge
+                    )));
                 }
             }
         }
@@ -275,8 +358,18 @@ impl Certifier {
                 {
                     drop(schema_idx);
                     drop(committed);
-                    stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
+                    stats.record_txn_conflict_with_type(ConflictType::SchemaGeneration);
+                    log::warn!(
+                        "certification conflict txn={} type={} resource=schema:{}",
+                        txn_id,
+                        ConflictType::SchemaGeneration,
+                        resource
+                    );
+                    return Err(TransactionError::serialization_failed(format!(
+                        "conflict {} schema {}",
+                        ConflictType::SchemaGeneration,
+                        resource
+                    )));
                 }
             }
         }
@@ -292,8 +385,18 @@ impl Certifier {
                 {
                     drop(index_idx);
                     drop(committed);
-                    stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
+                    stats.record_txn_conflict_with_type(ConflictType::IndexGeneration);
+                    log::warn!(
+                        "certification conflict txn={} type={} resource=index:{}",
+                        txn_id,
+                        ConflictType::IndexGeneration,
+                        resource
+                    );
+                    return Err(TransactionError::serialization_failed(format!(
+                        "conflict {} index {}",
+                        ConflictType::IndexGeneration,
+                        resource
+                    )));
                 }
             }
         }
@@ -313,8 +416,18 @@ impl Certifier {
                     {
                         drop(vertex_idx);
                         drop(committed);
-                        stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
+                        stats.record_txn_conflict_with_type(ConflictType::ReadWrite);
+                        log::warn!(
+                            "certification conflict txn={} type={} resource=vertex:{:?}",
+                            txn_id,
+                            ConflictType::ReadWrite,
+                            vid
+                        );
+                        return Err(TransactionError::serialization_failed(format!(
+                            "conflict {} read-write vertex {:?}",
+                            ConflictType::ReadWrite,
+                            vid
+                        )));
                     }
                 }
             }
@@ -330,8 +443,18 @@ impl Certifier {
                     {
                         drop(edge_idx);
                         drop(committed);
-                        stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
+                        stats.record_txn_conflict_with_type(ConflictType::ReadWrite);
+                        log::warn!(
+                            "certification conflict txn={} type={} resource=edge:{:?}",
+                            txn_id,
+                            ConflictType::ReadWrite,
+                            edge
+                        );
+                        return Err(TransactionError::serialization_failed(format!(
+                            "conflict {} read-write edge {:?}",
+                            ConflictType::ReadWrite,
+                            edge
+                        )));
                     }
                 }
             }
@@ -346,15 +469,75 @@ impl Certifier {
                     {
                         drop(schema_idx);
                         drop(committed);
-                        stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
+                        stats.record_txn_conflict_with_type(ConflictType::SchemaGeneration);
+                        return Err(TransactionError::serialization_failed(format!(
+                            "schema-generation conflict: {} {}",
+                            ConflictType::SchemaGeneration,
+                            resource
+                        )));
                     }
                 }
             }
             drop(schema_idx);
+
+            let index_idx = self.committed_index_writes.lock();
+            for resource in txn_read_set.index_resources.iter() {
+                if let Some(entries) = index_idx.get(resource) {
+                    if entries
+                        .iter()
+                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                    {
+                        drop(index_idx);
+                        drop(committed);
+                        stats.record_txn_conflict_with_type(ConflictType::IndexGeneration);
+                        return Err(TransactionError::serialization_failed(format!(
+                            "index-generation conflict: {} {}",
+                            ConflictType::IndexGeneration,
+                            resource
+                        )));
+                    }
+                }
+            }
+            drop(index_idx);
+
+            // Predicate range phantom detection: a concurrent committed write
+            // whose vertex falls inside a read range committed after our start
+            // indicates a phantom.
+            if !txn_read_set.read_ranges.is_empty() {
+                for (commit_ts, ws) in committed.iter() {
+                    if *commit_ts <= ctx.start_timestamp {
+                        continue;
+                    }
+                    if txn_read_set.has_read_range_conflict_with(ws) {
+                        drop(committed);
+                        stats.record_txn_conflict_with_type(ConflictType::Phantom);
+                        return Err(TransactionError::serialization_failed(format!(
+                            "phantom conflict: {} on range",
+                            ConflictType::Phantom
+                        )));
+                    }
+                }
+            }
+
+            // Conservative full-scan detection when the read set is large.
+            if let Some(threshold) = ctx.serializable_full_scan_threshold() {
+                let read_size = txn_read_set.size() + txn_read_set.read_ranges.len();
+                if read_size >= threshold {
+                    let has_new_commit = committed
+                        .iter()
+                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp);
+                    if has_new_commit {
+                        drop(committed);
+                        stats.record_txn_conflict_with_type(ConflictType::Phantom);
+                        return Err(TransactionError::serialization_failed(
+                            "full-scan read set exceeds threshold, conservative abort",
+                        ));
+                    }
+                }
+            }
         }
 
-        // SSI (Serializable Snapshot Isolation) dangerous-structure detection.
+        // Serializable snapshot isolation dangerous-structure detection.
         //
         // Instead of scanning all committed write sets (O(N)), we check for
         // dangerous structures: T_current writes R, T_other read R, AND
@@ -390,7 +573,7 @@ impl Certifier {
                             {
                                 drop(ssi_locks);
                                 drop(committed);
-                                stats.record_txn_conflict();
+                                stats.record_txn_conflict_with_type(ConflictType::ReadWrite);
                                 return Err(TransactionError::serialization_failed(
                                     "SSI dangerous structure detected: read-write cycle",
                                 ));
@@ -455,8 +638,18 @@ impl Certifier {
                 continue;
             }
             if write_set.has_conflict_with(&other_ctx.get_write_set()) {
-                stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
+                stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                log::warn!(
+                    "certification conflict (publish) txn={} other={} type={}",
+                    txn_id,
+                    other_id,
+                    ConflictType::WriteWrite
+                );
+                return Err(TransactionError::serialization_failed(format!(
+                    "conflict {} write-write with {} (publish)",
+                    ConflictType::WriteWrite,
+                    other_id
+                )));
             }
         }
         for (commit_ts, ws) in committed.iter() {
@@ -464,8 +657,16 @@ impl Certifier {
                 continue;
             }
             if write_set.has_conflict_with(ws) {
-                stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
+                stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                log::warn!(
+                    "certification conflict (publish) txn={} type={}",
+                    txn_id,
+                    ConflictType::WriteWrite
+                );
+                return Err(TransactionError::serialization_failed(format!(
+                    "conflict {} write-write with committed batch (publish)",
+                    ConflictType::WriteWrite,
+                )));
             }
         }
 

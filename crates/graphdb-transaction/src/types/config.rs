@@ -4,7 +4,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// Alias for the space-topology isolation level to make imports unambiguous.
+pub use graphdb_core::types::space::IsolationLevel as SpaceIsolationLevel;
 pub use graphdb_core::types::DurabilityLevel;
+/// Transaction MVCC isolation level (RepeatableRead / ReadCommitted / Serializable).
+/// Distinct from `graphdb_core::types::space::IsolationLevel` (storage topology).
 pub use graphdb_core::types::TransactionIsolationLevel as IsolationLevel;
 
 /// Concurrency mode for write transactions.

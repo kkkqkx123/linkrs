@@ -400,6 +400,23 @@ impl ColumnStore {
         }
     }
 
+    /// Garbage-collect using unified watermarks. Captures the same safe
+    /// timestamp for every column in one pass so a prefix reclaim cannot
+    /// change the cutoff for a later column.
+    #[allow(dead_code)]
+    pub fn gc_versions_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
+        let mut removed = 0;
+        for col in &mut self.columns {
+            removed += col.gc_versions(safe);
+        }
+        removed
+    }
+
     /// Garbage-collect version chains across all columns, returning the total
     /// number of before-images removed.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
