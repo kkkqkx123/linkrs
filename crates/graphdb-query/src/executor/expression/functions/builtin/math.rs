@@ -252,6 +252,62 @@ define_function_enum! {
             description: "Least common multiple",
             handler: execute_lcm
         },
+        Factorial => {
+            name: "factorial",
+            arity: 1,
+            variadic: false,
+            description: "Calculate factorial of a number",
+            handler: execute_factorial
+        },
+        Gamma => {
+            name: "gamma",
+            arity: 1,
+            variadic: false,
+            description: "Calculate gamma function",
+            handler: execute_gamma
+        },
+        Lgamma => {
+            name: "lgamma",
+            arity: 1,
+            variadic: false,
+            description: "Calculate natural logarithm of absolute value of gamma function",
+            handler: execute_lgamma
+        },
+        Negate => {
+            name: "negate",
+            arity: 1,
+            variadic: false,
+            description: "Negate a number",
+            handler: execute_negate
+        },
+        Even => {
+            name: "even",
+            arity: 1,
+            variadic: false,
+            description: "Round up to nearest even integer",
+            handler: execute_even
+        },
+        SetSeed => {
+            name: "set_seed",
+            arity: 1,
+            variadic: false,
+            description: "Set random seed",
+            handler: execute_set_seed
+        },
+        BitShiftLeft => {
+            name: "bit_shift_left",
+            arity: 2,
+            variadic: false,
+            description: "Bitwise left shift",
+            handler: execute_bit_shift_left
+        },
+        BitShiftRight => {
+            name: "bit_shift_right",
+            arity: 2,
+            variadic: false,
+            description: "Bitwise right shift",
+            handler: execute_bit_shift_right
+        },
     }
 }
 
@@ -538,6 +594,225 @@ fn lcm<
     (abs_a / g) * abs_b
 }
 
+fn execute_factorial(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "factorial requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => {
+            if *i < 0 {
+                return Err(ExpressionError::type_error(
+                    "factorial requires a non-negative integer",
+                ));
+            }
+            let mut result: i64 = 1;
+            for j in 2..=*i as i64 {
+                result *= j;
+            }
+            Ok(Value::BigInt(result))
+        }
+        Value::Int(i) => {
+            if *i < 0 {
+                return Err(ExpressionError::type_error(
+                    "factorial requires a non-negative integer",
+                ));
+            }
+            let mut result: i64 = 1;
+            for j in 2..=*i as i64 {
+                result *= j;
+            }
+            Ok(Value::BigInt(result))
+        }
+        Value::BigInt(i) => {
+            if *i < 0 {
+                return Err(ExpressionError::type_error(
+                    "factorial requires a non-negative integer",
+                ));
+            }
+            let mut result: i64 = 1;
+            for j in 2..=*i {
+                result *= j;
+            }
+            Ok(Value::BigInt(result))
+        }
+        Value::Float(f) => {
+            if *f < 0.0 {
+                return Err(ExpressionError::type_error(
+                    "factorial requires a non-negative integer",
+                ));
+            }
+            Ok(Value::Float(gamma(*f + 1.0)))
+        }
+        Value::Double(f) => {
+            if *f < 0.0 {
+                return Err(ExpressionError::type_error(
+                    "factorial requires a non-negative integer",
+                ));
+            }
+            Ok(Value::Float(gamma(*f as f32 + 1.0)))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "factorial requires a numeric type",
+        )),
+    }
+}
+
+fn gamma(mut x: f32) -> f32 {
+    if x < 0.5 {
+        std::f32::consts::PI / ((std::f32::consts::PI * x).sin() * gamma(1.0 - x))
+    } else {
+        x -= 1.0;
+        let g = 7;
+        let c = [
+            0.99999999999980993,
+            676.5203681218851,
+            -1259.1392167224028,
+            771.32342877765313,
+            -176.61502916214059,
+            12.507343278686905,
+            -0.13857109526572012,
+            9.9843695780195716e-6,
+            1.5056327351493116e-7,
+        ];
+        let mut t = c[0];
+        for i in 1..g + 2 {
+            t += c[i] / (x + i as f32);
+        }
+        let x = x + g as f32 + 0.5;
+        (2.0 * std::f32::consts::PI).sqrt() * x.powf(x - 0.5) * (-x).exp() * t
+    }
+}
+
+fn execute_gamma(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("gamma requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::Float(gamma(*i as f32))),
+        Value::Int(i) => Ok(Value::Float(gamma(*i as f32))),
+        Value::BigInt(i) => Ok(Value::Float(gamma(*i as f32))),
+        Value::Float(f) => Ok(Value::Float(gamma(*f))),
+        Value::Double(f) => Ok(Value::Float(gamma(*f as f32))),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("gamma requires a numeric type")),
+    }
+}
+
+fn execute_lgamma(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("lgamma requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::Float(gamma(*i as f32).abs().ln())),
+        Value::Int(i) => Ok(Value::Float(gamma(*i as f32).abs().ln())),
+        Value::BigInt(i) => Ok(Value::Float(gamma(*i as f32).abs().ln())),
+        Value::Float(f) => Ok(Value::Float(gamma(*f).abs().ln())),
+        Value::Double(f) => Ok(Value::Float(gamma(*f as f32).abs().ln())),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "lgamma requires a numeric type",
+        )),
+    }
+}
+
+fn execute_negate(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("negate requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::SmallInt(-i)),
+        Value::Int(i) => Ok(Value::Int(-i)),
+        Value::BigInt(i) => Ok(Value::BigInt(-i)),
+        Value::Float(f) => Ok(Value::Float(-f)),
+        Value::Double(f) => Ok(Value::Double(-f)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("negate requires a numeric type")),
+    }
+}
+
+fn execute_even(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("even requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::SmallInt(if *i % 2 == 0 { *i } else { *i + 1 })),
+        Value::Int(i) => Ok(Value::Int(if *i % 2 == 0 { *i } else { *i + 1 })),
+        Value::BigInt(i) => Ok(Value::BigInt(if *i % 2 == 0 { *i } else { *i + 1 })),
+        Value::Float(f) => {
+            let rounded = f.round();
+            if rounded % 2.0 == 0.0 {
+                Ok(Value::Float(rounded))
+            } else {
+                Ok(Value::Float(rounded + 1.0))
+            }
+        }
+        Value::Double(f) => {
+            let rounded = f.round();
+            if rounded % 2.0 == 0.0 {
+                Ok(Value::Double(rounded))
+            } else {
+                Ok(Value::Double(rounded + 1.0))
+            }
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("even requires a numeric type")),
+    }
+}
+
+fn execute_set_seed(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("set_seed requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(_) => Ok(Value::Null(NullType::Null)),
+        Value::Int(_) => Ok(Value::Null(NullType::Null)),
+        Value::BigInt(_) => Ok(Value::Null(NullType::Null)),
+        Value::Float(_) => Ok(Value::Null(NullType::Null)),
+        Value::Double(_) => Ok(Value::Null(NullType::Null)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "set_seed requires a numeric type",
+        )),
+    }
+}
+
+fn execute_bit_shift_left(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "bit_shift_left requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a << *b)),
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a << *b)),
+        (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(a << *b)),
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "bit_shift_left requires integer arguments",
+        )),
+    }
+}
+
+fn execute_bit_shift_right(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "bit_shift_right requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a >> *b)),
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a >> *b)),
+        (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(a >> *b)),
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "bit_shift_right requires integer arguments",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +905,59 @@ mod tests {
             .execute(&[Value::Null(NullType::Null)])
             .expect("Abs function null handling failure");
         assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_factorial() {
+        let func = MathFunction::Factorial;
+        let result = func
+            .execute(&[Value::Int(5)])
+            .expect("factorial should succeed");
+        assert_eq!(result, Value::BigInt(120));
+    }
+
+    #[test]
+    fn test_gamma() {
+        let func = MathFunction::Gamma;
+        let result = func
+            .execute(&[Value::Int(1)])
+            .expect("gamma should succeed");
+        assert!(matches!(result, Value::Float(_)));
+    }
+
+    #[test]
+    fn test_negate() {
+        let func = MathFunction::Negate;
+        let result = func
+            .execute(&[Value::Int(5)])
+            .expect("negate should succeed");
+        assert_eq!(result, Value::Int(-5));
+    }
+
+    #[test]
+    fn test_even() {
+        let func = MathFunction::Even;
+        let result = func
+            .execute(&[Value::Int(3)])
+            .expect("even should succeed");
+        assert_eq!(result, Value::Int(4));
+    }
+
+    #[test]
+    fn test_bit_shift_left() {
+        let func = MathFunction::BitShiftLeft;
+        let result = func
+            .execute(&[Value::Int(1), Value::Int(3)])
+            .expect("bit_shift_left should succeed");
+        assert_eq!(result, Value::Int(8));
+    }
+
+    #[test]
+    fn test_bit_shift_right() {
+        let func = MathFunction::BitShiftRight;
+        let result = func
+            .execute(&[Value::Int(8), Value::Int(2)])
+            .expect("bit_shift_right should succeed");
+        assert_eq!(result, Value::Int(2));
     }
 }

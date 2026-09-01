@@ -162,6 +162,111 @@ define_function_enum! {
             description: "Generate a series of timestamps",
             handler: execute_generate_series
         },
+        ToYears => {
+            name: "to_years",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to years interval",
+            handler: execute_to_years
+        },
+        ToMonths => {
+            name: "to_months",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to months interval",
+            handler: execute_to_months
+        },
+        ToDays => {
+            name: "to_days",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to days interval",
+            handler: execute_to_days
+        },
+        ToHours => {
+            name: "to_hours",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to hours interval",
+            handler: execute_to_hours
+        },
+        ToMinutes => {
+            name: "to_minutes",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to minutes interval",
+            handler: execute_to_minutes
+        },
+        ToSeconds => {
+            name: "to_seconds",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to seconds interval",
+            handler: execute_to_seconds
+        },
+        ToMilliseconds => {
+            name: "to_milliseconds",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to milliseconds interval",
+            handler: execute_to_milliseconds
+        },
+        ToMicroseconds => {
+            name: "to_microseconds",
+            arity: 1,
+            variadic: false,
+            description: "Convert number to microseconds interval",
+            handler: execute_to_microseconds
+        },
+        Century => {
+            name: "century",
+            arity: 1,
+            variadic: false,
+            description: "Extract century from date/datetime",
+            handler: execute_century
+        },
+        EpochMs => {
+            name: "epoch_ms",
+            arity: 1,
+            variadic: false,
+            description: "Convert date/datetime to epoch milliseconds",
+            handler: execute_epoch_ms
+        },
+        ToTimestamp => {
+            name: "to_timestamp",
+            arity: 1,
+            variadic: false,
+            description: "Convert epoch seconds to timestamp",
+            handler: execute_to_timestamp
+        },
+        ToEpochMs => {
+            name: "to_epoch_ms",
+            arity: 1,
+            variadic: false,
+            description: "Convert date/datetime to epoch milliseconds",
+            handler: execute_to_epoch_ms
+        },
+        DatePart => {
+            name: "date_part",
+            arity: 2,
+            variadic: false,
+            description: "Extract date part (year, month, day, hour, minute, second, dow, doy, quarter)",
+            handler: execute_date_part
+        },
+        DayName => {
+            name: "day_name",
+            arity: 1,
+            variadic: false,
+            description: "Get day name from date/datetime",
+            handler: execute_day_name
+        },
+        MonthName => {
+            name: "month_name",
+            arity: 1,
+            variadic: false,
+            description: "Get month name from date/datetime",
+            handler: execute_month_name
+        },
     }
 }
 
@@ -732,6 +837,374 @@ fn get_last_day(year: i32, month: u32) -> u32 {
     }
 }
 
+fn execute_to_years(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_years requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 365 * 24 * 60 * 60 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 365 * 24 * 60 * 60 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 365 * 24 * 60 * 60 * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 365.0 * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 365.0 * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("to_years requires a numeric type")),
+    }
+}
+
+fn execute_to_months(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_months requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 30 * 24 * 60 * 60 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 30 * 24 * 60 * 60 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 30 * 24 * 60 * 60 * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 30.0 * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 30.0 * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("to_months requires a numeric type")),
+    }
+}
+
+fn execute_to_days(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_days requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 24 * 60 * 60 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 24 * 60 * 60 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 24 * 60 * 60 * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 24.0 * 60.0 * 60.0 * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("to_days requires a numeric type")),
+    }
+}
+
+fn execute_to_hours(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_hours requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 60 * 60 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 60 * 60 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 60 * 60 * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 60.0 * 60.0 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 60.0 * 60.0 * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("to_hours requires a numeric type")),
+    }
+}
+
+fn execute_to_minutes(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_minutes requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 60 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 60 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 60 * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 60.0 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 60.0 * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_minutes requires a numeric type",
+        )),
+    }
+}
+
+fn execute_to_seconds(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("to_seconds requires 1 argument"));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 * 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i * 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 * 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f * 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_seconds requires a numeric type",
+        )),
+    }
+}
+
+fn execute_to_milliseconds(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "to_milliseconds requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i)),
+        Value::Float(f) => Ok(Value::Double(*f as f64)),
+        Value::Double(f) => Ok(Value::Double(*f)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_milliseconds requires a numeric type",
+        )),
+    }
+}
+
+fn execute_to_microseconds(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "to_microseconds requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 / 1000)),
+        Value::Int(i) => Ok(Value::BigInt(*i as i64 / 1000)),
+        Value::BigInt(i) => Ok(Value::BigInt(*i / 1000)),
+        Value::Float(f) => Ok(Value::Double(*f as f64 / 1000.0)),
+        Value::Double(f) => Ok(Value::Double(*f / 1000.0)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_microseconds requires a numeric type",
+        )),
+    }
+}
+
+fn execute_century(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("century requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Date(d) => Ok(Value::Int((d.year - 1) / 100 + 1)),
+        Value::DateTime(dt) => Ok(Value::Int((dt.year - 1) / 100 + 1)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "century requires a date or datetime type",
+        )),
+    }
+}
+
+fn execute_epoch_ms(args: &[Value]) -> Result<Value, ExpressionError> {
+    execute_timestamp(args)
+}
+
+fn execute_to_timestamp(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "to_timestamp requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::SmallInt(i) => {
+            let secs = *i as i64;
+            let dt = chrono::DateTime::from_timestamp(secs, 0)
+                .ok_or_else(|| ExpressionError::type_error("Invalid timestamp"))?;
+            let naive = dt.naive_utc();
+            Ok(Value::DateTime(DateTimeValue {
+                year: naive.year(),
+                month: naive.month(),
+                day: naive.day(),
+                hour: naive.hour(),
+                minute: naive.minute(),
+                sec: naive.second(),
+                microsec: naive.nanosecond() / 1000,
+            }))
+        }
+        Value::Int(i) => {
+            let secs = *i as i64;
+            let dt = chrono::DateTime::from_timestamp(secs, 0)
+                .ok_or_else(|| ExpressionError::type_error("Invalid timestamp"))?;
+            let naive = dt.naive_utc();
+            Ok(Value::DateTime(DateTimeValue {
+                year: naive.year(),
+                month: naive.month(),
+                day: naive.day(),
+                hour: naive.hour(),
+                minute: naive.minute(),
+                sec: naive.second(),
+                microsec: naive.nanosecond() / 1000,
+            }))
+        }
+        Value::BigInt(i) => {
+            let dt = chrono::DateTime::from_timestamp(*i, 0)
+                .ok_or_else(|| ExpressionError::type_error("Invalid timestamp"))?;
+            let naive = dt.naive_utc();
+            Ok(Value::DateTime(DateTimeValue {
+                year: naive.year(),
+                month: naive.month(),
+                day: naive.day(),
+                hour: naive.hour(),
+                minute: naive.minute(),
+                sec: naive.second(),
+                microsec: naive.nanosecond() / 1000,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_timestamp requires an integer (epoch seconds)",
+        )),
+    }
+}
+
+fn execute_to_epoch_ms(args: &[Value]) -> Result<Value, ExpressionError> {
+    execute_timestamp(args)
+}
+
+fn execute_date_part(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error("date_part requires 2 arguments"));
+    }
+    let part = match &args[0] {
+        Value::String(s) => s.to_lowercase(),
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => {
+            return Err(ExpressionError::type_error(
+                "date_part first argument must be a string",
+            ))
+        }
+    };
+    match &args[1] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            extract_date_part(&part, naive.year(), naive.month(), naive.day(), 0, 0, 0, 0)
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            extract_date_part(
+                &part,
+                naive.year(),
+                naive.month(),
+                naive.day(),
+                naive.hour(),
+                naive.minute(),
+                naive.second(),
+                naive.and_utc().timestamp_subsec_millis(),
+            )
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "date_part requires a date or datetime as second argument",
+        )),
+    }
+}
+
+fn extract_date_part(
+    part: &str,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millis: u32,
+) -> Result<Value, ExpressionError> {
+    match part {
+        "year" => Ok(Value::Int(year)),
+        "month" => Ok(Value::Int(month as i32)),
+        "day" => Ok(Value::Int(day as i32)),
+        "hour" => Ok(Value::Int(hour as i32)),
+        "minute" => Ok(Value::Int(minute as i32)),
+        "second" => Ok(Value::Int(second as i32)),
+        "millisecond" => Ok(Value::Int(millis as i32)),
+        "dow" => {
+            let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            Ok(Value::Int(naive.weekday().num_days_from_sunday() as i32))
+        }
+        "doy" => {
+            let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            Ok(Value::Int(naive.ordinal() as i32))
+        }
+        "quarter" => Ok(Value::Int(((month - 1) / 3 + 1) as i32)),
+        _ => Err(ExpressionError::type_error(format!(
+            "Unknown date part: {}",
+            part
+        ))),
+    }
+}
+
+fn execute_day_name(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("day_name requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let name = format!("{}", naive.weekday());
+            Ok(Value::string(name))
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let name = format!("{}", naive.and_utc().weekday());
+            Ok(Value::string(name))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "day_name requires a date or datetime type",
+        )),
+    }
+}
+
+fn execute_month_name(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("month_name requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Date(d) => {
+            let name = match d.month {
+                1 => "January",
+                2 => "February",
+                3 => "March",
+                4 => "April",
+                5 => "May",
+                6 => "June",
+                7 => "July",
+                8 => "August",
+                9 => "September",
+                10 => "October",
+                11 => "November",
+                12 => "December",
+                _ => "Unknown",
+            };
+            Ok(Value::string(name))
+        }
+        Value::DateTime(dt) => {
+            let name = match dt.month {
+                1 => "January",
+                2 => "February",
+                3 => "March",
+                4 => "April",
+                5 => "May",
+                6 => "June",
+                7 => "July",
+                8 => "August",
+                9 => "September",
+                10 => "October",
+                11 => "November",
+                12 => "December",
+                _ => "Unknown",
+            };
+            Ok(Value::string(name))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "month_name requires a date or datetime type",
+        )),
+    }
+}
+
 fn execute_generate_series(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() < 2 || args.len() > 3 {
         return Err(ExpressionError::type_error(
@@ -858,5 +1331,88 @@ mod tests {
             .execute(&[Value::Null(NullType::Null)])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_to_years() {
+        let func = DateTimeFunction::ToYears;
+        let result = func
+            .execute(&[Value::Int(2)])
+            .expect("to_years should succeed");
+        assert_eq!(result, Value::BigInt(2 * 365 * 24 * 60 * 60 * 1000));
+    }
+
+    #[test]
+    fn test_to_days() {
+        let func = DateTimeFunction::ToDays;
+        let result = func
+            .execute(&[Value::Int(7)])
+            .expect("to_days should succeed");
+        assert_eq!(result, Value::BigInt(7 * 24 * 60 * 60 * 1000));
+    }
+
+    #[test]
+    fn test_century() {
+        let func = DateTimeFunction::Century;
+        let date = DateValue {
+            year: 2024,
+            month: 6,
+            day: 15,
+        };
+        let result = func
+            .execute(&[Value::Date(date)])
+            .expect("century should succeed");
+        assert_eq!(result, Value::Int(21));
+    }
+
+    #[test]
+    fn test_to_timestamp() {
+        let func = DateTimeFunction::ToTimestamp;
+        let result = func
+            .execute(&[Value::BigInt(0)])
+            .expect("to_timestamp should succeed");
+        assert!(matches!(result, Value::DateTime(_)));
+    }
+
+    #[test]
+    fn test_date_part() {
+        let func = DateTimeFunction::DatePart;
+        let date = DateValue {
+            year: 2024,
+            month: 6,
+            day: 15,
+        };
+        let result = func
+            .execute(&[Value::string("year"), Value::Date(date)])
+            .expect("date_part should succeed");
+        assert_eq!(result, Value::Int(2024));
+    }
+
+    #[test]
+    fn test_day_name() {
+        let func = DateTimeFunction::DayName;
+        let date = DateValue {
+            year: 2024,
+            month: 1,
+            day: 1,
+        };
+        let result = func
+            .execute(&[Value::Date(date)])
+            .expect("day_name should succeed");
+        assert!(matches!(result, Value::String(_)));
+    }
+
+    #[test]
+    fn test_month_name() {
+        let func = DateTimeFunction::MonthName;
+        let date = DateValue {
+            year: 2024,
+            month: 6,
+            day: 15,
+        };
+        let result = func
+            .execute(&[Value::Date(date)])
+            .expect("month_name should succeed");
+        assert_eq!(result, Value::string("June"));
     }
 }

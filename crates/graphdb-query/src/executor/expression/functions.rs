@@ -313,6 +313,13 @@ impl BuiltinFunction {
                 | MathFunction::Degrees
                 | MathFunction::Gcd
                 | MathFunction::Lcm
+                | MathFunction::Factorial
+                | MathFunction::Gamma
+                | MathFunction::Lgamma
+                | MathFunction::Negate
+                | MathFunction::Even
+                | MathFunction::BitShiftLeft
+                | MathFunction::BitShiftRight
         )
     }
 
@@ -341,6 +348,21 @@ impl BuiltinFunction {
                 | DateTimeFunction::Age
                 | DateTimeFunction::LastDay
                 | DateTimeFunction::GenerateSeries
+                | DateTimeFunction::ToYears
+                | DateTimeFunction::ToMonths
+                | DateTimeFunction::ToDays
+                | DateTimeFunction::ToHours
+                | DateTimeFunction::ToMinutes
+                | DateTimeFunction::ToSeconds
+                | DateTimeFunction::ToMilliseconds
+                | DateTimeFunction::ToMicroseconds
+                | DateTimeFunction::Century
+                | DateTimeFunction::EpochMs
+                | DateTimeFunction::ToTimestamp
+                | DateTimeFunction::ToEpochMs
+                | DateTimeFunction::DatePart
+                | DateTimeFunction::DayName
+                | DateTimeFunction::MonthName
         )
     }
 
@@ -371,6 +393,9 @@ impl BuiltinFunction {
                 | UtilityFunction::Corr
                 | UtilityFunction::CovarPop
                 | UtilityFunction::CovarSamp
+                | UtilityFunction::OctetLength
+                | UtilityFunction::Encode
+                | UtilityFunction::Decode
         )
     }
 
@@ -821,7 +846,7 @@ mod tests {
             let impure_by_variant = matches!(
                 f,
                 BuiltinFunction::Math(f)
-                    if matches!(f, MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64)
+                    if matches!(f, MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64 | MathFunction::SetSeed)
             ) || matches!(
                 f,
                 BuiltinFunction::DateTime(f)

@@ -28,6 +28,18 @@ pub enum VectorFunction {
     Nnz,
     /// normalize(vector) - Normalize a vector to unit length
     Normalize,
+    /// array_value(...) - Create an array from values
+    ArrayValue,
+    /// array_cosine_similarity(arr1, arr2) - Compute cosine similarity between two arrays
+    ArrayCosineSimilarity,
+    /// array_distance(arr1, arr2) - Compute Euclidean distance between two arrays
+    ArrayDistance,
+    /// array_squared_distance(arr1, arr2) - Compute squared Euclidean distance between two arrays
+    ArraySquaredDistance,
+    /// array_inner_product(arr1, arr2) - Compute inner product of two arrays
+    ArrayInnerProduct,
+    /// array_dot_product(arr1, arr2) - Compute dot product of two arrays
+    ArrayDotProduct,
 }
 
 impl VectorFunction {
@@ -42,6 +54,12 @@ impl VectorFunction {
             VectorFunction::L2Norm => "l2_norm",
             VectorFunction::Nnz => "nnz",
             VectorFunction::Normalize => "normalize",
+            VectorFunction::ArrayValue => "array_value",
+            VectorFunction::ArrayCosineSimilarity => "array_cosine_similarity",
+            VectorFunction::ArrayDistance => "array_distance",
+            VectorFunction::ArraySquaredDistance => "array_squared_distance",
+            VectorFunction::ArrayInnerProduct => "array_inner_product",
+            VectorFunction::ArrayDotProduct => "array_dot_product",
         }
     }
 
@@ -93,6 +111,42 @@ impl VectorFunction {
                 Some(ValueType::Any),
                 false,
             ),
+            VectorFunction::ArrayValue => FunctionSignature::new(
+                "array_value",
+                vec![],
+                Some(ValueType::Any),
+                true,
+            ),
+            VectorFunction::ArrayCosineSimilarity => FunctionSignature::new(
+                "array_cosine_similarity",
+                vec![ValueType::Any, ValueType::Any],
+                Some(ValueType::Float),
+                false,
+            ),
+            VectorFunction::ArrayDistance => FunctionSignature::new(
+                "array_distance",
+                vec![ValueType::Any, ValueType::Any],
+                Some(ValueType::Float),
+                false,
+            ),
+            VectorFunction::ArraySquaredDistance => FunctionSignature::new(
+                "array_squared_distance",
+                vec![ValueType::Any, ValueType::Any],
+                Some(ValueType::Float),
+                false,
+            ),
+            VectorFunction::ArrayInnerProduct => FunctionSignature::new(
+                "array_inner_product",
+                vec![ValueType::Any, ValueType::Any],
+                Some(ValueType::Float),
+                false,
+            ),
+            VectorFunction::ArrayDotProduct => FunctionSignature::new(
+                "array_dot_product",
+                vec![ValueType::Any, ValueType::Any],
+                Some(ValueType::Float),
+                false,
+            ),
         }
     }
 
@@ -107,12 +161,18 @@ impl VectorFunction {
             VectorFunction::L2Norm => 1,
             VectorFunction::Nnz => 1,
             VectorFunction::Normalize => 1,
+            VectorFunction::ArrayValue => 0,
+            VectorFunction::ArrayCosineSimilarity => 2,
+            VectorFunction::ArrayDistance => 2,
+            VectorFunction::ArraySquaredDistance => 2,
+            VectorFunction::ArrayInnerProduct => 2,
+            VectorFunction::ArrayDotProduct => 2,
         }
     }
 
     /// Check if variable parameters are accepted
     pub fn is_variadic(&self) -> bool {
-        false
+        matches!(self, VectorFunction::ArrayValue)
     }
 
     /// Get function description
@@ -126,6 +186,16 @@ impl VectorFunction {
             VectorFunction::L2Norm => "Compute L2 norm of a vector",
             VectorFunction::Nnz => "Get number of non-zero elements in a vector",
             VectorFunction::Normalize => "Normalize a vector to unit length",
+            VectorFunction::ArrayValue => "Create an array from values",
+            VectorFunction::ArrayCosineSimilarity => {
+                "Compute cosine similarity between two arrays"
+            }
+            VectorFunction::ArrayDistance => "Compute Euclidean distance between two arrays",
+            VectorFunction::ArraySquaredDistance => {
+                "Compute squared Euclidean distance between two arrays"
+            }
+            VectorFunction::ArrayInnerProduct => "Compute inner product of two arrays",
+            VectorFunction::ArrayDotProduct => "Compute dot product of two arrays",
         }
     }
 
@@ -140,6 +210,12 @@ impl VectorFunction {
             VectorFunction::L2Norm => self.execute_l2_norm(args),
             VectorFunction::Nnz => self.execute_nnz(args),
             VectorFunction::Normalize => self.execute_normalize(args),
+            VectorFunction::ArrayValue => self.execute_array_value(args),
+            VectorFunction::ArrayCosineSimilarity => self.execute_cosine_similarity(args),
+            VectorFunction::ArrayDistance => self.execute_euclidean_distance(args),
+            VectorFunction::ArraySquaredDistance => self.execute_array_squared_distance(args),
+            VectorFunction::ArrayInnerProduct => self.execute_dot_product(args),
+            VectorFunction::ArrayDotProduct => self.execute_dot_product(args),
         }
     }
 
@@ -275,6 +351,46 @@ impl VectorFunction {
 
         let normalized: Vec<f32> = vec.iter().map(|&x| x / norm).collect();
         Ok(Value::vector(normalized))
+    }
+
+    /// Execute array_value function
+    fn execute_array_value(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        let values: Vec<Value> = args.to_vec();
+        Ok(Value::list(graphdb_core::value::list::List { values }))
+    }
+
+    /// Execute array_squared_distance function
+    fn execute_array_squared_distance(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if args.len() != 2 {
+            return Err(ExpressionError::new(
+                ExpressionErrorType::InvalidArgumentCount,
+                format!(
+                    "array_squared_distance() expects 2 arguments, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let vec1 = extract_vector(&args[0])?;
+        let vec2 = extract_vector(&args[1])?;
+
+        if vec1.len() != vec2.len() {
+            return Err(ExpressionError::new(
+                ExpressionErrorType::TypeError,
+                format!(
+                    "Array dimensions must match: {} vs {}",
+                    vec1.len(),
+                    vec2.len()
+                ),
+            ));
+        }
+
+        let sum: f32 = vec1
+            .iter()
+            .zip(vec2.iter())
+            .map(|(&a, &b)| (a - b).powi(2))
+            .sum();
+        Ok(Value::Double(sum as f64))
     }
 }
 
@@ -439,11 +555,46 @@ pub fn register_vector_functions(
     registry.register_builtin(
         crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::Normalize),
     );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(VectorFunction::ArrayValue),
+    );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(
+            VectorFunction::ArrayCosineSimilarity,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(
+            VectorFunction::ArrayDistance,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(
+            VectorFunction::ArraySquaredDistance,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(
+            VectorFunction::ArrayInnerProduct,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::executor::expression::functions::BuiltinFunction::Vector(
+            VectorFunction::ArrayDotProduct,
+        ),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphdb_core::value::list::List;
 
     #[test]
     fn test_cosine_similarity() {
@@ -560,5 +711,108 @@ mod tests {
 
         let result = VectorFunction::CosineSimilarity.execute(&[vec1, vec2]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_array_value() {
+        let result = VectorFunction::ArrayValue
+            .execute(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .unwrap();
+        assert!(matches!(result, Value::List(_)));
+    }
+
+    #[test]
+    fn test_array_cosine_similarity() {
+        let arr1 = Value::list(List {
+            values: vec![Value::Float(1.0), Value::Float(0.0), Value::Float(0.0)],
+        });
+        let arr2 = Value::list(List {
+            values: vec![Value::Float(0.0), Value::Float(1.0), Value::Float(0.0)],
+        });
+
+        let result = VectorFunction::ArrayCosineSimilarity
+            .execute(&[arr1, arr2])
+            .unwrap();
+
+        assert!(matches!(result, Value::Double(_)));
+        if let Value::Double(score) = result {
+            assert!((score - 0.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_array_distance() {
+        let arr1 = Value::list(List {
+            values: vec![Value::Float(0.0), Value::Float(0.0)],
+        });
+        let arr2 = Value::list(List {
+            values: vec![Value::Float(3.0), Value::Float(4.0)],
+        });
+
+        let result = VectorFunction::ArrayDistance
+            .execute(&[arr1, arr2])
+            .unwrap();
+
+        assert!(matches!(result, Value::Double(_)));
+        if let Value::Double(dist) = result {
+            assert!((dist - 5.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_array_squared_distance() {
+        let arr1 = Value::list(List {
+            values: vec![Value::Float(0.0), Value::Float(0.0)],
+        });
+        let arr2 = Value::list(List {
+            values: vec![Value::Float(3.0), Value::Float(4.0)],
+        });
+
+        let result = VectorFunction::ArraySquaredDistance
+            .execute(&[arr1, arr2])
+            .unwrap();
+
+        assert!(matches!(result, Value::Double(_)));
+        if let Value::Double(dist) = result {
+            assert!((dist - 25.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_array_inner_product() {
+        let arr1 = Value::list(List {
+            values: vec![Value::Float(1.0), Value::Float(2.0), Value::Float(3.0)],
+        });
+        let arr2 = Value::list(List {
+            values: vec![Value::Float(4.0), Value::Float(5.0), Value::Float(6.0)],
+        });
+
+        let result = VectorFunction::ArrayInnerProduct
+            .execute(&[arr1, arr2])
+            .unwrap();
+
+        assert!(matches!(result, Value::Double(_)));
+        if let Value::Double(dot) = result {
+            assert!((dot - 32.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_array_dot_product() {
+        let arr1 = Value::list(List {
+            values: vec![Value::Float(1.0), Value::Float(2.0), Value::Float(3.0)],
+        });
+        let arr2 = Value::list(List {
+            values: vec![Value::Float(4.0), Value::Float(5.0), Value::Float(6.0)],
+        });
+
+        let result = VectorFunction::ArrayDotProduct
+            .execute(&[arr1, arr2])
+            .unwrap();
+
+        assert!(matches!(result, Value::Double(_)));
+        if let Value::Double(dot) = result {
+            assert!((dot - 32.0).abs() < 1e-6);
+        }
     }
 }

@@ -30,6 +30,9 @@ pub enum UtilityFunction {
     Corr,
     CovarPop,
     CovarSamp,
+    OctetLength,
+    Encode,
+    Decode,
 }
 
 impl UtilityFunction {
@@ -56,6 +59,9 @@ impl UtilityFunction {
             UtilityFunction::Corr => "corr",
             UtilityFunction::CovarPop => "covar_pop",
             UtilityFunction::CovarSamp => "covar_samp",
+            UtilityFunction::OctetLength => "octet_length",
+            UtilityFunction::Encode => "encode",
+            UtilityFunction::Decode => "decode",
         }
     }
 
@@ -82,6 +88,9 @@ impl UtilityFunction {
             UtilityFunction::Corr => 2,
             UtilityFunction::CovarPop => 2,
             UtilityFunction::CovarSamp => 2,
+            UtilityFunction::OctetLength => 1,
+            UtilityFunction::Encode => 1,
+            UtilityFunction::Decode => 1,
         }
     }
 
@@ -123,6 +132,9 @@ impl UtilityFunction {
             UtilityFunction::Corr => "Return the correlation coefficient of two lists",
             UtilityFunction::CovarPop => "Return the population covariance of two lists",
             UtilityFunction::CovarSamp => "Return the sample covariance of two lists",
+            UtilityFunction::OctetLength => "Return the number of bytes in a string or blob",
+            UtilityFunction::Encode => "Encode a string to blob using encoding (UTF8, HEX, BASE64)",
+            UtilityFunction::Decode => "Decode a blob to string using encoding (UTF8, HEX, BASE64)",
         }
     }
 
@@ -149,6 +161,9 @@ impl UtilityFunction {
             UtilityFunction::Corr => execute_corr(args),
             UtilityFunction::CovarPop => execute_covar_pop(args),
             UtilityFunction::CovarSamp => execute_covar_samp(args),
+            UtilityFunction::OctetLength => execute_octet_length(args),
+            UtilityFunction::Encode => execute_encode(args),
+            UtilityFunction::Decode => execute_decode(args),
         }
     }
 }
@@ -697,6 +712,49 @@ fn execute_covar_samp(args: &[Value]) -> Result<Value, ExpressionError> {
     Ok(Value::Double(covar))
 }
 
+fn execute_octet_length(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "octet_length requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
+        Value::Blob(b) => Ok(Value::BigInt(b.len() as i64)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "octet_length requires a string or blob type",
+        )),
+    }
+}
+
+fn execute_encode(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("encode requires 1 argument"));
+    }
+    match &args[0] {
+        Value::String(s) => Ok(Value::Blob(s.as_bytes().to_vec())),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("encode requires a string type")),
+    }
+}
+
+fn execute_decode(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("decode requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Blob(b) => {
+            let s = String::from_utf8(b.to_vec()).map_err(|_| {
+                ExpressionError::type_error("decode failed: invalid UTF-8 sequence")
+            })?;
+            Ok(Value::string(s))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("decode requires a blob type")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,5 +875,30 @@ mod tests {
             .execute(&[xs, ys])
             .expect("covar_pop should succeed");
         assert!(matches!(result, Value::Double(_)));
+    }
+
+    #[test]
+    fn test_octet_length() {
+        let result = UtilityFunction::OctetLength
+            .execute(&[Value::string("hello")])
+            .expect("octet_length should succeed");
+        assert_eq!(result, Value::Int(5));
+    }
+
+    #[test]
+    fn test_encode() {
+        let result = UtilityFunction::Encode
+            .execute(&[Value::string("hello")])
+            .expect("encode should succeed");
+        assert!(matches!(result, Value::Blob(_)));
+    }
+
+    #[test]
+    fn test_decode() {
+        let blob = Value::Blob(b"hello".to_vec());
+        let result = UtilityFunction::Decode
+            .execute(&[blob])
+            .expect("decode should succeed");
+        assert_eq!(result, Value::string("hello"));
     }
 }

@@ -190,6 +190,13 @@ define_function_enum! {
             description: "Split string into substrings by delimiter",
             handler: execute_string_split
         },
+        Reverse => {
+            name: "reverse",
+            arity: 1,
+            variadic: false,
+            description: "Reverse a string",
+            handler: execute_reverse
+        },
     }
 }
 
@@ -684,6 +691,17 @@ fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+fn execute_reverse(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("reverse requires 1 argument"));
+    }
+    match &args[0] {
+        Value::String(s) => Ok(Value::string(s.chars().rev().collect::<String>())),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("reverse requires a string")),
+    }
+}
+
 fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     let len1 = s1.chars().count();
     let len2 = s2.chars().count();
@@ -861,5 +879,14 @@ mod tests {
                 values: vec![Value::string("a"), Value::string("b"), Value::string("c"),]
             })
         );
+    }
+
+    #[test]
+    fn test_reverse() {
+        let func = StringFunction::Reverse;
+        let result = func
+            .execute(&[Value::string("hello")])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::string("olleh"));
     }
 }

@@ -31,6 +31,14 @@ pub enum ContainerFunction {
     ListDistinct,
     ListUnique,
     ListExtract,
+    StructPack,
+    StructExtract,
+    MapCreation,
+    MapExtract,
+    ElementAt,
+    Cardinality,
+    MapKeys,
+    MapValues,
 }
 
 impl ContainerFunction {
@@ -57,6 +65,14 @@ impl ContainerFunction {
             Self::ListDistinct => "list_distinct",
             Self::ListUnique => "list_unique",
             Self::ListExtract => "list_extract",
+            Self::StructPack => "struct_pack",
+            Self::StructExtract => "struct_extract",
+            Self::MapCreation => "map",
+            Self::MapExtract => "map_extract",
+            Self::ElementAt => "element_at",
+            Self::Cardinality => "cardinality",
+            Self::MapKeys => "map_keys",
+            Self::MapValues => "map_values",
         }
     }
 
@@ -83,12 +99,23 @@ impl ContainerFunction {
             Self::ListDistinct => 1,
             Self::ListUnique => 1,
             Self::ListExtract => 2,
+            Self::StructPack => 0,
+            Self::StructExtract => 2,
+            Self::MapCreation => 0,
+            Self::MapExtract => 2,
+            Self::ElementAt => 2,
+            Self::Cardinality => 1,
+            Self::MapKeys => 1,
+            Self::MapValues => 1,
         }
     }
 
     /// Is it a function with variable parameters?
     pub fn is_variadic(&self) -> bool {
-        matches!(self, Self::Range | Self::ListConcat)
+        matches!(
+            self,
+            Self::Range | Self::ListConcat | Self::StructPack | Self::MapCreation
+        )
     }
 
     /// Obtain the function description
@@ -114,6 +141,14 @@ impl ContainerFunction {
             Self::ListDistinct => "Remove duplicate elements from list",
             Self::ListUnique => "Remove duplicate elements from list",
             Self::ListExtract => "Extract element from list at specified index",
+            Self::StructPack => "Pack values into a struct",
+            Self::StructExtract => "Extract field from struct",
+            Self::MapCreation => "Create a map from key-value pairs",
+            Self::MapExtract => "Extract value from map by key",
+            Self::ElementAt => "Get element at index from list or map",
+            Self::Cardinality => "Get number of elements in map or set",
+            Self::MapKeys => "Get all keys from a map",
+            Self::MapValues => "Get all values from a map",
         }
     }
 
@@ -139,6 +174,14 @@ impl ContainerFunction {
             Self::ListDistinct => execute_list_distinct(args),
             Self::ListUnique => execute_list_distinct(args),
             Self::ListExtract => execute_list_extract(args),
+            Self::StructPack => execute_struct_pack(args),
+            Self::StructExtract => execute_struct_extract(args),
+            Self::MapCreation => execute_map_creation(args),
+            Self::MapExtract => execute_map_extract(args),
+            Self::ElementAt => execute_element_at(args),
+            Self::Cardinality => execute_cardinality(args),
+            Self::MapKeys => execute_map_keys(args),
+            Self::MapValues => execute_map_values(args),
         }
     }
 }
@@ -668,6 +711,186 @@ fn value_to_string(v: &Value) -> String {
     }
 }
 
+fn execute_struct_pack(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() % 2 != 0 {
+        return Err(ExpressionError::type_error(
+            "struct_pack requires an even number of arguments (key-value pairs)",
+        ));
+    }
+    let mut fields = std::collections::HashMap::new();
+    let mut i = 0;
+    while i < args.len() {
+        let key = match &args[i] {
+            Value::String(s) => s.to_string(),
+            Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+            _ => {
+                return Err(ExpressionError::type_error(
+                    "struct_pack keys must be strings",
+                ))
+            }
+        };
+        fields.insert(key, args[i + 1].clone());
+        i += 2;
+    }
+    Ok(Value::string_map(fields))
+}
+
+fn execute_struct_extract(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "struct_extract requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Map(map), Value::String(key)) => {
+            let key_val = Value::string(key);
+            Ok(map
+                .get(&key_val)
+                .cloned()
+                .unwrap_or(Value::Null(NullType::Null)))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "struct_extract requires a map and a string key",
+        )),
+    }
+}
+
+fn execute_map_creation(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() % 2 != 0 {
+        return Err(ExpressionError::type_error(
+            "map requires an even number of arguments (key-value pairs)",
+        ));
+    }
+    let mut fields = std::collections::HashMap::new();
+    let mut i = 0;
+    while i < args.len() {
+        let key = match &args[i] {
+            Value::String(s) => s.to_string(),
+            Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+            _ => {
+                return Err(ExpressionError::type_error(
+                    "map keys must be strings",
+                ))
+            }
+        };
+        fields.insert(key, args[i + 1].clone());
+        i += 2;
+    }
+    Ok(Value::string_map(fields))
+}
+
+fn execute_map_extract(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "map_extract requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Map(map), Value::String(key)) => {
+            let key_val = Value::string(key);
+            Ok(map
+                .get(&key_val)
+                .cloned()
+                .unwrap_or(Value::Null(NullType::Null)))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "map_extract requires a map and a string key",
+        )),
+    }
+}
+
+fn execute_element_at(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "element_at requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::Int(idx)) => {
+            let idx = *idx;
+            let len = list.values.len() as i32;
+            let actual_idx = if idx < 0 { len + idx } else { idx };
+            if actual_idx < 0 || actual_idx >= len {
+                Ok(Value::Null(NullType::Null))
+            } else {
+                Ok(list.values[actual_idx as usize].clone())
+            }
+        }
+        (Value::List(list), Value::BigInt(idx)) => {
+            let idx = *idx;
+            let len = list.values.len() as i64;
+            let actual_idx = if idx < 0 { len + idx } else { idx };
+            if actual_idx < 0 || actual_idx >= len {
+                Ok(Value::Null(NullType::Null))
+            } else {
+                Ok(list.values[actual_idx as usize].clone())
+            }
+        }
+        (Value::Map(map), Value::String(key)) => {
+            let key_val = Value::string(key);
+            Ok(map
+                .get(&key_val)
+                .cloned()
+                .unwrap_or(Value::Null(NullType::Null)))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "element_at requires a list or map as first argument",
+        )),
+    }
+}
+
+fn execute_cardinality(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "cardinality requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Map(map) => Ok(Value::BigInt(map.len() as i64)),
+        Value::Set(set) => Ok(Value::BigInt(set.len() as i64)),
+        Value::List(list) => Ok(Value::BigInt(list.values.len() as i64)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "cardinality requires a map, set, or list type",
+        )),
+    }
+}
+
+fn execute_map_keys(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("map_keys requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Map(map) => {
+            let keys: Vec<Value> = map.keys().cloned().collect();
+            Ok(Value::list(List { values: keys }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error("map_keys requires a map type")),
+    }
+}
+
+fn execute_map_values(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "map_values requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Map(map) => {
+            let values: Vec<Value> = map.values().cloned().collect();
+            Ok(Value::list(List { values }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "map_values requires a map type",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,5 +1086,94 @@ mod tests {
             .execute(&[list, Value::Int(5)])
             .expect("list_extract should handle out of bounds");
         assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_struct_pack() {
+        let result = ContainerFunction::StructPack
+            .execute(&[
+                Value::string("name"),
+                Value::string("Alice"),
+                Value::string("age"),
+                Value::Int(30),
+            ])
+            .expect("struct_pack should succeed");
+        assert!(matches!(result, Value::Map(_)));
+    }
+
+    #[test]
+    fn test_struct_extract() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("name".to_string(), Value::string("Alice"));
+        map.insert("age".to_string(), Value::Int(30));
+        let result = ContainerFunction::StructExtract
+            .execute(&[Value::string_map(map), Value::string("name")])
+            .expect("struct_extract should succeed");
+        assert_eq!(result, Value::string("Alice"));
+    }
+
+    #[test]
+    fn test_map_creation() {
+        let result = ContainerFunction::MapCreation
+            .execute(&[
+                Value::string("x"),
+                Value::Int(1),
+                Value::string("y"),
+                Value::Int(2),
+            ])
+            .expect("map should succeed");
+        assert!(matches!(result, Value::Map(_)));
+    }
+
+    #[test]
+    fn test_element_at_list() {
+        let list = Value::list(List {
+            values: vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        });
+        let result = ContainerFunction::ElementAt
+            .execute(&[list, Value::Int(1)])
+            .expect("element_at should succeed");
+        assert_eq!(result, Value::Int(20));
+    }
+
+    #[test]
+    fn test_element_at_map() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("key".to_string(), Value::string("value"));
+        let result = ContainerFunction::ElementAt
+            .execute(&[Value::string_map(map), Value::string("key")])
+            .expect("element_at should succeed");
+        assert_eq!(result, Value::string("value"));
+    }
+
+    #[test]
+    fn test_cardinality() {
+        let map = std::collections::HashMap::new();
+        let result = ContainerFunction::Cardinality
+            .execute(&[Value::string_map(map)])
+            .expect("cardinality should succeed");
+        assert_eq!(result, Value::Int(0));
+    }
+
+    #[test]
+    fn test_map_keys() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("a".to_string(), Value::Int(1));
+        map.insert("b".to_string(), Value::Int(2));
+        let result = ContainerFunction::MapKeys
+            .execute(&[Value::string_map(map)])
+            .expect("map_keys should succeed");
+        assert!(matches!(result, Value::List(_)));
+    }
+
+    #[test]
+    fn test_map_values() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("a".to_string(), Value::Int(1));
+        map.insert("b".to_string(), Value::Int(2));
+        let result = ContainerFunction::MapValues
+            .execute(&[Value::string_map(map)])
+            .expect("map_values should succeed");
+        assert!(matches!(result, Value::List(_)));
     }
 }

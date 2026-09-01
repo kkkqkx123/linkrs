@@ -12,6 +12,10 @@ use graphdb_core::Value;
 pub enum PathFunction {
     Nodes,
     Relationships,
+    Properties,
+    IsTrail,
+    IsAcyclic,
+    PathLength,
 }
 
 impl PathFunction {
@@ -20,6 +24,10 @@ impl PathFunction {
         match self {
             Self::Nodes => "nodes",
             Self::Relationships => "relationships",
+            Self::Properties => "properties",
+            Self::IsTrail => "is_trail",
+            Self::IsAcyclic => "is_acyclic",
+            Self::PathLength => "length",
         }
     }
 
@@ -38,6 +46,10 @@ impl PathFunction {
         match self {
             Self::Nodes => "Get all vertices in the path",
             Self::Relationships => "Get all edges in the path",
+            Self::Properties => "Get all properties from vertices and edges in the path",
+            Self::IsTrail => "Check if path is a trail (no repeated edges)",
+            Self::IsAcyclic => "Check if path is acyclic (no repeated vertices)",
+            Self::PathLength => "Get the number of edges in the path",
         }
     }
 
@@ -45,6 +57,10 @@ impl PathFunction {
         match self {
             Self::Nodes => execute_nodes(args),
             Self::Relationships => execute_relationships(args),
+            Self::Properties => execute_properties(args),
+            Self::IsTrail => execute_is_trail(args),
+            Self::IsAcyclic => execute_is_acyclic(args),
+            Self::PathLength => execute_path_length(args),
         }
     }
 }
@@ -86,6 +102,117 @@ fn execute_relationships(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "relationships requires a path type",
+        )),
+    }
+}
+
+fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "properties requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Path(path) => {
+            let mut all_props = std::collections::HashMap::new();
+            // Get properties from source vertex
+            for tag in &path.src.tags {
+                for (k, v) in &tag.properties {
+                    all_props.insert(k.clone(), v.clone());
+                }
+            }
+            for (k, v) in &path.src.properties {
+                all_props.insert(k.clone(), v.clone());
+            }
+            // Get properties from edges and destination vertices
+            for step in &path.steps {
+                for (k, v) in &step.edge.props {
+                    all_props.insert(k.clone(), v.clone());
+                }
+                for tag in &step.dst.tags {
+                    for (k, v) in &tag.properties {
+                        all_props.insert(k.clone(), v.clone());
+                    }
+                }
+                for (k, v) in &step.dst.properties {
+                    all_props.insert(k.clone(), v.clone());
+                }
+            }
+            let props: Vec<Value> = all_props
+                .into_iter()
+                .map(|(k, v)| {
+                    Value::list(List {
+                        values: vec![Value::string(k), v],
+                    })
+                })
+                .collect();
+            Ok(Value::list(List { values: props }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "properties requires a path type",
+        )),
+    }
+}
+
+fn execute_is_trail(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("is_trail requires 1 argument"));
+    }
+    match &args[0] {
+        Value::Path(path) => {
+            let mut seen_edges = std::collections::HashSet::new();
+            for step in &path.steps {
+                let edge_id = (step.edge.src.as_int64(), step.edge.dst.as_int64(), &step.edge.edge_type);
+                if !seen_edges.insert(edge_id) {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "is_trail requires a path type",
+        )),
+    }
+}
+
+fn execute_is_acyclic(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "is_acyclic requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Path(path) => {
+            let mut seen_vertices = std::collections::HashSet::new();
+            seen_vertices.insert(path.src.vid.as_int64());
+            for step in &path.steps {
+                let vid = step.dst.vid.as_int64();
+                if !seen_vertices.insert(vid) {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "is_acyclic requires a path type",
+        )),
+    }
+}
+
+fn execute_path_length(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "length requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Path(path) => Ok(Value::BigInt(path.steps.len() as i64)),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "length requires a path type",
         )),
     }
 }
@@ -235,5 +362,32 @@ mod tests {
                 .expect("The relationshipships function should handle NULL."),
             Value::Null(NullType::Null)
         );
+    }
+
+    #[test]
+    fn test_is_trail() {
+        let path = create_test_path();
+        let result = PathFunction::IsTrail
+            .execute(&[Value::Path(Box::new(path))])
+            .expect("is_trail should succeed");
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_is_acyclic() {
+        let path = create_test_path();
+        let result = PathFunction::IsAcyclic
+            .execute(&[Value::Path(Box::new(path))])
+            .expect("is_acyclic should succeed");
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_path_length() {
+        let path = create_test_path();
+        let result = PathFunction::PathLength
+            .execute(&[Value::Path(Box::new(path))])
+            .expect("length should succeed");
+        assert_eq!(result, Value::BigInt(2));
     }
 }

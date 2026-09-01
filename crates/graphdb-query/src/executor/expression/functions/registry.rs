@@ -164,6 +164,15 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Math(MathFunction::Gcd));
         self.register_builtin(BuiltinFunction::Math(MathFunction::Lcm));
 
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Factorial));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Gamma));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Lgamma));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Negate));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Even));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::SetSeed));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::BitShiftLeft));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::BitShiftRight));
+
         // Register string function
         self.register_builtin(BuiltinFunction::String(StringFunction::Length));
         self.register_builtin(BuiltinFunction::String(StringFunction::Upper));
@@ -228,6 +237,21 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::Age));
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::LastDay));
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::GenerateSeries));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToYears));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToMonths));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToDays));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToHours));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToMinutes));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToSeconds));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToMilliseconds));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToMicroseconds));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::Century));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::EpochMs));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToTimestamp));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::ToEpochMs));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DatePart));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DayName));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::MonthName));
 
         // Registering geospatial functions
         use super::GeographyFunction;
@@ -267,6 +291,10 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Corr));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CovarPop));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CovarSamp));
+
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::OctetLength));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Encode));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Decode));
 
         // Register aggregate functions
         use graphdb_core::types::operators::AggregateFunction;
@@ -374,11 +402,23 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListDistinct));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListUnique));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListExtract));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::StructPack));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::StructExtract));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::MapCreation));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::MapExtract));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ElementAt));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::Cardinality));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::MapKeys));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::MapValues));
 
         // Register path function
         use super::PathFunction;
         self.register_builtin(BuiltinFunction::Path(PathFunction::Nodes));
         self.register_builtin(BuiltinFunction::Path(PathFunction::Relationships));
+        self.register_builtin(BuiltinFunction::Path(PathFunction::Properties));
+        self.register_builtin(BuiltinFunction::Path(PathFunction::IsTrail));
+        self.register_builtin(BuiltinFunction::Path(PathFunction::IsAcyclic));
+        self.register_builtin(BuiltinFunction::Path(PathFunction::PathLength));
 
         // Register vector functions
         super::builtin::vector::register_vector_functions(self);
