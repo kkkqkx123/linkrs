@@ -768,11 +768,7 @@ fn execute_map_creation(args: &[Value]) -> Result<Value, ExpressionError> {
         let key = match &args[i] {
             Value::String(s) => s.to_string(),
             Value::Null(_) => return Ok(Value::Null(NullType::Null)),
-            _ => {
-                return Err(ExpressionError::type_error(
-                    "map keys must be strings",
-                ))
-            }
+            _ => return Err(ExpressionError::type_error("map keys must be strings")),
         };
         fields.insert(key, args[i + 1].clone());
         i += 2;

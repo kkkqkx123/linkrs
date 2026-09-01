@@ -24,7 +24,7 @@ impl PathFunction {
         match self {
             Self::Nodes => "nodes",
             Self::Relationships => "relationships",
-            Self::Properties => "properties",
+            Self::Properties => "path_properties",
             Self::IsTrail => "is_trail",
             Self::IsAcyclic => "is_acyclic",
             Self::PathLength => "length",
@@ -163,7 +163,11 @@ fn execute_is_trail(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Path(path) => {
             let mut seen_edges = std::collections::HashSet::new();
             for step in &path.steps {
-                let edge_id = (step.edge.src.as_int64(), step.edge.dst.as_int64(), &step.edge.edge_type);
+                let edge_id = (
+                    step.edge.src.as_int64(),
+                    step.edge.dst.as_int64(),
+                    &step.edge.edge_type,
+                );
                 if !seen_edges.insert(edge_id) {
                     return Ok(Value::Bool(false));
                 }
@@ -171,9 +175,7 @@ fn execute_is_trail(args: &[Value]) -> Result<Value, ExpressionError> {
             Ok(Value::Bool(true))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "is_trail requires a path type",
-        )),
+        _ => Err(ExpressionError::type_error("is_trail requires a path type")),
     }
 }
 
@@ -204,16 +206,12 @@ fn execute_is_acyclic(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_path_length(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "length requires 1 argument",
-        ));
+        return Err(ExpressionError::type_error("length requires 1 argument"));
     }
     match &args[0] {
         Value::Path(path) => Ok(Value::BigInt(path.steps.len() as i64)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "length requires a path type",
-        )),
+        _ => Err(ExpressionError::type_error("length requires a path type")),
     }
 }
 

@@ -252,20 +252,36 @@ impl<'a> ExpressionBinder<'a> {
 
     /// Deduce function return type from name and argument types.
     pub fn deduce_function_return_type(&self, name: &str, arg_types: &[DataType]) -> DataType {
-        match name.to_lowercase().as_str() {
-            "abs" | "length" | "size" | "round" | "floor" | "ceil" => DataType::Int,
-            "sqrt" | "pow" | "sin" | "cos" | "tan" => DataType::Float,
-            "concat" | "substring" | "trim" | "ltrim" | "rtrim" | "upper" | "lower" | "type" => {
-                DataType::String
+        let lower = name.to_lowercase();
+        match lower.as_str() {
+            "head" | "last" | "coalesce" | "greatest" | "least" | "nullif" | "ifnull"
+            | "first_value" | "last_value" | "nth_value" | "lead" | "lag" | "element_at"
+            | "list_extract" | "struct_extract" | "map_extract" => {
+                return arg_types.first().cloned().unwrap_or(DataType::String);
             }
-            "id" => DataType::Int,
-            "properties" => DataType::Map(Box::new(DataType::Empty)),
-            "labels" | "keys" => DataType::List(Box::new(DataType::String)),
-            "values" | "range" | "reverse" => DataType::List(Box::new(DataType::Empty)),
-            "toboolean" | "toBoolean" => DataType::Bool,
-            "tointeger" | "toInteger" => DataType::Int,
-            "tofloat" | "toFloat" => DataType::Float,
-            "tostring" | "toString" => DataType::String,
+            "date_add" | "date_sub" | "date_trunc" | "last_day" => {
+                return arg_types.first().cloned().unwrap_or(DataType::DateTime);
+            }
+            _ => {}
+        }
+
+        let registry = crate::executor::expression::functions::global_registry_ref();
+        if let Some(return_type) = registry.get_return_type(name) {
+            if *return_type != DataType::Unknown {
+                return return_type.clone();
+            }
+            // For polymorphic functions that still have Unknown in registry,
+            // fall back to first argument type when available.
+            if !arg_types.is_empty() {
+                let first = &arg_types[0];
+                if *first != DataType::Unknown {
+                    return first.clone();
+                }
+            }
+            return return_type.clone();
+        }
+
+        match lower.as_str() {
             "head" => arg_types.first().cloned().unwrap_or(DataType::String),
             "last" => arg_types.first().cloned().unwrap_or(DataType::String),
             "coalesce" => arg_types.first().cloned().unwrap_or(DataType::String),

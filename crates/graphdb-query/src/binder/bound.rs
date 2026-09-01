@@ -480,6 +480,163 @@ pub enum SetOperationKind {
     Minus,
 }
 
+// ── DML bound types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct BoundInsert {
+    pub span: Span,
+    pub target: BoundInsertTarget,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundInsertTarget {
+    Vertices {
+        tags: Vec<crate::parser::ast::TagInsertSpec>,
+        values: Vec<BoundVertexRow>,
+    },
+    Edge {
+        edge_name: String,
+        prop_names: Vec<String>,
+        edges: Vec<(
+            BoundExpression,
+            BoundExpression,
+            Option<BoundExpression>,
+            Vec<BoundExpression>,
+        )>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundVertexRow {
+    pub vid: BoundExpression,
+    pub tag_values: Vec<Vec<BoundExpression>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundUpdate {
+    pub span: Span,
+    pub target: BoundUpdateTarget,
+    pub assignments: Vec<BoundAssignment>,
+    pub where_clause: Option<BoundExpression>,
+    pub is_upsert: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundUpdateTarget {
+    Vertex(BoundExpression),
+    Edge {
+        src: BoundExpression,
+        dst: BoundExpression,
+        edge_type: Option<String>,
+        rank: Option<BoundExpression>,
+    },
+    Tag(String),
+    TagOnVertex {
+        vid: BoundExpression,
+        tag_name: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundAssignment {
+    pub property: String,
+    pub value: BoundExpression,
+    pub target: Option<BoundExpression>,
+    pub object: Option<BoundExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundDelete {
+    pub span: Span,
+    pub target: BoundDeleteTarget,
+    pub where_clause: Option<BoundExpression>,
+    pub with_edge: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundDeleteTarget {
+    Vertices(Vec<BoundExpression>),
+    Edges {
+        edge_type: Option<String>,
+        edges: Vec<(BoundExpression, BoundExpression, Option<BoundExpression>)>,
+    },
+    Tags {
+        tag_names: Vec<String>,
+        vertex_ids: Vec<BoundExpression>,
+        is_all_tags: bool,
+    },
+    Index(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundMerge {
+    pub span: Span,
+    pub pattern: crate::parser::ast::Pattern,
+    pub on_create: Vec<BoundAssignment>,
+    pub on_match: Vec<BoundAssignment>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundSet {
+    pub span: Span,
+    pub assignments: Vec<BoundAssignment>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundRemove {
+    pub span: Span,
+    pub items: Vec<BoundExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCreate {
+    pub span: Span,
+    pub target: crate::parser::ast::CreateTarget,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundDrop {
+    pub span: Span,
+    pub target: crate::parser::ast::DropTarget,
+    pub if_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundAlter {
+    pub span: Span,
+    pub target: crate::parser::ast::AlterTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundBeginTransaction {
+    pub span: Span,
+    pub read_only: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCommit {
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundRollback {
+    pub span: Span,
+    pub savepoint_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCopy {
+    pub span: Span,
+    pub target: crate::parser::ast::CopyTarget,
+    pub direction: crate::parser::ast::CopyDirection,
+    pub file_path: String,
+    pub header: bool,
+    pub delimiter: char,
+    pub batch_size: Option<usize>,
+}
+
 // ── BoundStatement ───────────────────────────────────────────────────────────
 
 /// Fully bound query statement with all names resolved.
@@ -502,6 +659,25 @@ pub enum BoundStatement {
     GroupBy(BoundGroupByStatement),
     SetOperation(BoundSetOperationStatement),
 
+    // ── DML ─────────────────────────────────────────────────────────────────
+    Insert(BoundInsert),
+    Update(BoundUpdate),
+    Delete(BoundDelete),
+    Merge(BoundMerge),
+    Set(BoundSet),
+    Remove(BoundRemove),
+    Copy(BoundCopy),
+
+    // ── DDL ─────────────────────────────────────────────────────────────────
+    Create(BoundCreate),
+    Drop(BoundDrop),
+    Alter(BoundAlter),
+
+    // ── Transaction ─────────────────────────────────────────────────────────
+    BeginTransaction(BoundBeginTransaction),
+    Commit(BoundCommit),
+    Rollback(BoundRollback),
+
     // ── Placeholder for management/DDL/DML ─────────────────────────────────
     Other(Box<crate::parser::ast::Stmt>),
 }
@@ -522,6 +698,29 @@ impl BoundStatement {
             Self::Unwind(_) => "Unwind",
             Self::GroupBy(_) => "GroupBy",
             Self::SetOperation(_) => "SetOperation",
+            Self::Insert(_) => "Insert",
+            Self::Update(_) => "Update",
+            Self::Delete(_) => "Delete",
+            Self::Merge(_) => "Merge",
+            Self::Set(_) => "Set",
+            Self::Remove(_) => "Remove",
+            Self::Copy(_) => "Copy",
+            Self::Create(_) => "Create",
+            Self::Drop(_) => "Drop",
+            Self::Alter(_) => "Alter",
+            Self::BeginTransaction(s) => match s.read_only {
+                Some(true) => "BeginTransactionReadOnly",
+                Some(false) => "BeginTransactionReadWrite",
+                None => "BeginTransaction",
+            },
+            Self::Commit(_) => "Commit",
+            Self::Rollback(s) => {
+                if s.savepoint_name.is_some() {
+                    "RollbackToSavepoint"
+                } else {
+                    "Rollback"
+                }
+            }
             Self::Other(stmt) => stmt.kind(),
         }
     }

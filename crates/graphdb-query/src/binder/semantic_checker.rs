@@ -448,6 +448,83 @@ fn check_function_args(expr: &Expression, depth: usize) -> DBResult<()> {
                     args.len()
                 ))));
             }
+            // Validate arity against the registered function signature when known.
+            let registry = crate::executor::expression::functions::global_registry_ref();
+            if let Some(func) = registry.get_builtin(name) {
+                let expected = func.arity();
+                let variadic = func.is_variadic();
+                if variadic {
+                    if args.len() < expected {
+                        return Err(DBError::from(QueryError::invalid_query(format!(
+                            "Function '{}' expects at least {} arguments, got {}",
+                            name,
+                            expected,
+                            args.len()
+                        ))));
+                    }
+                } else if args.len() != expected {
+                    return Err(DBError::from(QueryError::invalid_query(format!(
+                        "Function '{}' expects {} arguments, got {}",
+                        name,
+                        expected,
+                        args.len()
+                    ))));
+                }
+            } else if let Some(func) = registry.get_custom(name) {
+                let expected = func.arity;
+                let variadic = func.is_variadic;
+                if variadic {
+                    if args.len() < expected {
+                        return Err(DBError::from(QueryError::invalid_query(format!(
+                            "Function '{}' expects at least {} arguments, got {}",
+                            name,
+                            expected,
+                            args.len()
+                        ))));
+                    }
+                } else if args.len() != expected {
+                    return Err(DBError::from(QueryError::invalid_query(format!(
+                        "Function '{}' expects {} arguments, got {}",
+                        name,
+                        expected,
+                        args.len()
+                    ))));
+                }
+            }
+            for arg in args {
+                check_function_args(arg, depth + 1)?;
+            }
+        }
+        Expression::WindowFunction { name, args, .. } => {
+            if args.len() > MAX_FUNCTION_ARGS {
+                return Err(DBError::from(QueryError::invalid_query(format!(
+                    "The function {:?} has too many arguments: {}",
+                    name,
+                    args.len()
+                ))));
+            }
+            let registry = crate::executor::expression::functions::global_registry_ref();
+            if let Some(func) = registry.get_builtin(name) {
+                let expected = func.arity();
+                let variadic = func.is_variadic();
+                if variadic {
+                    if args.len() < expected {
+                        return Err(DBError::from(QueryError::invalid_query(format!(
+                            "Function '{}' expects at least {} arguments, got {}",
+                            name,
+                            expected,
+                            args.len()
+                        ))));
+                    }
+                } else if args.len() != expected {
+                    return Err(DBError::from(QueryError::invalid_query(format!(
+                        "Function '{}' expects {} arguments, got {}",
+                        name,
+                        expected,
+                        args.len()
+                    ))));
+                }
+            }
             for arg in args {
                 check_function_args(arg, depth + 1)?;
             }
@@ -497,7 +574,11 @@ fn check_function_args(expr: &Expression, depth: usize) -> DBResult<()> {
                 check_function_args(d, depth + 1)?;
             }
         }
-        _ => {}
+        _ => {
+            for child in expr.children() {
+                check_function_args(child, depth + 1)?;
+            }
+        }
     }
     Ok(())
 }

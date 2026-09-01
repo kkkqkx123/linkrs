@@ -357,6 +357,26 @@ impl PlannerEnum {
                 Some(PlannerEnum::SetOperation(SetOperationPlanner::new()))
             }
             BoundStatement::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
+            BoundStatement::Insert(_) => Some(PlannerEnum::Insert(InsertPlanner::new())),
+            BoundStatement::Update(_) => Some(PlannerEnum::Update(UpdatePlanner::new())),
+            BoundStatement::Delete(_) => Some(PlannerEnum::Delete(DeletePlanner::new())),
+            BoundStatement::Merge(_) => Some(PlannerEnum::Merge(MergePlanner::new())),
+            BoundStatement::Set(_) => Some(PlannerEnum::Set(SetPlanner::new())),
+            BoundStatement::Remove(_) => Some(PlannerEnum::Remove(RemovePlanner::new())),
+            BoundStatement::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
+            BoundStatement::Create(c) => match &c.target {
+                crate::parser::ast::CreateTarget::Node { .. }
+                | crate::parser::ast::CreateTarget::Edge { .. }
+                | crate::parser::ast::CreateTarget::Path { .. } => {
+                    Some(PlannerEnum::CreateData(CreatePlanner::new()))
+                }
+                _ => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            },
+            BoundStatement::Drop(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::Alter(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::BeginTransaction(_)
+            | BoundStatement::Commit(_)
+            | BoundStatement::Rollback(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Other(stmt) => Self::from_stmt(&Arc::new(*stmt.clone())),
         }
     }

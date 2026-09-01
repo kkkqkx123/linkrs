@@ -820,6 +820,19 @@ fn referenced_schema_objects(
         | BoundStatement::With(_)
         | BoundStatement::Unwind(_)
         | BoundStatement::GroupBy(_) => (tags, edges, false),
+        BoundStatement::Insert(_)
+        | BoundStatement::Update(_)
+        | BoundStatement::Delete(_)
+        | BoundStatement::Merge(_)
+        | BoundStatement::Set(_)
+        | BoundStatement::Remove(_)
+        | BoundStatement::Copy(_)
+        | BoundStatement::Create(_)
+        | BoundStatement::Drop(_)
+        | BoundStatement::Alter(_)
+        | BoundStatement::BeginTransaction(_)
+        | BoundStatement::Commit(_)
+        | BoundStatement::Rollback(_) => (tags, edges, true),
         BoundStatement::Other(_) => (tags, edges, true),
     }
 }

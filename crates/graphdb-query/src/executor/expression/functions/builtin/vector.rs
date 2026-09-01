@@ -111,12 +111,9 @@ impl VectorFunction {
                 Some(ValueType::Any),
                 false,
             ),
-            VectorFunction::ArrayValue => FunctionSignature::new(
-                "array_value",
-                vec![],
-                Some(ValueType::Any),
-                true,
-            ),
+            VectorFunction::ArrayValue => {
+                FunctionSignature::new("array_value", vec![], Some(ValueType::Any), true)
+            }
             VectorFunction::ArrayCosineSimilarity => FunctionSignature::new(
                 "array_cosine_similarity",
                 vec![ValueType::Any, ValueType::Any],
@@ -187,9 +184,7 @@ impl VectorFunction {
             VectorFunction::Nnz => "Get number of non-zero elements in a vector",
             VectorFunction::Normalize => "Normalize a vector to unit length",
             VectorFunction::ArrayValue => "Create an array from values",
-            VectorFunction::ArrayCosineSimilarity => {
-                "Compute cosine similarity between two arrays"
-            }
+            VectorFunction::ArrayCosineSimilarity => "Compute cosine similarity between two arrays",
             VectorFunction::ArrayDistance => "Compute Euclidean distance between two arrays",
             VectorFunction::ArraySquaredDistance => {
                 "Compute squared Euclidean distance between two arrays"

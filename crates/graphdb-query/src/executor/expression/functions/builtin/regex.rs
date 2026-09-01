@@ -118,7 +118,9 @@ impl RegexFunction {
                             format!("Invalid regular expression: {}", pattern),
                         )
                     })?;
-                    Ok(Value::Bool(regex.is_match(s) && regex.find(s).map_or(false, |m| m.as_str() == s)))
+                    Ok(Value::Bool(
+                        regex.is_match(s) && regex.find(s).map_or(false, |m| m.as_str() == s),
+                    ))
                 }
                 (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
                 _ => Err(ExpressionError::type_error(
@@ -152,8 +154,13 @@ impl RegexFunction {
                             format!("Invalid regular expression: {}", pattern),
                         )
                     })?;
-                    let matches: Vec<Value> = regex.find_iter(s).map(|m| Value::string(m.as_str())).collect();
-                    Ok(Value::list(graphdb_core::value::list::List { values: matches }))
+                    let matches: Vec<Value> = regex
+                        .find_iter(s)
+                        .map(|m| Value::string(m.as_str()))
+                        .collect();
+                    Ok(Value::list(graphdb_core::value::list::List {
+                        values: matches,
+                    }))
                 }
                 (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
                 _ => Err(ExpressionError::type_error(
@@ -169,7 +176,9 @@ impl RegexFunction {
                         )
                     })?;
                     let parts: Vec<Value> = regex.split(s).map(Value::string).collect();
-                    Ok(Value::list(graphdb_core::value::list::List { values: parts }))
+                    Ok(Value::list(graphdb_core::value::list::List {
+                        values: parts,
+                    }))
                 }
                 (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
                 _ => Err(ExpressionError::type_error(
@@ -254,7 +263,11 @@ mod tests {
         assert_eq!(
             result,
             Value::list(graphdb_core::value::list::List {
-                values: vec![Value::string("abc"), Value::string("def"), Value::string("")]
+                values: vec![
+                    Value::string("abc"),
+                    Value::string("def"),
+                    Value::string("")
+                ]
             })
         );
     }

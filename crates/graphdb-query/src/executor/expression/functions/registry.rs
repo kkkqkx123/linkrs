@@ -7,9 +7,17 @@ use super::BuiltinFunction;
 use super::CustomFunction;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use graphdb_core::DataType;
 use graphdb_core::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Registry entry carrying the function and its static return type.
+#[derive(Debug, Clone)]
+pub struct RegistryEntry {
+    pub function: BuiltinFunction,
+    pub return_type: DataType,
+}
 
 /// Function Registry
 ///
@@ -17,8 +25,10 @@ use std::sync::Arc;
 /// The overhead associated with dynamic distribution (dyn) was avoided.
 #[derive(Debug)]
 pub struct FunctionRegistry {
-    /// Built-in function mapping (function name -> BuiltinFunction enumeration)
-    builtin_functions: HashMap<String, BuiltinFunction>,
+    /// Built-in function mapping (function name -> RegistryEntry)
+    builtin_functions: HashMap<String, RegistryEntry>,
+    /// Alias mapping: alias upper -> canonical upper
+    aliases: HashMap<String, String>,
     /// Custom function mapping (function name -> CustomFunction)
     custom_functions: HashMap<String, CustomFunction>,
 }
@@ -33,16 +43,39 @@ impl FunctionRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             builtin_functions: HashMap::new(),
+            aliases: HashMap::new(),
             custom_functions: HashMap::new(),
         };
         registry.register_all_builtin_functions();
         registry
     }
 
+    fn canonical_name(&self, upper: &str) -> Option<String> {
+        if self.builtin_functions.contains_key(upper) {
+            Some(upper.to_string())
+        } else if let Some(canon) = self.aliases.get(upper) {
+            Some(canon.clone())
+        } else {
+            None
+        }
+    }
+
+    fn resolve_entry(&self, name: &str) -> Option<&RegistryEntry> {
+        let upper = name.to_uppercase();
+        if let Some(entry) = self.builtin_functions.get(&upper) {
+            return Some(entry);
+        }
+        if let Some(canon) = self.aliases.get(&upper) {
+            return self.builtin_functions.get(canon);
+        }
+        None
+    }
+
     /// Check whether the function exists.
     pub fn contains(&self, name: &str) -> bool {
         let upper_name = name.to_uppercase();
         self.builtin_functions.contains_key(&upper_name)
+            || self.aliases.contains_key(&upper_name)
             || self.custom_functions.contains_key(&upper_name)
     }
 
@@ -56,14 +89,35 @@ impl FunctionRegistry {
     /// Registering built-in functions
     pub fn register_builtin(&mut self, function: BuiltinFunction) {
         let upper_name = function.name().to_uppercase();
-        self.builtin_functions.insert(upper_name, function);
+        let return_type = builtin_return_type(&function);
+        self.builtin_functions.insert(
+            upper_name,
+            RegistryEntry {
+                function,
+                return_type,
+            },
+        );
+    }
+
+    /// Register an alias for a built-in function.
+    pub fn register_alias(&mut self, alias: &str, canonical: &str) {
+        self.aliases
+            .insert(alias.to_uppercase(), canonical.to_uppercase());
     }
 
     /// Obtaining built-in functions
     pub fn get_builtin(&self, name: &str) -> Option<&BuiltinFunction> {
-        // Convert to uppercase for case-insensitive lookup
-        let upper_name = name.to_uppercase();
-        self.builtin_functions.get(&upper_name)
+        self.resolve_entry(name).map(|e| &e.function)
+    }
+
+    /// Get the full registry entry (function + return type).
+    pub fn get_entry(&self, name: &str) -> Option<&RegistryEntry> {
+        self.resolve_entry(name)
+    }
+
+    /// Get the static return type for a function name, resolving aliases.
+    pub fn get_return_type(&self, name: &str) -> Option<&DataType> {
+        self.resolve_entry(name).map(|e| &e.return_type)
     }
 
     /// Registering a custom function (full form)
@@ -81,14 +135,13 @@ impl FunctionRegistry {
 
     /// Execute a function (based on its name)
     pub fn execute(&self, name: &str, args: &[Value]) -> Result<Value, ExpressionError> {
-        // Convert to uppercase for case-insensitive lookup
         let upper_name = name.to_uppercase();
-        // Try to find the built-in functions first.
-        if let Some(func) = self.builtin_functions.get(&upper_name) {
-            return func.execute(args);
+        let canonical = self
+            .canonical_name(&upper_name)
+            .unwrap_or(upper_name.clone());
+        if let Some(entry) = self.builtin_functions.get(&canonical) {
+            return entry.function.execute(args);
         }
-
-        // Try to find the custom function again.
         if let Some(func) = self.custom_functions.get(&upper_name) {
             return func.execute(args);
         }
@@ -107,8 +160,11 @@ impl FunctionRegistry {
         storage: &GraphStorageRef,
     ) -> Result<Value, ExpressionError> {
         let upper_name = name.to_uppercase();
-        if let Some(func) = self.builtin_functions.get(&upper_name) {
-            return func.execute_with_storage(args, storage);
+        let canonical = self
+            .canonical_name(&upper_name)
+            .unwrap_or(upper_name.clone());
+        if let Some(entry) = self.builtin_functions.get(&canonical) {
+            return entry.function.execute_with_storage(args, storage);
         }
         if let Some(func) = self.custom_functions.get(&upper_name) {
             return func.execute(args);
@@ -200,11 +256,16 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::String(StringFunction::Translate));
         self.register_builtin(BuiltinFunction::String(StringFunction::Format));
         self.register_builtin(BuiltinFunction::String(StringFunction::StringSplit));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Reverse));
 
         // Registering regular expression functions
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexMatch));
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexReplace));
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexFind));
+        self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexpFullMatch));
+        self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexpExtract));
+        self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexpExtractAll));
+        self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexpSplitToArray));
 
         // Registration type conversion function
         self.register_builtin(BuiltinFunction::Conversion(ConversionFunction::ToString));
@@ -267,6 +328,30 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StCoveredBy));
         self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StDWithin));
         self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StDistance));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StArea));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StLength));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StPerimeter));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StNPoints));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StStartPoint));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StEndPoint));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StIsRing));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StIsClosed));
+        self.register_builtin(BuiltinFunction::Geography(
+            GeographyFunction::StGeometryType,
+        ));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StContains));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StWithin));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StEnvelope));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StBuffer));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StBoundary));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StCrosses));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StTouches));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StOverlaps));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StEquals));
+        self.register_builtin(BuiltinFunction::Geography(GeographyFunction::StAsGeoJson));
+        self.register_builtin(BuiltinFunction::Geography(
+            GeographyFunction::StGeomFromGeoJson,
+        ));
 
         // Registering practical functions
         use super::UtilityFunction;
@@ -422,6 +507,340 @@ impl FunctionRegistry {
 
         // Register vector functions
         super::builtin::vector::register_vector_functions(self);
+
+        // Register conversion aliases for backward compatibility
+        self.register_alias("TOINTEGER", "TO_INT");
+        self.register_alias("TOFLOAT", "TO_FLOAT");
+        self.register_alias("TOBOOLEAN", "TO_BOOL");
+        self.register_alias("TOSTRING", "TO_STRING");
+        // Also support camelCase variants via uppercase mapping (already covered)
+        // but keep explicit for clarity.
+        self.register_alias("TO_INTEGER", "TO_INT");
+    }
+}
+
+fn builtin_return_type(func: &BuiltinFunction) -> DataType {
+    use super::ContainerFunction;
+    use super::ConversionFunction;
+    use super::DateTimeFunction;
+    use super::GeographyFunction;
+    use super::GraphFunction;
+    use super::MathFunction;
+    use super::PathFunction;
+    use super::RegexFunction;
+    use super::StringFunction;
+    use super::UtilityFunction;
+    use super::VectorFunction;
+    use crate::executor::expression::functions::builtin::window::WindowFunction;
+    use crate::executor::expression::functions::FulltextFunction;
+    use graphdb_core::types::operators::AggregateFunction;
+    match func {
+        BuiltinFunction::Math(m) => match m {
+            MathFunction::Abs => DataType::Int,
+            MathFunction::Sqrt => DataType::Float,
+            MathFunction::Pow => DataType::Float,
+            MathFunction::Log => DataType::Float,
+            MathFunction::Log10 => DataType::Float,
+            MathFunction::Sin => DataType::Float,
+            MathFunction::Cos => DataType::Float,
+            MathFunction::Tan => DataType::Float,
+            MathFunction::Round => DataType::Float,
+            MathFunction::Ceil => DataType::Float,
+            MathFunction::Floor => DataType::Float,
+            MathFunction::Asin => DataType::Float,
+            MathFunction::Acos => DataType::Float,
+            MathFunction::Atan => DataType::Float,
+            MathFunction::Cbrt => DataType::Float,
+            MathFunction::Hypot => DataType::Float,
+            MathFunction::Sign => DataType::Int,
+            MathFunction::Rand => DataType::Float,
+            MathFunction::Rand32 => DataType::Int,
+            MathFunction::Rand64 => DataType::BigInt,
+            MathFunction::E => DataType::Float,
+            MathFunction::Pi => DataType::Float,
+            MathFunction::Exp2 => DataType::Float,
+            MathFunction::Log2 => DataType::Float,
+            MathFunction::Radians => DataType::Float,
+            MathFunction::BitAnd => DataType::Int,
+            MathFunction::BitOr => DataType::Int,
+            MathFunction::BitXor => DataType::Int,
+            MathFunction::Atan2 => DataType::Float,
+            MathFunction::Sinh => DataType::Float,
+            MathFunction::Cosh => DataType::Float,
+            MathFunction::Tanh => DataType::Float,
+            MathFunction::Degrees => DataType::Float,
+            MathFunction::Gcd => DataType::Int,
+            MathFunction::Lcm => DataType::Int,
+            MathFunction::Factorial => DataType::BigInt,
+            MathFunction::Gamma => DataType::Float,
+            MathFunction::Lgamma => DataType::Float,
+            MathFunction::Negate => DataType::Int,
+            MathFunction::Even => DataType::Int,
+            MathFunction::SetSeed => DataType::Null,
+            MathFunction::BitShiftLeft => DataType::Int,
+            MathFunction::BitShiftRight => DataType::Int,
+        },
+        BuiltinFunction::String(s) => match s {
+            StringFunction::Length => DataType::BigInt,
+            StringFunction::Upper => DataType::String,
+            StringFunction::Lower => DataType::String,
+            StringFunction::Trim => DataType::String,
+            StringFunction::Substring => DataType::String,
+            StringFunction::Concat => DataType::String,
+            StringFunction::Replace => DataType::String,
+            StringFunction::Contains => DataType::Bool,
+            StringFunction::StartsWith => DataType::Bool,
+            StringFunction::EndsWith => DataType::Bool,
+            StringFunction::Split => DataType::List(Box::new(DataType::String)),
+            StringFunction::Lpad => DataType::String,
+            StringFunction::Rpad => DataType::String,
+            StringFunction::ConcatWs => DataType::String,
+            StringFunction::Strcasecmp => DataType::Int,
+            StringFunction::Levenshtein => DataType::Int,
+            StringFunction::SplitPart => DataType::String,
+            StringFunction::Initcap => DataType::String,
+            StringFunction::Repeat => DataType::String,
+            StringFunction::Position => DataType::Int,
+            StringFunction::Left => DataType::String,
+            StringFunction::Right => DataType::String,
+            StringFunction::StringInsert => DataType::String,
+            StringFunction::Translate => DataType::String,
+            StringFunction::Format => DataType::String,
+            StringFunction::StringSplit => DataType::List(Box::new(DataType::String)),
+            StringFunction::Reverse => DataType::String,
+        },
+        BuiltinFunction::Regex(r) => match r {
+            RegexFunction::RegexMatch => DataType::Bool,
+            RegexFunction::RegexReplace => DataType::String,
+            RegexFunction::RegexFind => DataType::String,
+            RegexFunction::RegexpFullMatch => DataType::Bool,
+            RegexFunction::RegexpExtract => DataType::String,
+            RegexFunction::RegexpExtractAll => DataType::List(Box::new(DataType::String)),
+            RegexFunction::RegexpSplitToArray => DataType::List(Box::new(DataType::String)),
+        },
+        BuiltinFunction::Conversion(c) => match c {
+            ConversionFunction::ToString => DataType::String,
+            ConversionFunction::ToInt => DataType::Int,
+            ConversionFunction::ToFloat => DataType::Float,
+            ConversionFunction::ToBool => DataType::Bool,
+        },
+        BuiltinFunction::DateTime(d) => match d {
+            DateTimeFunction::Now => DataType::DateTime,
+            DateTimeFunction::Date => DataType::Date,
+            DateTimeFunction::Time => DataType::Time,
+            DateTimeFunction::DateTime => DataType::DateTime,
+            DateTimeFunction::Year => DataType::Int,
+            DateTimeFunction::Month => DataType::Int,
+            DateTimeFunction::Day => DataType::Int,
+            DateTimeFunction::Hour => DataType::Int,
+            DateTimeFunction::Minute => DataType::Int,
+            DateTimeFunction::Second => DataType::Int,
+            DateTimeFunction::TimeStamp => DataType::BigInt,
+            DateTimeFunction::DateAdd => DataType::Unknown,
+            DateTimeFunction::DateSub => DataType::Unknown,
+            DateTimeFunction::DateDiff => DataType::BigInt,
+            DateTimeFunction::DateTrunc => DataType::Unknown,
+            DateTimeFunction::CurrentDate => DataType::Date,
+            DateTimeFunction::CurrentTimestamp => DataType::BigInt,
+            DateTimeFunction::ToChar => DataType::String,
+            DateTimeFunction::ToDate => DataType::Date,
+            DateTimeFunction::Age => DataType::BigInt,
+            DateTimeFunction::LastDay => DataType::Unknown,
+            DateTimeFunction::GenerateSeries => DataType::List(Box::new(DataType::BigInt)),
+            DateTimeFunction::ToYears => DataType::BigInt,
+            DateTimeFunction::ToMonths => DataType::BigInt,
+            DateTimeFunction::ToDays => DataType::BigInt,
+            DateTimeFunction::ToHours => DataType::BigInt,
+            DateTimeFunction::ToMinutes => DataType::BigInt,
+            DateTimeFunction::ToSeconds => DataType::BigInt,
+            DateTimeFunction::ToMilliseconds => DataType::BigInt,
+            DateTimeFunction::ToMicroseconds => DataType::BigInt,
+            DateTimeFunction::Century => DataType::Int,
+            DateTimeFunction::EpochMs => DataType::BigInt,
+            DateTimeFunction::ToTimestamp => DataType::DateTime,
+            DateTimeFunction::ToEpochMs => DataType::BigInt,
+            DateTimeFunction::DatePart => DataType::Int,
+            DateTimeFunction::DayName => DataType::String,
+            DateTimeFunction::MonthName => DataType::String,
+        },
+        BuiltinFunction::Geography(g) => match g {
+            GeographyFunction::StPoint => DataType::Geography,
+            GeographyFunction::StGeogFromText => DataType::Geography,
+            GeographyFunction::StAsText => DataType::String,
+            GeographyFunction::StCentroid => DataType::Geography,
+            GeographyFunction::StIsValid => DataType::Bool,
+            GeographyFunction::StIntersects => DataType::Bool,
+            GeographyFunction::StCovers => DataType::Bool,
+            GeographyFunction::StCoveredBy => DataType::Bool,
+            GeographyFunction::StDWithin => DataType::Bool,
+            GeographyFunction::StDistance => DataType::Double,
+            GeographyFunction::StArea => DataType::Double,
+            GeographyFunction::StLength => DataType::Double,
+            GeographyFunction::StPerimeter => DataType::Double,
+            GeographyFunction::StNPoints => DataType::Int,
+            GeographyFunction::StStartPoint => DataType::Geography,
+            GeographyFunction::StEndPoint => DataType::Geography,
+            GeographyFunction::StIsRing => DataType::Bool,
+            GeographyFunction::StIsClosed => DataType::Bool,
+            GeographyFunction::StGeometryType => DataType::String,
+            GeographyFunction::StContains => DataType::Bool,
+            GeographyFunction::StWithin => DataType::Bool,
+            GeographyFunction::StEnvelope => DataType::Geography,
+            GeographyFunction::StBuffer => DataType::Geography,
+            GeographyFunction::StBoundary => DataType::Geography,
+            GeographyFunction::StCrosses => DataType::Bool,
+            GeographyFunction::StTouches => DataType::Bool,
+            GeographyFunction::StOverlaps => DataType::Bool,
+            GeographyFunction::StEquals => DataType::Bool,
+            GeographyFunction::StAsGeoJson => DataType::String,
+            GeographyFunction::StGeomFromGeoJson => DataType::Geography,
+        },
+        BuiltinFunction::Utility(u) => match u {
+            UtilityFunction::Coalesce => DataType::Unknown,
+            UtilityFunction::Hash => DataType::BigInt,
+            UtilityFunction::JsonExtract => DataType::String,
+            UtilityFunction::JsonBuildObject => DataType::String,
+            UtilityFunction::JsonBuildArray => DataType::String,
+            UtilityFunction::JsonObjectKeys => DataType::List(Box::new(DataType::String)),
+            UtilityFunction::NullIf => DataType::Unknown,
+            UtilityFunction::Greatest => DataType::Unknown,
+            UtilityFunction::Least => DataType::Unknown,
+            UtilityFunction::GenRandomUuid => DataType::Uuid,
+            UtilityFunction::JsonEach => DataType::List(Box::new(DataType::Empty)),
+            UtilityFunction::JsonTypeOf => DataType::String,
+            UtilityFunction::JsonStripNulls => DataType::String,
+            UtilityFunction::IfNull => DataType::Unknown,
+            UtilityFunction::TypeOf => DataType::String,
+            UtilityFunction::Version => DataType::String,
+            UtilityFunction::CurrentUser => DataType::String,
+            UtilityFunction::CurrentDatabase => DataType::String,
+            UtilityFunction::Corr => DataType::Double,
+            UtilityFunction::CovarPop => DataType::Double,
+            UtilityFunction::CovarSamp => DataType::Double,
+            UtilityFunction::OctetLength => DataType::BigInt,
+            UtilityFunction::Encode => DataType::Blob,
+            UtilityFunction::Decode => DataType::String,
+        },
+        BuiltinFunction::Graph(g) => match g {
+            GraphFunction::Id => DataType::BigInt,
+            GraphFunction::Tags => DataType::List(Box::new(DataType::String)),
+            GraphFunction::Labels => DataType::List(Box::new(DataType::String)),
+            GraphFunction::Properties => DataType::Map(Box::new(DataType::Empty)),
+            GraphFunction::EdgeType => DataType::String,
+            GraphFunction::Src => DataType::BigInt,
+            GraphFunction::Dst => DataType::BigInt,
+            GraphFunction::Rank => DataType::BigInt,
+            GraphFunction::StartNode => DataType::Vertex,
+            GraphFunction::EndNode => DataType::Vertex,
+            GraphFunction::Neighbors => DataType::List(Box::new(DataType::BigInt)),
+            GraphFunction::Degree => DataType::BigInt,
+            GraphFunction::OutEdges => DataType::List(Box::new(DataType::Edge)),
+            GraphFunction::InEdges => DataType::List(Box::new(DataType::Edge)),
+            GraphFunction::ShortestPath => DataType::BigInt,
+            GraphFunction::Bfs => DataType::List(Box::new(DataType::BigInt)),
+            GraphFunction::ConnectedComponents => {
+                DataType::List(Box::new(DataType::List(Box::new(DataType::BigInt))))
+            }
+            GraphFunction::VariableLengthPath => {
+                DataType::List(Box::new(DataType::List(Box::new(DataType::BigInt))))
+            }
+            GraphFunction::PageRank => DataType::Map(Box::new(DataType::Double)),
+        },
+        BuiltinFunction::Container(c) => match c {
+            ContainerFunction::Head => DataType::Unknown,
+            ContainerFunction::Last => DataType::Unknown,
+            ContainerFunction::Tail => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::Size => DataType::BigInt,
+            ContainerFunction::Range => DataType::List(Box::new(DataType::BigInt)),
+            ContainerFunction::Keys => DataType::List(Box::new(DataType::String)),
+            ContainerFunction::ReverseList => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ToSet => DataType::Set(Box::new(DataType::Empty)),
+            ContainerFunction::ListContains => DataType::Bool,
+            ContainerFunction::ListAppend => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListPrepend => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListFilter => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListTransform => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListConcat => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListSort => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListSlice => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListToString => DataType::String,
+            ContainerFunction::ListDistinct => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListUnique => DataType::List(Box::new(DataType::Empty)),
+            ContainerFunction::ListExtract => DataType::Unknown,
+            ContainerFunction::StructPack => DataType::Map(Box::new(DataType::Empty)),
+            ContainerFunction::StructExtract => DataType::Unknown,
+            ContainerFunction::MapCreation => DataType::Map(Box::new(DataType::Empty)),
+            ContainerFunction::MapExtract => DataType::Unknown,
+            ContainerFunction::ElementAt => DataType::Unknown,
+            ContainerFunction::Cardinality => DataType::BigInt,
+            ContainerFunction::MapKeys => DataType::List(Box::new(DataType::String)),
+            ContainerFunction::MapValues => DataType::List(Box::new(DataType::Empty)),
+        },
+        BuiltinFunction::Path(p) => match p {
+            PathFunction::Nodes => DataType::List(Box::new(DataType::Vertex)),
+            PathFunction::Relationships => DataType::List(Box::new(DataType::Edge)),
+            PathFunction::Properties => DataType::List(Box::new(DataType::Empty)),
+            PathFunction::IsTrail => DataType::Bool,
+            PathFunction::IsAcyclic => DataType::Bool,
+            PathFunction::PathLength => DataType::BigInt,
+        },
+        BuiltinFunction::Vector(v) => match v {
+            VectorFunction::CosineSimilarity => DataType::Double,
+            VectorFunction::DotProduct => DataType::Double,
+            VectorFunction::EuclideanDistance => DataType::Double,
+            VectorFunction::ManhattanDistance => DataType::Double,
+            VectorFunction::Dimension => DataType::BigInt,
+            VectorFunction::L2Norm => DataType::Double,
+            VectorFunction::Nnz => DataType::BigInt,
+            VectorFunction::Normalize => DataType::Vector,
+            VectorFunction::ArrayValue => DataType::List(Box::new(DataType::Empty)),
+            VectorFunction::ArrayCosineSimilarity => DataType::Double,
+            VectorFunction::ArrayDistance => DataType::Double,
+            VectorFunction::ArraySquaredDistance => DataType::Double,
+            VectorFunction::ArrayInnerProduct => DataType::Double,
+            VectorFunction::ArrayDotProduct => DataType::Double,
+        },
+        BuiltinFunction::Fulltext(f) => match f {
+            FulltextFunction::Score => DataType::Double,
+            FulltextFunction::Highlight => DataType::String,
+            FulltextFunction::MatchedFields => DataType::List(Box::new(DataType::String)),
+            FulltextFunction::Snippet => DataType::String,
+            FulltextFunction::Rank => DataType::BigInt,
+            FulltextFunction::SearchMatch => DataType::Bool,
+            FulltextFunction::FieldScore => DataType::Double,
+        },
+        BuiltinFunction::Window(w) => match w {
+            WindowFunction::RowNumber => DataType::BigInt,
+            WindowFunction::Rank => DataType::BigInt,
+            WindowFunction::DenseRank => DataType::BigInt,
+            WindowFunction::Lead => DataType::Unknown,
+            WindowFunction::Lag => DataType::Unknown,
+            WindowFunction::FirstValue => DataType::Unknown,
+            WindowFunction::LastValue => DataType::Unknown,
+            WindowFunction::NthValue => DataType::Unknown,
+            WindowFunction::Ntile => DataType::BigInt,
+        },
+        BuiltinFunction::Aggregate(a) => match a {
+            AggregateFunction::Count => DataType::BigInt,
+            AggregateFunction::Sum => DataType::Double,
+            AggregateFunction::Avg => DataType::Double,
+            AggregateFunction::Min => DataType::Unknown,
+            AggregateFunction::Max => DataType::Unknown,
+            AggregateFunction::Collect => DataType::List(Box::new(DataType::Unknown)),
+            AggregateFunction::CollectSet => DataType::Set(Box::new(DataType::Unknown)),
+            AggregateFunction::Variance => DataType::Double,
+            AggregateFunction::Median => DataType::Double,
+            AggregateFunction::Mode => DataType::Unknown,
+            AggregateFunction::BoolAnd => DataType::Bool,
+            AggregateFunction::BoolOr => DataType::Bool,
+            AggregateFunction::StddevPop => DataType::Double,
+            AggregateFunction::StddevSamp => DataType::Double,
+            AggregateFunction::Product => DataType::Double,
+            AggregateFunction::PercentileCont => DataType::Double,
+            AggregateFunction::GroupConcatWithOrder => DataType::String,
+            // Fallback for other variants
+            _ => DataType::Unknown,
+        },
     }
 }
 /// Global function registry instance

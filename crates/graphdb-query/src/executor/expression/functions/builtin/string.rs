@@ -191,7 +191,7 @@ define_function_enum! {
             handler: execute_string_split
         },
         Reverse => {
-            name: "reverse",
+            name: "reverse_string",
             arity: 1,
             variadic: false,
             description: "Reverse a string",

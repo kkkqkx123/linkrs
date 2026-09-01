@@ -596,9 +596,7 @@ fn lcm<
 
 fn execute_factorial(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "factorial requires 1 argument",
-        ));
+        return Err(ExpressionError::type_error("factorial requires 1 argument"));
     }
     match &args[0] {
         Value::SmallInt(i) => {
@@ -729,7 +727,9 @@ fn execute_negate(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Float(f) => Ok(Value::Float(-f)),
         Value::Double(f) => Ok(Value::Double(-f)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error("negate requires a numeric type")),
+        _ => Err(ExpressionError::type_error(
+            "negate requires a numeric type",
+        )),
     }
 }
 
@@ -937,9 +937,7 @@ mod tests {
     #[test]
     fn test_even() {
         let func = MathFunction::Even;
-        let result = func
-            .execute(&[Value::Int(3)])
-            .expect("even should succeed");
+        let result = func.execute(&[Value::Int(3)]).expect("even should succeed");
         assert_eq!(result, Value::Int(4));
     }
 

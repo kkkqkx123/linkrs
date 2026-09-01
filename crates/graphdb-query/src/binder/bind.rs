@@ -1,3 +1,4 @@
+mod bind_ddl;
 mod bind_dml;
 mod bind_expressions;
 mod bind_fetch;
@@ -78,6 +79,25 @@ impl Binder {
             Stmt::Pipe(p) => self.bind_pipe(p),
             Stmt::SetOperation(s) => self.bind_set_operation(s),
             Stmt::GroupBy(g) => self.bind_group_by(g),
+            Stmt::Insert(s) => self.bind_insert(s),
+            Stmt::Update(s) => self.bind_update(s),
+            Stmt::Delete(s) => self.bind_delete(s),
+            Stmt::Merge(s) => self.bind_merge(s),
+            Stmt::Set(s) => self.bind_set(s),
+            Stmt::Remove(s) => self.bind_remove(s),
+            Stmt::Copy(s) => self.bind_copy(s),
+            Stmt::Create(s) => self.bind_create(s),
+            Stmt::Drop(s) => self.bind_drop(s),
+            Stmt::Alter(s) => self.bind_alter(s),
+            Stmt::Desc(s) => self.bind_desc(s),
+            Stmt::ShowCreate(s) => self.bind_show_create(s),
+            Stmt::ClearSpace(s) => self.bind_clear_space(s),
+            Stmt::BeginTransaction(s) => self.bind_begin_transaction(s),
+            Stmt::CommitTransaction(s) => self.bind_commit(s),
+            Stmt::RollbackTransaction(s) => self.bind_rollback(s),
+            Stmt::Savepoint(s) => self.bind_savepoint(s),
+            Stmt::ReleaseSavepoint(s) => self.bind_release_savepoint(s),
+            Stmt::AssignVariable(s) => self.bind_assign_variable(s),
             _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
         }
     }
