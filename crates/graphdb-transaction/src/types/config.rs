@@ -324,8 +324,14 @@ impl TransactionManagerConfig {
     }
 
     pub fn with_cert_shard_count(mut self, count: usize) -> Self {
-        assert!(count.is_power_of_two(), "cert_shard_count must be power of two");
-        assert!(count > 0 && count <= 256, "cert_shard_count must be 1..=256");
+        assert!(
+            count.is_power_of_two(),
+            "cert_shard_count must be power of two"
+        );
+        assert!(
+            count > 0 && count <= 256,
+            "cert_shard_count must be 1..=256"
+        );
         self.cert_shard_count = count;
         self
     }

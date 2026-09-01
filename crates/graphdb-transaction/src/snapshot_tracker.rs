@@ -442,4 +442,46 @@ mod tests {
         // removing non-min should not recompute (still 100)
         assert_eq!(tracker.min_active_snapshot(), 100);
     }
+
+    #[test]
+    fn test_concurrent_add_release_min_active_correctness() {
+        use std::sync::Arc;
+        use std::thread;
+        let tracker = Arc::new(SnapshotTracker::new());
+        let mut handles = vec![];
+        for tid in 0..20 {
+            let t = Arc::clone(&tracker);
+            handles.push(thread::spawn(move || {
+                for cycle in 0..200 {
+                    let ts = tid * 1000 + cycle + 1;
+                    t.add_snapshot(ts).unwrap();
+                    // verify min is not greater than this ts if it is minimum
+                    let min = t.min_active_snapshot();
+                    assert!(min <= ts || min == u64::MAX);
+                    t.release_snapshot(ts).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+        assert_eq!(tracker.active_count(), 0);
+    }
+
+    #[test]
+    fn test_snapshot_tracker_releases_min_then_adds_smaller() {
+        let tracker = SnapshotTracker::new();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(50).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.release_snapshot(50).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.add_snapshot(25).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 25);
+        tracker.release_snapshot(25).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.release_snapshot(100).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
 }

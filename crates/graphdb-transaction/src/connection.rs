@@ -209,10 +209,7 @@ impl ConnectionManager {
         id
     }
 
-    pub fn get_connection(
-        &self,
-        id: ConnectionId,
-    ) -> Option<std::sync::Arc<ConnectionContext>> {
+    pub fn get_connection(&self, id: ConnectionId) -> Option<std::sync::Arc<ConnectionContext>> {
         self.connections.get(&id).map(|e| e.value().clone())
     }
 
@@ -234,9 +231,9 @@ impl ConnectionManager {
         conn_id: ConnectionId,
         options: TransactionOptions,
     ) -> Result<TransactionId, TransactionError> {
-        let conn = self
-            .get_connection(conn_id)
-            .ok_or_else(|| TransactionError::internal(format!("Connection {} not found", conn_id)))?;
+        let conn = self.get_connection(conn_id).ok_or_else(|| {
+            TransactionError::internal(format!("Connection {} not found", conn_id))
+        })?;
         if conn.has_active_transaction() {
             return Err(TransactionError::internal(format!(
                 "Connection {} already has active transaction {:?}",
@@ -255,9 +252,9 @@ impl ConnectionManager {
         manager: &TransactionManager,
         conn_id: ConnectionId,
     ) -> Result<(), TransactionError> {
-        let conn = self
-            .get_connection(conn_id)
-            .ok_or_else(|| TransactionError::internal(format!("Connection {} not found", conn_id)))?;
+        let conn = self.get_connection(conn_id).ok_or_else(|| {
+            TransactionError::internal(format!("Connection {} not found", conn_id))
+        })?;
         let txn_id = conn.current_transaction().ok_or_else(|| {
             TransactionError::internal(format!("Connection {} has no active transaction", conn_id))
         })?;
@@ -272,9 +269,9 @@ impl ConnectionManager {
         manager: &TransactionManager,
         conn_id: ConnectionId,
     ) -> Result<(), TransactionError> {
-        let conn = self
-            .get_connection(conn_id)
-            .ok_or_else(|| TransactionError::internal(format!("Connection {} not found", conn_id)))?;
+        let conn = self.get_connection(conn_id).ok_or_else(|| {
+            TransactionError::internal(format!("Connection {} not found", conn_id))
+        })?;
         let txn_id = conn.current_transaction().ok_or_else(|| {
             TransactionError::internal(format!("Connection {} has no active transaction", conn_id))
         })?;
@@ -300,9 +297,9 @@ impl ConnectionManager {
         F: FnOnce(&crate::context::TransactionContext) -> Result<T, E>,
         E: Into<TransactionError>,
     {
-        let conn = self
-            .get_connection(conn_id)
-            .ok_or_else(|| TransactionError::internal(format!("Connection {} not found", conn_id)))?;
+        let conn = self.get_connection(conn_id).ok_or_else(|| {
+            TransactionError::internal(format!("Connection {} not found", conn_id))
+        })?;
 
         // If MANUAL with active txn, run inside existing transaction
         if conn.mode() == TransactionMode::Manual {
@@ -340,9 +337,9 @@ impl ConnectionManager {
         F: FnOnce(&crate::context::TransactionContext) -> Result<T, E>,
         E: Into<TransactionError>,
     {
-        let conn = self
-            .get_connection(conn_id)
-            .ok_or_else(|| TransactionError::internal(format!("Connection {} not found", conn_id)))?;
+        let conn = self.get_connection(conn_id).ok_or_else(|| {
+            TransactionError::internal(format!("Connection {} not found", conn_id))
+        })?;
 
         if let Some(txn_id) = conn.current_transaction() {
             let ctx = manager.get_context(txn_id)?;
@@ -350,12 +347,7 @@ impl ConnectionManager {
         }
 
         if conn.is_auto_commit() {
-            self.execute_auto_commit(
-                manager,
-                conn_id,
-                conn.transaction_options(),
-                operation,
-            )
+            self.execute_auto_commit(manager, conn_id, conn.transaction_options(), operation)
         } else {
             Err(TransactionError::internal(format!(
                 "Connection {} in MANUAL mode has no active transaction",
@@ -441,7 +433,10 @@ mod tests {
             .begin_for_connection(&txn_mgr, conn_id, crate::TransactionOptions::default())
             .expect("begin should succeed");
         assert_eq!(
-            conn_mgr.get_connection(conn_id).unwrap().current_transaction(),
+            conn_mgr
+                .get_connection(conn_id)
+                .unwrap()
+                .current_transaction(),
             Some(txn_id)
         );
 
@@ -449,7 +444,10 @@ mod tests {
             .commit_for_connection(&txn_mgr, conn_id)
             .expect("commit should succeed");
         assert_eq!(
-            conn_mgr.get_connection(conn_id).unwrap().current_transaction(),
+            conn_mgr
+                .get_connection(conn_id)
+                .unwrap()
+                .current_transaction(),
             None
         );
     }
@@ -470,7 +468,10 @@ mod tests {
         assert!(result.unwrap() > 0);
         // AUTO execution should not leave transaction bound
         assert_eq!(
-            conn_mgr.get_connection(conn_id).unwrap().current_transaction(),
+            conn_mgr
+                .get_connection(conn_id)
+                .unwrap()
+                .current_transaction(),
             None
         );
     }
@@ -481,11 +482,9 @@ mod tests {
         let conn_mgr = ConnectionManager::new();
         let conn_id = conn_mgr.create_connection_with_mode(TransactionMode::Manual);
 
-        let result: Result<(), TransactionError> = conn_mgr.with_connection_transaction(
-            &txn_mgr,
-            conn_id,
-            |_| Ok::<(), TransactionError>(()),
-        );
+        let result: Result<(), TransactionError> =
+            conn_mgr
+                .with_connection_transaction(&txn_mgr, conn_id, |_| Ok::<(), TransactionError>(()));
         assert!(result.is_err());
     }
 }

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::aggregated_stats::AggregatedStatsManager;
 use super::error_stats::{ErrorInfo, ErrorStatsManager, ErrorType, QueryPhase};
@@ -88,6 +89,19 @@ pub enum MetricType {
     TxnStagedWalBytes,
     TxnUndoBytes,
     TxnCheckpointDrainTimeMs,
+    // Checkpoint metrics
+    CheckpointTriggerCount,
+    CheckpointSuccessCount,
+    CheckpointFailureCount,
+    CheckpointDurationUs,
+    CheckpointDataFlushedBytes,
+    CheckpointWalFilesTruncated,
+    CheckpointTriggerAgeSecs,
+    CheckpointTriggeredByWalSize,
+    CheckpointTriggeredByInterval,
+    CheckpointTriggeredExplicit,
+    CheckpointRequestsDeduplicated,
+    CheckpointRequestsBlocked,
     // Sync metrics
     SyncOperations,
     SyncLatencyMs,
@@ -168,6 +182,14 @@ pub enum MetricType {
     MigrationDurationMs,
     MigrationErrorsTotal,
     MigrationActiveCount,
+}
+
+/// Reason a checkpoint was triggered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointTriggerReason {
+    WalSizeExceeded,
+    TimeSinceLastCheckpoint,
+    Explicit,
 }
 
 /// metric
@@ -1261,6 +1283,80 @@ impl StatsManager {
         }
         out
     }
+
+    // ========== Checkpoint Metrics ==========
+
+    /// Record a successful checkpoint operation.
+    pub fn record_checkpoint_success(
+        &self,
+        duration: Duration,
+        bytes_flushed: u64,
+        wal_files_truncated: u64,
+    ) {
+        self.add_value(MetricType::CheckpointSuccessCount);
+        self.add_value_with_amount(
+            MetricType::CheckpointDurationUs,
+            duration.as_micros() as u64,
+        );
+        self.add_value_with_amount(MetricType::CheckpointDataFlushedBytes, bytes_flushed);
+        self.add_value_with_amount(MetricType::CheckpointWalFilesTruncated, wal_files_truncated);
+    }
+
+    /// Record a failed checkpoint operation.
+    pub fn record_checkpoint_failure(&self) {
+        self.add_value(MetricType::CheckpointFailureCount);
+    }
+
+    /// Record a checkpoint trigger event.
+    pub fn record_checkpoint_trigger(&self, reason: CheckpointTriggerReason, age: Duration) {
+        self.add_value(MetricType::CheckpointTriggerCount);
+        self.add_value_with_amount(MetricType::CheckpointTriggerAgeSecs, age.as_secs());
+        match reason {
+            CheckpointTriggerReason::WalSizeExceeded => {
+                self.add_value(MetricType::CheckpointTriggeredByWalSize);
+            }
+            CheckpointTriggerReason::TimeSinceLastCheckpoint => {
+                self.add_value(MetricType::CheckpointTriggeredByInterval);
+            }
+            CheckpointTriggerReason::Explicit => {
+                self.add_value(MetricType::CheckpointTriggeredExplicit);
+            }
+        }
+    }
+
+    /// Record a deduplicated checkpoint request.
+    pub fn record_checkpoint_deduplicated(&self) {
+        self.add_value(MetricType::CheckpointRequestsDeduplicated);
+    }
+
+    /// Record a checkpoint request that found another checkpoint in progress.
+    pub fn record_checkpoint_blocked(&self) {
+        self.add_value(MetricType::CheckpointRequestsBlocked);
+    }
+
+    /// Get all checkpoint-related metrics.
+    pub fn get_checkpoint_metrics(&self) -> HashMap<MetricType, u64> {
+        let mut out = HashMap::new();
+        for mt in [
+            MetricType::CheckpointTriggerCount,
+            MetricType::CheckpointSuccessCount,
+            MetricType::CheckpointFailureCount,
+            MetricType::CheckpointDurationUs,
+            MetricType::CheckpointDataFlushedBytes,
+            MetricType::CheckpointWalFilesTruncated,
+            MetricType::CheckpointTriggerAgeSecs,
+            MetricType::CheckpointTriggeredByWalSize,
+            MetricType::CheckpointTriggeredByInterval,
+            MetricType::CheckpointTriggeredExplicit,
+            MetricType::CheckpointRequestsDeduplicated,
+            MetricType::CheckpointRequestsBlocked,
+        ] {
+            if let Some(v) = self.get_value(mt) {
+                out.insert(mt, v);
+            }
+        }
+        out
+    }
 }
 
 impl Default for StatsManager {
@@ -1515,5 +1611,66 @@ mod tests {
 
         assert_eq!(stats.get_total_aggregated_queries(), 0);
         assert_eq!(stats.get_pattern_count(), 0);
+    }
+
+    #[test]
+    fn test_checkpoint_metrics_recorded() {
+        let stats = StatsManager::new();
+        let duration = std::time::Duration::from_millis(150);
+        stats.record_checkpoint_success(duration, 4096, 2);
+        assert_eq!(stats.get_value(MetricType::CheckpointSuccessCount), Some(1));
+        assert!(stats.get_value(MetricType::CheckpointDurationUs).unwrap() > 0);
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointDataFlushedBytes),
+            Some(4096)
+        );
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointWalFilesTruncated),
+            Some(2)
+        );
+
+        stats.record_checkpoint_failure();
+        assert_eq!(stats.get_value(MetricType::CheckpointFailureCount), Some(1));
+    }
+
+    #[test]
+    fn test_checkpoint_trigger_reasons() {
+        let stats = StatsManager::new();
+        let age = std::time::Duration::from_secs(5);
+        stats.record_checkpoint_trigger(CheckpointTriggerReason::WalSizeExceeded, age);
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointTriggeredByWalSize),
+            Some(1)
+        );
+        assert_eq!(stats.get_value(MetricType::CheckpointTriggerCount), Some(1));
+
+        stats.record_checkpoint_trigger(CheckpointTriggerReason::TimeSinceLastCheckpoint, age);
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointTriggeredByInterval),
+            Some(1)
+        );
+
+        stats.record_checkpoint_trigger(CheckpointTriggerReason::Explicit, age);
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointTriggeredExplicit),
+            Some(1)
+        );
+        assert_eq!(stats.get_value(MetricType::CheckpointTriggerCount), Some(3));
+    }
+
+    #[test]
+    fn test_checkpoint_dedup_and_blocked() {
+        let stats = StatsManager::new();
+        stats.record_checkpoint_deduplicated();
+        stats.record_checkpoint_deduplicated();
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointRequestsDeduplicated),
+            Some(2)
+        );
+        stats.record_checkpoint_blocked();
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointRequestsBlocked),
+            Some(1)
+        );
     }
 }

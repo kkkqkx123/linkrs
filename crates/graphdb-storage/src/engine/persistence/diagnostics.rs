@@ -1,7 +1,7 @@
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::wal::Lsn;
 
-use crate::engine::persistence_coordinator::PersistenceState;
+use crate::engine::persistence_coordinator::{CheckpointStats, PersistenceState};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SnapshotStats {
@@ -18,6 +18,7 @@ pub struct PersistenceDiagnostics {
     pub last_checkpoint_error: Option<String>,
     pub last_snapshot_error: Option<String>,
     pub temporary_checkpoint_count: usize,
+    pub last_checkpoint_stats: Option<CheckpointStats>,
     /// Number of catalog lock acquisitions observed by the storage engine.
     pub catalog_lock_acquisitions: u64,
     /// Total time spent waiting for catalog locks, in nanoseconds.
@@ -28,6 +29,13 @@ pub struct PersistenceDiagnostics {
     pub catalog_lock_contentions: u64,
     /// Lock metrics split by catalog operation type.
     pub catalog_lock_by_operation: Vec<CatalogLockDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointDiagnostics {
+    pub last_stats: Option<CheckpointStats>,
+    pub pending_checkpoint: bool,
+    pub last_trigger_age_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +142,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             last_checkpoint_error: self.last_checkpoint_error.read().clone(),
             last_snapshot_error: self.last_snapshot_error.read().clone(),
             temporary_checkpoint_count,
+            last_checkpoint_stats: self.last_checkpoint_stats.read().clone(),
             catalog_lock_acquisitions: 0,
             catalog_lock_wait_nanos: 0,
             catalog_lock_hold_nanos: 0,
@@ -152,5 +161,13 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         *self.last_checkpoint_time.write() = std::time::Instant::now();
         *self.last_flush_lsn.write() = lsn;
         *self.last_flush_time.write() = std::time::Instant::now();
+    }
+
+    pub fn checkpoint_diagnostics(&self, pending_checkpoint: bool) -> CheckpointDiagnostics {
+        CheckpointDiagnostics {
+            last_stats: self.last_checkpoint_stats.read().clone(),
+            pending_checkpoint,
+            last_trigger_age_secs: Some(self.last_checkpoint_time.read().elapsed().as_secs()),
+        }
     }
 }

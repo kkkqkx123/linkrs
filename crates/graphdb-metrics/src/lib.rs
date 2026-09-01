@@ -21,7 +21,9 @@ pub use error_stats::{
     ErrorInfo, ErrorStatsManager, ErrorSummary, ErrorType, QueryPhase, RecentError,
 };
 pub use latency_histogram::LatencyHistogram;
-pub use manager::{MetricType, MetricValue, OutboxState, StatsManager, TxnResourceMetrics};
+pub use manager::{
+    CheckpointTriggerReason, MetricType, MetricValue, OutboxState, StatsManager, TxnResourceMetrics,
+};
 pub use metrics::QueryMetrics;
 pub use profile::{ExecutorStat, QueryProfile, QueryStatus, StageMetrics};
 pub use slow_query_logger::{SlowQueryConfig, SlowQueryLogger};

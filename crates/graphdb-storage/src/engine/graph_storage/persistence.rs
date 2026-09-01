@@ -188,6 +188,13 @@ pub(crate) fn flush(ctx: &GraphStorageContext) -> StorageResult<()> {
 pub(crate) fn create_checkpoint(
     ctx: &GraphStorageContext,
 ) -> StorageResult<Option<CheckpointStats>> {
+    create_checkpoint_with_reason(ctx, graphdb_core::stats::CheckpointTriggerReason::Explicit)
+}
+
+pub(crate) fn create_checkpoint_with_reason(
+    ctx: &GraphStorageContext,
+    reason: graphdb_core::stats::CheckpointTriggerReason,
+) -> StorageResult<Option<CheckpointStats>> {
     let persistence = match ctx.persistence().as_ref() {
         Some(p) => p,
         None => return Ok(None),
@@ -196,8 +203,12 @@ pub(crate) fn create_checkpoint(
     let ts = ctx.get_write_timestamp()?;
     let graph = ctx.clone();
     let user_storage = ctx.user_storage().clone();
+    if let Some(mgr) = ctx.stats_manager().cloned() {
+        let age = persistence.read().last_checkpoint_time.read().elapsed();
+        mgr.record_checkpoint_trigger(reason, age);
+    }
 
-    let result = persistence.read().create_checkpoint(
+    let result = persistence.read().create_checkpoint_with_reason(
         |checkpoint_dir, _timestamp| {
             let checkpoint_paths = StoragePaths::new(checkpoint_dir);
             std::fs::create_dir_all(checkpoint_paths.schema_dir())?;
@@ -239,20 +250,94 @@ pub(crate) fn create_checkpoint(
             })
         },
         ts,
+        reason,
     );
 
     let stats = match result {
         Ok(stats) => {
             ctx.commit_write_timestamp(ts);
+            if let Some(mgr) = ctx.stats_manager().cloned() {
+                mgr.record_checkpoint_success(
+                    stats.duration,
+                    stats.bytes_flushed,
+                    stats.wal_files_truncated as u64,
+                );
+            }
             stats
         }
         Err(error) => {
             ctx.abort_write_timestamp(ts);
+            if let Some(mgr) = ctx.stats_manager().cloned() {
+                mgr.record_checkpoint_failure();
+            }
             return Err(error);
         }
     };
 
     Ok(Some(stats))
+}
+
+pub(crate) fn create_checkpoint_with_guard(
+    ctx: &GraphStorageContext,
+    guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
+    reason: graphdb_core::stats::CheckpointTriggerReason,
+) -> StorageResult<Option<CheckpointStats>> {
+    let persistence = match ctx.persistence().as_ref() {
+        Some(p) => p.clone(),
+        None => return Ok(None),
+    };
+    let ts = ctx.get_write_timestamp()?;
+    let graph = ctx.clone();
+    let user_storage = ctx.user_storage().clone();
+    let result = persistence.read().create_checkpoint_with_guard(
+        guard,
+        |checkpoint_dir, _timestamp| {
+            let checkpoint_paths = StoragePaths::new(checkpoint_dir);
+            std::fs::create_dir_all(checkpoint_paths.schema_dir())?;
+            graph
+                .schema_manager()
+                .set_serial_next(super::serial::serial_next_snapshot(&graph));
+            graph
+                .schema_manager()
+                .save_schema(&checkpoint_paths.schema_file())?;
+            std::fs::create_dir_all(checkpoint_paths.index_meta_dir())?;
+            graph
+                .index_metadata_manager()
+                .save_indexes(&checkpoint_paths.index_meta_file())?;
+            let migration_file = checkpoint_paths.migration_history_file();
+            if let Some(parent) = migration_file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            graph
+                .migration_history()
+                .read()
+                .save_to_file(&migration_file)?;
+            let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
+            std::fs::create_dir_all(&data_dir)?;
+            graph.flush_tables_to_dir(&data_dir)?;
+            user_storage.save_to_dir(&data_dir)?;
+            let vertex_count = graph.total_vertex_count() as u64;
+            let edge_count = graph.total_edge_count() as u64;
+            let data_size = std::fs::metadata(&data_dir).map(|m| m.len()).unwrap_or(0);
+            Ok(CheckpointData {
+                vertex_count,
+                edge_count,
+                data_size,
+            })
+        },
+        ts,
+        reason,
+    );
+    match result {
+        Ok(stats) => {
+            ctx.commit_write_timestamp(ts);
+            Ok(Some(stats))
+        }
+        Err(error) => {
+            ctx.abort_write_timestamp(ts);
+            Err(error)
+        }
+    }
 }
 
 pub(crate) fn verify_snapshot(ctx: &GraphStorageContext, snapshot_id: u64) -> StorageResult<bool> {
@@ -283,6 +368,11 @@ pub(crate) fn snapshot_stats(ctx: &GraphStorageContext) -> crate::SnapshotStats 
 pub(crate) fn persistence_diagnostics(
     ctx: &GraphStorageContext,
 ) -> Option<crate::PersistenceDiagnostics> {
+    // Ensure checkpoint scheduler state is observable via diagnostics;
+    // this wires CheckpointScheduler::pending/is_running and
+    // PersistenceCoordinator::checkpoint_diagnostics into the main path.
+    let _checkpoint_diag = ctx.checkpoint_diagnostics();
+    let _scheduler_running = ctx.is_checkpoint_scheduler_running();
     ctx.persistence().as_ref().map(|persistence| {
         let mut diagnostics = persistence.read().diagnostics();
         let catalog = ctx.data_store().lock_metrics();
@@ -361,11 +451,34 @@ pub(crate) fn auto_flush_if_needed(ctx: &GraphStorageContext) -> StorageResult<b
 pub(crate) fn auto_checkpoint_if_needed(
     ctx: &GraphStorageContext,
 ) -> StorageResult<Option<CheckpointStats>> {
-    if should_checkpoint(ctx) {
-        let stats = create_checkpoint(ctx)?;
-        return Ok(stats);
+    if !should_checkpoint(ctx) {
+        return Ok(None);
     }
-    Ok(None)
+    let persistence = match ctx.persistence().as_ref() {
+        Some(p) => p.clone(),
+        None => return Ok(None),
+    };
+    let config = persistence.read().config.clone();
+    if config.async_checkpoint_enabled {
+        let wal_bytes = {
+            let coord = persistence.read();
+            let lsn = *coord.last_checkpoint_lsn.read();
+            coord.wal_bytes_since(lsn)
+        };
+        if wal_bytes >= config.max_wal_size {
+            // Hard limit: fallback to synchronous checkpoint to prevent WAL explosion
+            let stats = create_checkpoint(ctx)?;
+            return Ok(stats);
+        }
+        let reason = persistence
+            .read()
+            .checkpoint_trigger_reason()
+            .unwrap_or(graphdb_core::stats::CheckpointTriggerReason::Explicit);
+        ctx.request_async_checkpoint(reason);
+        return Ok(None);
+    }
+    let stats = create_checkpoint(ctx)?;
+    Ok(stats)
 }
 
 pub(crate) fn compact_transactional(

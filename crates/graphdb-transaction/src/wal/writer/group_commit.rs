@@ -64,7 +64,11 @@ impl GroupCommitCoordinator {
         }
     }
 
-    pub fn with_config(file: File, start_lsn: u64, config: &graphdb_core::wal::types::WalConfig) -> Self {
+    pub fn with_config(
+        file: File,
+        start_lsn: u64,
+        config: &graphdb_core::wal::types::WalConfig,
+    ) -> Self {
         Self::with_timeout(file, start_lsn, config.group_commit_timeout())
     }
 

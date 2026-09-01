@@ -1035,9 +1035,8 @@ impl GraphStorageContext {
             }
             for path in candidate_paths {
                 if path.exists() {
-                    let mgr = crate::migration_history::MigrationHistoryManager::load_from_file(
-                        &path,
-                    )?;
+                    let mgr =
+                        crate::migration_history::MigrationHistoryManager::load_from_file(&path)?;
                     *self.persistent.migration_history.write() = mgr;
                     break;
                 }

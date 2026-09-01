@@ -965,8 +965,13 @@ mod tests {
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
         let mut notes = Vec::new();
-        let result =
-            walk_and_optimize_joins_with_decisions(&a, &stats_view, &cost_calc, &mut notes, &mut None);
+        let result = walk_and_optimize_joins_with_decisions(
+            &a,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
         // StartNode is preserved (same variant)
         assert!(matches!(result, PlanNodeEnum::Start(_)));
         // Output var is preserved
@@ -985,8 +990,13 @@ mod tests {
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
         let mut notes = Vec::new();
-        let optimized =
-            walk_and_optimize_joins_with_decisions(&join2, &stats_view, &cost_calc, &mut notes, &mut None);
+        let optimized = walk_and_optimize_joins_with_decisions(
+            &join2,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
 
         // The smallest table (b, 10 rows) should be first in the new tree
         assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
@@ -1098,7 +1108,11 @@ mod tests {
         let stats_view = StatsView::new(&stats, None);
         let mut notes = Vec::new();
         let result = walk_and_optimize_joins_with_decisions(
-            &left_join, &stats_view, &cost_calc, &mut notes, &mut None,
+            &left_join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
         );
 
         // The root should still be a LeftJoin
@@ -1121,8 +1135,13 @@ mod tests {
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
         let mut notes = Vec::new();
-        let result =
-            walk_and_optimize_joins_with_decisions(&join, &stats_view, &cost_calc, &mut notes, &mut None);
+        let result = walk_and_optimize_joins_with_decisions(
+            &join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
 
         // Should complete without panic (greedy path)
         assert!(matches!(result, PlanNodeEnum::InnerJoin(_)));

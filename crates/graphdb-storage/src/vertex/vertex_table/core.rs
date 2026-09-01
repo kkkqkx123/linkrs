@@ -20,8 +20,8 @@ use super::super::{
     VertexTimestamp,
 };
 use crate::encoding::EncodingSelector;
-use crate::SnapshotHandle;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
+use crate::SnapshotHandle;
 use graphdb_core::{StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone)]

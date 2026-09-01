@@ -42,6 +42,20 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
         if !self.should_checkpoint() {
             return Ok(None);
         }
-        self.create_checkpoint()
+        if self.enabled {
+            let manager = self.sync_manager.as_ref().ok_or_else(|| {
+                StorageError::invalid_operation(
+                    "Synchronization is enabled without an outbox manager",
+                )
+            })?;
+            manager
+                .create_checkpoint_outbox_snapshot()
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to create checkpoint outbox snapshot: {error}"
+                    ))
+                })?;
+        }
+        self.inner.auto_checkpoint_if_needed()
     }
 }

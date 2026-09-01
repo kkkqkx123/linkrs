@@ -117,7 +117,7 @@ impl TransactionManager {
                 // In-memory mode: skip WAL durability, assign synthetic LSN
                 commit_lsn = CommitLsn::new(context.timestamp());
                 // Clear local WAL buffer without I/O
-                let _ = context.local_wal_buffer().clear();
+                context.local_wal_buffer().clear();
             }
         }
 

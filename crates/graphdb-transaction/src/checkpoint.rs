@@ -226,11 +226,7 @@ impl ShadowPageManager {
         if !shadow_file.exists() {
             return Ok(());
         }
-        if target_file.exists() {
-            std::fs::copy(shadow_file, target_file)?;
-        } else {
-            std::fs::copy(shadow_file, target_file)?;
-        }
+        std::fs::copy(shadow_file, target_file)?;
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)

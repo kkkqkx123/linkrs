@@ -45,14 +45,19 @@ use graphdb_transaction::wal::{CheckpointManager, Lsn, WalConfig};
 
 #[path = "persistence/checkpoint.rs"]
 pub mod checkpoint;
+#[path = "persistence/checkpoint_scheduler.rs"]
+pub mod checkpoint_scheduler;
 #[path = "persistence/config.rs"]
 pub mod config;
 #[path = "persistence/diagnostics.rs"]
 pub mod diagnostics;
 
 pub use checkpoint::{CheckpointData, CheckpointInfo, CheckpointStats, CHECKPOINT_FORMAT_VERSION};
+pub use checkpoint_scheduler::CheckpointScheduler;
 pub use config::PersistenceConfig;
-pub use diagnostics::{CatalogLockDiagnostic, PersistenceDiagnostics, SnapshotStats};
+pub use diagnostics::{
+    CatalogLockDiagnostic, CheckpointDiagnostics, PersistenceDiagnostics, SnapshotStats,
+};
 
 /// Type alias for the outbox frontier provider callback.
 type OutboxFrontierProvider =
@@ -80,11 +85,11 @@ pub enum PersistenceFaultPoint {
     RecoveryScan,
 }
 
-pub(crate) struct PersistenceStateGuard<'a> {
-    pub(crate) state: &'a RwLock<PersistenceState>,
+pub(crate) struct PersistenceStateGuard {
+    pub(crate) state: Arc<RwLock<PersistenceState>>,
 }
 
-impl Drop for PersistenceStateGuard<'_> {
+impl Drop for PersistenceStateGuard {
     fn drop(&mut self) {
         *self.state.write() = PersistenceState::Idle;
     }
@@ -103,7 +108,8 @@ pub struct PersistenceCoordinator {
     pub(crate) last_snapshot_time: RwLock<Option<SystemTime>>,
     pub(crate) last_checkpoint_error: RwLock<Option<String>>,
     pub(crate) last_snapshot_error: RwLock<Option<String>>,
-    pub(crate) state: RwLock<PersistenceState>,
+    pub(crate) last_checkpoint_stats: RwLock<Option<CheckpointStats>>,
+    pub(crate) state: Arc<RwLock<PersistenceState>>,
     pub(crate) fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
     pub(crate) outbox_frontier_provider: RwLock<Option<OutboxFrontierProvider>>,
 }
@@ -180,7 +186,8 @@ impl PersistenceCoordinator {
             last_snapshot_time: RwLock::new(None),
             last_checkpoint_error: RwLock::new(None),
             last_snapshot_error: RwLock::new(None),
-            state: RwLock::new(PersistenceState::Idle),
+            last_checkpoint_stats: RwLock::new(None),
+            state: Arc::new(RwLock::new(PersistenceState::Idle)),
             fault_points: Arc::new(RwLock::new(HashSet::new())),
             outbox_frontier_provider: RwLock::new(None),
         })
@@ -227,7 +234,7 @@ impl PersistenceCoordinator {
     pub(crate) fn enter_state(
         &self,
         state: PersistenceState,
-    ) -> StorageResult<PersistenceStateGuard<'_>> {
+    ) -> StorageResult<PersistenceStateGuard> {
         let mut current = self.state.write();
         if *current != PersistenceState::Idle {
             return Err(StorageError::invalid_operation(format!(
@@ -237,7 +244,29 @@ impl PersistenceCoordinator {
         }
         *current = state;
         drop(current);
-        Ok(PersistenceStateGuard { state: &self.state })
+        Ok(PersistenceStateGuard {
+            state: Arc::clone(&self.state),
+        })
+    }
+
+    /// Non-blocking attempt to enter checkpoint state.
+    pub(crate) fn try_enter_checkpoint(&self) -> StorageResult<PersistenceStateGuard> {
+        let mut current = self.state.try_write().ok_or_else(|| {
+            StorageError::invalid_operation(
+                "persistence operation is already active (lock contention)".to_string(),
+            )
+        })?;
+        if *current != PersistenceState::Idle {
+            return Err(StorageError::invalid_operation(format!(
+                "persistence operation is already active: {:?}",
+                *current
+            )));
+        }
+        *current = PersistenceState::Checkpointing;
+        drop(current);
+        Ok(PersistenceStateGuard {
+            state: Arc::clone(&self.state),
+        })
     }
 
     pub fn set_outbox_materialized_lsn_provider(&self, provider: OutboxFrontierProvider) {
@@ -279,6 +308,7 @@ mod tests {
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
             property_graph_config: PropertyGraphConfig::default(),
+            ..Default::default()
         };
 
         let coordinator =
@@ -318,6 +348,7 @@ mod tests {
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
             property_graph_config: PropertyGraphConfig::default(),
+            ..Default::default()
         };
 
         let coordinator =
@@ -408,6 +439,7 @@ mod tests {
             enable_wal: false,
             sync_policy: None,
             property_graph_config: PropertyGraphConfig::default(),
+            ..Default::default()
         };
         std::fs::create_dir_all(&config.data_dir).expect("Failed to create main data dir");
         std::fs::write(config.data_dir.join("stale.txt"), b"stale")

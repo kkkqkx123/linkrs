@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use graphdb_core::stats::CheckpointTriggerReason;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_sync::checkpoint_manifest::{
@@ -26,13 +27,18 @@ pub struct CheckpointInfo {
     pub timestamp: Timestamp,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckpointStats {
     pub checkpoint_id: u64,
     pub data_flushed: u64,
     pub wal_truncated: u64,
     pub duration: Duration,
     pub snapshot_created: bool,
+    pub checkpoint_seq: u64,
+    pub data_files_created: usize,
+    pub bytes_flushed: u64,
+    pub wal_files_truncated: usize,
+    pub trigger_reason: CheckpointTriggerReason,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +133,21 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             || last_checkpoint.elapsed() >= self.config.auto_checkpoint_interval
     }
 
+    pub fn checkpoint_trigger_reason(&self) -> Option<CheckpointTriggerReason> {
+        let last_checkpoint_lsn = *self.last_checkpoint_lsn.read();
+        let last_checkpoint = *self.last_checkpoint_time.read();
+        let wal_bytes_since_checkpoint = self.wal_bytes_since(last_checkpoint_lsn);
+        if wal_bytes_since_checkpoint >= self.config.max_wal_size
+            || wal_bytes_since_checkpoint >= self.config.checkpoint_threshold
+        {
+            Some(CheckpointTriggerReason::WalSizeExceeded)
+        } else if last_checkpoint.elapsed() >= self.config.auto_checkpoint_interval {
+            Some(CheckpointTriggerReason::TimeSinceLastCheckpoint)
+        } else {
+            None
+        }
+    }
+
     pub fn should_snapshot(&self) -> bool {
         if !self.config.enable_snapshots {
             return false;
@@ -141,12 +162,39 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         true
     }
 
-    pub fn create_checkpoint(
+    #[cfg(test)]
+    pub(crate) fn create_checkpoint(
         &self,
         flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
         timestamp: Timestamp,
     ) -> StorageResult<CheckpointStats> {
-        let result = self.create_checkpoint_inner(flush_data, timestamp);
+        self.create_checkpoint_with_reason(flush_data, timestamp, CheckpointTriggerReason::Explicit)
+    }
+
+    pub fn create_checkpoint_with_reason(
+        &self,
+        flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
+        timestamp: Timestamp,
+        reason: CheckpointTriggerReason,
+    ) -> StorageResult<CheckpointStats> {
+        let result = self.create_checkpoint_inner(flush_data, timestamp, reason);
+        match &result {
+            Ok(_) => *self.last_checkpoint_error.write() = None,
+            Err(error) => *self.last_checkpoint_error.write() = Some(error.to_string()),
+        }
+        result
+    }
+
+    pub(crate) fn create_checkpoint_with_guard(
+        &self,
+        guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
+        flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
+        timestamp: Timestamp,
+        reason: CheckpointTriggerReason,
+    ) -> StorageResult<CheckpointStats> {
+        let result = self.create_checkpoint_inner_with_guard(
+            guard, flush_data, timestamp, reason,
+        );
         match &result {
             Ok(_) => *self.last_checkpoint_error.write() = None,
             Err(error) => *self.last_checkpoint_error.write() = Some(error.to_string()),
@@ -158,10 +206,21 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         &self,
         flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
         timestamp: Timestamp,
+        trigger_reason: CheckpointTriggerReason,
+    ) -> StorageResult<CheckpointStats> {
+        let guard = self
+            .enter_state(crate::engine::persistence_coordinator::PersistenceState::Checkpointing)?;
+        self.create_checkpoint_inner_with_guard(guard, flush_data, timestamp, trigger_reason)
+    }
+
+    fn create_checkpoint_inner_with_guard(
+        &self,
+        _guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
+        flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
+        timestamp: Timestamp,
+        trigger_reason: CheckpointTriggerReason,
     ) -> StorageResult<CheckpointStats> {
         let start = Instant::now();
-        let _state_guard = self
-            .enter_state(crate::engine::persistence_coordinator::PersistenceState::Checkpointing)?;
 
         let wal_lsn = {
             match &self.wal_manager {
@@ -327,7 +386,13 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             wal_truncated: safe_wal_lsn.into(),
             duration: start.elapsed(),
             snapshot_created,
+            checkpoint_seq: checkpoint.seq,
+            data_files_created: files.len(),
+            bytes_flushed: data.data_size,
+            wal_files_truncated: if safe_wal_lsn != Lsn::ZERO { 1 } else { 0 },
+            trigger_reason,
         };
+        *self.last_checkpoint_stats.write() = Some(stats.clone());
 
         log::info!(
             "Checkpoint {} completed in {:?}",

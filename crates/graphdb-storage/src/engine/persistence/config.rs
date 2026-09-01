@@ -23,6 +23,10 @@ pub struct PersistenceConfig {
     pub sync_policy: Option<SyncPolicy>,
     /// Property graph resource and maintenance configuration.
     pub property_graph_config: PropertyGraphConfig,
+    /// Whether async background checkpoint scheduling is enabled.
+    pub async_checkpoint_enabled: bool,
+    /// Interval for background checkpoint polling.
+    pub async_checkpoint_poll_interval: Duration,
 }
 
 impl Default for PersistenceConfig {
@@ -41,6 +45,8 @@ impl Default for PersistenceConfig {
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
             property_graph_config: PropertyGraphConfig::default(),
+            async_checkpoint_enabled: true,
+            async_checkpoint_poll_interval: Duration::from_secs(1),
         }
     }
 }

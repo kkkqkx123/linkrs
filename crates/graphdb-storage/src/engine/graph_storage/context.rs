@@ -322,6 +322,8 @@ pub struct GraphStorageContext {
     /// Read-only cold snapshots indexed by edge label ID, newest last.
     /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
     cold_snapshots: Arc<RwLock<ColdSnapshotMap>>,
+    checkpoint_scheduler:
+        Arc<Mutex<Option<crate::engine::persistence_coordinator::CheckpointScheduler>>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -364,6 +366,7 @@ impl GraphStorageContext {
             auto_commit_undo: None,
             auto_commit_window: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
+            checkpoint_scheduler: Arc::new(Mutex::new(None)),
         })
     }
 

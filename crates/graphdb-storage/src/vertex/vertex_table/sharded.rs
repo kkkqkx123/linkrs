@@ -4,10 +4,10 @@ use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::compression::CompressionType;
-use crate::SnapshotHandle;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{IdKey, VertexRecord};
+use crate::SnapshotHandle;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageResult, Value};
 
