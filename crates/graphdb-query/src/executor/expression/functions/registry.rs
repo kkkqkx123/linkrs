@@ -380,6 +380,9 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::OctetLength));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Encode));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Decode));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::UnionValue));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::UnionTag));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::UnionExtract));
 
         // Register aggregate functions
         use graphdb_core::types::operators::AggregateFunction;
@@ -720,6 +723,9 @@ fn builtin_return_type(func: &BuiltinFunction) -> DataType {
             UtilityFunction::OctetLength => DataType::BigInt,
             UtilityFunction::Encode => DataType::Blob,
             UtilityFunction::Decode => DataType::String,
+            UtilityFunction::UnionValue => DataType::Map(Box::new(DataType::Empty)),
+            UtilityFunction::UnionTag => DataType::Int,
+            UtilityFunction::UnionExtract => DataType::Unknown,
         },
         BuiltinFunction::Graph(g) => match g {
             GraphFunction::Id => DataType::BigInt,

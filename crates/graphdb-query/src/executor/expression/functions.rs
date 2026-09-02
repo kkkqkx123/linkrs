@@ -396,6 +396,9 @@ impl BuiltinFunction {
                 | UtilityFunction::OctetLength
                 | UtilityFunction::Encode
                 | UtilityFunction::Decode
+                | UtilityFunction::UnionValue
+                | UtilityFunction::UnionTag
+                | UtilityFunction::UnionExtract
         )
     }
 

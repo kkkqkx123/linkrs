@@ -5,6 +5,7 @@ use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 
 /// Enumeration of practical functions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,9 @@ pub enum UtilityFunction {
     OctetLength,
     Encode,
     Decode,
+    UnionValue,
+    UnionTag,
+    UnionExtract,
 }
 
 impl UtilityFunction {
@@ -62,6 +66,9 @@ impl UtilityFunction {
             UtilityFunction::OctetLength => "octet_length",
             UtilityFunction::Encode => "encode",
             UtilityFunction::Decode => "decode",
+            UtilityFunction::UnionValue => "union_value",
+            UtilityFunction::UnionTag => "union_tag",
+            UtilityFunction::UnionExtract => "union_extract",
         }
     }
 
@@ -91,6 +98,9 @@ impl UtilityFunction {
             UtilityFunction::OctetLength => 1,
             UtilityFunction::Encode => 1,
             UtilityFunction::Decode => 1,
+            UtilityFunction::UnionValue => 2,
+            UtilityFunction::UnionTag => 1,
+            UtilityFunction::UnionExtract => 1,
         }
     }
 
@@ -135,6 +145,9 @@ impl UtilityFunction {
             UtilityFunction::OctetLength => "Return the number of bytes in a string or blob",
             UtilityFunction::Encode => "Encode a string to blob using encoding (UTF8, HEX, BASE64)",
             UtilityFunction::Decode => "Decode a blob to string using encoding (UTF8, HEX, BASE64)",
+            UtilityFunction::UnionValue => "Create a union value with a tag and a value",
+            UtilityFunction::UnionTag => "Get the tag of a union value",
+            UtilityFunction::UnionExtract => "Extract the value from a union value",
         }
     }
 
@@ -164,6 +177,9 @@ impl UtilityFunction {
             UtilityFunction::OctetLength => execute_octet_length(args),
             UtilityFunction::Encode => execute_encode(args),
             UtilityFunction::Decode => execute_decode(args),
+            UtilityFunction::UnionValue => execute_union_value(args),
+            UtilityFunction::UnionTag => execute_union_tag(args),
+            UtilityFunction::UnionExtract => execute_union_extract(args),
         }
     }
 }
@@ -755,6 +771,86 @@ fn execute_decode(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+fn execute_union_value(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "union_value requires 2 arguments",
+        ));
+    }
+    let tag = match &args[0] {
+        Value::Int(i) => *i,
+        Value::SmallInt(i) => *i as i32,
+        Value::BigInt(i) => *i as i32,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => {
+            return Err(ExpressionError::type_error(
+                "union_value first argument must be an integer tag",
+            ))
+        }
+    };
+    if tag < 0 {
+        return Err(ExpressionError::type_error(
+            "union tag must be non-negative",
+        ));
+    }
+    let value = args[1].clone();
+    let mut map = HashMap::new();
+    map.insert(Value::string("__tag"), Value::Int(tag));
+    map.insert(Value::string("__value"), value);
+    Ok(Value::map(map))
+}
+
+fn execute_union_tag(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "union_tag requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Map(m) => {
+            let tag_key = Value::string("__tag");
+            match m.get(&tag_key) {
+                Some(Value::Int(tag)) => Ok(Value::Int(*tag)),
+                Some(Value::SmallInt(tag)) => Ok(Value::Int(*tag as i32)),
+                Some(Value::BigInt(tag)) => Ok(Value::Int(*tag as i32)),
+                Some(_) => Err(ExpressionError::type_error(
+                    "union tag must be an integer",
+                )),
+                None => Err(ExpressionError::type_error(
+                    "not a union value: missing __tag",
+                )),
+            }
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "union_tag requires a union value (map)",
+        )),
+    }
+}
+
+fn execute_union_extract(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "union_extract requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::Map(m) => {
+            let value_key = Value::string("__value");
+            match m.get(&value_key) {
+                Some(v) => Ok(v.clone()),
+                None => Err(ExpressionError::type_error(
+                    "not a union value: missing __value",
+                )),
+            }
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "union_extract requires a union value (map)",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -900,5 +996,106 @@ mod tests {
             .execute(&[blob])
             .expect("decode should succeed");
         assert_eq!(result, Value::string("hello"));
+    }
+
+    #[test]
+    fn test_union_value() {
+        let result = UtilityFunction::UnionValue
+            .execute(&[Value::Int(0), Value::Int(42)])
+            .expect("union_value should succeed");
+        match &result {
+            Value::Map(m) => {
+                let tag = m.get(&Value::string("__tag")).expect("missing __tag");
+                assert_eq!(tag, &Value::Int(0));
+                let val = m.get(&Value::string("__value")).expect("missing __value");
+                assert_eq!(val, &Value::Int(42));
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
+    fn test_union_value_null_propagation() {
+        let result = UtilityFunction::UnionValue
+            .execute(&[Value::Null(NullType::Null), Value::Int(42)])
+            .expect("union_value should succeed");
+        assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_union_value_negative_tag() {
+        let result = UtilityFunction::UnionValue.execute(&[Value::Int(-1), Value::Int(42)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_union_tag() {
+        let mut map = HashMap::new();
+        map.insert(Value::string("__tag"), Value::Int(2));
+        map.insert(Value::string("__value"), Value::string("hello"));
+        let union_val = Value::map(map);
+        let result = UtilityFunction::UnionTag
+            .execute(&[union_val])
+            .expect("union_tag should succeed");
+        assert_eq!(result, Value::Int(2));
+    }
+
+    #[test]
+    fn test_union_tag_missing_key() {
+        let map = HashMap::new();
+        let union_val = Value::map(map);
+        let result = UtilityFunction::UnionTag.execute(&[union_val]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_union_tag_null() {
+        let result = UtilityFunction::UnionTag
+            .execute(&[Value::Null(NullType::Null)])
+            .expect("union_tag should succeed");
+        assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_union_extract() {
+        let mut map = HashMap::new();
+        map.insert(Value::string("__tag"), Value::Int(0));
+        map.insert(Value::string("__value"), Value::string("hello"));
+        let union_val = Value::map(map);
+        let result = UtilityFunction::UnionExtract
+            .execute(&[union_val])
+            .expect("union_extract should succeed");
+        assert_eq!(result, Value::string("hello"));
+    }
+
+    #[test]
+    fn test_union_extract_missing_key() {
+        let map = HashMap::new();
+        let union_val = Value::map(map);
+        let result = UtilityFunction::UnionExtract.execute(&[union_val]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_union_extract_null() {
+        let result = UtilityFunction::UnionExtract
+            .execute(&[Value::Null(NullType::Null)])
+            .expect("union_extract should succeed");
+        assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_union_roundtrip() {
+        let u = UtilityFunction::UnionValue
+            .execute(&[Value::Int(1), Value::Double(3.14)])
+            .expect("create union");
+        let tag = UtilityFunction::UnionTag
+            .execute(&[u.clone()])
+            .expect("get tag");
+        assert_eq!(tag, Value::Int(1));
+        let val = UtilityFunction::UnionExtract
+            .execute(&[u])
+            .expect("extract value");
+        assert_eq!(val, Value::Double(3.14));
     }
 }
