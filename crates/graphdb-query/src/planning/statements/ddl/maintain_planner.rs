@@ -211,6 +211,10 @@ impl MaintainPlanner {
             CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. } => {
                 Ok(None)
             }
+            CreateTarget::Sequence { .. } => {
+                // Sequence creation will be handled by the executor in S-7
+                Ok(None)
+            }
         }
     }
 
@@ -271,6 +275,11 @@ impl MaintainPlanner {
 
                 let node = AlterEdgeNode::new(next_node_id(), alter_info);
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node))
+            }
+            AlterTarget::Sequence { .. } => {
+                // Sequence alteration will be handled by the executor in S-7
+                // Return a placeholder for now
+                unreachable!("ALTER SEQUENCE planning not yet implemented")
             }
         }
     }
@@ -408,6 +417,10 @@ impl MaintainPlanner {
                 )
                 .with_if_exists(drop_stmt.if_exists);
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node))
+            }
+            DropTarget::Sequence(_) => {
+                // Sequence dropping will be handled by the executor in S-7
+                unreachable!("DROP SEQUENCE planning not yet implemented")
             }
         }
     }

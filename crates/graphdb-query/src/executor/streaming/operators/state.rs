@@ -428,6 +428,7 @@ pub enum DdlState {
     MigratePlan,
     MigrateRun,
     MigrateRollback,
+    SequenceManage,
 }
 
 impl DdlState {
@@ -448,6 +449,7 @@ impl DdlState {
             super::spec::DdlSpec::MigratePlan { .. } => DdlState::MigratePlan,
             super::spec::DdlSpec::MigrateRun { .. } => DdlState::MigrateRun,
             super::spec::DdlSpec::MigrateRollback { .. } => DdlState::MigrateRollback,
+            super::spec::DdlSpec::SequenceManage { .. } => DdlState::SequenceManage,
         }
     }
 }

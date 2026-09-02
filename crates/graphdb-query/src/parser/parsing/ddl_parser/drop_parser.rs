@@ -118,10 +118,24 @@ impl DdlParser {
                 username,
                 if_exists,
             }));
+        } else if ctx.match_token(TokenKind::Sequence) {
+            let mut if_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Exists)?;
+                if_exists = true;
+            }
+            let seq_name = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::Drop(DropStmt {
+                span,
+                target: DropTarget::Sequence(seq_name),
+                if_exists,
+            }));
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected SPACE, TAG, EDGE, INDEX, or USER".to_string(),
+                "Expected SPACE, TAG, EDGE, INDEX, SEQUENCE, or USER".to_string(),
                 ctx.current_position(),
             ));
         };

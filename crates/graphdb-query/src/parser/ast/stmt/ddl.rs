@@ -53,6 +53,14 @@ pub enum CreateTarget {
         on: String,
         properties: Vec<String>,
     },
+    Sequence {
+        name: String,
+        start: Option<i64>,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +89,7 @@ pub enum DropTarget {
         space_name: String,
         index_name: String,
     },
+    Sequence(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +141,13 @@ pub enum AlterTarget {
     Space {
         space_name: String,
         comment: Option<String>,
+    },
+    Sequence {
+        name: String,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: Option<bool>,
     },
 }
 

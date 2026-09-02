@@ -812,6 +812,7 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::MigratePlan { .. } => "MigratePlan",
         DdlSpec::MigrateRun { .. } => "MigrateRun",
         DdlSpec::MigrateRollback { .. } => "MigrateRollback",
+        DdlSpec::SequenceManage { .. } => "SequenceManage",
     }
 }
 

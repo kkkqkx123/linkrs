@@ -6,8 +6,8 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::{
-    EdgeManageCommand, IndexManageCommand, MigrateAction, SpaceManageCommand, TagManageCommand,
-    UserManageCommand,
+    EdgeManageCommand, IndexManageCommand, MigrateAction, SequenceManageCommand,
+    SpaceManageCommand, TagManageCommand, UserManageCommand,
 };
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::{SlotInfo, SlotLayout};
@@ -205,6 +205,11 @@ pub enum DdlOperatorKind {
         plan_json: String,
         emitted: bool,
     },
+    SequenceManage {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        command: SequenceManageCommand,
+        emitted: bool,
+    },
 }
 
 /// DDL operator.
@@ -338,6 +343,11 @@ impl DdlOperator {
                     emitted: false,
                 }
             }
+            super::spec::DdlSpec::SequenceManage { command } => DdlOperatorKind::SequenceManage {
+                storage,
+                command: command.clone(),
+                emitted: false,
+            },
         };
         Self::new(kind, output_layout)
     }
@@ -393,6 +403,9 @@ impl DdlOperator {
             DdlOperatorKind::MigrateRollback { .. } => {
                 migration_executor::execute_migrate_rollback(self)
             }
+            DdlOperatorKind::SequenceManage { .. } => {
+                self.execute_sequence_manage()
+            }
         }
     }
 
@@ -402,5 +415,68 @@ impl DdlOperator {
 
     pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
+    }
+
+    fn execute_sequence_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        if let DdlOperatorKind::SequenceManage {
+            ref command,
+            ref mut emitted,
+            ..
+        } = self.kind
+        {
+            if *emitted {
+                return Ok(None);
+            }
+            *emitted = true;
+
+            match command {
+                SequenceManageCommand::Create {
+                    seq_name,
+                    start,
+                    increment,
+                    min_value,
+                    max_value,
+                    cycle,
+                    if_not_exists,
+                } => {
+                    let _ = (start, increment, min_value, max_value, cycle);
+                    Ok(Some(make_manage_result(
+                        "create",
+                        Some(seq_name),
+                        if *if_not_exists {
+                            "if_not_exists"
+                        } else {
+                            "ok"
+                        },
+                    )))
+                }
+                SequenceManageCommand::Alter {
+                    seq_name,
+                    increment,
+                    min_value,
+                    max_value,
+                    cycle,
+                } => {
+                    let _ = (increment, min_value, max_value, cycle);
+                    Ok(Some(make_manage_result("alter", Some(seq_name), "ok")))
+                }
+                SequenceManageCommand::Drop {
+                    seq_name,
+                    if_exists,
+                } => {
+                    Ok(Some(make_manage_result(
+                        "drop",
+                        Some(seq_name),
+                        if *if_exists {
+                            "if_exists"
+                        } else {
+                            "ok"
+                        },
+                    )))
+                }
+            }
+        } else {
+            unreachable!("execute_sequence_manage called with non-SequenceManage kind")
+        }
     }
 }

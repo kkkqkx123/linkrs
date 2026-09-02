@@ -403,6 +403,8 @@ impl<'a> Lexer<'a> {
             "HOSTS" => Tk::Hosts,
             "SPACE" => Tk::Space,
             "SPACES" => Tk::Spaces,
+            "SEQUENCE" => Tk::Sequence,
+            "SEQUENCES" => Tk::Sequences,
             "USER" => Tk::User,
             "USERS" => Tk::Users,
             "PASSWORD" => Tk::Password,

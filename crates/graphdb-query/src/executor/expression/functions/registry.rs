@@ -511,6 +511,11 @@ impl FunctionRegistry {
         // Register vector functions
         super::builtin::vector::register_vector_functions(self);
 
+        // Register sequence functions
+        use super::SequenceFunction;
+        self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::CurrVal));
+        self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::NextVal));
+
         // Register conversion aliases for backward compatibility
         self.register_alias("TOINTEGER", "TO_INT");
         self.register_alias("TOFLOAT", "TO_FLOAT");
@@ -531,6 +536,7 @@ fn builtin_return_type(func: &BuiltinFunction) -> DataType {
     use super::MathFunction;
     use super::PathFunction;
     use super::RegexFunction;
+    use super::SequenceFunction;
     use super::StringFunction;
     use super::UtilityFunction;
     use super::VectorFunction;
@@ -805,6 +811,10 @@ fn builtin_return_type(func: &BuiltinFunction) -> DataType {
             VectorFunction::ArraySquaredDistance => DataType::Double,
             VectorFunction::ArrayInnerProduct => DataType::Double,
             VectorFunction::ArrayDotProduct => DataType::Double,
+        },
+        BuiltinFunction::Sequence(s) => match s {
+            SequenceFunction::CurrVal => DataType::BigInt,
+            SequenceFunction::NextVal => DataType::BigInt,
         },
         BuiltinFunction::Fulltext(f) => match f {
             FulltextFunction::Score => DataType::Double,

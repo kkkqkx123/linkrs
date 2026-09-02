@@ -386,10 +386,64 @@ impl DdlParser {
                 },
                 if_not_exists,
             }))
+        } else if ctx.match_token(TokenKind::Sequence) {
+            let mut if_not_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Not)?;
+                ctx.expect_token(TokenKind::Exists)?;
+                if_not_exists = true;
+            }
+            let name = ctx.expect_identifier()?;
+            let mut start = None;
+            let mut increment = None;
+            let mut min_value = None;
+            let mut max_value = None;
+            let mut cycle = false;
+
+            // Parse optional clauses: START, INCREMENT, MINVALUE, MAXVALUE, CYCLE/NOCYCLE
+            loop {
+                if ctx.check_keyword("START") && start.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    start = Some(ctx.expect_integer_literal()?);
+                } else if ctx.check_keyword("INCREMENT") && increment.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    increment = Some(ctx.expect_integer_literal()?);
+                } else if ctx.check_keyword("MINVALUE") && min_value.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    min_value = Some(ctx.expect_integer_literal()?);
+                } else if ctx.check_keyword("MAXVALUE") && max_value.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    max_value = Some(ctx.expect_integer_literal()?);
+                } else if ctx.match_token(TokenKind::Cycle) {
+                    cycle = true;
+                } else if ctx.check_keyword("NOCYCLE") {
+                    ctx.next_token();
+                    cycle = false;
+                } else {
+                    break;
+                }
+            }
+
+            Ok(Stmt::Create(CreateStmt {
+                span: start_span,
+                target: CreateTarget::Sequence {
+                    name,
+                    start,
+                    increment,
+                    min_value,
+                    max_value,
+                    cycle,
+                },
+                if_not_exists,
+            }))
         } else {
             Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected TAG, EDGE, SPACE, or INDEX after CREATE".to_string(),
+                "Expected TAG, EDGE, SPACE, INDEX, or SEQUENCE after CREATE".to_string(),
                 ctx.current_position(),
             ))
         }

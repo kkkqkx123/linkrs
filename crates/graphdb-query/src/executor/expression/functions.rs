@@ -30,6 +30,9 @@ pub use fulltext::{FulltextExecutionContext, FulltextFunction};
 // Vector functions (re-export from builtin)
 pub use builtin::vector::VectorFunction;
 
+// Sequence functions (re-export from builtin)
+pub use builtin::sequence::SequenceFunction;
+
 pub use registry::{global_registry, global_registry_ref, FunctionRegistry};
 pub use signature::ValueType;
 
@@ -168,6 +171,8 @@ pub enum BuiltinFunction {
     Vector(VectorFunction),
     /// Window functions
     Window(crate::executor::expression::functions::builtin::window::WindowFunction),
+    /// Sequence functions (curr_val, next_val)
+    Sequence(SequenceFunction),
 }
 
 impl BuiltinFunction {
@@ -188,6 +193,7 @@ impl BuiltinFunction {
             BuiltinFunction::Fulltext(f) => f.name(),
             BuiltinFunction::Vector(f) => f.name(),
             BuiltinFunction::Window(f) => f.name(),
+            BuiltinFunction::Sequence(f) => f.name(),
         }
     }
 
@@ -208,6 +214,7 @@ impl BuiltinFunction {
             BuiltinFunction::Fulltext(_) => 0,
             BuiltinFunction::Vector(f) => f.arity(),
             BuiltinFunction::Window(f) => f.arity(),
+            BuiltinFunction::Sequence(f) => f.arity(),
         }
     }
 
@@ -228,6 +235,7 @@ impl BuiltinFunction {
             BuiltinFunction::Fulltext(f) => f.is_variadic(),
             BuiltinFunction::Vector(f) => f.is_variadic(),
             BuiltinFunction::Window(f) => f.is_variadic(),
+            BuiltinFunction::Sequence(f) => f.is_variadic(),
         }
     }
 
@@ -271,7 +279,8 @@ impl BuiltinFunction {
             BuiltinFunction::Aggregate(_)
             | BuiltinFunction::Graph(_)
             | BuiltinFunction::Fulltext(_)
-            | BuiltinFunction::Window(_) => false,
+            | BuiltinFunction::Window(_)
+            | BuiltinFunction::Sequence(_) => false,
         }
     }
 
@@ -419,6 +428,7 @@ impl BuiltinFunction {
             BuiltinFunction::Fulltext(f) => f.description(),
             BuiltinFunction::Vector(f) => f.description(),
             BuiltinFunction::Window(f) => f.description(),
+            BuiltinFunction::Sequence(f) => f.description(),
         }
     }
 
@@ -450,6 +460,7 @@ impl BuiltinFunction {
             }
             BuiltinFunction::Vector(f) => f.execute(args),
             BuiltinFunction::Window(f) => f.execute(args),
+            BuiltinFunction::Sequence(f) => f.execute(args),
         }
     }
 
@@ -845,6 +856,7 @@ mod tests {
                     | BuiltinFunction::Graph(_)
                     | BuiltinFunction::Fulltext(_)
                     | BuiltinFunction::Window(_)
+                    | BuiltinFunction::Sequence(_)
             );
             let impure_by_variant = matches!(
                 f,

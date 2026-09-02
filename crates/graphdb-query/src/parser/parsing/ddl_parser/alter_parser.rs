@@ -27,6 +27,50 @@ impl DdlParser {
             return self.parse_alter_user_internal(ctx, start_span);
         }
 
+        if ctx.match_token(TokenKind::Sequence) {
+            let name = ctx.expect_identifier()?;
+            let mut increment = None;
+            let mut min_value = None;
+            let mut max_value = None;
+            let mut cycle = None;
+
+            loop {
+                if ctx.check_keyword("INCREMENT") && increment.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    increment = Some(ctx.expect_integer_literal()?);
+                } else if ctx.check_keyword("MINVALUE") && min_value.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    min_value = Some(ctx.expect_integer_literal()?);
+                } else if ctx.check_keyword("MAXVALUE") && max_value.is_none() {
+                    ctx.next_token();
+                    ctx.expect_token(TokenKind::Assign)?;
+                    max_value = Some(ctx.expect_integer_literal()?);
+                } else if ctx.match_token(TokenKind::Cycle) {
+                    cycle = Some(true);
+                } else if ctx.check_keyword("NOCYCLE") {
+                    ctx.next_token();
+                    cycle = Some(false);
+                } else {
+                    break;
+                }
+            }
+
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::Alter(AlterStmt {
+                span,
+                target: AlterTarget::Sequence {
+                    name,
+                    increment,
+                    min_value,
+                    max_value,
+                    cycle,
+                },
+            }));
+        }
+
         let (is_tag, name, additions, deletions, changes) = if ctx.match_token(TokenKind::Tag) {
             let tag_name = ctx.expect_identifier()?;
             let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;

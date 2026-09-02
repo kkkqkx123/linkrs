@@ -11,6 +11,7 @@ use crate::executor::streaming::pool::SharedScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::JoinAlgorithm;
 use crate::storage::QueryStorage;
+use graphdb_core::metadata::SequenceManager;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::Arena;
 use graphdb_core::Value;
@@ -94,6 +95,8 @@ pub struct ExecutionContext {
     /// Consistency requirement for secondary-index reads.
     /// `None` = eventual; `Some(cfg)` = read-your-writes with timeout and optional LSN.
     pub ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
+    /// Sequence manager for curr_val/next_val functions.
+    pub sequence_manager: Option<Arc<SequenceManager>>,
 }
 
 /// Internal: build the non-search portion of an `ExecutionContext`.
@@ -121,6 +124,7 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         join_algorithms: HashMap::new(),
         isolation_level: None,
         ryw_config: None,
+        sequence_manager: None,
     }
 }
 
@@ -197,6 +201,14 @@ impl ExecutionContext {
         self.variables
             .write()
             .insert("space_id".to_string(), Value::Int(space_id as i32));
+    }
+
+    pub fn sequence_manager(&self) -> Option<&Arc<SequenceManager>> {
+        self.sequence_manager.as_ref()
+    }
+
+    pub fn set_sequence_manager(&mut self, manager: Arc<SequenceManager>) {
+        self.sequence_manager = Some(manager);
     }
 }
 

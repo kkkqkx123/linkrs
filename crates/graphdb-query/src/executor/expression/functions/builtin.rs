@@ -18,6 +18,7 @@ pub mod graph;
 pub mod math;
 pub mod path;
 pub mod regex;
+pub mod sequence;
 pub mod string;
 pub mod utility;
 pub mod vector;

@@ -692,6 +692,31 @@ pub enum EdgeManageCommand {
     },
 }
 
+/// Sequence DDL command payload.
+#[derive(Debug, Clone)]
+pub enum SequenceManageCommand {
+    Create {
+        seq_name: String,
+        start: Option<i64>,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: bool,
+        if_not_exists: bool,
+    },
+    Alter {
+        seq_name: String,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: Option<bool>,
+    },
+    Drop {
+        seq_name: String,
+        if_exists: bool,
+    },
+}
+
 /// Index DDL command payload.
 #[derive(Debug, Clone)]
 pub enum IndexManageCommand {
@@ -889,6 +914,9 @@ pub enum DdlSpec {
     },
     MigrateRollback {
         plan_json: String,
+    },
+    SequenceManage {
+        command: SequenceManageCommand,
     },
 }
 

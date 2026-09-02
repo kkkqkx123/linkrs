@@ -127,6 +127,8 @@ pub enum TokenKind {
     Hosts,
     Space,
     Spaces,
+    Sequence,
+    Sequences,
     User,
     Users,
     Password,

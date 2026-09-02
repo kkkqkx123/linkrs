@@ -442,6 +442,7 @@ impl StmtParser {
             || ctx.check_token(TokenKind::Edge)
             || ctx.check_token(TokenKind::Space)
             || ctx.check_token(TokenKind::Index)
+            || ctx.check_token(TokenKind::Sequence)
         {
             return DdlParser::new().parse_create_after_token(ctx, start_span);
         }

@@ -1,3 +1,4 @@
+use crate::metadata::sequence::SequenceDef;
 use crate::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
 use crate::StorageError;
 use dashmap::DashMap;
@@ -21,6 +22,9 @@ struct SchemaSnapshot {
     /// Persisted SERIAL counters: (space_id, table name, next value).
     #[serde(default)]
     serial_next: Vec<(u64, String, u64)>,
+    /// Persisted sequence definitions.
+    #[serde(default)]
+    sequences: Vec<SequenceDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +51,7 @@ pub struct SchemaManager {
     tag_id_counter: Arc<DashMap<u64, AtomicU32>>,
     edge_type_id_counter: Arc<DashMap<u64, AtomicU32>>,
     serial_next: Arc<RwLock<Vec<(u64, String, u64)>>>,
+    sequences: Arc<RwLock<HashMap<String, SequenceDef>>>,
 }
 
 impl Clone for SchemaManager {
@@ -60,6 +65,7 @@ impl Clone for SchemaManager {
             tag_id_counter: self.tag_id_counter.clone(),
             edge_type_id_counter: self.edge_type_id_counter.clone(),
             serial_next: self.serial_next.clone(),
+            sequences: self.sequences.clone(),
         }
     }
 }
@@ -83,6 +89,7 @@ impl SchemaManager {
             tag_id_counter: Arc::new(DashMap::new()),
             edge_type_id_counter: Arc::new(DashMap::new()),
             serial_next: Arc::new(RwLock::new(Vec::new())),
+            sequences: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -741,6 +748,7 @@ impl SchemaManager {
             tag_id_counters,
             edge_type_id_counters,
             serial_next: self.serial_next.read().clone(),
+            sequences: self.sequences.read().values().cloned().collect(),
         };
 
         let json = serde_json::to_string_pretty(&snapshot)
@@ -855,7 +863,103 @@ impl SchemaManager {
 
         *self.serial_next.write() = snapshot.serial_next;
 
+        let mut sequences = self.sequences.write();
+        sequences.clear();
+        for def in snapshot.sequences {
+            sequences.insert(def.name.clone(), def);
+        }
+
         Ok(())
+    }
+
+    // ==================== Sequence Operations ====================
+
+    /// Create a sequence
+    pub fn create_sequence(
+        &self,
+        name: String,
+        start: i64,
+        increment: i64,
+        min_value: i64,
+        max_value: i64,
+        cycle: bool,
+    ) -> Result<(), StorageError> {
+        let mut sequences = self.sequences.write();
+        if sequences.contains_key(&name) {
+            return Err(StorageError::db_error(format!(
+                "Sequence '{}' already exists",
+                name
+            )));
+        }
+        let def = SequenceDef::new(name.clone(), start, increment, min_value, max_value, cycle);
+        sequences.insert(name, def);
+        Ok(())
+    }
+
+    /// Drop a sequence
+    pub fn drop_sequence(&self, name: &str) -> Result<bool, StorageError> {
+        let mut sequences = self.sequences.write();
+        if sequences.remove(name).is_some() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get a sequence definition
+    pub fn get_sequence(&self, name: &str) -> Option<SequenceDef> {
+        let sequences = self.sequences.read();
+        sequences.get(name).cloned()
+    }
+
+    /// Get the current value of a sequence
+    pub fn sequence_current_value(&self, name: &str) -> Result<i64, StorageError> {
+        let sequences = self.sequences.read();
+        let def = sequences
+            .get(name)
+            .ok_or_else(|| StorageError::db_error(format!("Sequence '{}' does not exist", name)))?;
+        Ok(def.current_value())
+    }
+
+    /// Get the next value of a sequence (atomic increment)
+    pub fn sequence_next_value(&self, name: &str) -> Result<i64, StorageError> {
+        let sequences = self.sequences.read();
+        let def = sequences
+            .get(name)
+            .ok_or_else(|| StorageError::db_error(format!("Sequence '{}' does not exist", name)))?;
+        def.next_value()
+    }
+
+    /// Alter sequence properties
+    pub fn alter_sequence(
+        &self,
+        name: &str,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: Option<bool>,
+    ) -> Result<(), StorageError> {
+        let mut sequences = self.sequences.write();
+        let def = sequences
+            .get(name)
+            .ok_or_else(|| StorageError::db_error(format!("Sequence '{}' does not exist", name)))?;
+
+        let new_increment = increment.unwrap_or(def.increment);
+        let new_min = min_value.unwrap_or(def.min_value);
+        let new_max = max_value.unwrap_or(def.max_value);
+        let new_cycle = cycle.unwrap_or(def.cycle);
+        let current = def.current_value();
+
+        let new_def =
+            SequenceDef::new(name.to_string(), current, new_increment, new_min, new_max, new_cycle);
+        sequences.insert(name.to_string(), new_def);
+        Ok(())
+    }
+
+    /// List all sequence names
+    pub fn list_sequences(&self) -> Vec<String> {
+        let sequences = self.sequences.read();
+        sequences.keys().cloned().collect()
     }
 }
 

@@ -682,4 +682,206 @@ mod tests {
             }
         }
     }
+
+    // ==================== Sequence DDL Tests ====================
+
+    #[test]
+    fn test_create_sequence_basic() {
+        let stmt = parse_statement("CREATE SEQUENCE seq1").expect("CREATE SEQUENCE should parse");
+        if let Stmt::Create(create) = stmt {
+            assert!(!create.if_not_exists);
+            if let CreateTarget::Sequence { name, start, increment, .. } = &create.target {
+                assert_eq!(name, "seq1");
+                assert_eq!(*start, None);
+                assert_eq!(*increment, None);
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+    }
+
+    #[test]
+    fn test_create_sequence_with_options() {
+        // Test each option individually to find which one fails
+        let stmt = parse_statement("CREATE SEQUENCE seq2 START = 100")
+            .expect("CREATE SEQUENCE with START= should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, start, .. } = &create.target {
+                assert_eq!(name, "seq2");
+                assert_eq!(*start, Some(100));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+
+        let stmt = parse_statement("CREATE SEQUENCE seq2 INCREMENT = 5")
+            .expect("CREATE SEQUENCE with INCREMENT= should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, increment, .. } = &create.target {
+                assert_eq!(name, "seq2");
+                assert_eq!(*increment, Some(5));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+
+        let stmt = parse_statement("CREATE SEQUENCE seq2 MINVALUE = 1 MAXVALUE = 1000")
+            .expect("CREATE SEQUENCE with MIN/MAX should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, min_value, max_value, .. } = &create.target {
+                assert_eq!(name, "seq2");
+                assert_eq!(*min_value, Some(1));
+                assert_eq!(*max_value, Some(1000));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+
+        let stmt = parse_statement("CREATE SEQUENCE seq2 CYCLE")
+            .expect("CREATE SEQUENCE with CYCLE should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, cycle, .. } = &create.target {
+                assert_eq!(name, "seq2");
+                assert!(*cycle);
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+
+        let stmt = parse_statement("CREATE SEQUENCE seq2 NOCYCLE")
+            .expect("CREATE SEQUENCE with NOCYCLE should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, cycle, .. } = &create.target {
+                assert_eq!(name, "seq2");
+                assert!(!*cycle);
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+
+        let stmt = parse_statement("CREATE SEQUENCE seq2 START = 100 INCREMENT = 5 MINVALUE = 1 MAXVALUE = 1000 CYCLE")
+            .expect("CREATE SEQUENCE with all options should parse");
+        if let Stmt::Create(create) = stmt {
+            if let CreateTarget::Sequence { name, start, increment, min_value, max_value, cycle } = &create.target {
+                assert_eq!(name, "seq2");
+                assert_eq!(*start, Some(100));
+                assert_eq!(*increment, Some(5));
+                assert_eq!(*min_value, Some(1));
+                assert_eq!(*max_value, Some(1000));
+                assert!(*cycle);
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+    }
+
+    #[test]
+    fn test_create_sequence_if_not_exists() {
+        let stmt = parse_statement("CREATE SEQUENCE IF NOT EXISTS seq3")
+            .expect("CREATE SEQUENCE IF NOT EXISTS should parse");
+        if let Stmt::Create(create) = stmt {
+            assert!(create.if_not_exists);
+            if let CreateTarget::Sequence { name, .. } = &create.target {
+                assert_eq!(name, "seq3");
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Create statement");
+        }
+    }
+
+    #[test]
+    fn test_drop_sequence() {
+        let stmt = parse_statement("DROP SEQUENCE seq1").expect("DROP SEQUENCE should parse");
+        if let Stmt::Drop(drop) = stmt {
+            assert!(!drop.if_exists);
+            if let DropTarget::Sequence(name) = &drop.target {
+                assert_eq!(name, "seq1");
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Drop statement");
+        }
+    }
+
+    #[test]
+    fn test_drop_sequence_if_exists() {
+        let stmt = parse_statement("DROP SEQUENCE IF EXISTS seq1")
+            .expect("DROP SEQUENCE IF EXISTS should parse");
+        if let Stmt::Drop(drop) = stmt {
+            assert!(drop.if_exists);
+            if let DropTarget::Sequence(name) = &drop.target {
+                assert_eq!(name, "seq1");
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Drop statement");
+        }
+    }
+
+    #[test]
+    fn test_alter_sequence_increment() {
+        let stmt = parse_statement("ALTER SEQUENCE seq1 INCREMENT = 10")
+            .expect("ALTER SEQUENCE should parse");
+        if let Stmt::Alter(alter) = stmt {
+            if let AlterTarget::Sequence { name, increment, .. } = &alter.target {
+                assert_eq!(name, "seq1");
+                assert_eq!(*increment, Some(10));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Alter statement");
+        }
+    }
+
+    #[test]
+    fn test_alter_sequence_bounds() {
+        let stmt = parse_statement("ALTER SEQUENCE seq1 MINVALUE = 0 MAXVALUE = 999999 NOCYCLE")
+            .expect("ALTER SEQUENCE with bounds should parse");
+        if let Stmt::Alter(alter) = stmt {
+            if let AlterTarget::Sequence { name, min_value, max_value, cycle, .. } = &alter.target {
+                assert_eq!(name, "seq1");
+                assert_eq!(*min_value, Some(0));
+                assert_eq!(*max_value, Some(999999));
+                assert_eq!(*cycle, Some(false));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Alter statement");
+        }
+    }
+
+    #[test]
+    fn test_alter_sequence_cycle() {
+        let stmt = parse_statement("ALTER SEQUENCE seq1 CYCLE")
+            .expect("ALTER SEQUENCE CYCLE should parse");
+        if let Stmt::Alter(alter) = stmt {
+            if let AlterTarget::Sequence { cycle, .. } = &alter.target {
+                assert_eq!(*cycle, Some(true));
+            } else {
+                panic!("expected Sequence target");
+            }
+        } else {
+            panic!("expected Alter statement");
+        }
+    }
 }
