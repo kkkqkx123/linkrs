@@ -445,11 +445,8 @@ impl GraphStorageContext {
                             }
                             let index_dir = checkpoint_paths.data_dir().join("indexes");
                             if index_dir.exists() {
-                                if let Err(e) = self
-                                    .persistent
-                                    .index_data_manager
-                                    .write()
-                                    .load(&index_dir)
+                                if let Err(e) =
+                                    self.persistent.index_data_manager.write().load(&index_dir)
                                 {
                                     log::warn!(
                                         "Failed to load indexes for incremental checkpoint {}: {}",

@@ -969,27 +969,40 @@ impl ShardedVertexTable {
                 // Apply column delta pages if any (corrupted pages are skipped internally)
                 if shard_dir.join("columns_pages").exists() {
                     if let Err(e) = table.apply_delta_pages(&shard_dir) {
-                        log::warn!("Failed to apply delta pages for shard {}: {}, falling back to base", i, e);
+                        log::warn!(
+                            "Failed to apply delta pages for shard {}: {}, falling back to base",
+                            i,
+                            e
+                        );
                     }
                 }
                 // For incremental, timestamps and id_indexer are flushed fully; reload them
                 let ts_path = shard_dir.join("timestamps.bin");
                 if ts_path.exists() {
                     if let Err(e) = table.load_timestamps(&ts_path) {
-                        log::warn!("Failed to load timestamps for shard {} from {}: {}", i, ts_path.display(), e);
+                        log::warn!(
+                            "Failed to load timestamps for shard {} from {}: {}",
+                            i,
+                            ts_path.display(),
+                            e
+                        );
                     }
                 }
                 let id_path = shard_dir.join("id_indexer.bin");
                 if id_path.exists() {
                     if let Err(e) = table.load_id_indexer(&id_path) {
-                        log::warn!("Failed to load id_indexer for shard {} from {}: {}", i, id_path.display(), e);
+                        log::warn!(
+                            "Failed to load id_indexer for shard {} from {}: {}",
+                            i,
+                            id_path.display(),
+                            e
+                        );
                     }
                 }
             }
         }
         Ok(())
     }
-
 }
 
 fn fxhash(s: &str) -> u64 {

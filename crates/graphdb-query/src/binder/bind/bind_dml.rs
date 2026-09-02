@@ -14,9 +14,7 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
 
-        Ok(BoundStatement::Pipe(BoundPipeStatement {
-            statements,
-        }))
+        Ok(BoundStatement::Pipe(BoundPipeStatement { statements }))
     }
 
     pub(crate) fn bind_set_operation(
@@ -235,9 +233,7 @@ impl Binder {
         stmt: &crate::parser::ast::SetStmt,
     ) -> DBResult<BoundStatement> {
         let assignments = Self::bind_assignments(self, &stmt.assignments)?;
-        Ok(BoundStatement::Set(BoundSet {
-            assignments,
-        }))
+        Ok(BoundStatement::Set(BoundSet { assignments }))
     }
 
     pub(crate) fn bind_remove(
@@ -249,9 +245,7 @@ impl Binder {
             .iter()
             .map(|e| self.bind_expr(e))
             .collect::<DBResult<Vec<_>>>()?;
-        Ok(BoundStatement::Remove(BoundRemove {
-            items,
-        }))
+        Ok(BoundStatement::Remove(BoundRemove { items }))
     }
 
     pub(crate) fn bind_copy(
@@ -291,10 +285,7 @@ impl Binder {
         Ok(out)
     }
 
-    fn bind_merge_pattern(
-        &mut self,
-        pattern: &Pattern,
-    ) -> DBResult<BoundMergePattern> {
+    fn bind_merge_pattern(&mut self, pattern: &Pattern) -> DBResult<BoundMergePattern> {
         match pattern {
             Pattern::Node(np) => Ok(BoundMergePattern::Node(Self::bind_pattern_vertex(np)?)),
             Pattern::Edge(ep) => {
@@ -366,9 +357,7 @@ impl Binder {
         Ok(Vec::new())
     }
 
-    pub(crate) fn convert_ast_expr_to_bound(
-        expr: &Expression,
-    ) -> DBResult<BoundExpression> {
+    pub(crate) fn convert_ast_expr_to_bound(expr: &Expression) -> DBResult<BoundExpression> {
         use graphdb_core::DataType;
         match expr {
             Expression::Literal(v) => Ok(BoundExpression::Literal(v.clone(), DataType::Unknown)),
@@ -394,7 +383,10 @@ impl Binder {
                     return_type: graphdb_core::types::semantic::ValueType::Unknown,
                 }))
             }
-            _ => Ok(BoundExpression::Variable("_".to_string(), DataType::Unknown)),
+            _ => Ok(BoundExpression::Variable(
+                "_".to_string(),
+                DataType::Unknown,
+            )),
         }
     }
 }

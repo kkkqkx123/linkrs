@@ -198,10 +198,7 @@ impl Planner for SetOperationPlanner {
         let final_node = match set_op.operation {
             crate::binder::bound::SetOperationKind::Union => {
                 let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create UnionNode: {}",
-                        e
-                    ))
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
                 })?;
                 PlanNodeEnum::Union(union_node)
             }
@@ -216,10 +213,7 @@ impl Planner for SetOperationPlanner {
             }
             crate::binder::bound::SetOperationKind::Minus => {
                 let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create MinusNode: {}",
-                        e
-                    ))
+                    PlannerError::PlanGenerationFailed(format!("Failed to create MinusNode: {}", e))
                 })?;
                 PlanNodeEnum::Minus(minus_node)
             }
@@ -284,10 +278,7 @@ impl SetOperationPlanner {
         let final_node = match set_op.operation {
             crate::binder::bound::SetOperationKind::Union => {
                 let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create UnionNode: {}",
-                        e
-                    ))
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
                 })?;
                 PlanNodeEnum::Union(union_node)
             }
@@ -302,10 +293,7 @@ impl SetOperationPlanner {
             }
             crate::binder::bound::SetOperationKind::Minus => {
                 let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create MinusNode: {}",
-                        e
-                    ))
+                    PlannerError::PlanGenerationFailed(format!("Failed to create MinusNode: {}", e))
                 })?;
                 PlanNodeEnum::Minus(minus_node)
             }

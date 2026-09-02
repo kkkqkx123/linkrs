@@ -950,8 +950,14 @@ impl SchemaManager {
         let new_cycle = cycle.unwrap_or(def.cycle);
         let current = def.current_value();
 
-        let new_def =
-            SequenceDef::new(name.to_string(), current, new_increment, new_min, new_max, new_cycle);
+        let new_def = SequenceDef::new(
+            name.to_string(),
+            current,
+            new_increment,
+            new_min,
+            new_max,
+            new_cycle,
+        );
         sequences.insert(name.to_string(), new_def);
         Ok(())
     }

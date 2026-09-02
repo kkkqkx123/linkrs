@@ -163,14 +163,11 @@ impl Planner for FetchVerticesPlanner {
             .iter()
             .filter_map(|id| {
                 let ctx_expr =
-                    crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
-                        .ok()?;
+                    crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx).ok()?;
                 let meta = ctx_expr.expression()?;
                 let expr = meta.inner();
                 Some(match expr {
-                    graphdb_core::Expression::Literal(graphdb_core::Value::Int(i)) => {
-                        i.to_string()
-                    }
+                    graphdb_core::Expression::Literal(graphdb_core::Value::Int(i)) => i.to_string(),
                     graphdb_core::Expression::Literal(graphdb_core::Value::BigInt(i)) => {
                         i.to_string()
                     }

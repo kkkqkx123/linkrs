@@ -31,12 +31,10 @@ impl QueryStage for ParseStage {
         _ctx: &QueryContext,
     ) -> Result<Self::Output, QueryPipelineError> {
         let mut parser = crate::parser::Parser::new(&input);
-        let result = parser
-            .parse()
-            .map_err(|e| QueryPipelineError::Parse {
-                source: e,
-                query_text: input.clone(),
-            })?;
+        let result = parser.parse().map_err(|e| QueryPipelineError::Parse {
+            source: e,
+            query_text: input.clone(),
+        })?;
         if parser.has_errors() {
             let errors = parser.take_errors();
             return Err(QueryPipelineError::Pipeline {
@@ -150,10 +148,7 @@ impl QueryStage for PlanStage {
 pub struct OptimizeStage;
 
 impl QueryStage for OptimizeStage {
-    type Input = (
-        crate::planning::plan::ExecutionPlan,
-        Option<String>,
-    );
+    type Input = (crate::planning::plan::ExecutionPlan, Option<String>);
     type Output = crate::planning::plan::ExecutionPlan;
 
     fn process(

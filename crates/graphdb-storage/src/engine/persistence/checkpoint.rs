@@ -509,8 +509,6 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         Ok(())
     }
 
-
-
     pub(crate) fn collect_checkpoint_files(root: &Path) -> StorageResult<Vec<CheckpointFileEntry>> {
         fn visit(
             root: &Path,
@@ -788,9 +786,6 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             files,
         ))
     }
-
-
-
 
     /// Publish a combined checkpoint manifest that atomically references the
     /// storage snapshot, outbox snapshot (if provided), and index manifests.

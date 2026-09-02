@@ -98,22 +98,22 @@ impl Planner for LookupPlanner {
         );
 
         // Convert bound where clause to ContextualExpression for index selection
-        let where_ctx = lookup.where_clause.as_ref().map(|wc| {
-            crate::binder::expr_converter::bound_expr_to_contextual(
-                &wc.condition,
-                validated.expr_context(),
-            )
-            .map_err(|e| PlannerError::PlanGenerationFailed(e))
-        }).transpose()?;
+        let where_ctx = lookup
+            .where_clause
+            .as_ref()
+            .map(|wc| {
+                crate::binder::expr_converter::bound_expr_to_contextual(
+                    &wc.condition,
+                    validated.expr_context(),
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))
+            })
+            .transpose()?;
 
         // Use metadata for index selection (same logic as transform_with_metadata)
         let (selected_index, tag_id) = if let Some(metadata_context) = metadata {
-            let selected = Self::find_suitable_index(
-                metadata_context,
-                &target_name,
-                is_edge,
-                &where_ctx,
-            );
+            let selected =
+                Self::find_suitable_index(metadata_context, &target_name, is_edge, &where_ctx);
             let tag_id = if is_edge {
                 0
             } else {
@@ -128,7 +128,15 @@ impl Planner for LookupPlanner {
         };
 
         // Build the plan using bound data
-        self.plan_lookup_bound(lookup, qctx, validated, selected_index.as_ref(), is_edge, tag_id, where_ctx)
+        self.plan_lookup_bound(
+            lookup,
+            qctx,
+            validated,
+            selected_index.as_ref(),
+            is_edge,
+            tag_id,
+            where_ctx,
+        )
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

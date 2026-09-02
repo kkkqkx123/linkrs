@@ -707,6 +707,7 @@ pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
         UnarySpec::Unwind { .. } => "Unwind",
         UnarySpec::AppendVertices { .. } => "AppendVertices",
         UnarySpec::Sample { .. } => "Sample",
+        UnarySpec::Flatten { .. } => "Flatten",
     }
 }
 

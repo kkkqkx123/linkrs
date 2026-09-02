@@ -827,7 +827,10 @@ impl VertexTable {
                 }
             }
             if !applied {
-                log::warn!("Skipping unrecognized or corrupted delta page {}", path.display());
+                log::warn!(
+                    "Skipping unrecognized or corrupted delta page {}",
+                    path.display()
+                );
             }
         }
         // After applying deltas, clear dirty marks (data now reflects persisted delta).

@@ -275,8 +275,7 @@ impl Planner for ReturnPlanner {
                             graphdb_core::Expression::Variable(ctx_expr.to_expression_string())
                         });
                     Ok(crate::planning::plan::core::nodes::SortItem::new(
-                        expression,
-                        direction,
+                        expression, direction,
                     ))
                 })
                 .collect::<Result<Vec<_>, PlannerError>>()?;

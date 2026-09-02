@@ -98,10 +98,7 @@ impl Binder {
         }
     }
 
-    fn bind_pattern_element(
-        &mut self,
-        pattern: &Pattern,
-    ) -> DBResult<BoundPatternElement> {
+    fn bind_pattern_element(&mut self, pattern: &Pattern) -> DBResult<BoundPatternElement> {
         match pattern {
             Pattern::Node(np) => Ok(BoundPatternElement::Node(BoundPatternVertex {
                 variable: np.variable.clone(),
@@ -251,15 +248,13 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::vector::CreateVectorIndex,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::CreateVectorIndex(
-            BoundCreateVectorIndex {
-                index_name: stmt.index_name.clone(),
-                schema_name: stmt.schema_name.clone(),
-                field_name: stmt.field_name.clone(),
-                config: stmt.config.clone(),
-                if_not_exists: stmt.if_not_exists,
-            },
-        ))
+        Ok(BoundStatement::CreateVectorIndex(BoundCreateVectorIndex {
+            index_name: stmt.index_name.clone(),
+            schema_name: stmt.schema_name.clone(),
+            field_name: stmt.field_name.clone(),
+            config: stmt.config.clone(),
+            if_not_exists: stmt.if_not_exists,
+        }))
     }
 
     pub(crate) fn bind_explain(
@@ -355,11 +350,10 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundYieldItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
+                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                    expression: be,
+                    alias: item.alias.clone(),
+                })
             })
             .collect::<DBResult<Vec<_>>>()?;
 
@@ -376,11 +370,10 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression)
-                            .map(|be| BoundOrderByItem {
-                                expression: be,
-                                direction: item.direction,
-                            })
+                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
+                            expression: be,
+                            direction: item.direction,
+                        })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
@@ -404,11 +397,10 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundYieldItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
+                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                    expression: be,
+                    alias: item.alias.clone(),
+                })
             })
             .collect::<DBResult<Vec<_>>>()?;
         Ok(BoundStatement::Collect(BoundCollect { items }))

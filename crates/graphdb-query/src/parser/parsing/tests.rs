@@ -690,7 +690,13 @@ mod tests {
         let stmt = parse_statement("CREATE SEQUENCE seq1").expect("CREATE SEQUENCE should parse");
         if let Stmt::Create(create) = stmt {
             assert!(!create.if_not_exists);
-            if let CreateTarget::Sequence { name, start, increment, .. } = &create.target {
+            if let CreateTarget::Sequence {
+                name,
+                start,
+                increment,
+                ..
+            } = &create.target
+            {
                 assert_eq!(name, "seq1");
                 assert_eq!(*start, None);
                 assert_eq!(*increment, None);
@@ -721,7 +727,10 @@ mod tests {
         let stmt = parse_statement("CREATE SEQUENCE seq2 INCREMENT = 5")
             .expect("CREATE SEQUENCE with INCREMENT= should parse");
         if let Stmt::Create(create) = stmt {
-            if let CreateTarget::Sequence { name, increment, .. } = &create.target {
+            if let CreateTarget::Sequence {
+                name, increment, ..
+            } = &create.target
+            {
                 assert_eq!(name, "seq2");
                 assert_eq!(*increment, Some(5));
             } else {
@@ -734,7 +743,13 @@ mod tests {
         let stmt = parse_statement("CREATE SEQUENCE seq2 MINVALUE = 1 MAXVALUE = 1000")
             .expect("CREATE SEQUENCE with MIN/MAX should parse");
         if let Stmt::Create(create) = stmt {
-            if let CreateTarget::Sequence { name, min_value, max_value, .. } = &create.target {
+            if let CreateTarget::Sequence {
+                name,
+                min_value,
+                max_value,
+                ..
+            } = &create.target
+            {
                 assert_eq!(name, "seq2");
                 assert_eq!(*min_value, Some(1));
                 assert_eq!(*max_value, Some(1000));
@@ -771,10 +786,20 @@ mod tests {
             panic!("expected Create statement");
         }
 
-        let stmt = parse_statement("CREATE SEQUENCE seq2 START = 100 INCREMENT = 5 MINVALUE = 1 MAXVALUE = 1000 CYCLE")
-            .expect("CREATE SEQUENCE with all options should parse");
+        let stmt = parse_statement(
+            "CREATE SEQUENCE seq2 START = 100 INCREMENT = 5 MINVALUE = 1 MAXVALUE = 1000 CYCLE",
+        )
+        .expect("CREATE SEQUENCE with all options should parse");
         if let Stmt::Create(create) = stmt {
-            if let CreateTarget::Sequence { name, start, increment, min_value, max_value, cycle } = &create.target {
+            if let CreateTarget::Sequence {
+                name,
+                start,
+                increment,
+                min_value,
+                max_value,
+                cycle,
+            } = &create.target
+            {
                 assert_eq!(name, "seq2");
                 assert_eq!(*start, Some(100));
                 assert_eq!(*increment, Some(5));
@@ -841,7 +866,10 @@ mod tests {
         let stmt = parse_statement("ALTER SEQUENCE seq1 INCREMENT = 10")
             .expect("ALTER SEQUENCE should parse");
         if let Stmt::Alter(alter) = stmt {
-            if let AlterTarget::Sequence { name, increment, .. } = &alter.target {
+            if let AlterTarget::Sequence {
+                name, increment, ..
+            } = &alter.target
+            {
                 assert_eq!(name, "seq1");
                 assert_eq!(*increment, Some(10));
             } else {
@@ -857,7 +885,14 @@ mod tests {
         let stmt = parse_statement("ALTER SEQUENCE seq1 MINVALUE = 0 MAXVALUE = 999999 NOCYCLE")
             .expect("ALTER SEQUENCE with bounds should parse");
         if let Stmt::Alter(alter) = stmt {
-            if let AlterTarget::Sequence { name, min_value, max_value, cycle, .. } = &alter.target {
+            if let AlterTarget::Sequence {
+                name,
+                min_value,
+                max_value,
+                cycle,
+                ..
+            } = &alter.target
+            {
                 assert_eq!(name, "seq1");
                 assert_eq!(*min_value, Some(0));
                 assert_eq!(*max_value, Some(999999));

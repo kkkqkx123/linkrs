@@ -102,8 +102,7 @@ impl SequenceDef {
 
     /// Reset to the initial start value
     pub fn reset(&self) {
-        self.current_value
-            .store(self.start_value, Ordering::SeqCst);
+        self.current_value.store(self.start_value, Ordering::SeqCst);
     }
 
     /// Set the current value directly

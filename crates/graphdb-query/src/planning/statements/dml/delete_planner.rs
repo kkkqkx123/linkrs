@@ -93,10 +93,7 @@ impl Planner for DeletePlanner {
                 };
                 PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(next_node_id(), info))
             }
-            crate::binder::bound::BoundDeleteTarget::Edges {
-                edge_type,
-                edges,
-            } => {
+            crate::binder::bound::BoundDeleteTarget::Edges { edge_type, edges } => {
                 let converted_edges: Vec<(
                     graphdb_core::types::ContextualExpression,
                     graphdb_core::types::ContextualExpression,
@@ -104,14 +101,12 @@ impl Planner for DeletePlanner {
                 )> = edges
                     .iter()
                     .map(|(src, dst, rank)| {
-                        let s = crate::binder::expr_converter::bound_expr_to_contextual(
-                            src, &expr_ctx,
-                        )
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
-                        let d = crate::binder::expr_converter::bound_expr_to_contextual(
-                            dst, &expr_ctx,
-                        )
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        let s =
+                            crate::binder::expr_converter::bound_expr_to_contextual(src, &expr_ctx)
+                                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        let d =
+                            crate::binder::expr_converter::bound_expr_to_contextual(dst, &expr_ctx)
+                                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
                         let r = rank
                             .as_ref()
                             .map(|rk| {

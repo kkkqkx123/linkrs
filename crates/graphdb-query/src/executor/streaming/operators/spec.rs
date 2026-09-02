@@ -225,6 +225,9 @@ pub enum UnarySpec {
     Sample {
         count: u64,
     },
+    Flatten {
+        group_pos: u32,
+    },
 }
 
 impl UnarySpec {

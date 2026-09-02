@@ -1,10 +1,10 @@
 use std::fmt;
 
 use crate::binder::BoundStatement;
-use crate::planning::planner::PlannerError;
-use crate::parser::core::error::ParseError;
-use crate::optimizer::error::OptimizeError;
 use crate::executor::build_error::PlanBuildError;
+use crate::optimizer::error::OptimizeError;
+use crate::parser::core::error::ParseError;
+use crate::planning::planner::PlannerError;
 
 /// Classification of the statement being processed, used for
 /// diagnostic context in pipeline errors.
@@ -121,10 +121,7 @@ pub enum QueryPipelineError {
 impl fmt::Display for QueryPipelineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            QueryPipelineError::Parse {
-                source,
-                query_text,
-            } => {
+            QueryPipelineError::Parse { source, query_text } => {
                 write!(
                     f,
                     "Parse error in query {:?}: {}",
@@ -163,11 +160,7 @@ impl fmt::Display for QueryPipelineError {
                 source,
                 executor_type,
             } => {
-                write!(
-                    f,
-                    "Execution error ({}): {}",
-                    executor_type, source
-                )
+                write!(f, "Execution error ({}): {}", executor_type, source)
             }
             QueryPipelineError::Pipeline { phase, message } => {
                 write!(f, "{} phase error: {}", phase, message)
@@ -241,9 +234,10 @@ impl From<QueryPipelineError> for graphdb_core::error::DBError {
                 PipelinePhase::Execute => QueryPhase::Execute,
             },
         };
-        graphdb_core::error::DBError::from(
-            graphdb_core::error::QueryError::pipeline_error(phase, err.to_string()),
-        )
+        graphdb_core::error::DBError::from(graphdb_core::error::QueryError::pipeline_error(
+            phase,
+            err.to_string(),
+        ))
     }
 }
 

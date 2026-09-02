@@ -144,8 +144,7 @@ impl Planner for SetPlanner {
                         &expr_ctx,
                     )
                     .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
-                    variable_assignments
-                        .push((assignment.property.clone(), value));
+                    variable_assignments.push((assignment.property.clone(), value));
                 }
             } else {
                 let value = crate::binder::expr_converter::bound_expr_to_contextual(
@@ -153,15 +152,12 @@ impl Planner for SetPlanner {
                     &expr_ctx,
                 )
                 .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
-                variable_assignments
-                    .push((assignment.property.clone(), value));
+                variable_assignments.push((assignment.property.clone(), value));
             }
         }
 
         if !vertex_updates.is_empty() {
-            let update_info = UpdateTargetType::Vertex(
-                vertex_updates.into_iter().next().unwrap(),
-            );
+            let update_info = UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap());
             let update_node = UpdateNode::new(next_node_id(), update_info);
             let update_node_enum = PlanNodeEnum::Update(update_node);
             let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));

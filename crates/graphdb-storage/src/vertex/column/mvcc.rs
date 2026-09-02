@@ -235,8 +235,6 @@ impl Column {
         })
     }
 
-
-
     /// Garbage-collect version-chain entries no longer visible to any active
     /// snapshot at `min_active_snapshot_ts`. Returns the number of entries
     /// removed. Keeps the latest entry that ends at or before the cutoff when

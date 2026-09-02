@@ -297,18 +297,12 @@ impl Planner for WithPlanner {
         current_node = PlanNodeEnum::Project(project_node);
 
         if let Some(ref condition) = with_stmt.condition {
-            let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-                condition,
-                &expr_ctx,
-            )
-            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
-            let filter_node =
-                FilterNode::new(current_node.clone(), ctx_expr).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create FilterNode: {}",
-                        e
-                    ))
-                })?;
+            let ctx_expr =
+                crate::binder::expr_converter::bound_expr_to_contextual(condition, &expr_ctx)
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            let filter_node = FilterNode::new(current_node.clone(), ctx_expr).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
+            })?;
             current_node = PlanNodeEnum::Filter(filter_node);
         }
 

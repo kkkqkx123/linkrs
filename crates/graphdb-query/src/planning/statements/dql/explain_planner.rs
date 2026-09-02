@@ -66,9 +66,7 @@ impl ExplainPlanner {
 
         let inner_plan = inner_planner.transform(&inner_validated, qctx)?;
 
-        log::debug!(
-            "ExplainPlanner: inner plan generated via AST path",
-        );
+        log::debug!("ExplainPlanner: inner plan generated via AST path",);
 
         Ok(inner_plan)
     }

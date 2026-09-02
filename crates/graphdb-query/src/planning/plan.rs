@@ -1,6 +1,8 @@
 pub mod core;
 pub mod execution_plan;
 pub mod explain;
+pub mod factorization;
+pub mod factorization_compute;
 pub mod logical;
 pub mod logical_plan;
 pub mod partition_spec;

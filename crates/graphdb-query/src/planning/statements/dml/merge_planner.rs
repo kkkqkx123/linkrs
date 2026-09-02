@@ -413,10 +413,7 @@ impl Planner for MergePlanner {
                     let arg_node_enum = PlanNodeEnum::Argument(arg_node);
                     let insert_node = InsertVerticesNode::new(next_node_id(), vertex_info);
                     let insert_node_enum = PlanNodeEnum::InsertVertices(insert_node);
-                    return Ok(SubPlan::new(
-                        Some(insert_node_enum),
-                        Some(arg_node_enum),
-                    ));
+                    return Ok(SubPlan::new(Some(insert_node_enum), Some(arg_node_enum)));
                 }
 
                 let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
@@ -425,8 +422,11 @@ impl Planner for MergePlanner {
                 let mut select_node = SelectNode::new(next_node_id(), condition);
 
                 if has_on_match {
-                    let update_info =
-                        Self::build_update_info_from_bound(&merge.on_match, space_name.clone(), &expr_ctx)?;
+                    let update_info = Self::build_update_info_from_bound(
+                        &merge.on_match,
+                        space_name.clone(),
+                        &expr_ctx,
+                    )?;
                     let update_node =
                         UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(update_info));
                     select_node.set_if_branch(PlanNodeEnum::Update(update_node));
@@ -435,8 +435,11 @@ impl Planner for MergePlanner {
                 let insert_node = InsertVerticesNode::new(next_node_id(), vertex_info);
                 let mut current_node = PlanNodeEnum::InsertVertices(insert_node);
                 if has_on_create {
-                    let update_info =
-                        Self::build_update_info_from_bound(&merge.on_create, space_name.clone(), &expr_ctx)?;
+                    let update_info = Self::build_update_info_from_bound(
+                        &merge.on_create,
+                        space_name.clone(),
+                        &expr_ctx,
+                    )?;
                     let update_node =
                         UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(update_info));
                     current_node = PlanNodeEnum::Update(update_node);

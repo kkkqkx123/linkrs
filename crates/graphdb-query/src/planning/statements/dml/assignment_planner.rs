@@ -49,8 +49,10 @@ impl Planner for AssignmentPlanner {
                         graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
                     ),
                 );
-                let fallback_validated =
-                    ValidatedStatement::new(std::sync::Arc::new(ast), validated.validation_info.clone());
+                let fallback_validated = ValidatedStatement::new(
+                    std::sync::Arc::new(ast),
+                    validated.validation_info.clone(),
+                );
                 self.transform(&fallback_validated, qctx)
             }
             _ => self.transform(validated, qctx),

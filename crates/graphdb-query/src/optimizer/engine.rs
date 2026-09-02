@@ -420,6 +420,11 @@ impl OptimizerEngine {
         // `enable_feedback`; cheap when no history is present.
         self.maybe_apply_feedback();
 
+        // Factorization: remove factorization before heuristic passes so they
+        // operate on a flat view. Mirrors `RemoveFactorizationRewriter` at
+        // `optimizer.cpp:1`.
+        current_plan = self.apply_remove_factorization(current_plan);
+
         // Heuristic optimization (always executed).
         if self.enable_heuristic {
             log::debug!("Starting heuristic optimization");
@@ -432,6 +437,10 @@ impl OptimizerEngine {
         log::debug!("Starting cost-based optimization");
         current_plan = self.apply_cost_based(current_plan, space)?;
         log::debug!("Cost-based optimization completed successfully");
+
+        // Factorization: re-insert flatten operators after all optimizations.
+        // Mirrors `FactorizationRewriter` at `optimizer.cpp:4`.
+        current_plan = self.apply_factorization(current_plan);
 
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
@@ -929,6 +938,32 @@ impl OptimizerEngine {
             // Leaf / unsupported nodes: return unchanged.
             _ => node.clone(),
         }
+    }
+
+    fn apply_remove_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        if let Some(logical) = plan.logical_plan.clone() {
+            let mut root = logical.root.clone();
+            crate::optimizer::factorization::RemoveFactorizationRewriter::new().rewrite(&mut root);
+            let mut updated = logical.clone();
+            updated.root = root;
+            plan.set_logical_plan(updated);
+            plan.cbo_notes
+                .push("factorization: removed LogicalFlatten".to_string());
+        }
+        plan
+    }
+
+    fn apply_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        if let Some(logical) = plan.logical_plan.clone() {
+            let mut root = logical.root.clone();
+            crate::optimizer::factorization::FactorizationRewriter::new().rewrite(&mut root);
+            let mut updated = logical.clone();
+            updated.root = root;
+            plan.set_logical_plan(updated);
+            plan.cbo_notes
+                .push("factorization: re-inserted LogicalFlatten".to_string());
+        }
+        plan
     }
 
     /// Get the heuristic batch optimizer

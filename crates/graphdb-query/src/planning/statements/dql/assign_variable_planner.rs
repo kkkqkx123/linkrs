@@ -81,11 +81,9 @@ impl Planner for AssignVariablePlanner {
         let expr_ctx = Arc::new(
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
-        let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-            &assign.expression,
-            &expr_ctx,
-        )
-        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+        let ctx_expr =
+            crate::binder::expr_converter::bound_expr_to_contextual(&assign.expression, &expr_ctx)
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
 
         let start_node = StartNode::new();
         let current_node = PlanNodeEnum::Start(start_node.clone());

@@ -58,6 +58,7 @@ pub use crate::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
 pub use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+pub use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 pub use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 pub use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 pub use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
@@ -143,6 +144,7 @@ pub enum PlanNodeEnum {
     Limit(LimitNode),
     TopN(TopNNode),
     Sample(SampleNode),
+    Flatten(FlattenNode),
     Dedup(DedupNode),
     Aggregate(AggregateNode),
     Window(WindowNode),
@@ -280,6 +282,7 @@ crate::define_enum_is_methods! {
     (Limit, is_limit),
     (TopN, is_topn),
     (Sample, is_sample),
+    (Flatten, is_flatten),
     (Dedup, is_dedup),
     (Aggregate, is_aggregate),
     (Window, is_window),
@@ -380,6 +383,7 @@ crate::define_enum_as_methods! {
     (Limit, as_limit, LimitNode),
     (TopN, as_topn, TopNNode),
     (Sample, as_sample, SampleNode),
+    (Flatten, as_flatten, FlattenNode),
     (Dedup, as_dedup, DedupNode),
     (Aggregate, as_aggregate, AggregateNode),
     (Window, as_window, WindowNode),
@@ -475,7 +479,6 @@ crate::define_enum_as_mut_methods! {
     (Start, as_start_mut, StartNode),
     (GetVertices, as_get_vertices_mut, GetVerticesNode),
     (GetEdges, as_get_edges_mut, GetEdgesNode),
-    (GetNeighbors, as_get_neighbors_mut, GetNeighborsNode),
     (ScanVertices, as_scan_vertices_mut, ScanVerticesNode),
     (ScanEdges, as_scan_edges_mut, ScanEdgesNode),
     (IndexScan, as_index_scan_mut, IndexScanNode),
@@ -486,6 +489,7 @@ crate::define_enum_as_mut_methods! {
     (Limit, as_limit_mut, LimitNode),
     (TopN, as_topn_mut, TopNNode),
     (Sample, as_sample_mut, SampleNode),
+    (Flatten, as_flatten_mut, FlattenNode),
     (Dedup, as_dedup_mut, DedupNode),
     (Aggregate, as_aggregate_mut, AggregateNode),
     (Window, as_window_mut, WindowNode),
@@ -597,6 +601,7 @@ crate::define_all_plan_nodes! {
     (Limit, LimitNode, PlanNodeCategory::Operation, "Limit"),
     (TopN, TopNNode, PlanNodeCategory::Operation, "TopN"),
     (Sample, SampleNode, PlanNodeCategory::Operation, "Sample"),
+    (Flatten, FlattenNode, PlanNodeCategory::Operation, "Flatten"),
     (Dedup, DedupNode, PlanNodeCategory::Operation, "Dedup"),
     (Aggregate, AggregateNode, PlanNodeCategory::Operation, "Aggregate"),
     (Window, WindowNode, PlanNodeCategory::Operation, "Window function"),
@@ -742,13 +747,14 @@ mod tests {
         "ScanVertices",
         "ScanEdges",
         "IndexScan",
-        // Operation (9)
+        // Operation (10)
         "Project",
         "Filter",
         "Sort",
         "Limit",
         "TopN",
         "Sample",
+        "Flatten",
         "Dedup",
         "Aggregate",
         "Window",
@@ -841,6 +847,7 @@ mod tests {
         "Limit",
         "TopN",
         "Sample",
+        "Flatten",
         "Dedup",
         "Aggregate",
         "Window",
@@ -913,11 +920,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 80 variants. With `qdrant`: 83 variants.
+    /// Default build: 81 variants. With `qdrant`: 84 variants.
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 80;
+    const EXPECTED_VARIANT_COUNT: usize = 81;
     #[cfg(feature = "vector")]
-    const EXPECTED_VARIANT_COUNT: usize = 83;
+    const EXPECTED_VARIANT_COUNT: usize = 84;
 
     #[test]
     fn variant_count_matches_documented_number() {

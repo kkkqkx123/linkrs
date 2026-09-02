@@ -15,6 +15,8 @@ pub mod context;
 pub mod engine;
 pub mod executor;
 
+pub mod factorized_table;
+pub mod factorized_table_utils;
 pub mod helpers;
 pub mod instance;
 pub mod interner;

@@ -221,6 +221,14 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_unwind_spec(
     })
 }
 
+pub(in crate::executor::streaming::plan::arena_builder) fn build_flatten_spec(
+    node: &crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode,
+) -> Result<UnarySpec, PlanBuildError> {
+    Ok(UnarySpec::Flatten {
+        group_pos: node.group_pos(),
+    })
+}
+
 // ── Blocking spec builders ────────────────────────────────────────────────────
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_sort_spec(

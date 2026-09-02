@@ -1,8 +1,8 @@
 #![allow(clippy::arc_with_non_send_sync)]
 
 mod compiler;
-pub mod dml_cache;
 mod diagnostics;
+pub mod dml_cache;
 mod execution;
 mod frontend;
 mod prepared;

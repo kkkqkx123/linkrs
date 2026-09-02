@@ -802,9 +802,7 @@ fn execute_union_value(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_union_tag(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "union_tag requires 1 argument",
-        ));
+        return Err(ExpressionError::type_error("union_tag requires 1 argument"));
     }
     match &args[0] {
         Value::Map(m) => {
@@ -813,9 +811,7 @@ fn execute_union_tag(args: &[Value]) -> Result<Value, ExpressionError> {
                 Some(Value::Int(tag)) => Ok(Value::Int(*tag)),
                 Some(Value::SmallInt(tag)) => Ok(Value::Int(*tag as i32)),
                 Some(Value::BigInt(tag)) => Ok(Value::Int(*tag as i32)),
-                Some(_) => Err(ExpressionError::type_error(
-                    "union tag must be an integer",
-                )),
+                Some(_) => Err(ExpressionError::type_error("union tag must be an integer")),
                 None => Err(ExpressionError::type_error(
                     "not a union value: missing __tag",
                 )),

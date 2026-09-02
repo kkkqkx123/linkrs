@@ -70,16 +70,14 @@ impl Planner for RemovePlanner {
                 crate::binder::bound::BoundExpression::Label { .. } => "tag",
                 _ => "property",
             };
-            let ctx_expr =
-                crate::binder::expr_converter::bound_expr_to_contextual(item, &expr_ctx)
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(item, &expr_ctx)
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
             remove_items.push((item_type.to_string(), ctx_expr));
         }
 
-        let remove_node =
-            RemoveNode::new(arg_node_enum.clone(), remove_items).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create RemoveNode: {}", e))
-            })?;
+        let remove_node = RemoveNode::new(arg_node_enum.clone(), remove_items).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create RemoveNode: {}", e))
+        })?;
 
         let remove_node_enum = PlanNodeEnum::Remove(remove_node);
 

@@ -1,5 +1,5 @@
 use super::*;
-use graphdb_core::value::{DateValue, DateTimeValue, NullType};
+use graphdb_core::value::{DateTimeValue, DateValue, NullType};
 use graphdb_core::Value;
 
 #[test]

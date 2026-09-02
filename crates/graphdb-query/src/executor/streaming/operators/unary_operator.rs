@@ -72,6 +72,13 @@ pub enum UnaryOperatorKind {
         count: u64,
         consumed: u64,
     },
+    Flatten {
+        group_pos: u32,
+        current_idx: usize,
+        size_to_flatten: usize,
+        saved_sel_vector: Option<Vec<usize>>,
+        buffered_chunk: Option<DataChunk>,
+    },
 }
 
 /// Unary operator.
@@ -153,6 +160,13 @@ impl UnaryOperator {
             super::spec::UnarySpec::Sample { count } => UnaryOperatorKind::Sample {
                 count: *count,
                 consumed: 0,
+            },
+            super::spec::UnarySpec::Flatten { group_pos } => UnaryOperatorKind::Flatten {
+                group_pos: *group_pos,
+                current_idx: 0,
+                size_to_flatten: 0,
+                saved_sel_vector: None,
+                buffered_chunk: None,
             },
         };
         Self::new(kind, output_layout)
@@ -703,6 +717,19 @@ impl UnaryOperator {
                     }
                 }
             }
+            UnaryOperatorKind::Flatten {
+                group_pos: _,
+                current_idx,
+                size_to_flatten,
+                saved_sel_vector,
+                buffered_chunk,
+            } => crate::executor::streaming::operators::flatten::flatten_next_inner(
+                current_idx,
+                size_to_flatten,
+                saved_sel_vector,
+                buffered_chunk,
+                input,
+            ),
         }
     }
 
@@ -741,6 +768,18 @@ impl UnaryOperator {
                 *input_done = false;
             }
             UnaryOperatorKind::Sample { consumed, .. } => *consumed = 0,
+            UnaryOperatorKind::Flatten {
+                current_idx,
+                size_to_flatten,
+                saved_sel_vector,
+                buffered_chunk,
+                ..
+            } => {
+                *current_idx = 0;
+                *size_to_flatten = 0;
+                *saved_sel_vector = None;
+                *buffered_chunk = None;
+            }
             UnaryOperatorKind::Filter { .. }
             | UnaryOperatorKind::Project { .. }
             | UnaryOperatorKind::Assign { .. }

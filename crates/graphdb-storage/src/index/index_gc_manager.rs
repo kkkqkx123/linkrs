@@ -202,9 +202,6 @@ impl IndexGcManager {
         stats
     }
 
-
-
-
     /// Run aggressive GC until no more tombstones can be removed
     ///
     /// Returns the total number of entries removed.

@@ -113,10 +113,7 @@ pub trait Planner: std::fmt::Debug {
     /// validated statement). The default implementation returns
     /// `UnsupportedOperation` so that planners which have not yet been
     /// migrated to the bound pipeline continue to work unchanged.
-    fn plan_bound(
-        &mut self,
-        _ctx: &PlanContext<'_>,
-    ) -> Result<SubPlan, PlannerError> {
+    fn plan_bound(&mut self, _ctx: &PlanContext<'_>) -> Result<SubPlan, PlannerError> {
         Err(PlannerError::UnsupportedOperation(
             "plan_bound not yet implemented for this planner".to_string(),
         ))
@@ -363,9 +360,7 @@ impl PlannerEnum {
             BoundStatement::Show(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::ShowCreate(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Desc(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
-            BoundStatement::ClearSpace(_) => {
-                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
-            }
+            BoundStatement::ClearSpace(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::CreateUser(_)
             | BoundStatement::DropUser(_)
             | BoundStatement::AlterUser(_) => {
@@ -384,12 +379,8 @@ impl PlannerEnum {
                     None
                 }
             }
-            BoundStatement::Explain(_) => {
-                Some(PlannerEnum::Explain(ExplainPlanner::new()))
-            }
-            BoundStatement::Profile(_) => {
-                Some(PlannerEnum::Explain(ExplainPlanner::new_profile()))
-            }
+            BoundStatement::Explain(_) => Some(PlannerEnum::Explain(ExplainPlanner::new())),
+            BoundStatement::Profile(_) => Some(PlannerEnum::Explain(ExplainPlanner::new_profile())),
             BoundStatement::BeginTransaction(_)
             | BoundStatement::Commit(_)
             | BoundStatement::Rollback(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),

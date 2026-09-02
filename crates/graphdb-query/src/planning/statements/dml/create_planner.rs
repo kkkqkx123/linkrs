@@ -166,13 +166,10 @@ impl Planner for CreatePlanner {
 
         let (insert_node, created_count) = match &create.target {
             BoundCreateTarget::Node {
-                labels,
-                properties,
-                ..
+                labels, properties, ..
             } => {
                 let props = Self::convert_bound_properties(properties.as_deref(), &expr_ctx)?;
-                let info =
-                    self.build_vertex_insert_info(space_name, labels, &props, &expr_ctx)?;
+                let info = self.build_vertex_insert_info(space_name, labels, &props, &expr_ctx)?;
                 (
                     PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
                     1,
@@ -277,9 +274,10 @@ impl Planner for CreatePlanner {
 
                 let mut insert_nodes = Vec::new();
                 for info in vertex_infos {
-                    insert_nodes.push(PlanNodeEnum::InsertVertices(
-                        InsertVerticesNode::new(next_node_id(), info),
-                    ));
+                    insert_nodes.push(PlanNodeEnum::InsertVertices(InsertVerticesNode::new(
+                        next_node_id(),
+                        info,
+                    )));
                 }
                 for info in edge_infos {
                     insert_nodes.push(PlanNodeEnum::InsertEdges(InsertEdgesNode::new(

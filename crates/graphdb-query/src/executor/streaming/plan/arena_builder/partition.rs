@@ -967,7 +967,10 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
         let op = chain[i - 1];
         if matches!(
             op,
-            PlanNodeEnum::Filter(_) | PlanNodeEnum::Project(_) | PlanNodeEnum::ExpandAll(_)
+            PlanNodeEnum::Filter(_)
+                | PlanNodeEnum::Project(_)
+                | PlanNodeEnum::Flatten(_)
+                | PlanNodeEnum::ExpandAll(_)
         ) {
             local.push(op);
             i -= 1;
@@ -1008,6 +1011,7 @@ fn collect_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) 
         PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_) => true,
         PlanNodeEnum::Filter(filter) => collect_chain(filter.input(), chain),
         PlanNodeEnum::Project(project) => collect_chain(project.input(), chain),
+        PlanNodeEnum::Flatten(flatten) => collect_chain(flatten.input(), chain),
         PlanNodeEnum::Limit(limit) => collect_chain(limit.input(), chain),
         PlanNodeEnum::Sort(sort) => collect_chain(sort.input(), chain),
         PlanNodeEnum::Aggregate(agg) => collect_chain(agg.input(), chain),

@@ -403,9 +403,7 @@ impl DdlOperator {
             DdlOperatorKind::MigrateRollback { .. } => {
                 migration_executor::execute_migrate_rollback(self)
             }
-            DdlOperatorKind::SequenceManage { .. } => {
-                self.execute_sequence_manage()
-            }
+            DdlOperatorKind::SequenceManage { .. } => self.execute_sequence_manage(),
         }
     }
 
@@ -463,17 +461,11 @@ impl DdlOperator {
                 SequenceManageCommand::Drop {
                     seq_name,
                     if_exists,
-                } => {
-                    Ok(Some(make_manage_result(
-                        "drop",
-                        Some(seq_name),
-                        if *if_exists {
-                            "if_exists"
-                        } else {
-                            "ok"
-                        },
-                    )))
-                }
+                } => Ok(Some(make_manage_result(
+                    "drop",
+                    Some(seq_name),
+                    if *if_exists { "if_exists" } else { "ok" },
+                ))),
             }
         } else {
             unreachable!("execute_sequence_manage called with non-SequenceManage kind")

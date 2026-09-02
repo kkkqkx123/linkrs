@@ -49,6 +49,7 @@ pub mod cost;
 pub mod decision;
 pub mod engine;
 pub mod error;
+pub mod factorization;
 pub mod partitioning;
 pub mod stats;
 

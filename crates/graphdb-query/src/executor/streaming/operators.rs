@@ -10,6 +10,7 @@ pub mod blocking;
 pub mod copy;
 pub mod ddl_operator;
 pub mod exchange_operator;
+pub mod flatten;
 pub mod fulltext_operator;
 pub mod gather_operator;
 pub mod graph_operator;

@@ -1068,5 +1068,21 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             node.set_col_names(n.col_names);
             PlanNodeEnum::VectorMatch(node)
         }
+
+        LogicalNodeEnum::Flatten(n) => {
+            let input = convert_logical_to_physical(*n.input.expect("Flatten missing input"));
+            let mut node =
+                crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode::new(
+                    input,
+                    n.group_pos,
+                )
+                .expect("Failed to construct FlattenNode");
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            node.set_col_names(n.col_names);
+            node.set_column_types(n.column_types);
+            PlanNodeEnum::Flatten(node)
+        }
     }
 }

@@ -20,6 +20,7 @@ use super::logical_nodes::control_flow::{
     LogicalArgumentNode, LogicalBeginTransactionNode, LogicalCommitNode, LogicalLoopNode,
     LogicalPassThroughNode, LogicalRollbackNode, LogicalSelectNode,
 };
+use super::logical_nodes::flatten::LogicalFlattenNode;
 use super::logical_nodes::graph_ops::{
     LogicalApplyNode, LogicalAssignNode, LogicalCorrelatedApplyNode, LogicalDataCollectNode,
     LogicalIntersectNode, LogicalMaterializeNode, LogicalMinusNode, LogicalPatternApplyNode,
@@ -123,6 +124,9 @@ pub enum LogicalNodeEnum {
     VectorLookup(LogicalVectorLookupNode),
     #[cfg(feature = "vector")]
     VectorMatch(LogicalVectorMatchNode),
+
+    // Factorization
+    Flatten(LogicalFlattenNode),
 }
 
 impl LogicalNodeEnum {
@@ -187,6 +191,7 @@ impl LogicalNodeEnum {
             Self::VectorLookup(n) => n.id(),
             #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.id(),
+            Self::Flatten(n) => n.id(),
         }
     }
 
@@ -251,6 +256,7 @@ impl LogicalNodeEnum {
             Self::VectorLookup(_) => "VectorLookup",
             #[cfg(feature = "vector")]
             Self::VectorMatch(_) => "VectorMatch",
+            Self::Flatten(_) => "Flatten",
         }
     }
 
@@ -315,6 +321,7 @@ impl LogicalNodeEnum {
             Self::VectorLookup(n) => n.col_names(),
             #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.col_names(),
+            Self::Flatten(n) => n.col_names(),
         }
     }
 }

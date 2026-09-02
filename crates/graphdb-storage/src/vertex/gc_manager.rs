@@ -142,9 +142,6 @@ impl VertexGcManager {
         total_removed
     }
 
-
-
-
     /// Start the background GC task on the shared thread pool.
     ///
     /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task

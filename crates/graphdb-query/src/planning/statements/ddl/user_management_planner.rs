@@ -60,11 +60,9 @@ impl Planner for UserManagementPlanner {
                 PlanNodeEnum::UserManage(UserManageNode::Alter(node))
             }
             BoundStatement::DropUser(drop) => {
-                let node = crate::planning::plan::core::nodes::DropUserNode::new(
-                    3,
-                    drop.username.clone(),
-                )
-                .with_if_exists(drop.if_exists);
+                let node =
+                    crate::planning::plan::core::nodes::DropUserNode::new(3, drop.username.clone())
+                        .with_if_exists(drop.if_exists);
                 PlanNodeEnum::UserManage(UserManageNode::Drop(node))
             }
             _ => {

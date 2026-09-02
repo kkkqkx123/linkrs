@@ -150,6 +150,18 @@ impl ArenaPlanAssembler {
                 let spec = build_sample_spec(sample_node)?;
                 Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
+            PlanNodeEnum::Flatten(flatten_node) => {
+                let (child_fid, _) = Self::convert_node(
+                    flatten_node.input(),
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    exec_ctx,
+                )?;
+                let spec = build_flatten_spec(flatten_node)?;
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
+            }
             PlanNodeEnum::Remove(remove_node) => {
                 let (child_fid, _) = Self::convert_node(
                     remove_node.input(),

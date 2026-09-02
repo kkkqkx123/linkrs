@@ -69,19 +69,16 @@ impl Planner for FilterPlanner {
         let expr_ctx = Arc::new(
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
-        let condition = crate::binder::expr_converter::bound_expr_to_contextual(
-            &filter.condition,
-            &expr_ctx,
-        )
-        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+        let condition =
+            crate::binder::expr_converter::bound_expr_to_contextual(&filter.condition, &expr_ctx)
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
 
         let start_node = StartNode::new();
         let start_enum = PlanNodeEnum::Start(start_node);
 
-        let filter_node =
-            FilterNode::new(start_enum.clone(), condition).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
-            })?;
+        let filter_node = FilterNode::new(start_enum.clone(), condition).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
+        })?;
 
         let sub_plan = SubPlan::new(Some(PlanNodeEnum::Filter(filter_node)), Some(start_enum));
         Ok(sub_plan)

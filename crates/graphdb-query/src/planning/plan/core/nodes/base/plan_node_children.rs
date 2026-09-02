@@ -62,6 +62,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::Sample(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
+            PlanNodeEnum::Flatten(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
             PlanNodeEnum::Dedup(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }

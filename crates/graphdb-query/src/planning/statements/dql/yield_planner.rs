@@ -192,18 +192,12 @@ impl Planner for YieldPlanner {
         current_node = PlanNodeEnum::Project(project_node);
 
         if let Some(where_clause) = &yield_stmt.where_clause {
-            let condition = crate::binder::expr_converter::bound_expr_to_contextual(
-                where_clause,
-                &expr_ctx,
-            )
-            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
-            let filter_node =
-                FilterNode::new(current_node.clone(), condition).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create FilterNode: {}",
-                        e
-                    ))
-                })?;
+            let condition =
+                crate::binder::expr_converter::bound_expr_to_contextual(where_clause, &expr_ctx)
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            let filter_node = FilterNode::new(current_node.clone(), condition).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
+            })?;
             current_node = PlanNodeEnum::Filter(filter_node);
         }
 
@@ -227,9 +221,7 @@ impl Planner for YieldPlanner {
                         .expression()
                         .map(|e| e.inner().clone())
                         .unwrap_or_else(|| {
-                            graphdb_core::Expression::Variable(
-                                ctx_expr.to_expression_string(),
-                            )
+                            graphdb_core::Expression::Variable(ctx_expr.to_expression_string())
                         });
                     Ok(crate::planning::plan::core::nodes::SortItem::new(
                         raw_expr,

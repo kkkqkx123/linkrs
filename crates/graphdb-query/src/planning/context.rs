@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::binder::BoundStatement;
 use crate::binder::validation::ValidatedStatement;
+use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
 use crate::QueryContext;
 

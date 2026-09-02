@@ -242,9 +242,7 @@ impl Planner for GoPlanner {
         let first_from = &go_stmt.from[0];
         let (use_start_node, from_var) = match first_from {
             crate::binder::bound::BoundExpression::Literal(_, _) => (true, "v".to_string()),
-            crate::binder::bound::BoundExpression::Variable(name, _) => {
-                (false, name.clone())
-            }
+            crate::binder::bound::BoundExpression::Variable(name, _) => (false, name.clone()),
             _ => (false, "v".to_string()),
         };
 
@@ -335,7 +333,8 @@ impl Planner for GoPlanner {
             });
         }
 
-        let project_columns = self.build_yield_columns_from_bound(go_stmt, validated.expr_context())?;
+        let project_columns =
+            self.build_yield_columns_from_bound(go_stmt, validated.expr_context())?;
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),

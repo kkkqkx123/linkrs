@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::StorageError;
 use crate::wal::redo::UpdateSequenceRedo;
 use crate::wal::traits::WalWriter;
 use crate::wal::types::WalOpType;
+use crate::StorageError;
 
 use super::sequence::SequenceDef;
 

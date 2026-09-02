@@ -46,7 +46,8 @@ pub use crate::planning::plan::core::nodes::join::join_node::{
 pub use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 pub use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
-pub use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
+pub use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
+use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
 pub use crate::planning::plan::core::nodes::traversal::path_algorithms::{
     AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
 };
@@ -108,6 +109,7 @@ pub trait PlanNodeVisitor {
     impl_visitor_methods!(
         Filter, FilterNode, visit_filter;
         Aggregate, AggregateNode, visit_aggregate;
+        Flatten, FlattenNode, visit_flatten;
         Window, WindowNode, visit_window;
         Dedup, DedupNode, visit_dedup;
     );
@@ -236,6 +238,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::BiExpand(node) => visitor.visit_bi_expand(node),
             PlanNodeEnum::BiTraverse(node) => visitor.visit_bi_traverse(node),
             PlanNodeEnum::Filter(node) => visitor.visit_filter(node),
+            PlanNodeEnum::Flatten(node) => visitor.visit_flatten(node),
             PlanNodeEnum::Aggregate(node) => visitor.visit_aggregate(node),
             PlanNodeEnum::Window(node) => visitor.visit_window(node),
             PlanNodeEnum::Argument(node) => visitor.visit_argument(node),

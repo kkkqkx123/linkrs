@@ -43,6 +43,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             UnaryOperatorKind::Unwind { .. } => "Unwind",
             UnaryOperatorKind::AppendVertices { .. } => "AppendVertices",
             UnaryOperatorKind::Sample { .. } => "Sample",
+            UnaryOperatorKind::Flatten { .. } => "Flatten",
         },
         Txn(_, _, op) => match &op.kind {
             TxnOperatorKind::BeginTransaction { .. } => "BeginTransaction",
