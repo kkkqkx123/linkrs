@@ -3,12 +3,17 @@
 //! The `AggregateNode` is used to perform aggregation operations on the input data.
 
 use crate::define_plan_node_with_deps;
+use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
 
 define_plan_node_with_deps! {
     pub struct AggregateNode {
         group_keys: Vec<String>,
+        // Pass-through for lossless logical <-> physical round-trip.
+        // Execution still uses `group_keys` strings; this field preserves
+        // the authoritative `ContextualExpression` with its `ExpressionId`.
+        group_key_exprs: Option<Vec<ContextualExpression>>,
         aggregation_functions: Vec<AggregateFunction>,
         // Parameter expressions per aggregate function, parallel to
         // `aggregation_functions`. Each entry is the full `args` list of the
@@ -43,6 +48,7 @@ impl AggregateNode {
             input: Some(Box::new(input.clone())),
             deps: vec![input],
             group_keys,
+            group_key_exprs: None,
             aggregation_functions,
             aggregation_args: vec![Vec::new(); num_agg],
             aggregation_distinct: vec![false; num_agg],
@@ -73,6 +79,7 @@ impl AggregateNode {
             input: Some(Box::new(input.clone())),
             deps: vec![input],
             group_keys,
+            group_key_exprs: None,
             aggregation_functions,
             aggregation_args: vec![Vec::new(); num_agg],
             aggregation_distinct: vec![false; num_agg],
@@ -88,6 +95,26 @@ impl AggregateNode {
     /// Obtain the group key
     pub fn group_keys(&self) -> &[String] {
         &self.group_keys
+    }
+
+    /// Obtain the lossless group key expressions, if present.
+    ///
+    /// When `Some`, this is the authoritative pass-through from
+    /// `LogicalAggregateNode::group_key_exprs` and preserves the original
+    /// `ExpressionId` without string round-trip loss. Execution still uses
+    /// `group_keys` strings; this accessor is for logical reconstruction.
+    pub fn group_key_exprs(&self) -> Option<&[ContextualExpression]> {
+        self.group_key_exprs.as_deref()
+    }
+
+    /// Set the lossless group key expressions for logical reconstruction.
+    pub fn set_group_key_exprs(&mut self, exprs: Vec<ContextualExpression>) {
+        self.group_key_exprs = Some(exprs);
+    }
+
+    /// Clear the lossless group key expressions (force legacy path).
+    pub fn clear_group_key_exprs(&mut self) {
+        self.group_key_exprs = None;
     }
 
     /// Obtain a list of aggregate functions

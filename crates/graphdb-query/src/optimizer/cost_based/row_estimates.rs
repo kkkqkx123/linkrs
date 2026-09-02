@@ -454,12 +454,16 @@ pub fn estimate_node_output_rows_logical(
         }
         Aggregate(n) => {
             let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);
-            if n.group_keys.is_empty() {
+            if n.group_key_exprs.is_empty() {
                 1
             } else {
                 let tag_for_ndv = first_tag_of_logical_input(n.input());
-                let ndv =
-                    factor_cost::ndv_for_group_keys(stats, tag_for_ndv.as_deref(), &n.group_keys);
+                let keys: Vec<String> = n
+                    .group_key_exprs
+                    .iter()
+                    .map(|e| e.to_expression_string())
+                    .collect();
+                let ndv = factor_cost::ndv_for_group_keys(stats, tag_for_ndv.as_deref(), &keys);
                 if let Some(distinct) = ndv {
                     distinct.min(input_rows).max(1)
                 } else {
@@ -731,11 +735,18 @@ mod tests {
             col_names: vec![],
             column_types: vec![],
         });
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let expr = graphdb_core::Expression::Variable("n.age".to_string());
+        let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
+        let id = ctx.register_expression(meta);
+        let ctx_expr = graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx);
         let aggregate = LogicalNodeEnum::Aggregate(LogicalAggregateNode {
             id: 2,
             input: Some(Box::new(scan.clone())),
             deps: vec![scan],
-            group_keys: vec!["n.age".to_string()],
+            group_key_exprs: vec![ctx_expr],
             aggregation_functions: vec![],
             aggregation_distinct: vec![],
             aggregation_filters: vec![],

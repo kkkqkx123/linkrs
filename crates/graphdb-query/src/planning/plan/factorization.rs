@@ -114,6 +114,7 @@ impl FactorizationGroup {
         self.expression_id_to_pos.get(expr_id).copied()
     }
 
+    #[cfg(test)]
     pub fn get_expression_pos_by_name(&self, name: &str) -> Option<usize> {
         self.expression_name_to_pos.get(name).copied()
     }
@@ -171,6 +172,7 @@ impl FactorizedSchema {
         self.get_group(pos)
     }
 
+    #[cfg(test)]
     pub fn get_group_by_name(&self, name: &str) -> Option<&FactorizationGroup> {
         let pos = self.get_group_pos_by_name(name)?;
         self.get_group(pos)
@@ -284,6 +286,7 @@ impl FactorizedSchema {
         self.expression_to_group.get(expr_id).copied()
     }
 
+    #[cfg(test)]
     pub fn get_group_pos_by_name(&self, name: &str) -> Option<FGroupPos> {
         self.expression_name_to_group.get(name).copied()
     }
@@ -326,6 +329,7 @@ impl FactorizedSchema {
         self.expression_to_group.contains_key(expr_id)
     }
 
+    #[cfg(test)]
     pub fn is_name_in_scope(&self, name: &str) -> bool {
         self.expression_name_to_group.contains_key(name)
     }
@@ -415,9 +419,7 @@ impl FactorizedSchema {
         mapping
     }
 
-    pub fn expression_to_group_iter(
-        &self,
-    ) -> impl Iterator<Item = (&ExpressionId, &FGroupPos)> {
+    pub fn expression_to_group_iter(&self) -> impl Iterator<Item = (&ExpressionId, &FGroupPos)> {
         self.expression_to_group.iter()
     }
 }
@@ -471,6 +473,9 @@ impl SchemaUtils {
 }
 
 /// Trait for operators that can compute factorized schemas.
+///
+/// `child_schemas` must be the bottom-up computed results for the direct children;
+/// passing an empty slice forces recomputation and violates the factorization invariant.
 pub trait FactorizedSchemaCompute {
     fn compute_factorized_schema(&mut self, child_schemas: &[FactorizedSchema])
         -> FactorizedSchema;

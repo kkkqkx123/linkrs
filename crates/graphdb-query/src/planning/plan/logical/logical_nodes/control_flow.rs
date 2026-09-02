@@ -22,13 +22,13 @@ define_logical_plan_node! {
 /// Logical SelectNode – chooses if-branch or else-branch at runtime.
 #[derive(Debug)]
 pub struct LogicalSelectNode {
-    id: i64,
-    condition: ContextualExpression,
-    if_branch: Option<Box<LogicalNodeEnum>>,
-    else_branch: Option<Box<LogicalNodeEnum>>,
-    output_var: Option<String>,
-    col_names: Vec<String>,
-    column_types: Vec<graphdb_core::DataType>,
+    pub id: i64,
+    pub condition: ContextualExpression,
+    pub if_branch: Option<Box<LogicalNodeEnum>>,
+    pub else_branch: Option<Box<LogicalNodeEnum>>,
+    pub output_var: Option<String>,
+    pub col_names: Vec<String>,
+    pub column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalSelectNode {
@@ -75,6 +75,18 @@ impl LogicalSelectNode {
     pub fn else_branch(&self) -> Option<&LogicalNodeEnum> {
         self.else_branch.as_deref()
     }
+    pub fn set_if_branch(&mut self, branch: LogicalNodeEnum) {
+        self.if_branch = Some(Box::new(branch));
+    }
+    pub fn set_else_branch(&mut self, branch: LogicalNodeEnum) {
+        self.else_branch = Some(Box::new(branch));
+    }
+    pub fn take_if_branch(&mut self) -> Option<Box<LogicalNodeEnum>> {
+        self.if_branch.take()
+    }
+    pub fn take_else_branch(&mut self) -> Option<Box<LogicalNodeEnum>> {
+        self.else_branch.take()
+    }
 }
 
 impl crate::planning::plan::logical::logical_node_traits::LogicalNode for LogicalSelectNode {
@@ -104,12 +116,12 @@ impl crate::planning::plan::logical::logical_node_traits::LogicalNode for Logica
 /// Logical LoopNode – loops body while condition holds.
 #[derive(Debug)]
 pub struct LogicalLoopNode {
-    id: i64,
-    condition: ContextualExpression,
-    body: Option<Box<LogicalNodeEnum>>,
-    output_var: Option<String>,
-    col_names: Vec<String>,
-    column_types: Vec<graphdb_core::DataType>,
+    pub id: i64,
+    pub condition: ContextualExpression,
+    pub body: Option<Box<LogicalNodeEnum>>,
+    pub output_var: Option<String>,
+    pub col_names: Vec<String>,
+    pub column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalLoopNode {
@@ -151,6 +163,15 @@ impl LogicalLoopNode {
     }
     pub fn body(&self) -> Option<&LogicalNodeEnum> {
         self.body.as_deref()
+    }
+    pub fn body_mut(&mut self) -> Option<&mut LogicalNodeEnum> {
+        self.body.as_deref_mut()
+    }
+    pub fn take_body(&mut self) -> Option<Box<LogicalNodeEnum>> {
+        self.body.take()
+    }
+    pub fn set_body(&mut self, body: LogicalNodeEnum) {
+        self.body = Some(Box::new(body));
     }
 
     /// Create a loop node with its body pre-attached.

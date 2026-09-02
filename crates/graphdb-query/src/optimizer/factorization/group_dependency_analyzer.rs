@@ -283,8 +283,8 @@ mod tests {
         schema.insert_to_group_and_scope(id_b.clone(), g1);
 
         // Build store where combined expr 30 = a + b
-        let mut store = HashMap::new();
-        let combined_expr = graphdb_core::Expression::Binary {
+        let store = HashMap::new();
+        let _combined_expr = graphdb_core::Expression::Binary {
             left: Box::new(graphdb_core::Expression::Variable("a".to_string())),
             op: graphdb_core::types::operators::BinaryOperator::Add,
             right: Box::new(graphdb_core::Expression::Variable("b".to_string())),

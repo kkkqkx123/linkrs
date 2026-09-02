@@ -22,7 +22,7 @@ use super::assembler::{
     ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx, HashExchangeParams,
 };
 use super::specs::{
-    build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec,
+    build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec, build_flatten_spec,
     build_inner_join_spec, build_limit_spec, build_project_spec, build_sort_spec,
     build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
     is_count_only_aggregate, COUNT_ONLY_COLUMN,
@@ -299,7 +299,19 @@ fn build_partition_local_fragments(
                     )?
                     .0;
                 }
-                _ => unreachable!("local chain holds filter/project/expand operators only"),
+                PlanNodeEnum::Flatten(flatten) => {
+                    let spec = build_flatten_spec(flatten)?;
+                    let (new_fid, _) = ArenaPlanAssembler::push_unary_op(
+                        operators,
+                        fragments,
+                        op_alloc,
+                        fid,
+                        op.id(),
+                        spec,
+                    )?;
+                    fid = new_fid;
+                }
+                _ => unreachable!("local chain holds filter/project/expand/flatten operators only"),
             }
         }
         if let Some(agg) = chain.aggregate_split {

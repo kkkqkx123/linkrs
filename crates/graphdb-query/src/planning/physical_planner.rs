@@ -287,9 +287,25 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::Aggregate(n) => {
             let input = convert_logical_to_physical(*n.input.expect("AggregateNode missing input"));
+            let group_keys: Vec<String> = n
+                .group_key_exprs
+                .iter()
+                .map(|e| e.to_expression_string())
+                .collect();
+            let group_key_exprs = n.group_key_exprs.clone();
+            let aggregation_functions = n.aggregation_functions.clone();
+            let aggregation_distinct = n.aggregation_distinct.clone();
+            let aggregation_filters = n.aggregation_filters.clone();
+            let grouping_sets = n.grouping_sets.clone();
             let mut node = crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode::new(
-                input, n.group_keys, n.aggregation_functions,
+                input, group_keys, aggregation_functions,
             ).expect("Failed to construct AggregateNode");
+            // Preserve lossless identities for reverse conversion; execution
+            // still uses `group_keys` strings.
+            node.set_group_key_exprs(group_key_exprs);
+            node.set_aggregation_distinct(aggregation_distinct);
+            node.set_aggregation_filters(aggregation_filters);
+            node.set_grouping_sets(grouping_sets);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }

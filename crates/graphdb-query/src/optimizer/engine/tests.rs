@@ -465,21 +465,33 @@ fn cost_based_consumes_logical_plan_when_attached() {
 
 #[test]
 fn cost_based_falls_back_when_no_logical_plan_attached() {
-    use crate::planning::plan::core::nodes::control_flow::control_flow_node::ArgumentNode;
+    use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
+    use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
 
     let mut engine = OptimizerEngine::default();
     engine.set_enable_heuristic(false);
 
-    // Argument nodes are not supported by the physical-to-logical
+    // DeleteVertices is not supported by the physical-to-logical
     // converter, so no logical plan is attached and the physical
-    // fallback path must keep the plan intact.
-    let arg = ArgumentNode::new(-1, "x");
-    let plan = ExecutionPlan::new(Some(PlanNodeEnum::Argument(arg)));
+    // fallback path must keep the plan intact. Argument is now
+    // supported (conversion produces LogicalArgument), so it no longer
+    // exercises the fallback path.
+    let info = VertexDeleteInfo {
+        space_name: "test".to_string(),
+        vertex_ids: vec![],
+        with_edge: false,
+        condition: None,
+    };
+    let del = DeleteVerticesNode::new(1, info);
+    let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(del)));
     assert!(plan.logical_plan().is_none());
 
     let optimized = engine
         .optimize(plan, Some("test"))
         .expect("optimization should succeed");
-    assert!(matches!(optimized.root, Some(PlanNodeEnum::Argument(_))));
+    assert!(matches!(
+        optimized.root,
+        Some(PlanNodeEnum::DeleteVertices(_))
+    ));
     assert!(optimized.logical_plan().is_none());
 }

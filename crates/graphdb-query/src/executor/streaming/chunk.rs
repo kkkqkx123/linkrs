@@ -49,6 +49,7 @@ pub use core::DataChunk;
 pub use policy::ColumnarPolicy;
 pub use pool::RowPool;
 pub use schema::{ColumnInfo, Schema};
+pub(crate) use typed::gather_typed_column;
 pub use typed::{TypedColumn, TypedKind};
 pub use view::ChunkView;
 

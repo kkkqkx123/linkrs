@@ -67,7 +67,7 @@ define_logical_plan_node_with_deps! {
 
 define_logical_plan_node_with_deps! {
     pub struct LogicalAggregateNode {
-        group_keys: Vec<String>,
+        group_key_exprs: Vec<ContextualExpression>,
         aggregation_functions: Vec<AggregateFunction>,
         aggregation_distinct: Vec<bool>,
         aggregation_filters: Vec<Option<Expression>>,

@@ -791,6 +791,13 @@ impl UnaryOperator {
     }
 
     pub fn close(&mut self) -> Result<(), QueryError> {
+        if let UnaryOperatorKind::Flatten { buffered_chunk, .. } = &mut self.kind {
+            if let Some(chunk) = buffered_chunk.take() {
+                if let Some(stats) = chunk.columnar_stats {
+                    stats.record_selection_materialized();
+                }
+            }
+        }
         Ok(())
     }
 }

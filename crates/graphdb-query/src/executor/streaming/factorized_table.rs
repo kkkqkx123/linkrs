@@ -225,6 +225,8 @@ impl DataBlockCollection {
 
     pub fn allocate_block(&mut self) -> &mut DataBlock {
         let capacity = self.num_bytes_per_tuple as usize * self.num_tuples_per_block as usize;
+        debug_assert!(capacity > 0, "allocate_block: capacity must be >0");
+        // Byte layer reserved, current Value row storage equivalent.
         let block = DataBlock::with_tuple_size(capacity, self.num_bytes_per_tuple);
         self.blocks.push(block);
         self.blocks.last_mut().expect("just pushed")
@@ -255,6 +257,8 @@ impl InMemOverflowBuffer {
     }
 
     pub fn allocate(&mut self, size: usize) -> &mut [u8] {
+        debug_assert!(size > 0, "InMemOverflowBuffer::allocate size must be >0");
+        // Byte layer reserved, current Value row storage equivalent.
         self.buffers.push(vec![0u8; size]);
         self.buffers.last_mut().expect("just pushed").as_mut_slice()
     }
@@ -456,6 +460,44 @@ impl FactorizedTable {
         Ok(())
     }
 
+    /// Batch scan for flat schemas only (future vectorized path).
+    pub fn scan_batch(
+        &self,
+        vectors: &mut [Vec<Value>],
+        start: usize,
+        count: usize,
+    ) -> Result<(), String> {
+        if self.has_unflat_col() {
+            return Err("scan_batch requires flat schema".to_string());
+        }
+        self.scan(vectors, start, count)
+    }
+
+    /// Bridge to DataChunk without requiring callers to handle overflow blocks.
+    pub fn to_data_chunk(
+        &self,
+        start: usize,
+        count: usize,
+    ) -> Result<crate::executor::streaming::chunk::DataChunk, String> {
+        if start + count > self.num_tuples as usize {
+            return Err("to_data_chunk out of bounds".to_string());
+        }
+        let rows = self.flat_rows();
+        let end = (start + count).min(rows.len());
+        let slice = if start < rows.len() {
+            rows[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let col_names: Vec<String> = (0..self.schema.num_columns())
+            .map(|i| format!("col_{}", i))
+            .collect();
+        let layout = std::sync::Arc::new(crate::executor::streaming::slot::SlotLayout::from_names(
+            &col_names,
+        ));
+        Ok(crate::executor::streaming::chunk::DataChunk::new_with_layout(slice, layout))
+    }
+
     /// Lookup helper for factorized probing (single tuple + selection).
     pub fn lookup_single(
         &self,
@@ -554,15 +596,57 @@ impl FactorizedTable {
     pub fn get_tuple_overflow(&self, tuple_idx: usize, col_idx: usize) -> Option<&OverflowValue> {
         self.overflow_tuples.get(tuple_idx)?.get(&col_idx)
     }
-}
 
-fn row_layout_size(data_type_str: &str) -> u32 {
-    match data_type_str.to_lowercase().as_str() {
-        "int" | "bigint" | "int64" => 8,
-        "double" | "float" => 8,
-        "bool" => 1,
-        "string" => 16,
-        _ => 16,
+    /// Iterate logical flat rows (cross product of the single unflat group).
+    ///
+    /// Since the invariant is at most one unflat group, this expands that
+    /// group's overflow vectors into individual rows. This is the Rust analogue
+    /// of `FactorizedTable::scan` row expansion on the C++ side and is intended
+    /// for bridging to `DataChunk` without requiring callers to handle overflow
+    /// blocks directly.
+    pub fn flat_rows(&self) -> Vec<Vec<Value>> {
+        let mut out = Vec::new();
+        for row_idx in 0..self.num_tuples as usize {
+            let flat_row = &self.flat_tuples[row_idx];
+            let overflow = &self.overflow_tuples[row_idx];
+            // Find the unflat group's cardinality (if any)
+            let mut unflat_len: Option<usize> = None;
+            let mut unflat_cols: Vec<usize> = Vec::new();
+            for (col_idx, col) in self.schema.columns.iter().enumerate() {
+                if col.is_unflat {
+                    unflat_cols.push(col_idx);
+                    if let Some(ov) = overflow.get(&col_idx) {
+                        let len = ov.values.len();
+                        match unflat_len {
+                            None => unflat_len = Some(len),
+                            Some(prev) => debug_assert_eq!(
+                                prev, len,
+                                "all unflat columns of the same group must have equal length"
+                            ),
+                        }
+                    }
+                }
+            }
+            let repeat = unflat_len.unwrap_or(1).max(1);
+            for k in 0..repeat {
+                let mut row = Vec::with_capacity(self.schema.num_columns());
+                for (col_idx, col) in self.schema.columns.iter().enumerate() {
+                    if col.is_flat() {
+                        row.push(flat_row[col_idx].clone());
+                    } else if let Some(ov) = overflow.get(&col_idx) {
+                        if k < ov.values.len() {
+                            row.push(ov.values[k].clone());
+                        } else {
+                            row.push(Value::Null(graphdb_core::value::NullType::Null));
+                        }
+                    } else {
+                        row.push(Value::Null(graphdb_core::value::NullType::Null));
+                    }
+                }
+                out.push(row);
+            }
+        }
+        out
     }
 }
 

@@ -298,12 +298,23 @@ impl ClausePlanner for ReturnClausePlanner {
 
             // Logical mirror: project → aggregate → [having filter] →
             // [dedup] → [sample].
+            let group_key_exprs = yield_columns
+                .iter()
+                .filter(|col| {
+                    if let Some(expr_meta) = col.expression.expression() {
+                        !expression_contains_aggregate(expr_meta.inner())
+                    } else {
+                        false
+                    }
+                })
+                .map(|col| col.expression.clone())
+                .collect::<Vec<_>>();
             let mut logical_root = wrap_logical(&project_plan, |input| {
                 LogicalNodeEnum::Aggregate(LogicalAggregateNode {
                     id: next_node_id(),
                     input: Some(Box::new(input.clone())),
                     deps: vec![input],
-                    group_keys,
+                    group_key_exprs: group_key_exprs.clone(),
                     aggregation_functions: agg_functions,
                     aggregation_distinct: agg_distinct,
                     aggregation_filters: agg_filters,

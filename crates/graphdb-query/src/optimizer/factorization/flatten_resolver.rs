@@ -2,9 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use graphdb_core::types::expr::ExpressionId;
 
-use crate::planning::plan::factorization::{
-    FGroupPos, FactorizedSchema, SchemaUtils, INVALID_F_GROUP_POS,
-};
+use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema, INVALID_F_GROUP_POS};
 
 use super::group_dependency_analyzer::GroupDependencyAnalyzer;
 
@@ -229,7 +227,7 @@ mod tests {
     use super::*;
     use crate::planning::plan::factorization::FactorizedSchema;
     use graphdb_core::types::expr::ExpressionId;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     fn expr(id: u64) -> ExpressionId {
         ExpressionId::new(id)

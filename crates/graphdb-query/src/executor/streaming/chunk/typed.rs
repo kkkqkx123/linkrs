@@ -1263,7 +1263,7 @@ pub(super) fn typed_cast_batch(
 }
 
 /// Gather a typed column's entries at `indices`.
-pub(super) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> TypedColumn {
+pub(crate) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> TypedColumn {
     match column {
         TypedColumn::I64(v) => TypedColumn::I64(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::F64(v) => TypedColumn::F64(indices.iter().map(|&i| v[i]).collect()),

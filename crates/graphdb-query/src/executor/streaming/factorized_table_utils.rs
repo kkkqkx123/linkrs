@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use graphdb_core::types::expr::ExpressionId;
 
 use crate::executor::streaming::factorized_table::{ColumnSchema, FactorizedTableSchema};
-use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema};
+#[cfg(test)]
+use crate::planning::plan::factorization::FGroupPos;
+use crate::planning::plan::factorization::FactorizedSchema;
 
 /// Row layout size helper mirroring `LogicalTypeUtils::getRowLayoutSize`.
 fn row_layout_size_for_expr(_expr_id: &ExpressionId) -> u32 {
@@ -22,11 +24,16 @@ pub fn create_ftable_schema(
 ) -> FactorizedTableSchema {
     let mut columns = Vec::with_capacity(expressions.len());
     for expr_id in expressions {
-        let group_pos = schema.get_group_pos(expr_id).unwrap_or(0);
-        let is_flat = schema
+        let group_pos = schema.get_group_pos(expr_id).unwrap_or_else(|| {
+            panic!(
+                "create_ftable_schema: expression {:?} not in FactorizedSchema; silent fallback to group 0 would corrupt flat/unflat layout",
+                expr_id
+            )
+        });
+        let group = schema
             .get_group(group_pos)
-            .map(|g| g.is_flat())
-            .unwrap_or(true);
+            .expect("create_ftable_schema: group_pos from schema must be valid");
+        let is_flat = group.is_flat();
         if is_flat {
             columns.push(ColumnSchema {
                 is_unflat: false,
@@ -56,9 +63,16 @@ pub fn create_ftable_schema_with_types(
 ) -> FactorizedTableSchema {
     let mut columns = Vec::with_capacity(expressions.len());
     for expr_id in expressions {
-        let group_pos = schema.get_group_pos(expr_id).unwrap_or(0);
-        let group = schema.get_group(group_pos);
-        let is_flat = group.map(|g| g.is_flat()).unwrap_or(true);
+        let group_pos = schema.get_group_pos(expr_id).unwrap_or_else(|| {
+            panic!(
+                "create_ftable_schema_with_types: expression {:?} not in FactorizedSchema",
+                expr_id
+            )
+        });
+        let group = schema
+            .get_group(group_pos)
+            .expect("create_ftable_schema_with_types: group_pos must be valid");
+        let is_flat = group.is_flat();
         let typ = type_map
             .get(expr_id)
             .map(|s| s.as_str())
@@ -85,7 +99,7 @@ pub fn create_ftable_schema_with_types(
     FactorizedTableSchema::new(columns)
 }
 
-/// Convenience: create schema from (name, group) pairs without needing ExpressionId.
+#[cfg(test)]
 pub fn create_ftable_schema_from_groups(
     groups: &[(String, FGroupPos, bool)],
 ) -> FactorizedTableSchema {
@@ -106,30 +120,41 @@ pub fn create_ftable_schema_from_groups(
     FactorizedTableSchema::new(columns)
 }
 
-/// Build `FactorizedTableSchema` directly from a logical output node.
-///
-/// The logical node's factorized schema is computed via `FactorizedSchemaCompute`,
-/// then its `col_names` are mapped to expression ids to build the physical schema.
+#[cfg(test)]
 pub fn create_ftable_schema_for_logical(
     node: &mut crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum,
     child_schemas: &[FactorizedSchema],
 ) -> FactorizedTableSchema {
     use crate::planning::plan::factorization::FactorizedSchemaCompute;
     let schema = node.compute_factorized_schema(child_schemas);
-    let exprs: Vec<ExpressionId> = node
-        .col_names()
-        .iter()
-        .map(|n| {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::{Hash, Hasher};
-            n.hash(&mut h);
-            ExpressionId::new(h.finish())
-        })
-        .collect();
-    if exprs.is_empty() {
+    if node.col_names().is_empty() {
         return FactorizedTableSchema::new(Vec::new());
     }
-    create_ftable_schema(&exprs, &schema)
+    let mut columns = Vec::with_capacity(node.col_names().len());
+    for name in node.col_names() {
+        let pos = schema.get_group_pos_by_name(name).unwrap_or_else(|| {
+            panic!(
+                "create_ftable_schema_for_logical (test-only): missing group for column '{}' not in FactorizedSchema",
+                name
+            )
+        });
+        let group = schema
+            .get_group(pos)
+            .expect("create_ftable_schema_for_logical: group must exist");
+        let is_flat = group.is_flat();
+        columns.push(ColumnSchema {
+            is_unflat: !is_flat,
+            group_id: pos,
+            num_bytes: if is_flat {
+                16
+            } else {
+                std::mem::size_of::<crate::executor::streaming::factorized_table::OverflowValue>()
+                    as u32
+            },
+            may_contain_nulls: true,
+        });
+    }
+    FactorizedTableSchema::new(columns)
 }
 
 #[cfg(test)]

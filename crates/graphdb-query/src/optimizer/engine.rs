@@ -420,17 +420,22 @@ impl OptimizerEngine {
         // `enable_feedback`; cheap when no history is present.
         self.maybe_apply_feedback();
 
+        // Ensure a logical plan is available for the optimization pipeline.
+        // Legacy paths that still emit physical trees are bridged via the
+        // reverse conversion instead of being silently skipped.
+        current_plan = self.ensure_logical_plan(current_plan);
+
         // Factorization: remove factorization before heuristic passes so they
         // operate on a flat view. Mirrors `RemoveFactorizationRewriter` at
         // `optimizer.cpp:1`.
         current_plan = self.apply_remove_factorization(current_plan);
 
-        // Heuristic optimization (always executed).
+        // Logical heuristic optimization on the logical tree.
         if self.enable_heuristic {
-            log::debug!("Starting heuristic optimization");
+            log::debug!("Starting logical heuristic optimization");
             current_plan = self
                 .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
-            log::debug!("Heuristic optimization completed successfully");
+            log::debug!("Logical heuristic optimization completed successfully");
         }
 
         // Cost-based optimization (always active — conservative rules)
@@ -442,9 +447,395 @@ impl OptimizerEngine {
         // Mirrors `FactorizationRewriter` at `optimizer.cpp:4`.
         current_plan = self.apply_factorization(current_plan);
 
+        // Physical mapping: LogicalNodeEnum → PlanNodeEnum (introduces
+        // physical choices such as IndexScan). Mirrors PhysicalMapper.
+        current_plan = self.apply_physical_mapping(current_plan);
+
+        // Physical heuristic optimization on the physical tree.
+        if self.enable_heuristic {
+            log::debug!("Starting physical heuristic optimization");
+            current_plan = self
+                .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
+            log::debug!("Physical heuristic optimization completed successfully");
+        }
+
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
         Ok(current_plan)
+    }
+
+    fn ensure_logical_plan(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        if plan.logical_plan.is_none() {
+            if let Some(root) = plan.root.clone() {
+                match crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(&root) {
+                    Ok(logical) => {
+                        plan.set_logical_plan(logical);
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "logical_plan fallback failed: {} (factorization skipped, flat execution)",
+                            e
+                        );
+                        if e.to_string().contains("Aggregate") {
+                            log::warn!(
+                                "LogicalPlan::from_plan_node fallback failed (Aggregate legacy path): {}",
+                                e
+                            );
+                        } else {
+                            log::warn!("LogicalPlan::from_plan_node fallback failed: {}", e);
+                        }
+                        plan.cbo_notes.push(msg.clone());
+                        if plan.parallel_fallback_reason.is_empty() {
+                            plan.parallel_fallback_reason = msg;
+                        } else {
+                            plan.parallel_fallback_reason.push_str("; ");
+                            plan.parallel_fallback_reason.push_str(&msg);
+                        }
+                    }
+                }
+            }
+        }
+        plan
+    }
+
+    fn apply_physical_mapping(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        // Logical → Physical mapping for factorization.
+        //
+        // The generic Logical→Physical converter would discard CBO rewrites
+        // that currently operate directly on the physical root (IndexScan,
+        // TopN). To avoid that regression we do not overwrite the physical
+        // root wholesale. Instead we splice the LogicalFlatten nodes inserted
+        // by FactorizationRewriter into the physical tree at the corresponding
+        // positions, preserving all other physical choices.
+        //
+        // If the logical plan contains Flatten but the physical does not,
+        // failing to splice would silently drop factorization (wrong row
+        // counts). That fallback is semantically harmful and must be observable.
+        if let Some(logical) = plan.logical_plan.clone() {
+            let has_logical_flatten =
+                crate::optimizer::factorization::RemoveFactorizationRewriter::has_flatten_public(
+                    &logical.root,
+                );
+            let has_physical_flatten = plan
+                .root
+                .as_ref()
+                .map(|r| Self::physical_has_flatten(r))
+                .unwrap_or(false);
+            if has_logical_flatten && !has_physical_flatten {
+                if let Some(root) = plan.root.clone() {
+                    match Self::splice_flatten_from_logical(&logical.root, &root) {
+                        Ok(new_root) => {
+                            plan.set_root(new_root);
+                            log::debug!(
+                                "PhysicalMapping: spliced LogicalFlatten into physical plan"
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "PhysicalMapping: failed to splice Flatten ({}); factorization will be ineffective",
+                                e
+                            );
+                        }
+                    }
+                }
+            } else if has_logical_flatten {
+                log::debug!("PhysicalMapping: physical already contains Flatten, no splice needed");
+            }
+        }
+        plan
+    }
+
+    fn physical_has_flatten(node: &crate::planning::plan::PlanNodeEnum) -> bool {
+        if matches!(node, crate::planning::plan::PlanNodeEnum::Flatten(_)) {
+            return true;
+        }
+        for child in node.children() {
+            if Self::physical_has_flatten(child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn splice_flatten_from_logical(
+        logical: &crate::planning::plan::logical::LogicalNodeEnum,
+        physical: &crate::planning::plan::PlanNodeEnum,
+    ) -> Result<crate::planning::plan::PlanNodeEnum, String> {
+        let mut flattens = Vec::new();
+        Self::collect_logical_flattens(logical, &mut flattens);
+        if flattens.is_empty() {
+            return Ok(physical.clone());
+        }
+        flattens.sort_unstable();
+        flattens.dedup();
+        Ok(Self::insert_flattens_at_leaves(physical, &flattens))
+    }
+
+    fn insert_flattens_at_leaves(
+        node: &crate::planning::plan::PlanNodeEnum,
+        flattens: &[u32],
+    ) -> crate::planning::plan::PlanNodeEnum {
+        if flattens.is_empty() {
+            return node.clone();
+        }
+        match node {
+            crate::planning::plan::PlanNodeEnum::ScanVertices(_)
+            | crate::planning::plan::PlanNodeEnum::ScanEdges(_)
+            | crate::planning::plan::PlanNodeEnum::IndexScan(_) => {
+                let mut cur = node.clone();
+                for &pos in flattens {
+                    if let Ok(flatten_node) =
+                        crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode::new(
+                            cur.clone(),
+                            pos,
+                        )
+                    {
+                        cur = crate::planning::plan::PlanNodeEnum::Flatten(flatten_node);
+                    }
+                }
+                cur
+            }
+            crate::planning::plan::PlanNodeEnum::Select(n) => {
+                let mut cloned = n.clone();
+                if let Some(branch) = cloned.if_branch().clone() {
+                    let new_branch = Self::insert_flattens_at_leaves(&branch, flattens);
+                    cloned.set_if_branch(new_branch);
+                }
+                if let Some(branch) = cloned.else_branch().clone() {
+                    let new_branch = Self::insert_flattens_at_leaves(&branch, flattens);
+                    cloned.set_else_branch(new_branch);
+                }
+                crate::planning::plan::PlanNodeEnum::Select(cloned)
+            }
+            crate::planning::plan::PlanNodeEnum::Loop(n) => {
+                let mut cloned = n.clone();
+                if let Some(body) = cloned.body().clone() {
+                    let new_body = Self::insert_flattens_at_leaves(&body, flattens);
+                    cloned.set_body(new_body);
+                }
+                crate::planning::plan::PlanNodeEnum::Loop(cloned)
+            }
+            _ => {
+                if node.children().is_empty() {
+                    return node.clone();
+                }
+                crate::optimizer::cost_based::traversal::rewrite_children(node, &mut |child| {
+                    Self::insert_flattens_at_leaves(child, flattens)
+                })
+            }
+        }
+    }
+
+    fn collect_logical_flattens(
+        node: &crate::planning::plan::logical::LogicalNodeEnum,
+        out: &mut Vec<u32>,
+    ) {
+        use crate::planning::plan::logical::LogicalNodeEnum;
+        match node {
+            LogicalNodeEnum::Flatten(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+                out.push(n.group_pos);
+            }
+            LogicalNodeEnum::Project(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Filter(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Sort(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Limit(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::TopN(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Dedup(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Aggregate(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Window(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Sample(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Unwind(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Traverse(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Assign(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::Remove(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::DataCollect(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::Materialize(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::RollUpApply(n) => {
+                if let Some(child) = &n.input {
+                    Self::collect_logical_flattens(child, out);
+                }
+            }
+            LogicalNodeEnum::GetVertices(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::GetNeighbors(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::Expand(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::ExpandAll(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::AppendVertices(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::BiExpand(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::BiTraverse(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::InnerJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::LeftJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::RightJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::CrossJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::FullOuterJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::SemiJoin(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::PatternApply(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::CorrelatedApply(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::Apply(n) => {
+                Self::collect_logical_flattens(n.left_input(), out);
+                Self::collect_logical_flattens(n.right_input(), out);
+            }
+            LogicalNodeEnum::Union(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::Minus(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::Intersect(n) => {
+                for d in &n.deps {
+                    Self::collect_logical_flattens(d, out);
+                }
+            }
+            LogicalNodeEnum::Select(n) => {
+                if let Some(b) = n.if_branch() {
+                    Self::collect_logical_flattens(b, out);
+                }
+                if let Some(b) = n.else_branch() {
+                    Self::collect_logical_flattens(b, out);
+                }
+            }
+            LogicalNodeEnum::Loop(n) => {
+                if let Some(b) = n.body() {
+                    Self::collect_logical_flattens(b, out);
+                }
+            }
+            LogicalNodeEnum::MultiShortestPath(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::BFSShortest(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::AllPaths(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            LogicalNodeEnum::ShortestPath(n) => {
+                Self::collect_logical_flattens(&n.left, out);
+                Self::collect_logical_flattens(&n.right, out);
+            }
+            _ => {}
+        }
     }
 
     fn apply_partitioning_selection(
@@ -469,7 +860,12 @@ impl OptimizerEngine {
         } else if !decision.reason.is_empty() {
             // Keep the decision observable: EXPLAIN ANALYZE / PROFILE report
             // the reason whenever the plan falls back to serial execution.
-            plan.parallel_fallback_reason = decision.reason;
+            if plan.parallel_fallback_reason.is_empty() {
+                plan.parallel_fallback_reason = decision.reason;
+            } else {
+                plan.parallel_fallback_reason.push_str("; ");
+                plan.parallel_fallback_reason.push_str(&decision.reason);
+            }
         }
         plan
     }
@@ -958,10 +1354,23 @@ impl OptimizerEngine {
             let mut root = logical.root.clone();
             crate::optimizer::factorization::FactorizationRewriter::new().rewrite(&mut root);
             let mut updated = logical.clone();
-            updated.root = root;
+            updated.root = root.clone();
             plan.set_logical_plan(updated);
-            plan.cbo_notes
-                .push("factorization: re-inserted LogicalFlatten".to_string());
+            let mut flattens = Vec::new();
+            Self::collect_logical_flattens(&root, &mut flattens);
+            flattens.sort_unstable();
+            flattens.dedup();
+            for pos in flattens {
+                plan.cbo_notes.push(format!("Flatten(group={})", pos));
+            }
+            if plan
+                .cbo_notes
+                .iter()
+                .all(|n| !n.starts_with("Flatten(group="))
+            {
+                plan.cbo_notes
+                    .push("factorization: re-inserted LogicalFlatten".to_string());
+            }
         }
         plan
     }

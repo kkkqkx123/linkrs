@@ -639,7 +639,11 @@ pub fn walk_aggregate_strategies_logical(
         let input_rows = estimate_node_output_rows_logical(aggregate.input(), stats, selectivity);
         let context = AggregateContext {
             input_rows,
-            group_keys: aggregate.group_keys.clone(),
+            group_keys: aggregate
+                .group_key_exprs
+                .iter()
+                .map(|e| e.to_expression_string())
+                .collect(),
             agg_function_count: aggregate.aggregation_functions.len(),
             memory_limit: 0,
             input_is_sorted: false,
@@ -865,11 +869,18 @@ mod tests {
             col_names: vec![],
             column_types: vec![],
         });
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let expr = graphdb_core::Expression::Variable("n.age".to_string());
+        let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
+        let id = ctx.register_expression(meta);
+        let ctx_expr = graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx);
         let aggregate = LogicalNodeEnum::Aggregate(LogicalAggregateNode {
             id: 2,
             input: Some(Box::new(scan.clone())),
             deps: vec![scan],
-            group_keys: vec!["n.age".to_string()],
+            group_key_exprs: vec![ctx_expr],
             aggregation_functions: vec![AggregateFunction::Count],
             aggregation_distinct: vec![],
             aggregation_filters: vec![],

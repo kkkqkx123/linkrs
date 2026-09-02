@@ -93,17 +93,17 @@ define_logical_plan_node_with_deps! {
 /// Logical ApplyNode – binary input apply operation.
 #[derive(Debug)]
 pub struct LogicalApplyNode {
-    id: i64,
-    left: Box<LogicalNodeEnum>,
-    right: Box<LogicalNodeEnum>,
-    deps: Vec<LogicalNodeEnum>,
-    left_input_var: Option<String>,
-    right_input_var: Option<String>,
-    correlated_cols: Vec<String>,
-    apply_kind: ApplyKind,
-    output_var: Option<String>,
-    col_names: Vec<String>,
-    column_types: Vec<graphdb_core::DataType>,
+    pub id: i64,
+    pub left: Box<LogicalNodeEnum>,
+    pub right: Box<LogicalNodeEnum>,
+    pub deps: Vec<LogicalNodeEnum>,
+    pub left_input_var: Option<String>,
+    pub right_input_var: Option<String>,
+    pub correlated_cols: Vec<String>,
+    pub apply_kind: ApplyKind,
+    pub output_var: Option<String>,
+    pub col_names: Vec<String>,
+    pub column_types: Vec<graphdb_core::DataType>,
 }
 
 impl Clone for LogicalApplyNode {
