@@ -156,27 +156,133 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::DescStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::Desc(stmt.clone()),
-        )))
+        Ok(BoundStatement::Desc(BoundDesc {
+            target: stmt.target.clone(),
+        }))
     }
 
     pub(crate) fn bind_show_create(
         &mut self,
         stmt: &crate::parser::ast::ShowCreateStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::ShowCreate(stmt.clone()),
-        )))
+        Ok(BoundStatement::ShowCreate(BoundShowCreate {
+            target: stmt.target.clone(),
+        }))
     }
 
     pub(crate) fn bind_clear_space(
         &mut self,
         stmt: &crate::parser::ast::ClearSpaceStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::ClearSpace(stmt.clone()),
-        )))
+        Ok(BoundStatement::ClearSpace(BoundClearSpace {
+            space_name: stmt.space_name.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_use(
+        &mut self,
+        stmt: &crate::parser::ast::UseStmt,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::Use(BoundUse {
+            space: stmt.space.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_show(
+        &mut self,
+        stmt: &crate::parser::ast::ShowStmt,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::Show(BoundShow {
+            target: stmt.target.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_create_user(
+        &mut self,
+        stmt: &crate::parser::ast::CreateUserStmt,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::CreateUser(BoundCreateUser {
+            username: stmt.username.clone(),
+            password: stmt.password.clone(),
+            role: stmt.role.clone(),
+            if_not_exists: stmt.if_not_exists,
+        }))
+    }
+
+    pub(crate) fn bind_drop_user(
+        &mut self,
+        stmt: &crate::parser::ast::DropUserStmt,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::DropUser(BoundDropUser {
+            username: stmt.username.clone(),
+            if_exists: stmt.if_exists,
+        }))
+    }
+
+    pub(crate) fn bind_alter_user(
+        &mut self,
+        stmt: &crate::parser::ast::AlterUserStmt,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::AlterUser(BoundAlterUser {
+            username: stmt.username.clone(),
+            password: stmt.password.clone(),
+            new_role: stmt.new_role.clone(),
+            is_locked: stmt.is_locked,
+        }))
+    }
+
+    pub(crate) fn bind_create_fulltext_index(
+        &mut self,
+        stmt: &crate::parser::ast::fulltext::CreateFulltextIndex,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::CreateFulltextIndex(
+            BoundCreateFulltextIndex {
+                index_name: stmt.index_name.clone(),
+                schema_name: stmt.schema_name.clone(),
+                fields: stmt.fields.clone(),
+                engine_type: stmt.engine_type.clone(),
+                options: stmt.options.clone(),
+                if_not_exists: stmt.if_not_exists,
+            },
+        ))
+    }
+
+    pub(crate) fn bind_create_vector_index(
+        &mut self,
+        stmt: &crate::parser::ast::vector::CreateVectorIndex,
+    ) -> DBResult<BoundStatement> {
+        Ok(BoundStatement::CreateVectorIndex(
+            BoundCreateVectorIndex {
+                index_name: stmt.index_name.clone(),
+                schema_name: stmt.schema_name.clone(),
+                field_name: stmt.field_name.clone(),
+                config: stmt.config.clone(),
+                if_not_exists: stmt.if_not_exists,
+            },
+        ))
+    }
+
+    pub(crate) fn bind_explain(
+        &mut self,
+        stmt: &crate::parser::ast::ExplainStmt,
+    ) -> DBResult<BoundStatement> {
+        let inner = self.bind_stmt(&stmt.statement)?;
+        Ok(BoundStatement::Explain(BoundExplain {
+            statement: Box::new(inner),
+            format: stmt.format.clone(),
+            analyze: stmt.analyze,
+        }))
+    }
+
+    pub(crate) fn bind_profile(
+        &mut self,
+        stmt: &crate::parser::ast::ProfileStmt,
+    ) -> DBResult<BoundStatement> {
+        let inner = self.bind_stmt(&stmt.statement)?;
+        Ok(BoundStatement::Profile(BoundProfile {
+            statement: Box::new(inner),
+            format: stmt.format.clone(),
+        }))
     }
 
     pub(crate) fn bind_begin_transaction(

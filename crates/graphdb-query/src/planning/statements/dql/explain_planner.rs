@@ -5,7 +5,7 @@
 //! explain/profile execution mode at the executor layer.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{ExplainFormat, Stmt};
+use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -29,30 +29,24 @@ impl ExplainPlanner {
         Self { is_profile: true }
     }
 
-    fn extract_inner_stmt(&self, stmt: &Stmt) -> Result<(Box<Stmt>, ExplainFormat), PlannerError> {
+    fn extract_inner_stmt(&self, stmt: &Stmt) -> Result<Box<Stmt>, PlannerError> {
         match stmt {
-            Stmt::Explain(explain_stmt) => {
-                Ok((explain_stmt.statement.clone(), explain_stmt.format.clone()))
-            }
-            Stmt::Profile(profile_stmt) => {
-                Ok((profile_stmt.statement.clone(), profile_stmt.format.clone()))
-            }
+            Stmt::Explain(explain_stmt) => Ok(explain_stmt.statement.clone()),
+            Stmt::Profile(profile_stmt) => Ok(profile_stmt.statement.clone()),
             _ => Err(PlannerError::PlanGenerationFailed(
                 "statement does not contain EXPLAIN or PROFILE".to_string(),
             )),
         }
     }
 
-    /// Plan the inner statement, optionally forwarding the metadata context
-    /// so index-aware planners (e.g. LOOKUP) produce the same plan under
-    /// EXPLAIN as they do in normal execution.
-    fn plan_inner(
+    /// Plan the inner statement via the AST-based path (for backward compatibility).
+    fn plan_inner_ast(
         &self,
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
         metadata_context: Option<&crate::metadata::MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let (inner_stmt, format) = self.extract_inner_stmt(validated.stmt())?;
+        let inner_stmt = self.extract_inner_stmt(validated.stmt())?;
 
         let inner_validated = ValidatedStatement::new(
             Arc::new(crate::parser::ast::stmt::Ast::new(
@@ -77,15 +71,8 @@ impl ExplainPlanner {
             None => inner_planner.transform(&inner_validated, qctx)?,
         };
 
-        let mode = if self.is_profile {
-            "PROFILE"
-        } else {
-            "EXPLAIN"
-        };
         log::debug!(
-            "ExplainPlanner: {} mode with format {:?}, inner plan generated",
-            mode,
-            format
+            "ExplainPlanner: inner plan generated via AST path",
         );
 
         Ok(inner_plan)
@@ -98,7 +85,7 @@ impl Planner for ExplainPlanner {
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        self.plan_inner(validated, qctx, None)
+        self.plan_inner_ast(validated, qctx, None)
     }
 
     fn transform_with_metadata(
@@ -107,20 +94,44 @@ impl Planner for ExplainPlanner {
         qctx: Arc<QueryContext>,
         metadata_context: &crate::metadata::MetadataContext,
     ) -> Result<SubPlan, PlannerError> {
-        self.plan_inner(validated, qctx, Some(metadata_context))
+        self.plan_inner_ast(validated, qctx, Some(metadata_context))
     }
 
     fn plan_bound(
         &mut self,
-        _bound: &BoundStatement,
+        bound: &BoundStatement,
         qctx: Arc<QueryContext>,
         metadata: Option<&crate::metadata::MetadataContext>,
         validated: &ValidatedStatement,
     ) -> Result<SubPlan, PlannerError> {
-        match metadata {
-            Some(m) => self.plan_inner(validated, qctx, Some(m)),
-            None => self.plan_inner(validated, qctx, None),
-        }
+        let (inner_bound, is_profile) = match bound {
+            BoundStatement::Explain(e) => (e.statement.as_ref(), false),
+            BoundStatement::Profile(p) => (p.statement.as_ref(), true),
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "ExplainPlanner requires BoundStatement::Explain or Profile".to_string(),
+                ));
+            }
+        };
+
+        let mut inner_planner =
+            PlannerEnum::from_bound_statement(inner_bound).ok_or_else(|| {
+                PlannerError::NoSuitablePlanner(format!(
+                    "explain inner statement: {}",
+                    inner_bound.kind()
+                ))
+            })?;
+
+        let inner_plan =
+            inner_planner.plan_bound(inner_bound, qctx, metadata, validated)?;
+
+        let mode = if is_profile { "PROFILE" } else { "EXPLAIN" };
+        log::debug!(
+            "ExplainPlanner: {} mode, inner plan generated via bound path",
+            mode,
+        );
+
+        Ok(inner_plan)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

@@ -8,9 +8,10 @@
 //! - If the pattern matches existing data -> execute ON MATCH actions (if any)
 //! - If the pattern does not exist -> create new data and execute ON CREATE actions (if any)
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use crate::binder::bound::{
+    BoundAssignment, BoundMergePattern, BoundPatternVertex, BoundStatement,
+};
+use crate::binder::expr_converter::bound_expr_to_contextual;
 use crate::parser::ast::{MergeStmt, Pattern, SetClause, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
@@ -22,8 +23,11 @@ use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::ExpressionMeta;
 use graphdb_core::{Expression, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Merge Operation Planner
 /// Responsible for converting MERGE statements into execution plans.
@@ -282,17 +286,169 @@ impl MergePlanner {
         let id = expr_context.register_expression(meta);
         Ok(ContextualExpression::new(id, expr_context.clone()))
     }
+
+    fn bound_vertex_to_info(
+        &self,
+        vertex: &BoundPatternVertex,
+        space_name: String,
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<VertexInsertInfo, PlannerError> {
+        let tag_name = vertex
+            .labels
+            .first()
+            .ok_or_else(|| {
+                PlannerError::PlanGenerationFailed(
+                    "MERGE node pattern must have a label".to_string(),
+                )
+            })?
+            .clone();
+
+        let (prop_names, prop_values, vid_expr) = match &vertex.properties {
+            Some(props) => {
+                let mut names = Vec::new();
+                let mut values = Vec::new();
+                for (key, bound_expr) in props {
+                    names.push(key.clone());
+                    let ctx = bound_expr_to_contextual(bound_expr, expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    values.push(ctx);
+                }
+                let vid_expr = if let Some(Expression::Literal(Value::Int(i))) =
+                    values.first().and_then(|v| v.get_expression())
+                {
+                    let vid_meta = ExpressionMeta::new(Expression::Literal(Value::Int(i)));
+                    let vid_id = expr_ctx.register_expression(vid_meta);
+                    ContextualExpression::new(vid_id, expr_ctx.clone())
+                } else {
+                    self.create_vid_expression(expr_ctx)?
+                };
+                (names, values, vid_expr)
+            }
+            None => {
+                let vid_expr = self.create_vid_expression(expr_ctx)?;
+                (vec![], vec![], vid_expr)
+            }
+        };
+
+        let tag_spec = TagInsertSpec {
+            tag_name,
+            prop_names,
+        };
+        Ok(VertexInsertInfo {
+            space_name,
+            tags: vec![tag_spec],
+            values: vec![(vid_expr, vec![prop_values])],
+            if_not_exists: true,
+        })
+    }
+
+    fn bound_assignments_to_properties(
+        assignments: &[BoundAssignment],
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<HashMap<String, ContextualExpression>, PlannerError> {
+        let mut properties = HashMap::new();
+        for assignment in assignments {
+            let ctx = bound_expr_to_contextual(&assignment.value, expr_ctx)
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            properties.insert(assignment.property.clone(), ctx);
+        }
+        Ok(properties)
+    }
+
+    fn build_update_info_from_bound(
+        assignments: &[BoundAssignment],
+        space_name: String,
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<VertexUpdateInfo, PlannerError> {
+        let properties = Self::bound_assignments_to_properties(assignments, expr_ctx)?;
+
+        let exists_expr = Expression::Literal(Value::Bool(true));
+        let exists_meta = ExpressionMeta::new(exists_expr);
+        let exists_id = expr_ctx.register_expression(exists_meta);
+        let vid_expr = ContextualExpression::new(exists_id, expr_ctx.clone());
+
+        Ok(VertexUpdateInfo {
+            space_name,
+            vertex_id: vid_expr,
+            tag_name: None,
+            properties,
+            condition: None,
+            is_upsert: false,
+        })
+    }
 }
 
 impl Planner for MergePlanner {
     fn plan_bound(
         &mut self,
-        _bound: &crate::binder::BoundStatement,
+        bound: &BoundStatement,
         qctx: Arc<QueryContext>,
         _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        _validated: &ValidatedStatement,
     ) -> Result<SubPlan, PlannerError> {
-        self.transform(validated, qctx)
+        let merge = match bound {
+            BoundStatement::Merge(m) => m,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain the MERGE".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+
+        match &merge.pattern {
+            BoundMergePattern::Node(vertex) => {
+                let vertex_info =
+                    self.bound_vertex_to_info(vertex, space_name.clone(), &expr_ctx)?;
+
+                let has_on_match = !merge.on_match.is_empty();
+                let has_on_create = !merge.on_create.is_empty();
+
+                if !has_on_match && !has_on_create {
+                    let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
+                    let arg_node_enum = PlanNodeEnum::Argument(arg_node);
+                    let insert_node = InsertVerticesNode::new(next_node_id(), vertex_info);
+                    let insert_node_enum = PlanNodeEnum::InsertVertices(insert_node);
+                    return Ok(SubPlan::new(
+                        Some(insert_node_enum),
+                        Some(arg_node_enum),
+                    ));
+                }
+
+                let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
+                let arg_node_enum = PlanNodeEnum::Argument(arg_node);
+                let condition = self.create_exists_condition(&expr_ctx)?;
+                let mut select_node = SelectNode::new(next_node_id(), condition);
+
+                if has_on_match {
+                    let update_info =
+                        Self::build_update_info_from_bound(&merge.on_match, space_name.clone(), &expr_ctx)?;
+                    let update_node =
+                        UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(update_info));
+                    select_node.set_if_branch(PlanNodeEnum::Update(update_node));
+                }
+
+                let insert_node = InsertVerticesNode::new(next_node_id(), vertex_info);
+                let mut current_node = PlanNodeEnum::InsertVertices(insert_node);
+                if has_on_create {
+                    let update_info =
+                        Self::build_update_info_from_bound(&merge.on_create, space_name.clone(), &expr_ctx)?;
+                    let update_node =
+                        UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(update_info));
+                    current_node = PlanNodeEnum::Update(update_node);
+                }
+                select_node.set_else_branch(current_node);
+
+                let select_node_enum = PlanNodeEnum::Select(select_node);
+                Ok(SubPlan::new(Some(select_node_enum), Some(arg_node_enum)))
+            }
+            BoundMergePattern::Edge { .. } => {
+                // Edge MERGE still delegates to AST-based transform
+                self.transform(_validated, qctx)
+            }
+        }
     }
 
     fn transform(

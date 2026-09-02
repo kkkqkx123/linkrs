@@ -667,6 +667,85 @@ pub struct BoundAlter {
 }
 
 #[derive(Debug, Clone)]
+pub struct BoundUse {
+    pub space: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundShow {
+    pub target: crate::parser::ast::ShowTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundShowCreate {
+    pub target: crate::parser::ast::ShowCreateTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundDesc {
+    pub target: crate::parser::ast::DescTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundClearSpace {
+    pub space_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCreateUser {
+    pub username: String,
+    pub password: String,
+    pub role: Option<String>,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundDropUser {
+    pub username: String,
+    pub if_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundAlterUser {
+    pub username: String,
+    pub password: Option<String>,
+    pub new_role: Option<String>,
+    pub is_locked: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCreateFulltextIndex {
+    pub index_name: String,
+    pub schema_name: String,
+    pub fields: Vec<crate::parser::ast::fulltext::IndexFieldDef>,
+    pub engine_type: graphdb_core::types::FulltextEngineType,
+    pub options: crate::parser::ast::fulltext::IndexOptions,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCreateVectorIndex {
+    pub index_name: String,
+    pub schema_name: String,
+    pub field_name: String,
+    pub config: crate::parser::ast::vector::VectorIndexConfig,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundExplain {
+    pub statement: Box<BoundStatement>,
+    pub format: crate::parser::ast::ExplainFormat,
+    pub analyze: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundProfile {
+    pub statement: Box<BoundStatement>,
+    pub format: crate::parser::ast::ExplainFormat,
+}
+
+#[derive(Debug, Clone)]
 pub struct BoundBeginTransaction {
     pub read_only: Option<bool>,
 }
@@ -728,6 +807,22 @@ pub enum BoundStatement {
     Create(BoundCreate),
     Drop(BoundDrop),
     Alter(BoundAlter),
+    Show(BoundShow),
+    ShowCreate(BoundShowCreate),
+    Desc(BoundDesc),
+    ClearSpace(BoundClearSpace),
+    CreateUser(BoundCreateUser),
+    DropUser(BoundDropUser),
+    AlterUser(BoundAlterUser),
+    CreateFulltextIndex(BoundCreateFulltextIndex),
+    CreateVectorIndex(BoundCreateVectorIndex),
+
+    // ── EXPLAIN / PROFILE ──────────────────────────────────────────────────
+    Explain(BoundExplain),
+    Profile(BoundProfile),
+
+    // ── USE ────────────────────────────────────────────────────────────────
+    Use(BoundUse),
 
     // ── Transaction ─────────────────────────────────────────────────────────
     BeginTransaction(BoundBeginTransaction),
@@ -768,6 +863,18 @@ impl BoundStatement {
             Self::Create(_) => "Create",
             Self::Drop(_) => "Drop",
             Self::Alter(_) => "Alter",
+            Self::Show(_) => "Show",
+            Self::ShowCreate(_) => "ShowCreate",
+            Self::Desc(_) => "Desc",
+            Self::ClearSpace(_) => "ClearSpace",
+            Self::CreateUser(_) => "CreateUser",
+            Self::DropUser(_) => "DropUser",
+            Self::AlterUser(_) => "AlterUser",
+            Self::CreateFulltextIndex(_) => "CreateFulltextIndex",
+            Self::CreateVectorIndex(_) => "CreateVectorIndex",
+            Self::Explain(_) => "Explain",
+            Self::Profile(_) => "Profile",
+            Self::Use(_) => "Use",
             Self::BeginTransaction(s) => match s.read_only {
                 Some(true) => "BeginTransactionReadOnly",
                 Some(false) => "BeginTransactionReadWrite",

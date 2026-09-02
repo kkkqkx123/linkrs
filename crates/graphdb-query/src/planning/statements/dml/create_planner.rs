@@ -3,6 +3,10 @@
 //! Query planning for handling Cypher-style CREATE statements
 //! supports CREATE (n:Label {props}) and CREATE (a)-[:Type]->(b) syntaxes
 
+use crate::binder::bound::{
+    BoundCreateTarget, BoundExpression, BoundPatternElement, BoundStatement,
+};
+use crate::binder::expr_converter::bound_expr_to_contextual;
 use crate::parser::ast::{CreateStmt, CreateTarget, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -135,12 +139,175 @@ impl CreatePlanner {
 impl Planner for CreatePlanner {
     fn plan_bound(
         &mut self,
-        _bound: &crate::binder::BoundStatement,
+        bound: &BoundStatement,
         qctx: Arc<QueryContext>,
         _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        _validated: &ValidatedStatement,
     ) -> Result<SubPlan, PlannerError> {
-        self.transform(validated, qctx)
+        let create = match bound {
+            BoundStatement::Create(c) => c,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain the CREATE".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx
+            .rctx()
+            .space_name
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let arg_node = ArgumentNode::new(next_node_id(), "create_args");
+
+        let (insert_node, created_count) = match &create.target {
+            BoundCreateTarget::Node {
+                labels,
+                properties,
+                ..
+            } => {
+                let props = Self::convert_bound_properties(properties.as_deref(), &expr_ctx)?;
+                let info =
+                    self.build_vertex_insert_info(space_name, labels, &props, &expr_ctx)?;
+                (
+                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    1,
+                )
+            }
+            BoundCreateTarget::Edge {
+                edge_type,
+                src,
+                dst,
+                properties,
+                ..
+            } => {
+                let props = Self::convert_bound_properties(properties.as_deref(), &expr_ctx)?;
+                let src_vid = bound_expr_to_contextual(src, &expr_ctx)
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                let dst_vid = bound_expr_to_contextual(dst, &expr_ctx)
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                let info = self.build_edge_insert_info(
+                    space_name,
+                    edge_type.clone(),
+                    src_vid,
+                    dst_vid,
+                    &props,
+                );
+                (
+                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    1,
+                )
+            }
+            BoundCreateTarget::Path { patterns } => {
+                let mut vertex_infos = Vec::new();
+                let mut edge_infos = Vec::new();
+                let mut created_count = 0;
+
+                for element in patterns {
+                    match element {
+                        BoundPatternElement::Node(vertex) => {
+                            let props = Self::convert_bound_properties(
+                                vertex.properties.as_deref(),
+                                &expr_ctx,
+                            )?;
+                            let info = self.build_vertex_insert_info(
+                                space_name.clone(),
+                                &vertex.labels,
+                                &props,
+                                &expr_ctx,
+                            )?;
+                            vertex_infos.push(info);
+                            created_count += 1;
+                        }
+                        BoundPatternElement::Edge(edge) => {
+                            if edge.edge_types.is_empty() {
+                                return Err(PlannerError::PlanGenerationFailed(
+                                    "The edge mode must specify the edge type".to_string(),
+                                ));
+                            }
+                            let props = Self::convert_bound_properties(
+                                edge.properties.as_deref(),
+                                &expr_ctx,
+                            )?;
+                            let src_vid = {
+                                let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                                    graphdb_core::Expression::literal(Value::Null(
+                                        graphdb_core::NullType::default(),
+                                    )),
+                                );
+                                let id = expr_ctx.register_expression(expr_meta);
+                                ContextualExpression::new(id, expr_ctx.clone())
+                            };
+                            let dst_vid = {
+                                let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                                    graphdb_core::Expression::literal(Value::Null(
+                                        graphdb_core::NullType::default(),
+                                    )),
+                                );
+                                let id = expr_ctx.register_expression(expr_meta);
+                                ContextualExpression::new(id, expr_ctx.clone())
+                            };
+                            let edge_info = EdgeInsertInfo {
+                                space_name: space_name.clone(),
+                                edge_name: edge.edge_types[0].clone(),
+                                prop_names: props.iter().map(|(k, _)| k.clone()).collect(),
+                                edges: vec![(
+                                    src_vid,
+                                    dst_vid,
+                                    None,
+                                    props.iter().map(|(_, v)| v.clone()).collect(),
+                                )],
+                                if_not_exists: false,
+                            };
+                            edge_infos.push(edge_info);
+                            created_count += 1;
+                        }
+                    }
+                }
+
+                if vertex_infos.is_empty() && edge_infos.is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "Path creation must contain at least one node or edge".to_string(),
+                    ));
+                }
+
+                let mut insert_nodes = Vec::new();
+                for info in vertex_infos {
+                    insert_nodes.push(PlanNodeEnum::InsertVertices(
+                        InsertVerticesNode::new(next_node_id(), info),
+                    ));
+                }
+                for info in edge_infos {
+                    insert_nodes.push(PlanNodeEnum::InsertEdges(InsertEdgesNode::new(
+                        next_node_id(),
+                        info,
+                    )));
+                }
+
+                if insert_nodes.len() == 1 {
+                    (
+                        insert_nodes
+                            .into_iter()
+                            .next()
+                            .expect("insert_nodes should not be null after length checking"),
+                        created_count,
+                    )
+                } else {
+                    let combined = self.combine_insert_nodes(insert_nodes)?;
+                    (PlanNodeEnum::PassThrough(combined), created_count)
+                }
+            }
+        };
+
+        let yield_columns = self.create_yield_columns(created_count, &expr_ctx);
+        let project_node = ProjectNode::new(insert_node, yield_columns).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+        })?;
+        let final_node = PlanNodeEnum::Project(project_node);
+        let sub_plan = SubPlan::new(Some(final_node), Some(PlanNodeEnum::Argument(arg_node)));
+        Ok(sub_plan)
     }
 
     fn transform(
@@ -329,6 +496,24 @@ impl Planner for CreatePlanner {
 }
 
 impl CreatePlanner {
+    /// Convert bound properties to contextual expressions.
+    fn convert_bound_properties(
+        props: Option<&[(String, BoundExpression)]>,
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<Vec<(String, ContextualExpression)>, PlannerError> {
+        match props {
+            Some(pairs) => pairs
+                .iter()
+                .map(|(key, bound_expr)| {
+                    let ctx = bound_expr_to_contextual(bound_expr, expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    Ok((key.clone(), ctx))
+                })
+                .collect(),
+            None => Ok(vec![]),
+        }
+    }
+
     /// Extract attribute key-value pairs from the expression.
     fn extract_properties(
         expr: &ContextualExpression,

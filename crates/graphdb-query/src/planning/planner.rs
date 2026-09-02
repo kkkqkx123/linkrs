@@ -351,6 +351,7 @@ impl PlannerEnum {
             BoundStatement::Subgraph(_) => Some(PlannerEnum::Subgraph(SubgraphPlanner::new())),
             BoundStatement::Return(_) => Some(PlannerEnum::Return(ReturnPlanner::new())),
             BoundStatement::With(_) => Some(PlannerEnum::With(WithPlanner::new())),
+            BoundStatement::Use(_) => Some(PlannerEnum::Use(UsePlanner::new())),
             BoundStatement::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
             BoundStatement::Pipe(_) => Some(PlannerEnum::Pipe(PipePlanner::new())),
             BoundStatement::SetOperation(_) => {
@@ -379,6 +380,36 @@ impl PlannerEnum {
             },
             BoundStatement::Drop(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Alter(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::Show(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::ShowCreate(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::Desc(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            BoundStatement::ClearSpace(_) => {
+                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
+            }
+            BoundStatement::CreateUser(_)
+            | BoundStatement::DropUser(_)
+            | BoundStatement::AlterUser(_) => {
+                Some(PlannerEnum::UserManagement(UserManagementPlanner::new()))
+            }
+            BoundStatement::CreateFulltextIndex(_) => {
+                Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
+            }
+            BoundStatement::CreateVectorIndex(_) => {
+                #[cfg(feature = "vector")]
+                {
+                    Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new()))
+                }
+                #[cfg(not(feature = "vector"))]
+                {
+                    None
+                }
+            }
+            BoundStatement::Explain(_) => {
+                Some(PlannerEnum::Explain(ExplainPlanner::new()))
+            }
+            BoundStatement::Profile(_) => {
+                Some(PlannerEnum::Explain(ExplainPlanner::new_profile()))
+            }
             BoundStatement::BeginTransaction(_)
             | BoundStatement::Commit(_)
             | BoundStatement::Rollback(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
