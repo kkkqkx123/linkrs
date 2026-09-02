@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
+use crate::planning::context::PlanContext;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::SubPlan;
 use crate::QueryContext;
@@ -105,37 +106,16 @@ pub trait Planner: std::fmt::Debug {
         Ok(plan)
     }
 
-    /// Transform with pre-resolved metadata context
+    /// Translate a bound statement directly into a plan sub-tree.
     ///
-    /// This method allows planners to use pre-resolved metadata during planning phase,
-    /// enabling early error detection and better query optimization.
-    /// Default implementation falls back to regular transform if metadata context is not needed.
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        _metadata_context: &crate::metadata::MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        // Default implementation ignores metadata context
-        // Specific planners (like VectorSearchPlanner) can override this
-        self.transform(validated, qctx)
-    }
-
-    /// Translate a bound statement directly into a plan sub-tree,
-    /// bypassing ValidatedStatement entirely.
-    ///
-    /// `metadata` is the lazy, statement-scoped metadata context (only the
-    /// referenced tags/edges/indexes), and `validated` is the AST-derived
-    /// [`ValidatedStatement`] for planners whose clause planning is still
-    /// AST-driven (e.g. MATCH).  The default implementation returns
+    /// The unified [`PlanContext`] bundles all inputs needed during
+    /// bound-statement planning (bound statement, query context, metadata,
+    /// validated statement). The default implementation returns
     /// `UnsupportedOperation` so that planners which have not yet been
     /// migrated to the bound pipeline continue to work unchanged.
     fn plan_bound(
         &mut self,
-        _bound: &BoundStatement,
-        _qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        _validated: &ValidatedStatement,
+        _ctx: &PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         Err(PlannerError::UnsupportedOperation(
             "plan_bound not yet implemented for this planner".to_string(),
@@ -498,171 +478,42 @@ impl PlannerEnum {
     /// Plan from a BoundStatement, producing a SubPlan (PlanNodeEnum tree).
     pub fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         match self {
-            PlannerEnum::Match(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Go(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Lookup(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Path(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Subgraph(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::FetchVertices(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::FetchEdges(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::Maintain(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::UserManagement(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::CreateData(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::Assignment(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::Insert(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Copy(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Delete(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Update(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Remove(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Set(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Merge(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::GroupBy(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Filter(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Collect(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::SetOperation(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::Use(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Unwind(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::With(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Return(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::AssignVariable(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-            PlannerEnum::Yield(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Pipe(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::Explain(planner) => planner.plan_bound(bound, qctx, metadata, validated),
-            PlannerEnum::FulltextSearch(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
+            PlannerEnum::Match(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Go(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Lookup(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Path(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Subgraph(planner) => planner.plan_bound(ctx),
+            PlannerEnum::FetchVertices(planner) => planner.plan_bound(ctx),
+            PlannerEnum::FetchEdges(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Maintain(planner) => planner.plan_bound(ctx),
+            PlannerEnum::UserManagement(planner) => planner.plan_bound(ctx),
+            PlannerEnum::CreateData(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Assignment(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Insert(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Copy(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Delete(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Update(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Remove(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Set(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Merge(planner) => planner.plan_bound(ctx),
+            PlannerEnum::GroupBy(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Filter(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Collect(planner) => planner.plan_bound(ctx),
+            PlannerEnum::SetOperation(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Use(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Unwind(planner) => planner.plan_bound(ctx),
+            PlannerEnum::With(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Return(planner) => planner.plan_bound(ctx),
+            PlannerEnum::AssignVariable(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Yield(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Pipe(planner) => planner.plan_bound(ctx),
+            PlannerEnum::Explain(planner) => planner.plan_bound(ctx),
+            PlannerEnum::FulltextSearch(planner) => planner.plan_bound(ctx),
             #[cfg(feature = "vector")]
-            PlannerEnum::VectorSearch(planner) => {
-                planner.plan_bound(bound, qctx, metadata, validated)
-            }
-        }
-    }
-
-    /// Transform with pre-resolved metadata context
-    pub fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &crate::metadata::MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        match self {
-            PlannerEnum::Match(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Go(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Lookup(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Path(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Subgraph(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::FetchVertices(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::FetchEdges(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Maintain(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::UserManagement(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::CreateData(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Assignment(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Insert(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Copy(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Delete(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Update(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Remove(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Set(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Merge(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::GroupBy(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Filter(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Collect(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::SetOperation(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Use(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Unwind(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::With(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Return(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::AssignVariable(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Yield(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Pipe(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::Explain(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            PlannerEnum::FulltextSearch(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
-            #[cfg(feature = "vector")]
-            PlannerEnum::VectorSearch(planner) => {
-                planner.transform_with_metadata(validated, qctx, metadata_context)
-            }
+            PlannerEnum::VectorSearch(planner) => planner.plan_bound(ctx),
         }
     }
 }

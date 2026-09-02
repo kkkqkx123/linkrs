@@ -44,7 +44,7 @@ impl ExplainPlanner {
         &self,
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
-        metadata_context: Option<&crate::metadata::MetadataContext>,
+        _metadata_context: Option<&crate::metadata::MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
         let inner_stmt = self.extract_inner_stmt(validated.stmt())?;
 
@@ -64,12 +64,7 @@ impl ExplainPlanner {
                 ))
             })?;
 
-        let inner_plan = match metadata_context {
-            Some(metadata) => {
-                inner_planner.transform_with_metadata(&inner_validated, qctx, metadata)?
-            }
-            None => inner_planner.transform(&inner_validated, qctx)?,
-        };
+        let inner_plan = inner_planner.transform(&inner_validated, qctx)?;
 
         log::debug!(
             "ExplainPlanner: inner plan generated via AST path",
@@ -88,22 +83,15 @@ impl Planner for ExplainPlanner {
         self.plan_inner_ast(validated, qctx, None)
     }
 
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &crate::metadata::MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        self.plan_inner_ast(validated, qctx, Some(metadata_context))
-    }
-
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         let (inner_bound, is_profile) = match bound {
             BoundStatement::Explain(e) => (e.statement.as_ref(), false),
             BoundStatement::Profile(p) => (p.statement.as_ref(), true),
@@ -122,8 +110,8 @@ impl Planner for ExplainPlanner {
                 ))
             })?;
 
-        let inner_plan =
-            inner_planner.plan_bound(inner_bound, qctx, metadata, validated)?;
+        let inner_ctx = ctx.with_bound(inner_bound);
+        let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
         let mode = if is_profile { "PROFILE" } else { "EXPLAIN" };
         log::debug!(

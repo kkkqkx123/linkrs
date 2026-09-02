@@ -34,11 +34,13 @@ impl AssignmentPlanner {
 impl Planner for AssignmentPlanner {
     fn plan_bound(
         &mut self,
-        bound: &crate::binder::BoundStatement,
-        qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         match bound {
             crate::binder::BoundStatement::Other(stmt) => {
                 let ast = crate::parser::ast::stmt::Ast::new(

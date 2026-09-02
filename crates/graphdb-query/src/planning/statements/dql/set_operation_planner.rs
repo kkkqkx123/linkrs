@@ -170,11 +170,10 @@ impl Planner for SetOperationPlanner {
 
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let _ = &bound;
         let set_op = match bound {
             BoundStatement::SetOperation(s) => s,
             _ => {
@@ -184,10 +183,10 @@ impl Planner for SetOperationPlanner {
             }
         };
 
-        let left_plan =
-            self.plan_bound_subquery(&set_op.left, qctx.clone(), metadata, validated, 1)?;
-        let right_plan =
-            self.plan_bound_subquery(&set_op.right, qctx, metadata, validated, 1)?;
+        let left_ctx = ctx.with_bound(&set_op.left);
+        let right_ctx = ctx.with_bound(&set_op.right);
+        let left_plan = self.plan_bound_subquery(&left_ctx, 1)?;
+        let right_plan = self.plan_bound_subquery(&right_ctx, 1)?;
 
         let left_root = left_plan.root().clone().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
@@ -238,10 +237,7 @@ impl Planner for SetOperationPlanner {
 impl SetOperationPlanner {
     fn plan_bound_subquery(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
         depth: usize,
     ) -> Result<SubPlan, PlannerError> {
         if depth > self.max_depth {
@@ -251,18 +247,18 @@ impl SetOperationPlanner {
             )));
         }
 
-        match bound {
+        match ctx.bound {
             BoundStatement::SetOperation(set_op_stmt) => {
-                self.plan_bound_set_op(set_op_stmt, qctx, metadata, validated, depth + 1)
+                self.plan_bound_set_op(set_op_stmt, ctx, depth + 1)
             }
             _ => {
-                let Some(mut planner) = PlannerEnum::from_bound_statement(bound) else {
+                let Some(mut planner) = PlannerEnum::from_bound_statement(ctx.bound) else {
                     return Err(PlannerError::InvalidOperation(format!(
                         "Unsupported subquery type in set operation: {}",
-                        bound.kind()
+                        ctx.bound.kind()
                     )));
                 };
-                planner.plan_bound(bound, qctx, metadata, validated)
+                planner.plan_bound(ctx)
             }
         }
     }
@@ -270,15 +266,13 @@ impl SetOperationPlanner {
     fn plan_bound_set_op(
         &mut self,
         set_op: &crate::binder::bound::BoundSetOperationStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
         depth: usize,
     ) -> Result<SubPlan, PlannerError> {
-        let left_plan =
-            self.plan_bound_subquery(&set_op.left, qctx.clone(), metadata, validated, depth)?;
-        let right_plan =
-            self.plan_bound_subquery(&set_op.right, qctx, metadata, validated, depth)?;
+        let left_ctx = ctx.with_bound(&set_op.left);
+        let right_ctx = ctx.with_bound(&set_op.right);
+        let left_plan = self.plan_bound_subquery(&left_ctx, depth)?;
+        let right_plan = self.plan_bound_subquery(&right_ctx, depth)?;
 
         let left_root = left_plan.root().clone().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())

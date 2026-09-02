@@ -12,6 +12,7 @@
 
 // Core modules
 pub mod connector;
+pub mod context;
 pub mod physical_planner;
 pub mod plan;
 pub mod planner;

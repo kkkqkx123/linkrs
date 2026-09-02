@@ -100,12 +100,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let validated = super::prepared::build_validated_fallback(ast);
         let metadata = self.build_metadata_context(&query_context, bound);
 
-        let sub_plan = planner_enum.plan_bound(
+        let ctx = crate::planning::context::PlanContext::new(
             bound,
             query_context.clone(),
             metadata.as_ref(),
             &validated,
-        ).map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?;
+        );
+        let sub_plan = planner_enum
+            .plan_bound(&ctx)
+            .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?;
 
         let root = sub_plan.root().clone();
         let mut execution_plan = crate::planning::plan::ExecutionPlan::new(root);

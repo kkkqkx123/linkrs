@@ -44,11 +44,13 @@ impl DeletePlanner {
 impl Planner for DeletePlanner {
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        _validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         let delete = match bound {
             BoundStatement::Delete(d) => d,
             _ => {

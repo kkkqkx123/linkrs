@@ -124,11 +124,13 @@ impl InsertPlanner {
 impl Planner for InsertPlanner {
     fn plan_bound(
         &mut self,
-        _bound: &crate::binder::BoundStatement,
-        qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         self.transform(validated, qctx)
     }
 

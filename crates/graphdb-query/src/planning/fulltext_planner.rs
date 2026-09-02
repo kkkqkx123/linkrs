@@ -52,11 +52,11 @@ impl FulltextSearchPlanner {
 impl Planner for FulltextSearchPlanner {
     fn plan_bound(
         &mut self,
-        _bound: &crate::binder::BoundStatement,
-        qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let validated = ctx.validated;
+        let qctx = ctx.qctx.clone();
+        let _ = validated;
         self.transform(validated, qctx)
     }
 
@@ -80,15 +80,6 @@ impl Planner for FulltextSearchPlanner {
                 | Stmt::LookupFulltext(_)
                 | Stmt::MatchFulltext(_)
         )
-    }
-
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        self.transform_impl(validated, qctx, Some(metadata_context))
     }
 }
 

@@ -125,46 +125,15 @@ impl Planner for MatchStatementPlanner {
         self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)
     }
 
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        self.metadata_context = Some(metadata_context.clone());
-
-        let validation_info = &validated.validation_info;
-
-        self.expr_context = Some(validated.ast.expr_context().clone());
-
-        for hint in &validation_info.optimization_hints {
-            log::debug!("Optimization Tip: {:?}", hint);
-        }
-
-        if self.config.enable_index_optimization {
-            for index in metadata_context.get_all_indexes() {
-                log::debug!(
-                    "Available index: {} on tag {} field {}",
-                    index.index_name,
-                    index.tag_name,
-                    index.field_name
-                );
-            }
-        }
-
-        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)
-    }
-
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         if !matches!(bound, BoundStatement::Match(_)) {
             return Err(PlannerError::UnsupportedOperation(
                 "Expected a MATCH bound statement".to_string(),

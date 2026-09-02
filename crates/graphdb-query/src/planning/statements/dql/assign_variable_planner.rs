@@ -62,11 +62,13 @@ impl Planner for AssignVariablePlanner {
 
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        _qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        _validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         let assign = match bound {
             BoundStatement::AssignVariable(a) => a,
             _ => {

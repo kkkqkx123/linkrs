@@ -69,70 +69,15 @@ impl Planner for LookupPlanner {
         self.plan_lookup(validated, qctx, None, is_edge, 0)
     }
 
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        let lookup_stmt = match validated.stmt() {
-            Stmt::Lookup(lookup_stmt) => lookup_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "LookupPlanner requires the Lookup statement.".to_string(),
-                ));
-            }
-        };
-
-        let target_name = match &lookup_stmt.target {
-            crate::parser::ast::LookupTarget::Tag(name) => name.clone(),
-            crate::parser::ast::LookupTarget::Edge(name) => name.clone(),
-            crate::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
-        };
-
-        // Resolve the target kind against the schema metadata (mirrors the
-        // binder: a tag takes precedence over an edge type).
-        let is_edge = match &lookup_stmt.target {
-            crate::parser::ast::LookupTarget::Edge(_) => true,
-            crate::parser::ast::LookupTarget::Tag(_) => false,
-            crate::parser::ast::LookupTarget::Unspecified(_) => {
-                if metadata_context.has_tag_metadata(&target_name) {
-                    false
-                } else {
-                    metadata_context.has_edge_type_metadata(&target_name)
-                }
-            }
-        };
-
-        let selected_index = Self::find_suitable_index(
-            metadata_context,
-            &target_name,
-            is_edge,
-            &lookup_stmt.where_clause,
-        );
-
-        // Resolve the numeric tag id for tag-targeted index scans so the
-        // IndexScanNode can export it to the cost model and statistics
-        // manager.  Edge-targeted scans keep tag_id <= 0 (edge convention).
-        let tag_id = if is_edge {
-            0
-        } else {
-            metadata_context
-                .get_tag_metadata(&target_name)
-                .map(|meta| meta.tag_id as i32)
-                .unwrap_or(0)
-        };
-
-        self.plan_lookup(validated, qctx, selected_index.as_ref(), is_edge, tag_id)
-    }
-
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         let lookup = match bound {
             BoundStatement::Lookup(l) => l,
             _ => {

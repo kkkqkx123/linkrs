@@ -94,11 +94,13 @@ impl Planner for PipePlanner {
 
     fn plan_bound(
         &mut self,
-        bound: &BoundStatement,
-        qctx: Arc<QueryContext>,
-        metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
         let pipe = match bound {
             BoundStatement::Pipe(p) => p,
             _ => {
@@ -124,7 +126,8 @@ impl Planner for PipePlanner {
                 ))
             })?;
 
-            let sub_plan = planner.plan_bound(stmt, qctx.clone(), metadata, validated)?;
+            let sub_ctx = ctx.with_bound(stmt);
+            let sub_plan = planner.plan_bound(&sub_ctx)?;
 
             combined_plan = match combined_plan {
                 None => Some(sub_plan),

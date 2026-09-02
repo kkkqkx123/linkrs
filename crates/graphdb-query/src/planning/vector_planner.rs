@@ -52,11 +52,11 @@ impl VectorSearchPlanner {
 impl Planner for VectorSearchPlanner {
     fn plan_bound(
         &mut self,
-        _bound: &crate::binder::BoundStatement,
-        qctx: Arc<QueryContext>,
-        _metadata: Option<&crate::metadata::MetadataContext>,
-        validated: &ValidatedStatement,
+        ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        let validated = ctx.validated;
+        let qctx = ctx.qctx.clone();
+        let _ = validated;
         self.transform(validated, qctx)
     }
 
@@ -95,44 +95,10 @@ impl Planner for VectorSearchPlanner {
                 | Stmt::MatchVector(_)
         )
     }
-
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let space_id = qctx.space_id().unwrap_or(0);
-
-        match stmt {
-            Stmt::CreateVectorIndex(create) => {
-                self.transform_create_vector_index(create, &space_name, space_id)
-            }
-            Stmt::DropVectorIndex(drop) => {
-                self.transform_drop_vector_index_with_metadata(drop, &space_name, metadata_context)
-            }
-            Stmt::SearchVector(search) => {
-                self.transform_search_vector_with_metadata(search, space_id, metadata_context)
-            }
-            Stmt::LookupVector(lookup) => self.transform_lookup_vector_with_metadata(
-                lookup,
-                space_id,
-                &space_name,
-                metadata_context,
-            ),
-            Stmt::MatchVector(match_stmt) => {
-                self.transform_match_vector_with_metadata(match_stmt, space_id, metadata_context)
-            }
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "Not a vector search statement".to_string(),
-            )),
-        }
-    }
 }
 
 impl VectorSearchPlanner {
+    #[allow(dead_code)]
     fn transform_create_vector_index(
         &self,
         create: &CreateVectorIndex,
@@ -192,6 +158,7 @@ impl VectorSearchPlanner {
     /// yields `IndexNotFound` unless `IF EXISTS` was given, in which case the
     /// node keeps an empty location and the executor turns it into a no-op
     /// status row.
+    #[allow(dead_code)]
     fn transform_drop_vector_index_with_metadata(
         &self,
         drop: &DropVectorIndex,
@@ -683,6 +650,7 @@ impl VectorSearchPlanner {
     }
 
     /// Transform SEARCH VECTOR with pre-resolved metadata
+    #[allow(dead_code)]
     fn transform_search_vector_with_metadata(
         &self,
         search: &SearchVectorStatement,
@@ -726,6 +694,7 @@ impl VectorSearchPlanner {
     }
 
     /// Transform LOOKUP VECTOR with pre-resolved metadata
+    #[allow(dead_code)]
     fn transform_lookup_vector_with_metadata(
         &self,
         lookup: &LookupVector,
@@ -768,6 +737,7 @@ impl VectorSearchPlanner {
     }
 
     /// Transform MATCH VECTOR with pre-resolved metadata
+    #[allow(dead_code)]
     fn transform_match_vector_with_metadata(
         &self,
         match_stmt: &MatchVector,

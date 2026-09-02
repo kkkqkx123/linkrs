@@ -109,8 +109,13 @@ impl QueryStage for PlanStage {
 
         let validated = crate::pipeline::prepared::build_validated_fallback(&ast);
 
+        let ctx = crate::planning::context::PlanContext::without_metadata(
+            &bound,
+            query_context.clone(),
+            &validated,
+        );
         let sub_plan = planner_enum
-            .plan_bound(&bound, query_context.clone(), None, &validated)
+            .plan_bound(&ctx)
             .map_err(|e| QueryPipelineError::Planning {
                 source: e,
                 statement_type: crate::error::StatementType::from_bound(&bound),
