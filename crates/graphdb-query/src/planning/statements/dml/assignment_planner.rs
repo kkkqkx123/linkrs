@@ -32,6 +32,29 @@ impl AssignmentPlanner {
 }
 
 impl Planner for AssignmentPlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &crate::binder::BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        match bound {
+            crate::binder::BoundStatement::Other(stmt) => {
+                let ast = crate::parser::ast::stmt::Ast::new(
+                    (**stmt).clone(),
+                    std::sync::Arc::new(
+                        graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                );
+                let fallback_validated =
+                    ValidatedStatement::new(std::sync::Arc::new(ast), validated.validation_info.clone());
+                self.transform(&fallback_validated, qctx)
+            }
+            _ => self.transform(validated, qctx),
+        }
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

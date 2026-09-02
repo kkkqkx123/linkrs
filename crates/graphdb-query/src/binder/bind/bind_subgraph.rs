@@ -37,7 +37,6 @@ impl Binder {
             .map(|o| (o.edge_types.clone(), o.direction));
 
         Ok(BoundStatement::Subgraph(BoundSubgraphStatement {
-            span: stmt.span,
             steps: stmt.steps.clone(),
             from,
             over,

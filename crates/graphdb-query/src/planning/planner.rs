@@ -357,6 +357,12 @@ impl PlannerEnum {
                 Some(PlannerEnum::SetOperation(SetOperationPlanner::new()))
             }
             BoundStatement::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
+            BoundStatement::Filter(_) => Some(PlannerEnum::Filter(FilterPlanner::new())),
+            BoundStatement::Yield(_) => Some(PlannerEnum::Yield(YieldPlanner::new())),
+            BoundStatement::Collect(_) => Some(PlannerEnum::Collect(CollectPlanner::new())),
+            BoundStatement::AssignVariable(_) => {
+                Some(PlannerEnum::AssignVariable(AssignVariablePlanner::new()))
+            }
             BoundStatement::Insert(_) => Some(PlannerEnum::Insert(InsertPlanner::new())),
             BoundStatement::Update(_) => Some(PlannerEnum::Update(UpdatePlanner::new())),
             BoundStatement::Delete(_) => Some(PlannerEnum::Delete(DeletePlanner::new())),
@@ -365,12 +371,11 @@ impl PlannerEnum {
             BoundStatement::Remove(_) => Some(PlannerEnum::Remove(RemovePlanner::new())),
             BoundStatement::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
             BoundStatement::Create(c) => match &c.target {
-                crate::parser::ast::CreateTarget::Node { .. }
-                | crate::parser::ast::CreateTarget::Edge { .. }
-                | crate::parser::ast::CreateTarget::Path { .. } => {
+                crate::binder::bound::BoundCreateTarget::Node { .. }
+                | crate::binder::bound::BoundCreateTarget::Edge { .. }
+                | crate::binder::bound::BoundCreateTarget::Path { .. } => {
                     Some(PlannerEnum::CreateData(CreatePlanner::new()))
                 }
-                _ => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             },
             BoundStatement::Drop(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Alter(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),

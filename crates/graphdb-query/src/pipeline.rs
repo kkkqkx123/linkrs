@@ -1,10 +1,12 @@
 #![allow(clippy::arc_with_non_send_sync)]
 
 mod compiler;
+pub mod dml_cache;
 mod diagnostics;
 mod execution;
 mod frontend;
 mod prepared;
+pub mod stage;
 
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;

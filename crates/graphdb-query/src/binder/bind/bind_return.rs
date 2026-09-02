@@ -44,7 +44,6 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::Return(BoundReturnStatement {
-            span: stmt.span,
             items,
             distinct: stmt.distinct,
             order_by,
@@ -91,7 +90,6 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::With(BoundWithStatement {
-            span: stmt.span,
             items,
             condition,
         }))
@@ -103,7 +101,6 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let expr = self.bind_expr(&stmt.expression)?;
         Ok(BoundStatement::Unwind(BoundUnwindStatement {
-            span: stmt.span,
             expression: expr,
             alias: stmt.variable.clone(),
         }))

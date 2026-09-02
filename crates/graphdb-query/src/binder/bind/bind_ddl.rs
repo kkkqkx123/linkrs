@@ -1,6 +1,7 @@
 use graphdb_core::DBResult;
 
 use crate::binder::bound::*;
+use crate::parser::ast::pattern::Pattern;
 
 use super::Binder;
 
@@ -9,27 +10,127 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::CreateStmt,
     ) -> DBResult<BoundStatement> {
-        // Validate property definitions for tag/edge creation: no duplicate names.
-        if let crate::parser::ast::CreateTarget::Tag { properties, .. }
-        | crate::parser::ast::CreateTarget::EdgeType { properties, .. } = &stmt.target
-        {
-            let mut seen = std::collections::HashSet::new();
-            for prop in properties {
-                if !seen.insert(&prop.name) {
-                    return Err(graphdb_core::error::DBError::from(
-                        graphdb_core::error::QueryError::invalid_query(format!(
-                            "Duplicate property name '{}'",
-                            prop.name
-                        )),
-                    ));
-                }
+        match &stmt.target {
+            crate::parser::ast::CreateTarget::Node { .. }
+            | crate::parser::ast::CreateTarget::Edge { .. }
+            | crate::parser::ast::CreateTarget::Path { .. } => {
+                let bound_target = self.bind_create_target(&stmt.target)?;
+                Ok(BoundStatement::Create(BoundCreate {
+                    target: bound_target,
+                    if_not_exists: stmt.if_not_exists,
+                }))
+            }
+            _ => {
+                // Schema DDL targets (Tag, EdgeType, Space, Index, Sequence)
+                // remain as Other for MaintainPlanner.
+                Ok(BoundStatement::Other(Box::new(
+                    crate::parser::ast::Stmt::Create(stmt.clone()),
+                )))
             }
         }
-        Ok(BoundStatement::Create(BoundCreate {
-            span: stmt.span,
-            target: stmt.target.clone(),
-            if_not_exists: stmt.if_not_exists,
-        }))
+    }
+
+    fn bind_create_target(
+        &mut self,
+        target: &crate::parser::ast::CreateTarget,
+    ) -> DBResult<BoundCreateTarget> {
+        match target {
+            crate::parser::ast::CreateTarget::Node {
+                variable,
+                labels,
+                properties,
+            } => {
+                let bound_props = properties
+                    .as_ref()
+                    .map(|p| Self::extract_map_properties(p))
+                    .transpose()?;
+                Ok(BoundCreateTarget::Node {
+                    variable: variable.clone(),
+                    labels: labels.clone(),
+                    properties: bound_props,
+                })
+            }
+            crate::parser::ast::CreateTarget::Edge {
+                variable,
+                edge_type,
+                src,
+                dst,
+                properties,
+                direction,
+            } => {
+                let src_expr = src
+                    .expression()
+                    .map(|e| e.inner().clone())
+                    .unwrap_or_else(|| graphdb_core::types::Expression::Variable("_".to_string()));
+                let dst_expr = dst
+                    .expression()
+                    .map(|e| e.inner().clone())
+                    .unwrap_or_else(|| graphdb_core::types::Expression::Variable("_".to_string()));
+                let bound_src = Self::convert_ast_expr_to_bound(&src_expr)?;
+                let bound_dst = Self::convert_ast_expr_to_bound(&dst_expr)?;
+                let bound_props = properties
+                    .as_ref()
+                    .map(|p| Self::extract_map_properties(p))
+                    .transpose()?;
+                Ok(BoundCreateTarget::Edge {
+                    variable: variable.clone(),
+                    edge_type: edge_type.clone(),
+                    src: bound_src,
+                    dst: bound_dst,
+                    properties: bound_props,
+                    direction: *direction,
+                })
+            }
+            crate::parser::ast::CreateTarget::Path { patterns } => {
+                let bound_patterns = patterns
+                    .iter()
+                    .map(|p| self.bind_pattern_element(p))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundCreateTarget::Path {
+                    patterns: bound_patterns,
+                })
+            }
+            _ => Err(graphdb_core::error::DBError::from(
+                graphdb_core::error::QueryError::invalid_query(
+                    "Unexpected CREATE target type".to_string(),
+                ),
+            )),
+        }
+    }
+
+    fn bind_pattern_element(
+        &mut self,
+        pattern: &Pattern,
+    ) -> DBResult<BoundPatternElement> {
+        match pattern {
+            Pattern::Node(np) => Ok(BoundPatternElement::Node(BoundPatternVertex {
+                variable: np.variable.clone(),
+                labels: np.labels.clone(),
+                properties: np
+                    .properties
+                    .as_ref()
+                    .map(|p| Self::extract_map_properties(p))
+                    .transpose()?,
+            })),
+            Pattern::Edge(ep) => {
+                let properties = ep
+                    .properties
+                    .as_ref()
+                    .map(|p| Self::extract_map_properties(p))
+                    .transpose()?;
+                Ok(BoundPatternElement::Edge(BoundPatternEdge {
+                    variable: ep.variable.clone(),
+                    edge_types: ep.edge_types.clone(),
+                    properties,
+                    direction: ep.direction,
+                }))
+            }
+            _ => Err(graphdb_core::error::DBError::from(
+                graphdb_core::error::QueryError::invalid_query(
+                    "CREATE PATH only supports node or edge patterns".to_string(),
+                ),
+            )),
+        }
     }
 
     pub(crate) fn bind_drop(
@@ -37,7 +138,6 @@ impl Binder {
         stmt: &crate::parser::ast::DropStmt,
     ) -> DBResult<BoundStatement> {
         Ok(BoundStatement::Drop(BoundDrop {
-            span: stmt.span,
             target: stmt.target.clone(),
             if_exists: stmt.if_exists,
         }))
@@ -48,7 +148,6 @@ impl Binder {
         stmt: &crate::parser::ast::AlterStmt,
     ) -> DBResult<BoundStatement> {
         Ok(BoundStatement::Alter(BoundAlter {
-            span: stmt.span,
             target: stmt.target.clone(),
         }))
     }
@@ -85,16 +184,15 @@ impl Binder {
         stmt: &crate::parser::ast::BeginTransactionStmt,
     ) -> DBResult<BoundStatement> {
         Ok(BoundStatement::BeginTransaction(BoundBeginTransaction {
-            span: stmt.span,
             read_only: stmt.read_only,
         }))
     }
 
     pub(crate) fn bind_commit(
         &mut self,
-        stmt: &crate::parser::ast::CommitTransactionStmt,
+        _stmt: &crate::parser::ast::CommitTransactionStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Commit(BoundCommit { span: stmt.span }))
+        Ok(BoundStatement::Commit(BoundCommit))
     }
 
     pub(crate) fn bind_rollback(
@@ -102,7 +200,6 @@ impl Binder {
         stmt: &crate::parser::ast::RollbackTransactionStmt,
     ) -> DBResult<BoundStatement> {
         Ok(BoundStatement::Rollback(BoundRollback {
-            span: stmt.span,
             savepoint_name: stmt.savepoint_name.clone(),
         }))
     }
@@ -130,11 +227,84 @@ impl Binder {
         stmt: &crate::parser::ast::AssignVariableStmt,
     ) -> DBResult<BoundStatement> {
         let bound_expr = self.bind_expr(&stmt.expression)?;
-        // Validate variable name is defined in current scope? For assignment, we just ensure expression is valid.
-        // No extra scope mutation needed at bind time.
-        let _ = bound_expr;
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::AssignVariable(stmt.clone()),
-        )))
+        Ok(BoundStatement::AssignVariable(BoundAssignVariable {
+            name: stmt.name.clone(),
+            expression: bound_expr,
+        }))
+    }
+
+    pub(crate) fn bind_filter(
+        &mut self,
+        stmt: &crate::parser::ast::FilterStmt,
+    ) -> DBResult<BoundStatement> {
+        let condition = self.bind_expr(&stmt.expression)?;
+        Ok(BoundStatement::Filter(BoundFilter { condition }))
+    }
+
+    pub(crate) fn bind_yield(
+        &mut self,
+        stmt: &crate::parser::ast::YieldStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| {
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundYieldItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|w| self.bind_expr(w))
+            .transpose()?;
+
+        let order_by = stmt
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression)
+                            .map(|be| BoundOrderByItem {
+                                expression: be,
+                                direction: item.direction,
+                            })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        Ok(BoundStatement::Yield(BoundYield {
+            items,
+            where_clause,
+            distinct: stmt.distinct,
+            order_by,
+            skip: stmt.skip.clone(),
+            limit: stmt.limit.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_collect(
+        &mut self,
+        stmt: &crate::parser::ast::CollectStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| {
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundYieldItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+        Ok(BoundStatement::Collect(BoundCollect { items }))
     }
 }

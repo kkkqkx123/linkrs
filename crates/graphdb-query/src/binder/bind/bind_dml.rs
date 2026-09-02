@@ -1,4 +1,6 @@
+use crate::parser::ast::pattern::{NodePattern, Pattern};
 use crate::parser::ast::{Assignment, DeleteTarget, InsertTarget, SetOperationType, UpdateTarget};
+use graphdb_core::types::Expression;
 use graphdb_core::DBResult;
 
 use crate::binder::bound::*;
@@ -13,7 +15,6 @@ impl Binder {
         let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
 
         Ok(BoundStatement::Pipe(BoundPipeStatement {
-            span: stmt.span,
             statements,
         }))
     }
@@ -30,7 +31,6 @@ impl Binder {
             SetOperationType::Minus => SetOperationKind::Minus,
         };
         Ok(BoundStatement::SetOperation(BoundSetOperationStatement {
-            span: stmt.span,
             left,
             right,
             operation,
@@ -48,7 +48,6 @@ impl Binder {
             .collect::<DBResult<Vec<_>>>()?;
 
         Ok(BoundStatement::GroupBy(BoundGroupByStatement {
-            span: stmt.span,
             keys,
             aggregates: Vec::new(),
         }))
@@ -102,7 +101,6 @@ impl Binder {
             }
         };
         Ok(BoundStatement::Insert(BoundInsert {
-            span: stmt.span,
             target,
             if_not_exists: stmt.if_not_exists,
         }))
@@ -149,7 +147,6 @@ impl Binder {
             .map(|w| self.bind_expr(w))
             .transpose()?;
         Ok(BoundStatement::Update(BoundUpdate {
-            span: stmt.span,
             target,
             assignments,
             where_clause,
@@ -205,7 +202,6 @@ impl Binder {
             .map(|w| self.bind_expr(w))
             .transpose()?;
         Ok(BoundStatement::Delete(BoundDelete {
-            span: stmt.span,
             target,
             where_clause,
             with_edge: stmt.with_edge,
@@ -226,12 +222,9 @@ impl Binder {
         } else {
             Vec::new()
         };
-        // Validate pattern: MERGE requires a node or path pattern. No additional
-        // emptiness check needed because `Pattern` is an enum (Node/Edge/Path/Variable)
-        // and the parser guarantees a non-empty pattern.
+        let bound_pattern = self.bind_merge_pattern(&stmt.pattern)?;
         Ok(BoundStatement::Merge(BoundMerge {
-            span: stmt.span,
-            pattern: stmt.pattern.clone(),
+            pattern: bound_pattern,
             on_create,
             on_match,
         }))
@@ -243,7 +236,6 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let assignments = Self::bind_assignments(self, &stmt.assignments)?;
         Ok(BoundStatement::Set(BoundSet {
-            span: stmt.span,
             assignments,
         }))
     }
@@ -258,7 +250,6 @@ impl Binder {
             .map(|e| self.bind_expr(e))
             .collect::<DBResult<Vec<_>>>()?;
         Ok(BoundStatement::Remove(BoundRemove {
-            span: stmt.span,
             items,
         }))
     }
@@ -275,7 +266,6 @@ impl Binder {
             ));
         }
         Ok(BoundStatement::Copy(BoundCopy {
-            span: stmt.span,
             target: stmt.target.clone(),
             direction: stmt.direction,
             file_path: stmt.file_path.clone(),
@@ -299,5 +289,112 @@ impl Binder {
             });
         }
         Ok(out)
+    }
+
+    fn bind_merge_pattern(
+        &mut self,
+        pattern: &Pattern,
+    ) -> DBResult<BoundMergePattern> {
+        match pattern {
+            Pattern::Node(np) => Ok(BoundMergePattern::Node(Self::bind_pattern_vertex(np)?)),
+            Pattern::Edge(ep) => {
+                let edge = self.bind_pattern_edge(ep)?;
+                let src = BoundPatternVertex {
+                    variable: None,
+                    labels: Vec::new(),
+                    properties: None,
+                };
+                let dst = BoundPatternVertex {
+                    variable: None,
+                    labels: Vec::new(),
+                    properties: None,
+                };
+                Ok(BoundMergePattern::Edge { src, edge, dst })
+            }
+            _ => Err(graphdb_core::error::DBError::from(
+                graphdb_core::error::QueryError::invalid_query(
+                    "MERGE only supports node or edge patterns".to_string(),
+                ),
+            )),
+        }
+    }
+
+    fn bind_pattern_vertex(np: &NodePattern) -> DBResult<BoundPatternVertex> {
+        let properties = np
+            .properties
+            .as_ref()
+            .map(|p| Self::extract_map_properties(p))
+            .transpose()?;
+        Ok(BoundPatternVertex {
+            variable: np.variable.clone(),
+            labels: np.labels.clone(),
+            properties,
+        })
+    }
+
+    fn bind_pattern_edge(
+        &mut self,
+        ep: &crate::parser::ast::pattern::EdgePattern,
+    ) -> DBResult<BoundPatternEdge> {
+        let properties = ep
+            .properties
+            .as_ref()
+            .map(|p| Self::extract_map_properties(p))
+            .transpose()?;
+        Ok(BoundPatternEdge {
+            variable: ep.variable.clone(),
+            edge_types: ep.edge_types.clone(),
+            properties,
+            direction: ep.direction,
+        })
+    }
+
+    pub(crate) fn extract_map_properties(
+        expr: &graphdb_core::types::ContextualExpression,
+    ) -> DBResult<Vec<(String, BoundExpression)>> {
+        use graphdb_core::types::Expression;
+        if let Some(meta) = expr.expression() {
+            if let Expression::Map(pairs) = meta.inner() {
+                let mut result = Vec::with_capacity(pairs.len());
+                for (key, val) in pairs {
+                    let bound_val = Self::convert_ast_expr_to_bound(val)?;
+                    result.push((key.clone(), bound_val));
+                }
+                return Ok(result);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    pub(crate) fn convert_ast_expr_to_bound(
+        expr: &Expression,
+    ) -> DBResult<BoundExpression> {
+        use graphdb_core::DataType;
+        match expr {
+            Expression::Literal(v) => Ok(BoundExpression::Literal(v.clone(), DataType::Unknown)),
+            Expression::Variable(name) => {
+                Ok(BoundExpression::Variable(name.clone(), DataType::Unknown))
+            }
+            Expression::Property { object, property } => {
+                let obj = Self::convert_ast_expr_to_bound(object)?;
+                Ok(BoundExpression::Property {
+                    object: Box::new(obj),
+                    property: property.clone(),
+                    value_type: DataType::Unknown,
+                })
+            }
+            Expression::Function { name, args } => {
+                let bound_args = args
+                    .iter()
+                    .map(|a| Self::convert_ast_expr_to_bound(a))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundExpression::Function(BoundFunctionCall {
+                    name: name.clone(),
+                    args: bound_args,
+                    return_type: graphdb_core::types::semantic::ValueType::Unknown,
+                }))
+            }
+            _ => Ok(BoundExpression::Variable("_".to_string(), DataType::Unknown)),
+        }
     }
 }

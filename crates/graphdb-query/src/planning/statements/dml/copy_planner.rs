@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::ArgumentNode;
@@ -35,6 +36,76 @@ impl CopyPlanner {
 }
 
 impl Planner for CopyPlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let copy = match bound {
+            BoundStatement::Copy(c) => c,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement is not a COPY statement".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        let target = match &copy.target {
+            AstCopyTarget::Vertex(tag) => PlanCopyTarget::Vertex(tag.clone()),
+            AstCopyTarget::Edge(edge) => PlanCopyTarget::Edge(edge.clone()),
+        };
+
+        let batch_size = copy.batch_size.unwrap_or(1000);
+        if batch_size == 0 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "COPY batch_size must be > 0".to_string(),
+            ));
+        }
+
+        if copy.file_path.trim().is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "COPY file path must not be empty".to_string(),
+            ));
+        }
+
+        let arg_node = || ArgumentNode::new(next_node_id(), "copy_args");
+        match copy.direction {
+            CopyDirection::From => {
+                let node = CopyFromNode::new(
+                    next_node_id(),
+                    space_name,
+                    target,
+                    copy.file_path.clone(),
+                    copy.header,
+                    copy.delimiter,
+                    batch_size,
+                );
+                Ok(SubPlan::new(
+                    Some(PlanNodeEnum::CopyFrom(node)),
+                    Some(PlanNodeEnum::Argument(arg_node())),
+                ))
+            }
+            CopyDirection::To => {
+                let node = CopyToNode::new(
+                    next_node_id(),
+                    space_name,
+                    target,
+                    copy.file_path.clone(),
+                    copy.header,
+                    copy.delimiter,
+                );
+                Ok(SubPlan::new(
+                    Some(PlanNodeEnum::CopyTo(node)),
+                    Some(PlanNodeEnum::Argument(arg_node())),
+                ))
+            }
+        }
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

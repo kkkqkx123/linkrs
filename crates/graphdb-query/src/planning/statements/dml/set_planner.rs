@@ -2,6 +2,7 @@
 //!
 //! Query planning for processing SET statements (set properties on vertices/edges)
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{SetStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -65,6 +66,132 @@ impl SetPlanner {
 }
 
 impl Planner for SetPlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let set = match bound {
+            BoundStatement::Set(s) => s,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "Statement does not contain SET".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let mut vertex_updates: Vec<VertexUpdateInfo> = Vec::new();
+        let mut variable_assignments: Vec<(String, ContextualExpression)> = Vec::new();
+
+        for assignment in &set.assignments {
+            if let Some(ref target) = assignment.target {
+                // Check if target is a direct property access like "1.age"
+                // i.e. BoundExpression::Property { object: Literal/Variable, .. }
+                let is_direct_vertex = match target {
+                    crate::binder::bound::BoundExpression::Property { object, .. } => {
+                        matches!(
+                            object.as_ref(),
+                            crate::binder::bound::BoundExpression::Literal(_, _)
+                                | crate::binder::bound::BoundExpression::Variable(_, _)
+                        )
+                    }
+                    _ => false,
+                };
+
+                if is_direct_vertex {
+                    // Extract vertex ID from the Property's object
+                    if let crate::binder::bound::BoundExpression::Property { object, .. } = target {
+                        let vertex_id = crate::binder::expr_converter::bound_expr_to_contextual(
+                            object, &expr_ctx,
+                        )
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+
+                        let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                            &assignment.value,
+                            &expr_ctx,
+                        )
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+
+                        let mut properties = HashMap::new();
+                        properties.insert(assignment.property.clone(), value);
+
+                        let vertex_update = VertexUpdateInfo {
+                            space_name: space_name.clone(),
+                            vertex_id,
+                            tag_name: None,
+                            properties,
+                            condition: None,
+                            is_upsert: false,
+                        };
+                        vertex_updates.push(vertex_update);
+                    }
+                } else {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    variable_assignments
+                        .push((assignment.property.clone(), value));
+                }
+            } else {
+                let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &assignment.value,
+                    &expr_ctx,
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                variable_assignments
+                    .push((assignment.property.clone(), value));
+            }
+        }
+
+        if !vertex_updates.is_empty() {
+            let update_info = UpdateTargetType::Vertex(
+                vertex_updates.into_iter().next().unwrap(),
+            );
+            let update_node = UpdateNode::new(next_node_id(), update_info);
+            let update_node_enum = PlanNodeEnum::Update(update_node);
+            let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+            return Ok(sub_plan);
+        }
+
+        if !variable_assignments.is_empty() {
+            use crate::planning::plan::core::nodes::{ArgumentNode, AssignNode};
+
+            let arg_node = ArgumentNode::new(next_node_id(), "set_input");
+            let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
+
+            let assign_node = AssignNode::new(arg_node_enum.clone(), variable_assignments)
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create AssignNode: {}",
+                        e
+                    ))
+                })?;
+
+            let assign_node_enum = PlanNodeEnum::Assign(assign_node);
+            let sub_plan = SubPlan::new(Some(assign_node_enum.clone()), Some(assign_node_enum));
+            return Ok(sub_plan);
+        }
+
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
+        let sub_plan = SubPlan::new(Some(arg_node_enum.clone()), Some(arg_node_enum));
+        Ok(sub_plan)
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

@@ -2,6 +2,7 @@
 //!
 //! Query planning for processing UPDATE VERTEX/EDGE statements
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -11,7 +12,7 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
-use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::{ContextualExpression, ExpressionMeta};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -89,6 +90,188 @@ impl UpdatePlanner {
 }
 
 impl Planner for UpdatePlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let update = match bound {
+            BoundStatement::Update(u) => u,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "Statement does not contain UPDATE".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let update_target = match &update.target {
+            crate::binder::bound::BoundUpdateTarget::Vertex(vid) => {
+                let vertex_id =
+                    crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let condition = update
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .transpose()?;
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name,
+                    vertex_id,
+                    tag_name: None,
+                    properties,
+                    condition,
+                    is_upsert: update.is_upsert,
+                };
+                UpdateTargetType::Vertex(vertex_info)
+            }
+            crate::binder::bound::BoundUpdateTarget::Edge {
+                src,
+                dst,
+                edge_type,
+                rank,
+            } => {
+                let src_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(src, &expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                let dst_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(dst, &expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                let rank_ctx = rank
+                    .as_ref()
+                    .map(|r| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(r, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .transpose()?;
+
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let condition = update
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .transpose()?;
+
+                let edge_info = EdgeUpdateInfo {
+                    space_name,
+                    src: src_ctx,
+                    dst: dst_ctx,
+                    edge_type: edge_type.clone(),
+                    rank: rank_ctx,
+                    properties,
+                    condition,
+                    is_upsert: update.is_upsert,
+                };
+                UpdateTargetType::Edge(edge_info)
+            }
+            crate::binder::bound::BoundUpdateTarget::Tag(tag_name) => {
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let placeholder_meta = ExpressionMeta::new(graphdb_core::Expression::Variable(
+                    "_tag_placeholder".to_string(),
+                ));
+                let placeholder_id = expr_ctx.register_expression(placeholder_meta);
+
+                let mut scan_node =
+                    crate::planning::plan::core::nodes::ScanVerticesNode::new(0, &space_name);
+                scan_node.set_tag(tag_name);
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name: space_name.clone(),
+                    vertex_id: ContextualExpression::new(placeholder_id, expr_ctx.clone()),
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition: None,
+                    is_upsert: update.is_upsert,
+                };
+
+                let update_node =
+                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info));
+
+                let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
+                let update_enum = PlanNodeEnum::Update(update_node);
+
+                let sub_plan = SubPlan::new(Some(scan_enum), Some(update_enum));
+                return Ok(sub_plan);
+            }
+            crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
+                let vid_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name,
+                    vertex_id: vid_ctx,
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition: None,
+                    is_upsert: update.is_upsert,
+                };
+                UpdateTargetType::Vertex(vertex_info)
+            }
+        };
+
+        let update_node = UpdateNode::new(next_node_id(), update_target);
+        let update_node_enum = PlanNodeEnum::Update(update_node);
+        let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+        Ok(sub_plan)
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

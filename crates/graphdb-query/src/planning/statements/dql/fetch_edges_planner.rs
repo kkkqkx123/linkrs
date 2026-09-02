@@ -1,6 +1,7 @@
 //! The FETCH EDGES query planner
 //! Planning for the execution of the FETCH EDGES query
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{FetchTarget, Stmt};
 use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::execution_plan::SubPlan;
@@ -85,6 +86,73 @@ impl Planner for FetchEdgesPlanner {
         // No need for additional Filter nodes
         let sub_plan = SubPlan::new(Some(root), None);
 
+        Ok(sub_plan)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let fetch = match bound {
+            BoundStatement::FetchEdges(f) => f,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "FetchEdgesPlanner requires the FetchEdges statement.".to_string(),
+                ));
+            }
+        };
+
+        let expr_ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let src_ctx = crate::binder::expr_converter::bound_expr_to_contextual(
+            &fetch.src,
+            &expr_ctx,
+        )
+        .map_err(|e| PlannerError::InvalidOperation(e))?;
+        let src_str = src_ctx
+            .expression()
+            .map(|m| m.inner().to_string())
+            .unwrap_or_default();
+
+        let dst_ctx = crate::binder::expr_converter::bound_expr_to_contextual(
+            &fetch.dst,
+            &expr_ctx,
+        )
+        .map_err(|e| PlannerError::InvalidOperation(e))?;
+        let dst_str = dst_ctx
+            .expression()
+            .map(|m| m.inner().to_string())
+            .unwrap_or_default();
+
+        let rank_str = match &fetch.rank {
+            Some(rank_expr) => {
+                let rank_ctx = crate::binder::expr_converter::bound_expr_to_contextual(
+                    rank_expr,
+                    &expr_ctx,
+                )
+                .map_err(|e| PlannerError::InvalidOperation(e))?;
+                rank_ctx
+                    .expression()
+                    .map(|m| m.inner().to_string())
+                    .unwrap_or_else(|| "0".to_string())
+            }
+            None => "0".to_string(),
+        };
+
+        let get_edges_node = PlanNodeEnum::GetEdges(GetEdgesNode::new(
+            1,
+            &src_str,
+            &fetch.edge_type,
+            &rank_str,
+            &dst_str,
+        ));
+
+        let sub_plan = SubPlan::new(Some(get_edges_node), None);
         Ok(sub_plan)
     }
 

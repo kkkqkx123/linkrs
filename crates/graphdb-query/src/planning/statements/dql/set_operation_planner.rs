@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{SetOperationStmt, SetOperationType, Stmt};
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
@@ -167,8 +168,157 @@ impl Planner for SetOperationPlanner {
         self.transform_recursive(&set_op_stmt, qctx, 0)
     }
 
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let set_op = match bound {
+            BoundStatement::SetOperation(s) => s,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "SetOperationPlanner requires SetOperation statement".to_string(),
+                ));
+            }
+        };
+
+        let left_plan =
+            self.plan_bound_subquery(&set_op.left, qctx.clone(), metadata, validated, 1)?;
+        let right_plan =
+            self.plan_bound_subquery(&set_op.right, qctx, metadata, validated, 1)?;
+
+        let left_root = left_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
+        })?;
+        let right_root = right_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
+        })?;
+
+        let final_node = match set_op.operation {
+            crate::binder::bound::SetOperationKind::Union => {
+                let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create UnionNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::Intersect => {
+                let intersect_node = IntersectNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create IntersectNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Intersect(intersect_node)
+            }
+            crate::binder::bound::SetOperationKind::Minus => {
+                let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create MinusNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Minus(minus_node)
+            }
+        };
+
+        let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
+        Ok(SubPlan::new(Some(final_node), Some(tail)))
+    }
+
     fn match_planner(&self, stmt: &Stmt) -> bool {
         matches!(stmt, Stmt::SetOperation(_))
+    }
+}
+
+impl SetOperationPlanner {
+    fn plan_bound_subquery(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+        depth: usize,
+    ) -> Result<SubPlan, PlannerError> {
+        if depth > self.max_depth {
+            return Err(PlannerError::PlanGenerationFailed(format!(
+                "Maximum set operation nesting depth ({}) exceeded",
+                self.max_depth
+            )));
+        }
+
+        match bound {
+            BoundStatement::SetOperation(set_op_stmt) => {
+                self.plan_bound_set_op(set_op_stmt, qctx, metadata, validated, depth + 1)
+            }
+            _ => {
+                let Some(mut planner) = PlannerEnum::from_bound_statement(bound) else {
+                    return Err(PlannerError::InvalidOperation(format!(
+                        "Unsupported subquery type in set operation: {}",
+                        bound.kind()
+                    )));
+                };
+                planner.plan_bound(bound, qctx, metadata, validated)
+            }
+        }
+    }
+
+    fn plan_bound_set_op(
+        &mut self,
+        set_op: &crate::binder::bound::BoundSetOperationStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+        depth: usize,
+    ) -> Result<SubPlan, PlannerError> {
+        let left_plan =
+            self.plan_bound_subquery(&set_op.left, qctx.clone(), metadata, validated, depth)?;
+        let right_plan =
+            self.plan_bound_subquery(&set_op.right, qctx, metadata, validated, depth)?;
+
+        let left_root = left_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
+        })?;
+        let right_root = right_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
+        })?;
+
+        let final_node = match set_op.operation {
+            crate::binder::bound::SetOperationKind::Union => {
+                let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create UnionNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::Intersect => {
+                let intersect_node = IntersectNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create IntersectNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Intersect(intersect_node)
+            }
+            crate::binder::bound::SetOperationKind::Minus => {
+                let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create MinusNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Minus(minus_node)
+            }
+        };
+
+        let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
+        Ok(SubPlan::new(Some(final_node), Some(tail)))
     }
 }
 

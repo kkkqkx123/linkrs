@@ -8,7 +8,7 @@
 use crate::parser::ast::{LimitClause, SampleClause, SkipClause, Steps};
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::types::semantic::{ColumnDef, ValueType};
-use graphdb_core::types::{EdgeDirection, OrderDirection, Span};
+use graphdb_core::types::{EdgeDirection, OrderDirection};
 use graphdb_core::DataType;
 use graphdb_core::Value;
 
@@ -349,8 +349,33 @@ pub enum BoundMatchDeleteTarget {
 // ── Statement-level bound types ──────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+pub struct BoundFilter {
+    pub condition: BoundExpression,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundYield {
+    pub items: Vec<BoundYieldItem>,
+    pub where_clause: Option<BoundExpression>,
+    pub distinct: bool,
+    pub order_by: Option<Vec<BoundOrderByItem>>,
+    pub skip: Option<SkipClause>,
+    pub limit: Option<LimitClause>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCollect {
+    pub items: Vec<BoundYieldItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundAssignVariable {
+    pub name: String,
+    pub expression: BoundExpression,
+}
+
+#[derive(Debug, Clone)]
 pub struct BoundMatchStatement {
-    pub span: Span,
     pub query_graph: QueryGraph,
     pub where_clause: Option<BoundWhereClause>,
     pub return_clause: Option<BoundReturnClause>,
@@ -363,7 +388,6 @@ pub struct BoundMatchStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundGoStatement {
-    pub span: Span,
     pub steps: Steps,
     pub from: Vec<BoundExpression>,
     pub over: Option<Vec<String>>,
@@ -374,7 +398,6 @@ pub struct BoundGoStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundLookupStatement {
-    pub span: Span,
     pub target: BoundLookupTarget,
     pub where_clause: Option<BoundWhereClause>,
     pub yield_clause: Option<BoundYieldClause>,
@@ -388,7 +411,6 @@ pub enum BoundLookupTarget {
 
 #[derive(Debug, Clone)]
 pub struct BoundFetchVerticesStatement {
-    pub span: Span,
     pub tag_name: Option<String>,
     pub ids: Vec<BoundExpression>,
     pub properties: Option<Vec<String>>,
@@ -396,7 +418,6 @@ pub struct BoundFetchVerticesStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundFetchEdgesStatement {
-    pub span: Span,
     pub src: BoundExpression,
     pub dst: BoundExpression,
     pub edge_type: String,
@@ -406,7 +427,6 @@ pub struct BoundFetchEdgesStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundFindPathStatement {
-    pub span: Span,
     pub from: Vec<BoundExpression>,
     pub to: BoundExpression,
     pub over: Option<(Vec<String>, EdgeDirection)>,
@@ -420,7 +440,6 @@ pub struct BoundFindPathStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundSubgraphStatement {
-    pub span: Span,
     pub steps: Steps,
     pub from: Vec<BoundExpression>,
     pub over: Option<(Vec<String>, EdgeDirection)>,
@@ -430,7 +449,6 @@ pub struct BoundSubgraphStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundReturnStatement {
-    pub span: Span,
     pub items: Vec<BoundReturnItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
@@ -440,34 +458,29 @@ pub struct BoundReturnStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundWithStatement {
-    pub span: Span,
     pub items: Vec<BoundReturnItem>,
     pub condition: Option<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundUnwindStatement {
-    pub span: Span,
     pub expression: BoundExpression,
     pub alias: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundPipeStatement {
-    pub span: Span,
     pub statements: Vec<BoundStatement>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundGroupByStatement {
-    pub span: Span,
     pub keys: Vec<BoundExpression>,
     pub aggregates: Vec<BoundAggregateCall>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundSetOperationStatement {
-    pub span: Span,
     pub left: Box<BoundStatement>,
     pub right: Box<BoundStatement>,
     pub operation: SetOperationKind,
@@ -484,7 +497,6 @@ pub enum SetOperationKind {
 
 #[derive(Debug, Clone)]
 pub struct BoundInsert {
-    pub span: Span,
     pub target: BoundInsertTarget,
     pub if_not_exists: bool,
 }
@@ -515,7 +527,6 @@ pub struct BoundVertexRow {
 
 #[derive(Debug, Clone)]
 pub struct BoundUpdate {
-    pub span: Span,
     pub target: BoundUpdateTarget,
     pub assignments: Vec<BoundAssignment>,
     pub where_clause: Option<BoundExpression>,
@@ -548,7 +559,6 @@ pub struct BoundAssignment {
 
 #[derive(Debug, Clone)]
 pub struct BoundDelete {
-    pub span: Span,
     pub target: BoundDeleteTarget,
     pub where_clause: Option<BoundExpression>,
     pub with_edge: bool,
@@ -569,66 +579,108 @@ pub enum BoundDeleteTarget {
     Index(String),
 }
 
+// ── Bound pattern types (replace raw AST patterns) ───────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum BoundCreateTarget {
+    Node {
+        variable: Option<String>,
+        labels: Vec<String>,
+        properties: Option<Vec<(String, BoundExpression)>>,
+    },
+    Edge {
+        variable: Option<String>,
+        edge_type: String,
+        src: BoundExpression,
+        dst: BoundExpression,
+        properties: Option<Vec<(String, BoundExpression)>>,
+        direction: EdgeDirection,
+    },
+    Path {
+        patterns: Vec<BoundPatternElement>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundPatternElement {
+    Node(BoundPatternVertex),
+    Edge(BoundPatternEdge),
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundPatternVertex {
+    pub variable: Option<String>,
+    pub labels: Vec<String>,
+    pub properties: Option<Vec<(String, BoundExpression)>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundPatternEdge {
+    pub variable: Option<String>,
+    pub edge_types: Vec<String>,
+    pub properties: Option<Vec<(String, BoundExpression)>>,
+    pub direction: EdgeDirection,
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundMergePattern {
+    Node(BoundPatternVertex),
+    Edge {
+        src: BoundPatternVertex,
+        edge: BoundPatternEdge,
+        dst: BoundPatternVertex,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct BoundMerge {
-    pub span: Span,
-    pub pattern: crate::parser::ast::Pattern,
+    pub pattern: BoundMergePattern,
     pub on_create: Vec<BoundAssignment>,
     pub on_match: Vec<BoundAssignment>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundSet {
-    pub span: Span,
     pub assignments: Vec<BoundAssignment>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundRemove {
-    pub span: Span,
     pub items: Vec<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundCreate {
-    pub span: Span,
-    pub target: crate::parser::ast::CreateTarget,
+    pub target: BoundCreateTarget,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundDrop {
-    pub span: Span,
     pub target: crate::parser::ast::DropTarget,
     pub if_exists: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundAlter {
-    pub span: Span,
     pub target: crate::parser::ast::AlterTarget,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundBeginTransaction {
-    pub span: Span,
     pub read_only: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
-pub struct BoundCommit {
-    pub span: Span,
-}
+pub struct BoundCommit;
 
 #[derive(Debug, Clone)]
 pub struct BoundRollback {
-    pub span: Span,
     pub savepoint_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundCopy {
-    pub span: Span,
     pub target: crate::parser::ast::CopyTarget,
     pub direction: crate::parser::ast::CopyDirection,
     pub file_path: String,
@@ -658,6 +710,10 @@ pub enum BoundStatement {
     Unwind(BoundUnwindStatement),
     GroupBy(BoundGroupByStatement),
     SetOperation(BoundSetOperationStatement),
+    Filter(BoundFilter),
+    Yield(BoundYield),
+    Collect(BoundCollect),
+    AssignVariable(BoundAssignVariable),
 
     // ── DML ─────────────────────────────────────────────────────────────────
     Insert(BoundInsert),
@@ -698,6 +754,10 @@ impl BoundStatement {
             Self::Unwind(_) => "Unwind",
             Self::GroupBy(_) => "GroupBy",
             Self::SetOperation(_) => "SetOperation",
+            Self::Filter(_) => "Filter",
+            Self::Yield(_) => "Yield",
+            Self::Collect(_) => "Collect",
+            Self::AssignVariable(_) => "AssignVariable",
             Self::Insert(_) => "Insert",
             Self::Update(_) => "Update",
             Self::Delete(_) => "Delete",

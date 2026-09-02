@@ -7,6 +7,7 @@
 //! Improving the handling of JOIN operations
 //! - Add support for attribute projection.
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{GoStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
@@ -211,13 +212,162 @@ impl Planner for GoPlanner {
         Ok(SubPlan::from_logical_root(logical_root))
     }
 
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let go_stmt = match bound {
+            BoundStatement::Go(go) => go,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "GoPlanner requires Go statements".to_string(),
+                ));
+            }
+        };
+
+        let space_id = qctx.space_id().unwrap_or(1);
+
+        // Handle FROM clause - extract source vertex IDs from bound expressions
+        if go_stmt.from.is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "GO statement must have FROM clause".to_string(),
+            ));
+        }
+
+        let first_from = &go_stmt.from[0];
+        let (use_start_node, from_var) = match first_from {
+            crate::binder::bound::BoundExpression::Literal(_, _) => (true, "v".to_string()),
+            crate::binder::bound::BoundExpression::Variable(name, _) => {
+                (false, name.clone())
+            }
+            _ => (false, "v".to_string()),
+        };
+
+        let tail_logical = if use_start_node {
+            LogicalNodeEnum::Start(LogicalStartNode::new())
+        } else {
+            LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: from_var.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        };
+
+        let (direction_str, edge_types) = match &go_stmt.over {
+            Some(edge_types) => {
+                let direction_str = match go_stmt.direction {
+                    EdgeDirection::Out => "out",
+                    EdgeDirection::In => "in",
+                    EdgeDirection::Both => "both",
+                };
+                (direction_str, edge_types.clone())
+            }
+            None => ("both", vec![]),
+        };
+
+        let step_limit = match go_stmt.steps {
+            crate::parser::ast::Steps::Fixed(n) => n as u32,
+            crate::parser::ast::Steps::Range { min: _, max } => max as u32,
+            crate::parser::ast::Steps::Variable(_) => 1,
+        };
+
+        let mut col_names = vec!["src".to_string(), "edge".to_string(), "dst".to_string()];
+        if edge_types.len() == 1 {
+            col_names.push(edge_types[0].clone());
+        }
+
+        let src_vids: Vec<graphdb_core::Value> = if use_start_node {
+            go_stmt
+                .from
+                .iter()
+                .filter_map(|expr| match expr {
+                    crate::binder::bound::BoundExpression::Literal(v, _) => Some(v.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let mut logical_root = LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
+            id: next_node_id(),
+            deps: vec![tail_logical],
+            space_id,
+            edge_types: edge_types.clone(),
+            direction: direction_str.to_string(),
+            any_edge_type: false,
+            step_limit: Some(step_limit),
+            step_limits: None,
+            join_input: false,
+            sample: false,
+            edge_props: vec![],
+            vertex_props: vec![],
+            filter: None,
+            src_vids,
+            include_empty_paths: false,
+            input_var: None,
+            output_var: None,
+            col_names,
+            column_types: vec![],
+        });
+
+        if let Some(ref where_clause) = go_stmt.where_clause {
+            let condition = crate::binder::expr_converter::bound_expr_to_contextual(
+                &where_clause.condition,
+                validated.expr_context(),
+            )
+            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                condition,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+        }
+
+        let project_columns = self.build_yield_columns_from_bound(go_stmt, validated.expr_context())?;
+        logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(logical_root)),
+            deps: vec![],
+            columns: project_columns.clone(),
+            output_var: None,
+            col_names: project_columns
+                .iter()
+                .map(|col| col.alias.clone())
+                .collect(),
+            column_types: vec![],
+        });
+
+        if step_limit > 1 {
+            logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+        }
+
+        Ok(SubPlan::from_logical_root(logical_root))
+    }
+
     fn match_planner(&self, stmt: &Stmt) -> bool {
         matches!(stmt, Stmt::Go(_))
     }
 }
 
 impl GoPlanner {
-    /// Create the YIELD column
+    /// Create the YIELD column from AST statement (legacy transform path)
     fn build_yield_columns(
         go_stmt: &GoStmt,
         expr_context: &Arc<ExpressionAnalysisContext>,
@@ -228,6 +378,67 @@ impl GoPlanner {
             for item in &yield_clause.items {
                 columns.push(graphdb_core::YieldColumn {
                     expression: item.expression.clone(),
+                    alias: item.alias.clone().unwrap_or_default(),
+                    is_matched: false,
+                });
+            }
+        } else {
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("dst".to_string()),
+            );
+            let id = expr_context.register_expression(expr_meta);
+            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
+            columns.push(graphdb_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "dst".to_string(),
+                is_matched: false,
+            });
+
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("edge".to_string()),
+            );
+            let id = expr_context.register_expression(expr_meta);
+            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
+            columns.push(graphdb_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "edge".to_string(),
+                is_matched: false,
+            });
+        }
+
+        if columns.is_empty() {
+            let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+                graphdb_core::Expression::Variable("*".to_string()),
+            );
+            let id = expr_context.register_expression(expr_meta);
+            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
+            columns.push(graphdb_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "result".to_string(),
+                is_matched: false,
+            });
+        }
+
+        Ok(columns)
+    }
+
+    /// Create YIELD columns from bound statement (plan_bound path)
+    fn build_yield_columns_from_bound(
+        &self,
+        go_stmt: &crate::binder::bound::BoundGoStatement,
+        expr_context: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<Vec<graphdb_core::YieldColumn>, PlannerError> {
+        let mut columns = Vec::new();
+
+        if let Some(ref yield_clause) = go_stmt.yield_clause {
+            for item in &yield_clause.items {
+                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &item.expression,
+                    expr_context,
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                columns.push(graphdb_core::YieldColumn {
+                    expression: ctx_expr,
                     alias: item.alias.clone().unwrap_or_default(),
                     is_matched: false,
                 });

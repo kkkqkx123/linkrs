@@ -2,6 +2,7 @@
 //!
 //! Query planning for queries that handle the WITH statement
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
 use crate::planning::plan::core::{
     next_node_id,
@@ -241,6 +242,75 @@ impl Planner for WithPlanner {
         // Create a SubPlan
         let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
 
+        Ok(sub_plan)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let with_stmt = match bound {
+            BoundStatement::With(w) => w,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain the WITH".to_string(),
+                ));
+            }
+        };
+
+        let expr_ctx = Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let yield_columns: Vec<YieldColumn> = with_stmt
+            .items
+            .iter()
+            .map(|item| {
+                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &item.expression,
+                    &expr_ctx,
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                let alias = item
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| ctx_expr.to_expression_string());
+                Ok(YieldColumn {
+                    expression: ctx_expr,
+                    alias,
+                    is_matched: false,
+                })
+            })
+            .collect::<Result<Vec<_>, PlannerError>>()?;
+
+        let start_node = StartNode::new();
+        let mut current_node = PlanNodeEnum::Start(start_node.clone());
+
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+        })?;
+        current_node = PlanNodeEnum::Project(project_node);
+
+        if let Some(ref condition) = with_stmt.condition {
+            let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
+                condition,
+                &expr_ctx,
+            )
+            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            let filter_node =
+                FilterNode::new(current_node.clone(), ctx_expr).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create FilterNode: {}",
+                        e
+                    ))
+                })?;
+            current_node = PlanNodeEnum::Filter(filter_node);
+        }
+
+        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
         Ok(sub_plan)
     }
 

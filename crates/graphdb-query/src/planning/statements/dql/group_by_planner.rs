@@ -2,6 +2,7 @@
 //!
 //! Query planning for statements that involve the GROUP BY clause
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{GroupingType, Stmt};
 use crate::planning::plan::core::nodes::{
     AggregateNode, FilterNode, ProjectNode, ScanVerticesNode,
@@ -365,6 +366,101 @@ impl Planner for GroupByPlanner {
         // Create a SubPlan
         let sub_plan = SubPlan::new(Some(final_node), Some(input_tail));
 
+        Ok(sub_plan)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let group_by = match bound {
+            BoundStatement::GroupBy(g) => g,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "GroupByPlanner requires the GroupBy statement.".to_string(),
+                ));
+            }
+        };
+
+        let group_keys: Vec<String> = group_by
+            .keys
+            .iter()
+            .map(|k| {
+                let expr_ctx = Arc::new(
+                    graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                );
+                crate::binder::expr_converter::bound_expr_to_contextual(k, &expr_ctx)
+                    .map(|ctx| ctx.to_expression_string())
+                    .unwrap_or_else(|_| "_".to_string())
+            })
+            .collect();
+
+        let mut aggregation_functions = Vec::new();
+        let mut aggregation_args = Vec::new();
+        let mut agg_aliases = Vec::new();
+
+        for agg in &group_by.aggregates {
+            let func = match agg.function_name.to_uppercase().as_str() {
+                "COUNT" => AggregateFunction::Count,
+                "SUM" => AggregateFunction::Sum,
+                "AVG" => AggregateFunction::Avg,
+                "MAX" => AggregateFunction::Max,
+                "MIN" => AggregateFunction::Min,
+                "COLLECT" => AggregateFunction::Collect,
+                "STD" => AggregateFunction::Std,
+                "STDDEV" => AggregateFunction::StddevPop,
+                "VARIANCE" => AggregateFunction::Variance,
+                "PRODUCT" => AggregateFunction::Product,
+                _ => AggregateFunction::Count,
+            };
+            aggregation_functions.push(func);
+
+            let args: Vec<Expression> = agg
+                .arguments
+                .iter()
+                .map(|arg| {
+                    let expr_ctx = Arc::new(
+                        graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    );
+                    crate::binder::expr_converter::bound_expr_to_contextual(arg, &expr_ctx)
+                        .map(|ctx| {
+                            ctx.expression()
+                                .map(|m| m.inner().clone())
+                                .unwrap_or_else(|| Expression::Variable("_".to_string()))
+                        })
+                        .unwrap_or_else(|_| Expression::Variable("_".to_string()))
+                })
+                .collect();
+            aggregation_args.push(args);
+
+            agg_aliases.push(
+                agg.alias
+                    .clone()
+                    .unwrap_or_else(|| format!("agg_{}", agg.function_name)),
+            );
+        }
+
+        let start_node = crate::planning::plan::core::nodes::StartNode::new();
+        let input_enum = PlanNodeEnum::Start(start_node.clone());
+
+        let mut aggregate_node = AggregateNode::with_agg_aliases(
+            input_enum.clone(),
+            group_keys,
+            aggregation_functions,
+            agg_aliases,
+        )
+        .map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
+        })?;
+        aggregate_node.set_aggregation_args(aggregation_args);
+
+        let sub_plan = SubPlan::new(
+            Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            Some(input_enum),
+        );
         Ok(sub_plan)
     }
 

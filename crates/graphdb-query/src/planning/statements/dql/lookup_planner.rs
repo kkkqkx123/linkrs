@@ -8,6 +8,7 @@
 //! Add logic for selecting attribute indexes.
 //! Use IndexSelector to automatically select the optimal index.
 
+use crate::binder::BoundStatement;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::{LookupStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
@@ -123,6 +124,66 @@ impl Planner for LookupPlanner {
         };
 
         self.plan_lookup(validated, qctx, selected_index.as_ref(), is_edge, tag_id)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let lookup = match bound {
+            BoundStatement::Lookup(l) => l,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "LookupPlanner requires the Lookup statement.".to_string(),
+                ));
+            }
+        };
+
+        let target_name = match &lookup.target {
+            crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
+            crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
+        };
+
+        let is_edge = matches!(
+            &lookup.target,
+            crate::binder::bound::BoundLookupTarget::Edge(_)
+        );
+
+        // Convert bound where clause to ContextualExpression for index selection
+        let where_ctx = lookup.where_clause.as_ref().map(|wc| {
+            crate::binder::expr_converter::bound_expr_to_contextual(
+                &wc.condition,
+                validated.expr_context(),
+            )
+            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+        }).transpose()?;
+
+        // Use metadata for index selection (same logic as transform_with_metadata)
+        let (selected_index, tag_id) = if let Some(metadata_context) = metadata {
+            let selected = Self::find_suitable_index(
+                metadata_context,
+                &target_name,
+                is_edge,
+                &where_ctx,
+            );
+            let tag_id = if is_edge {
+                0
+            } else {
+                metadata_context
+                    .get_tag_metadata(&target_name)
+                    .map(|meta| meta.tag_id as i32)
+                    .unwrap_or(0)
+            };
+            (selected, tag_id)
+        } else {
+            (None, 0)
+        };
+
+        // Build the plan using bound data
+        self.plan_lookup_bound(lookup, qctx, validated, selected_index.as_ref(), is_edge, tag_id, where_ctx)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
@@ -372,7 +433,218 @@ impl LookupPlanner {
         Ok(sub_plan)
     }
 
-    /// Construct the YIELD column
+    /// Build a lookup plan from a bound statement (plan_bound path).
+    fn plan_lookup_bound(
+        &self,
+        lookup: &crate::binder::bound::BoundLookupStatement,
+        qctx: Arc<QueryContext>,
+        validated: &ValidatedStatement,
+        selected_index: Option<&IndexMetadata>,
+        is_edge: bool,
+        tag_id: i32,
+        where_ctx: Option<ContextualExpression>,
+    ) -> Result<SubPlan, PlannerError> {
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        if space_id == 0 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Invalid space ID: 0".to_string(),
+            ));
+        }
+
+        let target_name = match &lookup.target {
+            crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
+            crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
+        };
+
+        // Extract scan limits from WHERE when an index is available
+        let (scan_limits, scan_type) = if let Some(index) = selected_index {
+            let limits = if let Some(ref where_ctx) = where_ctx {
+                Self::extract_scan_limits_from_where(
+                    &Some(where_ctx.clone()),
+                    std::slice::from_ref(&index.field_name),
+                )
+            } else {
+                Vec::new()
+            };
+            let scan_type = if limits.len() == 1 && limits[0].scan_type == ScanType::Unique {
+                ScanType::Unique
+            } else {
+                ScanType::Range
+            };
+            (limits, scan_type)
+        } else {
+            (Vec::new(), ScanType::Full)
+        };
+
+        // Build physical scan node
+        let mut current_node: PlanNodeEnum = match selected_index {
+            Some(index) => {
+                let mut index_scan_node = IndexScanNode::new(
+                    space_id,
+                    tag_id,
+                    index.index_id,
+                    index.index_name.clone(),
+                    target_name.clone(),
+                    scan_type,
+                );
+                index_scan_node.set_scan_limits(scan_limits);
+                index_scan_node.set_col_names(vec![target_name.clone()]);
+                if let Some(ref yield_clause) = lookup.yield_clause {
+                    if let Some(ref limit_clause) = yield_clause.limit {
+                        index_scan_node.set_limit(limit_clause.count as i64);
+                    }
+                }
+                PlanNodeEnum::IndexScan(index_scan_node)
+            }
+            None if is_edge => {
+                let mut edge_scan_node = ScanEdgesNode::new(space_id, &target_name);
+                edge_scan_node.set_col_names(vec![target_name.clone()]);
+                if let Some(ref yield_clause) = lookup.yield_clause {
+                    if let Some(ref limit_clause) = yield_clause.limit {
+                        edge_scan_node.set_limit(limit_clause.count as i64);
+                    }
+                }
+                PlanNodeEnum::ScanEdges(edge_scan_node)
+            }
+            None => {
+                let mut vertex_scan_node = ScanVerticesNode::new(space_id, &space_name);
+                vertex_scan_node.set_col_names(vec![target_name.clone()]);
+                vertex_scan_node.set_tag(&target_name);
+                if let Some(ref yield_clause) = lookup.yield_clause {
+                    if let Some(ref limit_clause) = yield_clause.limit {
+                        vertex_scan_node.set_limit(limit_clause.count as i64);
+                    }
+                }
+                PlanNodeEnum::ScanVertices(vertex_scan_node)
+            }
+        };
+
+        // Build logical mirror
+        let limit_from_yield = lookup
+            .yield_clause
+            .as_ref()
+            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
+        let mut logical_root = if is_edge {
+            LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
+                id: next_node_id(),
+                space_id,
+                edge_type: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: vec![],
+            })
+        } else {
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id: next_node_id(),
+                space_id,
+                space_name: space_name.clone(),
+                tag: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: vec![],
+            })
+        };
+
+        // Add filter node if WHERE clause present
+        if let Some(ref condition) = where_ctx {
+            let filter_node = FilterNode::new(current_node, condition.clone()).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
+            })?;
+            current_node = PlanNodeEnum::Filter(filter_node);
+
+            let logical_filter = LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                condition: condition.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Filter(logical_filter);
+        }
+
+        // Add project node if YIELD clause present
+        if lookup.yield_clause.is_some() {
+            let yield_columns = self.build_yield_columns_from_bound(lookup, validated)?;
+            let project_node =
+                ProjectNode::new(current_node, yield_columns.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create ProjectNode: {}",
+                        e
+                    ))
+                })?;
+            current_node = PlanNodeEnum::Project(project_node);
+
+            let logical_project = LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                columns: yield_columns.clone(),
+                output_var: None,
+                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Project(logical_project);
+        }
+
+        let arg_node = ArgumentNode::new(0, "lookup_input");
+        let sub_plan = SubPlan {
+            root: Some(current_node),
+            tail: Some(PlanNodeEnum::Argument(arg_node)),
+            logical_root: Some(logical_root),
+        };
+
+        Ok(sub_plan)
+    }
+
+    /// Build YIELD columns from bound statement (plan_bound path)
+    fn build_yield_columns_from_bound(
+        &self,
+        lookup: &crate::binder::bound::BoundLookupStatement,
+        validated: &ValidatedStatement,
+    ) -> Result<Vec<graphdb_core::YieldColumn>, PlannerError> {
+        let mut columns = Vec::new();
+
+        if let Some(ref yield_clause) = lookup.yield_clause {
+            for item in &yield_clause.items {
+                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &item.expression,
+                    validated.expr_context(),
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                columns.push(graphdb_core::YieldColumn {
+                    expression: ctx_expr,
+                    alias: item.alias.clone().unwrap_or_default(),
+                    is_matched: false,
+                });
+            }
+        }
+
+        if columns.is_empty() {
+            let expr = Expression::Variable("_vertex".to_string());
+            let meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
+            let id = validated.expr_context().register_expression(meta);
+            let ctx_expr = ContextualExpression::new(id, validated.expr_context().clone());
+            columns.push(graphdb_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "result".to_string(),
+                is_matched: false,
+            });
+        }
+
+        Ok(columns)
+    }
+
+    /// Construct the YIELD column (legacy transform path)
     fn build_yield_columns(
         lookup_stmt: &LookupStmt,
         validated: &ValidatedStatement,

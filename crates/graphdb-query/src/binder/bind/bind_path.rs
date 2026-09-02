@@ -38,7 +38,6 @@ impl Binder {
             .map(|o| (o.edge_types.clone(), o.direction));
 
         Ok(BoundStatement::FindPath(BoundFindPathStatement {
-            span: stmt.span,
             from,
             to,
             over,

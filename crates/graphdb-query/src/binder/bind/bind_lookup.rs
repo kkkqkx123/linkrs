@@ -50,7 +50,6 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::Lookup(BoundLookupStatement {
-            span: stmt.span,
             target,
             where_clause,
             yield_clause,

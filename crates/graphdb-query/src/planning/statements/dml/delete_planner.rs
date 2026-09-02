@@ -3,7 +3,7 @@
 //! Query planning for handling DELETE VERTEX/EDGE/TAG statements.
 //! Supports both standalone deletion and pipe-based deletion (e.g., GO ... | DELETE VERTEX $-.id).
 
-use crate::metadata::MetadataContext;
+use crate::binder::BoundStatement;
 use crate::parser::ast::{DeleteStmt, DeleteTarget, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -42,6 +42,137 @@ impl DeletePlanner {
 }
 
 impl Planner for DeletePlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let delete = match bound {
+            BoundStatement::Delete(d) => d,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain a DELETE".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let final_node = match &delete.target {
+            crate::binder::bound::BoundDeleteTarget::Vertices(vertex_ids) => {
+                let converted_ids: Vec<graphdb_core::types::ContextualExpression> = vertex_ids
+                    .iter()
+                    .map(|id| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let condition = delete
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .transpose()?;
+
+                let info = VertexDeleteInfo {
+                    space_name,
+                    vertex_ids: converted_ids,
+                    with_edge: delete.with_edge,
+                    condition,
+                };
+                PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(next_node_id(), info))
+            }
+            crate::binder::bound::BoundDeleteTarget::Edges {
+                edge_type,
+                edges,
+            } => {
+                let converted_edges: Vec<(
+                    graphdb_core::types::ContextualExpression,
+                    graphdb_core::types::ContextualExpression,
+                    Option<graphdb_core::types::ContextualExpression>,
+                )> = edges
+                    .iter()
+                    .map(|(src, dst, rank)| {
+                        let s = crate::binder::expr_converter::bound_expr_to_contextual(
+                            src, &expr_ctx,
+                        )
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        let d = crate::binder::expr_converter::bound_expr_to_contextual(
+                            dst, &expr_ctx,
+                        )
+                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        let r = rank
+                            .as_ref()
+                            .map(|rk| {
+                                crate::binder::expr_converter::bound_expr_to_contextual(
+                                    rk, &expr_ctx,
+                                )
+                                .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            })
+                            .transpose()?;
+                        Ok((s, d, r))
+                    })
+                    .collect::<Result<Vec<_>, PlannerError>>()?;
+
+                let condition = delete
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .transpose()?;
+
+                let info = EdgeDeleteInfo {
+                    space_name,
+                    edge_type: edge_type.clone(),
+                    edges: converted_edges,
+                    condition,
+                };
+                PlanNodeEnum::DeleteEdges(DeleteEdgesNode::new(next_node_id(), info))
+            }
+            crate::binder::bound::BoundDeleteTarget::Tags {
+                tag_names,
+                vertex_ids,
+                is_all_tags,
+            } => {
+                let converted_ids: Vec<graphdb_core::types::ContextualExpression> = vertex_ids
+                    .iter()
+                    .map(|id| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
+                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let info = TagDeleteInfo {
+                    space_name,
+                    tag_names: tag_names.clone(),
+                    vertex_ids: converted_ids,
+                    is_all_tags: *is_all_tags,
+                };
+                PlanNodeEnum::DeleteTags(DeleteTagsNode::new(next_node_id(), info))
+            }
+            crate::binder::bound::BoundDeleteTarget::Index(index_name) => {
+                let info = IndexDeleteInfo {
+                    space_name,
+                    index_name: index_name.clone(),
+                };
+                PlanNodeEnum::DeleteIndex(DeleteIndexNode::new(next_node_id(), info))
+            }
+        };
+
+        Ok(SubPlan::new(Some(final_node), None))
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,
@@ -52,38 +183,6 @@ impl Planner for DeletePlanner {
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
         matches!(stmt, Stmt::Delete(_))
-    }
-
-    fn transform_with_metadata(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        let validation_info = &validated.validation_info;
-        let referenced_tags = &validation_info.semantic_info.referenced_tags;
-        let referenced_edges = &validation_info.semantic_info.referenced_edges;
-
-        for tag_name in referenced_tags {
-            let _space_id = qctx.space_id().unwrap_or(0);
-            if metadata_context.get_tag_metadata(tag_name).is_none() {
-                log::debug!(
-                    "Tag '{}' referenced in DELETE not found in metadata context",
-                    tag_name
-                );
-            }
-        }
-
-        for edge_type in referenced_edges {
-            if metadata_context.get_edge_type_metadata(edge_type).is_none() {
-                log::debug!(
-                    "Edge type '{}' referenced in DELETE not found in metadata context",
-                    edge_type
-                );
-            }
-        }
-
-        self.transform(validated, qctx)
     }
 }
 

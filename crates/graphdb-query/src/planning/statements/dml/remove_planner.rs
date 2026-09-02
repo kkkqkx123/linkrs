@@ -2,6 +2,7 @@
 //!
 //! Query planning for handling the REMOVE statement
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{RemoveStmt, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
@@ -37,6 +38,71 @@ impl RemovePlanner {
 }
 
 impl Planner for RemovePlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let remove = match bound {
+            BoundStatement::Remove(r) => r,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain a REMOVE".to_string(),
+                ));
+            }
+        };
+
+        let arg_node = ArgumentNode::new(next_node_id(), "remove_input");
+        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
+
+        let expr_ctx = Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let mut remove_items = Vec::new();
+        for item in &remove.items {
+            let item_type = match item {
+                crate::binder::bound::BoundExpression::Property { .. } => "property",
+                crate::binder::bound::BoundExpression::Label { .. } => "tag",
+                _ => "property",
+            };
+            let ctx_expr =
+                crate::binder::expr_converter::bound_expr_to_contextual(item, &expr_ctx)
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            remove_items.push((item_type.to_string(), ctx_expr));
+        }
+
+        let remove_node =
+            RemoveNode::new(arg_node_enum.clone(), remove_items).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create RemoveNode: {}", e))
+            })?;
+
+        let remove_node_enum = PlanNodeEnum::Remove(remove_node);
+
+        let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("removed_count".to_string()),
+        );
+        let id = expr_ctx.register_expression(expr_meta);
+        let ctx_expr = ContextualExpression::new(id, expr_ctx);
+
+        let yield_columns = vec![YieldColumn {
+            expression: ctx_expr,
+            alias: "removed_count".to_string(),
+            is_matched: false,
+        }];
+
+        let project_node =
+            ProjectNode::new(remove_node_enum.clone(), yield_columns).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+            })?;
+
+        let final_node = PlanNodeEnum::Project(project_node);
+        let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
+        Ok(sub_plan)
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

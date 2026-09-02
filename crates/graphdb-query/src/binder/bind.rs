@@ -98,6 +98,9 @@ impl Binder {
             Stmt::Savepoint(s) => self.bind_savepoint(s),
             Stmt::ReleaseSavepoint(s) => self.bind_release_savepoint(s),
             Stmt::AssignVariable(s) => self.bind_assign_variable(s),
+            Stmt::Filter(s) => self.bind_filter(s),
+            Stmt::Yield(s) => self.bind_yield(s),
+            Stmt::Collect(s) => self.bind_collect(s),
             _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
         }
     }

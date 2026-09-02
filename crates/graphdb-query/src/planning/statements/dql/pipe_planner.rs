@@ -3,6 +3,7 @@
 //! Query planning for handling pipe statements that chain multiple statements together.
 //! Supports pipe DELETE syntax: GO ... | DELETE VERTEX $-.id
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::{PipeStmt, Stmt};
 use crate::planning::plan::core::nodes::{PipeDeleteEdgesNode, PipeDeleteVerticesNode};
 use crate::planning::plan::core::{
@@ -89,6 +90,66 @@ impl Planner for PipePlanner {
         let combined_root = replace_argument_node(right_root, left_root);
 
         Ok(SubPlan::new(Some(combined_root), None))
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let pipe = match bound {
+            BoundStatement::Pipe(p) => p,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement does not contain the Pipe".to_string(),
+                ));
+            }
+        };
+
+        if pipe.statements.len() < 2 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Pipe statement requires at least two sub-statements".to_string(),
+            ));
+        }
+
+        let mut combined_plan: Option<SubPlan> = None;
+
+        for stmt in &pipe.statements {
+            let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
+                PlannerError::NoSuitablePlanner(format!(
+                    "No suitable planner for pipe sub-statement: {}",
+                    stmt.kind()
+                ))
+            })?;
+
+            let sub_plan = planner.plan_bound(stmt, qctx.clone(), metadata, validated)?;
+
+            combined_plan = match combined_plan {
+                None => Some(sub_plan),
+                Some(prev_plan) => {
+                    let prev_root = prev_plan.root.ok_or_else(|| {
+                        PlannerError::PlanGenerationFailed(
+                            "Previous pipe stage has no root node".to_string(),
+                        )
+                    })?;
+
+                    let new_root = sub_plan.root.ok_or_else(|| {
+                        PlannerError::PlanGenerationFailed(
+                            "Current pipe stage has no root node".to_string(),
+                        )
+                    })?;
+
+                    let combined_root = replace_argument_node(new_root, prev_root);
+                    Some(SubPlan::new(Some(combined_root), None))
+                }
+            };
+        }
+
+        combined_plan.ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Pipe statement produced no plan".to_string())
+        })
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

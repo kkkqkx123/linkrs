@@ -90,7 +90,6 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::Match(BoundMatchStatement {
-            span: stmt.span,
             query_graph,
             where_clause,
             return_clause,
@@ -237,7 +236,6 @@ impl Binder {
             .transpose()?;
 
         Ok(BoundStatement::Match(BoundMatchStatement {
-            span: graphdb_core::types::Span::default(),
             query_graph,
             where_clause,
             return_clause,

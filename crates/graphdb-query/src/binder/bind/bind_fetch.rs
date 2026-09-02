@@ -24,7 +24,6 @@ impl Binder {
                     .map(|id| self.bind_expr(id))
                     .collect::<DBResult<Vec<_>>>()?;
                 Ok(BoundStatement::FetchVertices(BoundFetchVerticesStatement {
-                    span: stmt.span,
                     tag_name: tag_name.clone(),
                     ids: bound_ids,
                     properties: properties.clone(),
@@ -41,7 +40,6 @@ impl Binder {
                 let bound_dst = self.bind_expr(dst)?;
                 let bound_rank = rank.as_ref().map(|r| self.bind_expr(r)).transpose()?;
                 Ok(BoundStatement::FetchEdges(BoundFetchEdgesStatement {
-                    span: stmt.span,
                     src: bound_src,
                     dst: bound_dst,
                     edge_type: edge_type.clone(),

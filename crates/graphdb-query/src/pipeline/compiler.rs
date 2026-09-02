@@ -94,32 +94,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ))
         })?;
 
-        // The AST-derived validated statement is the primary input for
-        // clause planning; the lazy metadata context is built from the
-        // referenced tags/edges only (never the full space schema).
+        // Build a lightweight ValidatedStatement for expression context (used
+        // by clause planners like MATCH that still need the AST expression
+        // analysis context for YIELD column construction).
         let validated = super::prepared::build_validated_fallback(ast);
         let metadata = self.build_metadata_context(&query_context, bound);
 
-        let sub_plan = match planner_enum.plan_bound(
+        let sub_plan = planner_enum.plan_bound(
             bound,
             query_context.clone(),
             metadata.as_ref(),
             &validated,
-        ) {
-            Ok(plan) => plan,
-            Err(PlannerError::UnsupportedOperation(_)) => {
-                if let Some(metadata) = metadata.as_ref() {
-                    planner_enum
-                        .transform_with_metadata(&validated, query_context.clone(), metadata)
-                        .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
-                } else {
-                    planner_enum
-                        .transform(&validated, query_context.clone())
-                        .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
-                }
-            }
-            Err(e) => return Err(DBError::from(QueryError::pipeline_planning_error(e))),
-        };
+        ).map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?;
 
         let root = sub_plan.root().clone();
         let mut execution_plan = crate::planning::plan::ExecutionPlan::new(root);
@@ -819,7 +805,11 @@ fn referenced_schema_objects(
         BoundStatement::Return(_)
         | BoundStatement::With(_)
         | BoundStatement::Unwind(_)
-        | BoundStatement::GroupBy(_) => (tags, edges, false),
+        | BoundStatement::GroupBy(_)
+        | BoundStatement::Filter(_)
+        | BoundStatement::Yield(_)
+        | BoundStatement::Collect(_)
+        | BoundStatement::AssignVariable(_) => (tags, edges, false),
         BoundStatement::Insert(_)
         | BoundStatement::Update(_)
         | BoundStatement::Delete(_)

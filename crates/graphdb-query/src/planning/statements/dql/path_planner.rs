@@ -8,6 +8,7 @@
 //! Support for the shortest path with weights
 //! Improve the logic for path filtering.
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
 use crate::planning::plan::core::PlanNode;
@@ -86,6 +87,106 @@ impl Planner for PathPlanner {
                 },
                 find_path_stmt,
             )?
+        };
+
+        let sub_plan = SubPlan {
+            root: Some(root_node),
+            tail: Some(start_node_enum),
+            logical_root: None,
+        };
+
+        Ok(sub_plan)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let find_path = match bound {
+            BoundStatement::FindPath(fp) => fp,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "PathPlanner requires the FindPath statement.".to_string(),
+                ));
+            }
+        };
+
+        let space_id = qctx.space_id().ok_or_else(|| {
+            PlannerError::InvalidOperation(
+                "No graph space selected, please execute USE <space> first".to_string(),
+            )
+        })?;
+
+        let start_node = StartNode::new();
+        let start_node_enum = PlanNodeEnum::Start(start_node);
+
+        let edge_types = find_path
+            .over
+            .as_ref()
+            .map(|(types, _)| types.clone())
+            .unwrap_or_default();
+
+        let max_steps = find_path.max_steps.unwrap_or(10);
+
+        let start_vertex_ids: Vec<Value> = find_path
+            .from
+            .iter()
+            .filter_map(|expr| match expr {
+                crate::binder::bound::BoundExpression::Literal(v, _) => Some(v.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let end_vertex_ids: Vec<Value> = match &find_path.to {
+            crate::binder::bound::BoundExpression::Literal(v, _) => vec![v.clone()],
+            _ => vec![],
+        };
+
+        let root_node = if find_path.shortest {
+            self.build_shortest_path_plan(PathPlanParams {
+                left_input: start_node_enum.clone(),
+                space_id,
+                edge_types,
+                max_steps,
+                start_vertex_ids,
+                end_vertex_ids,
+            })?
+        } else {
+            let direction = find_path
+                .over
+                .as_ref()
+                .map(|(_, dir)| *dir)
+                .unwrap_or(graphdb_core::EdgeDirection::Out);
+
+            let right_node = StartNode::new();
+            let right_node_enum = PlanNodeEnum::Start(right_node);
+
+            let mut all_paths_node = AllPathsNode::new(
+                start_node_enum.clone(),
+                right_node_enum,
+                space_id,
+                max_steps,
+                edge_types,
+                1,
+                max_steps,
+                true,
+            );
+            all_paths_node.set_direction(direction);
+            let start_vids: Vec<VertexId> = start_vertex_ids
+                .iter()
+                .filter_map(|v| VertexId::try_from(v).ok())
+                .collect();
+            let end_vids: Vec<VertexId> = end_vertex_ids
+                .iter()
+                .filter_map(|v| VertexId::try_from(v).ok())
+                .collect();
+            all_paths_node.set_start_vertex_ids(start_vids);
+            all_paths_node.set_end_vertex_ids(end_vids);
+
+            all_paths_node.into_enum()
         };
 
         let sub_plan = SubPlan {

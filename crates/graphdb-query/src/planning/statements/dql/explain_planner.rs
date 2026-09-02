@@ -4,6 +4,7 @@
 //! These statements plan the inner query and mark the plan for
 //! explain/profile execution mode at the executor layer.
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::{ExplainFormat, Stmt};
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
@@ -107,6 +108,19 @@ impl Planner for ExplainPlanner {
         metadata_context: &crate::metadata::MetadataContext,
     ) -> Result<SubPlan, PlannerError> {
         self.plan_inner(validated, qctx, Some(metadata_context))
+    }
+
+    fn plan_bound(
+        &mut self,
+        _bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        match metadata {
+            Some(m) => self.plan_inner(validated, qctx, Some(m)),
+            None => self.plan_inner(validated, qctx, None),
+        }
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

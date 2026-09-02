@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::Steps;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::{
@@ -146,6 +147,127 @@ impl Planner for SubgraphPlanner {
 
         let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Argument(arg_node)));
 
+        Ok(sub_plan)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let subgraph = match bound {
+            BoundStatement::Subgraph(s) => s,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "SubgraphPlanner requires the Subgraph statement.".to_string(),
+                ));
+            }
+        };
+
+        log::debug!("Processing SUBGRAPH query planning (plan_bound)");
+
+        let (m_steps, n_steps) = match &subgraph.steps {
+            Steps::Fixed(n) => (*n, *n),
+            Steps::Range { min, max } => (*min, *max),
+            Steps::Variable(_) => {
+                return Err(PlannerError::InvalidOperation(
+                    "SUBGRAPH does not support variable steps".to_string(),
+                ));
+            }
+        };
+
+        log::debug!("SUBGRAPH steps: {} to {}", m_steps, n_steps);
+
+        let var_name = "subgraph_args";
+        let arg_node = Argument::new(1, var_name);
+        let mut current_node: PlanNodeEnum = PlanNodeEnum::Argument(arg_node.clone());
+
+        let (edge_types, direction_str) = match &subgraph.over {
+            Some((types, dir)) => {
+                let direction_str = match dir {
+                    EdgeDirection::Out => "out",
+                    EdgeDirection::In => "in",
+                    EdgeDirection::Both => "both",
+                };
+                (types.clone(), direction_str)
+            }
+            None => (vec![], "out"),
+        };
+
+        if m_steps == 0 {
+            log::debug!("SUBGRAPH with 0 steps - returning only start vertices");
+
+            let get_vertices_node = GetVerticesNode::new(1, "default", var_name);
+            current_node = PlanNodeEnum::GetVertices(get_vertices_node);
+
+            let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+            if let Some(ref where_clause) = subgraph.where_clause {
+                let condition = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &where_clause.condition,
+                    &expr_ctx,
+                )
+                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                current_node = match FilterNode::new(current_node.clone(), condition) {
+                    Ok(node) => PlanNodeEnum::Filter(node),
+                    Err(_) => current_node,
+                };
+            }
+
+            let project_node = match Project::new(current_node.clone(), vec![]) {
+                Ok(node) => PlanNodeEnum::Project(node),
+                Err(_) => current_node,
+            };
+            current_node = project_node;
+
+            let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Argument(arg_node)));
+            return Ok(sub_plan);
+        }
+
+        if m_steps > 0 {
+            current_node = self.create_expand_node(
+                current_node,
+                &edge_types,
+                &direction_str,
+                m_steps as u32,
+                n_steps as u32,
+            )?;
+
+            if n_steps > m_steps {
+                for step in (m_steps + 1)..=n_steps {
+                    log::debug!("Adding expansion step {}", step);
+                    current_node = self.create_expand_node(
+                        current_node,
+                        &edge_types,
+                        &direction_str,
+                        step as u32,
+                        n_steps as u32,
+                    )?;
+                }
+            }
+        }
+
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        if let Some(ref where_clause) = subgraph.where_clause {
+            let condition = crate::binder::expr_converter::bound_expr_to_contextual(
+                &where_clause.condition,
+                &expr_ctx,
+            )
+            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            current_node = match FilterNode::new(current_node.clone(), condition) {
+                Ok(node) => PlanNodeEnum::Filter(node),
+                Err(_) => current_node,
+            };
+        }
+
+        let project_node = match Project::new(current_node.clone(), vec![]) {
+            Ok(node) => PlanNodeEnum::Project(node),
+            Err(_) => current_node,
+        };
+        current_node = project_node;
+
+        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Argument(arg_node)));
         Ok(sub_plan)
     }
 

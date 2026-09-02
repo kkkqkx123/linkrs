@@ -39,7 +39,6 @@ impl Binder {
         let over = stmt.over.as_ref().map(|o| o.edge_types.clone());
 
         Ok(BoundStatement::Go(BoundGoStatement {
-            span: stmt.span,
             steps: stmt.steps.clone(),
             from,
             over,

@@ -11,6 +11,7 @@ pub mod binder;
 pub mod cache;
 pub mod context;
 pub mod data_set;
+pub mod error;
 pub mod executor;
 pub mod metadata;
 pub mod optimizer;
