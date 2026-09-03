@@ -62,6 +62,8 @@ fn logical_scan_vertices(
         expression: None,
         limit: None,
         projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
         output_var: Some(var_name.to_string()),
         col_names: vec![var_name.to_string()],
         column_types: vec![],

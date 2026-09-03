@@ -105,7 +105,7 @@ impl SlotLayout {
         self.slots.get(id)
     }
 
-    /// Return the names of all slots (useful for legacy code paths).
+    /// Return the names of all slots.
     pub fn names(&self) -> Vec<String> {
         self.slots.iter().map(|s| s.name.clone()).collect()
     }

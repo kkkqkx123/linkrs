@@ -39,7 +39,7 @@ pub struct EdgeTableConfig {
     pub calibrator: CalibratorConfig,
 
     /// Maximum number of regions frozen per incremental freeze operation.
-    /// `0` means unlimited (full freeze, legacy behavior). With `N > 0`,
+    /// `0` means unlimited (full freeze). With `N > 0`,
     /// each freeze incrementally freezes at most `N` high-density regions,
     /// leaving low-density regions in the mutable CSR to reduce per-freeze
     /// latency. Default 8 balances latency and progress.

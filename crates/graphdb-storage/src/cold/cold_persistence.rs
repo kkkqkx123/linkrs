@@ -129,15 +129,6 @@ impl ColdSnapshot {
             None
         };
 
-        // Skip legacy edge_prop_map section if present (backward compat with old files).
-        // New files no longer write this section since properties are stored in CsrWithProperties.
-        if pos + 8 <= data.len() - 4 {
-            let remaining_before_crc = data.len() - pos - 4;
-            if remaining_before_crc >= 8 {
-                let _map_section = read_section(data, &mut pos)?;
-            }
-        }
-
         // CRC32 verification
         let stored_crc = u32::from_le_bytes(read_arr::<4>(data, &mut pos));
         let computed_crc = crc32fast::hash(&data[..pos - 4]);

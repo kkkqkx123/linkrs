@@ -127,7 +127,7 @@
 |----------|--------|---------|----------|
 | **写入吞吐** | delta CSR 先写内存，微基准测顶点/边插入 | 单版本 + `local_storage` + 批量 `OptimisticAllocator` + WAL 组提交 | 两者均有写入优化；但 linkrs 的**整表写锁**会严重限制并发写（见 4.1） |
 | **图遍历（邻接扫描）** | 可变 CSR + overflow 两级 | 密度自适应 CSR + 零拷贝 Arrow 扫描 | ladybug 零拷贝 + 密度自适应在大规模遍历上更优；linkrs 两级结构有额外间接 |
-| **分析查询（多跳 join）** | 流式执行器 | 向量化 + 因子化 + morsel 并行 | **ladybug 压倒性优势**——linkrs 未见因子化/morsel 并行执行器 |
+| **分析查询（多跳 join）** | 流式执行器 + 轻量 `LogicalFlatten`（`crates/graphdb-query/src/planning/plan/factorization.rs`、`executor/streaming/operators/flatten.rs:16`，2026-09 已实现；`FactorizedTable` 死存储已于 2026-09 彻底删除，见 `docs/plan/factorization_remaining_issues_phased_plan.md Phase1`） | 向量化 + 因子化 + morsel 并行 | **ladybug 优势**——linkrs 已有轻量因子化，仅缺少 `semi_masker/multiplicity_reducer` 与 morsel 并行 |
 | **多核扩展性** | 未见多核查询并行；粗锁阻碍并发 | 明确 morsel 并行（`docs/morsel_parallelism.md`） | ladybug 天然多核；linkrs 当前偏单线程执行 |
 | **内存效率** | Moka 缓存 + 段 spill；边行存 | vmcache BM + 列存压缩 + 谓词下推 | ladybug 全局缓冲 + 列裁剪更省内存/IO |
 | **读一致性 / 时间旅行** | SI + time-travel（真多版本） | 快照隔离，无 time-travel | linkrs 独有 time-travel 能力 |
@@ -185,12 +185,12 @@ assert!(
 
 ### 5.7 【中等】缺少成熟的向量化/因子化分析执行器
 
-与 ladybug 的"向量化 + 因子化 + morsel 并行"相比，linkrs 当前是**流式执行器**，未见：
+与 ladybug 的"向量化 + 因子化 + morsel 并行"相比，linkrs 当前是**流式执行器 + 轻量因子化**（`LogicalFlatten`/`FlattenNode`/`UnarySpec::Flatten→flatten_next_inner` 已落地，`FactorizedTable` 死存储已于 2026-09 彻底删除（`docs/plan/factorization_remaining_issues_phased_plan.md Phase1`），生产路径仅 `DataChunk+SelectionVector`），仍缺：
 - 批量向量化扫描（2048 行/批）；
-- 因子化连接（semi-mask 半连接掩码）；
+- 因子化连接 `semi_masker`/`multiplicity_reducer`（ladybug `src/processor/operator/semi_masker.cpp` / `src/planner/operator/factorization/*`）；
 - 多核 morsel 并行。
 
-这使其在分析型（多跳 join、聚合）负载上性能天花板明显低于 ladybug。**如果 linkrs 定位是 OLTP+时序，这不算缺陷；若想兼顾分析负载，则是能力缺口。**
+这使其在分析型（多跳 join、聚合）负载上性能天花板仍低于 ladybug，但已非“未见因子化”（勘误 2026-09）。**如果 linkrs 定位是 OLTP+时序，这不算缺陷；若想兼顾分析负载，则是能力缺口。**
 
 ### 5.8 【中等】基准方法论偏向微基准，缺真实分析负载验证
 

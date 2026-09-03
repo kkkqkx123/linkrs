@@ -39,24 +39,11 @@ pub struct VectorSearchResult {
 
 /// Write mode for vector point mutations.
 ///
-/// - `Direct`: bypass the transactional outbox and write straight to the
-///   backend (`VectorBackend::upsert`). Fast but not transactional: a graph
-///   transaction that rolls back will not roll back the vector point.
-///   **Warning**: Prefer `Transactional` for data consistency. Use `Direct`
-///   only for bulk loading or when the caller explicitly accepts eventual
-///   consistency with graph data.
-/// - `Transactional`: stage the mutation through `SyncManager` into the durable
-///   outbox (`WAL + SQLite`) so it participates in the graph transaction's
-///   commit/abort and benefits from `read-your-writes` consistency.
+/// All writes are transactional through the durable outbox (`WAL + SQLite`)
+/// so they participate in the graph transaction's commit/abort and benefit
+/// from `read-your-writes` consistency.
 #[derive(Debug, Clone)]
 pub enum VectorWriteMode {
-    /// Non-transactional direct write. Bypasses WAL/Outbox.
-    ///
-    /// Prefer `Transactional` for data consistency. `Direct` is retained only
-    /// for bulk loading or when the caller explicitly accepts eventual
-    /// consistency; it bypasses the transactional outbox and `warn!`s on use.
-    #[deprecated(note = "Prefer Transactional for data consistency")]
-    Direct,
     /// Transactional write through the durable outbox.
     Transactional {
         txn_id: graphdb_core::types::TransactionId,
@@ -257,138 +244,95 @@ impl VectorApi {
     }
 
     /// Insert a vector point with explicit write mode.
-    #[allow(deprecated)]
     pub async fn insert_vector_with_mode(
         &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
+        _space_id: u64,
+        _tag_name: &str,
+        _field_name: &str,
         point: VectorPoint,
         mode: VectorWriteMode,
     ) -> CoreResult<()> {
-        match mode {
-            VectorWriteMode::Direct => {
-                tracing::warn!(
-                    "Vector Direct write: point {} in {}.{}.{} bypasses transactional outbox",
-                    point.id,
-                    space_id,
-                    tag_name,
-                    field_name
-                );
-                let collection_name =
-                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-                self.backend
-                    .upsert(&collection_name, point)
-                    .await
-                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
-                Ok(())
-            }
-            VectorWriteMode::Transactional {
-                txn_id,
-                space_id: txn_space,
-                tag,
-                field,
-            } => {
-                let Some(manager) = self.sync_manager.as_ref() else {
-                    return Err(CoreError::VectorError(
-                        "Transactional vector writes require a configured SyncManager".to_string(),
-                    ));
-                };
-                // Stage as a vertex vector mutation so it flows through the
-                // durable outbox (WAL + SQLite) and participates in the graph
-                // transaction's commit/abort.
-                let vector = point.vector.clone();
-                let payload = point.payload.clone().unwrap_or_default();
-                let mut properties = Vec::new();
-                // Preserve existing payload fields as vertex properties; add the
-                // vector field explicitly.
-                for (k, v) in payload {
-                    if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
-                        properties.push((k, val));
-                    }
-                }
-                // Use the vector field as the indexed property.
-                properties.push((field.clone(), graphdb_core::Value::vector(vector)));
-                let vertex_id = graphdb_core::Value::string(point.id.to_string());
-                manager
-                    .on_vertex_change_with_txn(
-                        txn_id,
-                        txn_space,
-                        &tag,
-                        &vertex_id,
-                        &properties,
-                        graphdb_sync::types::ChangeType::Insert,
-                    )
-                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
-                Ok(())
+        let VectorWriteMode::Transactional {
+            txn_id,
+            space_id: txn_space,
+            tag,
+            field,
+        } = mode;
+        let Some(manager) = self.sync_manager.as_ref() else {
+            return Err(CoreError::VectorError(
+                "Transactional vector writes require a configured SyncManager".to_string(),
+            ));
+        };
+        let vector = point.vector.clone();
+        let payload = point.payload.clone().unwrap_or_default();
+        let mut properties = Vec::new();
+        for (k, v) in payload {
+            if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
+                properties.push((k, val));
             }
         }
+        properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+        let vertex_id = graphdb_core::Value::string(point.id.to_string());
+        manager
+            .on_vertex_change_with_txn(
+                txn_id,
+                txn_space,
+                &tag,
+                &vertex_id,
+                &properties,
+                graphdb_sync::types::ChangeType::Insert,
+            )
+            .map_err(|e| CoreError::VectorError(e.to_string()))?;
+        Ok(())
     }
 
     /// Insert vector points in batch with explicit write mode.
-    #[allow(deprecated)]
     pub async fn insert_vector_batch_with_mode(
         &self,
         space_id: u64,
-        tag_name: &str,
-        field_name: &str,
+        _tag_name: &str,
+        _field_name: &str,
         points: Vec<VectorPoint>,
         mode: VectorWriteMode,
     ) -> CoreResult<()> {
-        match mode {
-            VectorWriteMode::Direct => {
-                tracing::warn!(
-                    "Vector Direct batch write: {} points in {}.{}.{} bypasses transactional outbox",
-                    points.len(), space_id, tag_name, field_name
-                );
-                let collection_name =
-                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-                self.backend
-                    .upsert_batch(&collection_name, points)
-                    .await
-                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
-                Ok(())
-            }
-            VectorWriteMode::Transactional {
-                txn_id,
-                space_id: txn_space,
-                tag,
-                field,
-            } => {
-                let Some(manager) = self.sync_manager.as_ref() else {
-                    return Err(CoreError::VectorError(
-                        "Transactional vector writes require a configured SyncManager".to_string(),
-                    ));
-                };
-                for point in points {
-                    let vector = point.vector.clone();
-                    let payload = point.payload.clone().unwrap_or_default();
-                    let mut properties = Vec::new();
-                    for (k, v) in payload {
-                        if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
-                            properties.push((k, val));
-                        }
-                    }
-                    properties.push((field.clone(), graphdb_core::Value::vector(vector)));
-                    let vertex_id = graphdb_core::Value::string(point.id.to_string());
-                    manager
-                        .on_vertex_change_with_txn(
-                            txn_id,
-                            txn_space,
-                            &tag,
-                            &vertex_id,
-                            &properties,
-                            graphdb_sync::types::ChangeType::Insert,
-                        )
-                        .map_err(|e| CoreError::VectorError(e.to_string()))?;
+        let VectorWriteMode::Transactional {
+            txn_id,
+            space_id: txn_space,
+            tag,
+            field,
+        } = mode;
+        let Some(manager) = self.sync_manager.as_ref() else {
+            return Err(CoreError::VectorError(
+                "Transactional vector writes require a configured SyncManager".to_string(),
+            ));
+        };
+        for point in points {
+            let vector = point.vector.clone();
+            let payload = point.payload.clone().unwrap_or_default();
+            let mut properties = Vec::new();
+            for (k, v) in payload {
+                if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
+                    properties.push((k, val));
                 }
-                Ok(())
             }
+            properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+            let vertex_id = graphdb_core::Value::string(point.id.to_string());
+            manager
+                .on_vertex_change_with_txn(
+                    txn_id,
+                    txn_space,
+                    &tag,
+                    &vertex_id,
+                    &properties,
+                    graphdb_sync::types::ChangeType::Insert,
+                )
+                .map_err(|e| CoreError::VectorError(e.to_string()))?;
         }
+        let _ = space_id;
+        Ok(())
     }
 
     /// Delete a vector point with explicit write mode.
-    #[allow(deprecated)]
     pub async fn delete_vector_with_mode(
         &self,
         space_id: u64,
@@ -397,59 +341,33 @@ impl VectorApi {
         point_id: &str,
         mode: VectorWriteMode,
     ) -> CoreResult<()> {
-        match mode {
-            VectorWriteMode::Direct => {
-                tracing::warn!(
-                    "Vector Direct delete: point {} in {}.{}.{} bypasses transactional outbox",
-                    point_id,
-                    space_id,
-                    tag_name,
-                    field_name
-                );
-                let collection_name =
-                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-                self.backend
-                    .delete(&collection_name, point_id)
-                    .await
-                    .map_err(|e| CoreError::VectorError(e.to_string()))
-            }
-            VectorWriteMode::Transactional {
+        let VectorWriteMode::Transactional {
+            txn_id,
+            space_id: txn_space,
+            tag,
+            field,
+        } = mode;
+        let Some(manager) = self.sync_manager.as_ref() else {
+            return Err(CoreError::VectorError(
+                "Transactional vector deletes require a configured SyncManager".to_string(),
+            ));
+        };
+        let vertex_id = graphdb_core::Value::string(point_id);
+        manager
+            .on_vertex_change_with_txn(
                 txn_id,
-                space_id: txn_space,
-                tag,
-                field,
-            } => {
-                let Some(manager) = self.sync_manager.as_ref() else {
-                    return Err(CoreError::VectorError(
-                        "Transactional vector deletes require a configured SyncManager".to_string(),
-                    ));
-                };
-                let vertex_id = graphdb_core::Value::string(point_id);
-                // Stage a Delete mutation so it flows through the outbox and
-                // participates in the graph transaction's commit/abort. Properties
-                // are empty; manager's delete fan-out will cover all indexed fields.
-                manager
-                    .on_vertex_change_with_txn(
-                        txn_id,
-                        txn_space,
-                        &tag,
-                        &vertex_id,
-                        &[],
-                        graphdb_sync::types::ChangeType::Delete,
-                    )
-                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
-                // The point_id is derived as "{vid}#{tag}#{field}" in the delivery
-                // layer, so the specific field to delete is conveyed via the staged
-                // tag/field in the transactional path; the extra `field` param keeps
-                // call-site symmetry with insert.
-                let _ = (space_id, tag_name, field_name, field);
-                Ok(())
-            }
-        }
+                txn_space,
+                &tag,
+                &vertex_id,
+                &[],
+                graphdb_sync::types::ChangeType::Delete,
+            )
+            .map_err(|e| CoreError::VectorError(e.to_string()))?;
+        let _ = (space_id, tag_name, field_name, field);
+        Ok(())
     }
 
     /// Delete vector points in batch with explicit write mode.
-    #[allow(deprecated)]
     pub async fn delete_vector_batch_with_mode(
         &self,
         space_id: u64,
@@ -458,47 +376,32 @@ impl VectorApi {
         point_ids: Vec<&str>,
         mode: VectorWriteMode,
     ) -> CoreResult<()> {
-        match mode {
-            VectorWriteMode::Direct => {
-                tracing::warn!(
-                    "Vector Direct batch delete: {} points in {}.{}.{} bypasses transactional outbox",
-                    point_ids.len(), space_id, tag_name, field_name
-                );
-                let collection_name =
-                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-                self.backend
-                    .delete_batch(&collection_name, &point_ids)
-                    .await
-                    .map_err(|e| CoreError::VectorError(e.to_string()))
-            }
-            VectorWriteMode::Transactional {
-                txn_id,
-                space_id: txn_space,
-                tag,
-                field,
-            } => {
-                let Some(manager) = self.sync_manager.as_ref() else {
-                    return Err(CoreError::VectorError(
-                        "Transactional vector deletes require a configured SyncManager".to_string(),
-                    ));
-                };
-                for point_id in point_ids {
-                    let vertex_id = graphdb_core::Value::string(point_id);
-                    manager
-                        .on_vertex_change_with_txn(
-                            txn_id,
-                            txn_space,
-                            &tag,
-                            &vertex_id,
-                            &[],
-                            graphdb_sync::types::ChangeType::Delete,
-                        )
-                        .map_err(|e| CoreError::VectorError(e.to_string()))?;
-                }
-                let _ = (space_id, tag_name, field_name, field);
-                Ok(())
-            }
+        let VectorWriteMode::Transactional {
+            txn_id,
+            space_id: txn_space,
+            tag,
+            field,
+        } = mode;
+        let Some(manager) = self.sync_manager.as_ref() else {
+            return Err(CoreError::VectorError(
+                "Transactional vector deletes require a configured SyncManager".to_string(),
+            ));
+        };
+        for point_id in point_ids {
+            let vertex_id = graphdb_core::Value::string(point_id);
+            manager
+                .on_vertex_change_with_txn(
+                    txn_id,
+                    txn_space,
+                    &tag,
+                    &vertex_id,
+                    &[],
+                    graphdb_sync::types::ChangeType::Delete,
+                )
+                .map_err(|e| CoreError::VectorError(e.to_string()))?;
         }
+        let _ = (space_id, tag_name, field_name, field);
+        Ok(())
     }
 
     /// Search vectors with options

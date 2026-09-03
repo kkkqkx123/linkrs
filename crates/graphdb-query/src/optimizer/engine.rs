@@ -480,14 +480,7 @@ impl OptimizerEngine {
                             "logical_plan fallback failed: {} (factorization skipped, flat execution)",
                             e
                         );
-                        if e.to_string().contains("Aggregate") {
-                            log::warn!(
-                                "LogicalPlan::from_plan_node fallback failed (Aggregate legacy path): {}",
-                                e
-                            );
-                        } else {
-                            log::warn!("LogicalPlan::from_plan_node fallback failed: {}", e);
-                        }
+                        log::warn!("LogicalPlan::from_plan_node fallback failed: {}", e);
                         plan.cbo_notes.push(msg.clone());
                         if plan.parallel_fallback_reason.is_empty() {
                             plan.parallel_fallback_reason = msg;
@@ -511,9 +504,6 @@ impl OptimizerEngine {
         // root wholesale. Instead we splice the LogicalFlatten nodes inserted
         // by FactorizationRewriter into the physical tree at the corresponding
         // positions, preserving all other physical choices.
-        // Current implementation is splice rather than full PhysicalMapper::map
-        // to retain CBO IndexScan selection. Switch to full mapping once CBO
-        // marks index_hint on Logical (see physical_planner.rs:34).
         //
         // If the logical plan contains Flatten but the physical does not,
         // failing to splice would silently drop factorization (wrong row
@@ -538,10 +528,15 @@ impl OptimizerEngine {
                             );
                         }
                         Err(e) => {
-                            log::warn!(
-                                "PhysicalMapping: failed to splice Flatten ({}); factorization will be ineffective",
-                                e
-                            );
+                            let msg = format!("PhysicalMapping: failed to splice Flatten ({}); factorization will be ineffective", e);
+                            log::warn!("{}", msg);
+                            plan.cbo_notes.push(msg.clone());
+                            if plan.parallel_fallback_reason.is_empty() {
+                                plan.parallel_fallback_reason = msg;
+                            } else {
+                                plan.parallel_fallback_reason.push_str("; ");
+                                plan.parallel_fallback_reason.push_str(&msg);
+                            }
                         }
                     }
                 }
@@ -600,7 +595,14 @@ impl OptimizerEngine {
             if flattens.is_empty() {
                 return Ok(physical.clone());
             }
-            return Ok(Self::insert_flattens_at_leaves(physical, &flattens));
+            return Err(format!(
+                "splice LogicalFlatten: structure mismatch logical {} vs physical {} (logical children {}, physical children {}), LogicalFlatten positions {:?} cannot be spliced; CBO rewrites diverged physical tree",
+                logical.type_name(),
+                physical.type_name(),
+                log_children.len(),
+                phys_children.len(),
+                flattens
+            ));
         }
         if log_children.is_empty() {
             return Ok(physical.clone());
@@ -1046,61 +1048,6 @@ impl OptimizerEngine {
                 Ok(PlanNodeEnum::Loop(cloned))
             }
             _ => Ok(physical.clone()),
-        }
-    }
-
-    fn insert_flattens_at_leaves(
-        node: &crate::planning::plan::PlanNodeEnum,
-        flattens: &[u32],
-    ) -> crate::planning::plan::PlanNodeEnum {
-        if flattens.is_empty() {
-            return node.clone();
-        }
-        match node {
-            crate::planning::plan::PlanNodeEnum::ScanVertices(_)
-            | crate::planning::plan::PlanNodeEnum::ScanEdges(_)
-            | crate::planning::plan::PlanNodeEnum::IndexScan(_) => {
-                let mut cur = node.clone();
-                for &pos in flattens {
-                    if let Ok(flatten_node) =
-                        crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode::new(
-                            cur.clone(),
-                            pos,
-                        )
-                    {
-                        cur = crate::planning::plan::PlanNodeEnum::Flatten(flatten_node);
-                    }
-                }
-                cur
-            }
-            crate::planning::plan::PlanNodeEnum::Select(n) => {
-                let mut cloned = n.clone();
-                if let Some(branch) = cloned.if_branch().clone() {
-                    let new_branch = Self::insert_flattens_at_leaves(&branch, flattens);
-                    cloned.set_if_branch(new_branch);
-                }
-                if let Some(branch) = cloned.else_branch().clone() {
-                    let new_branch = Self::insert_flattens_at_leaves(&branch, flattens);
-                    cloned.set_else_branch(new_branch);
-                }
-                crate::planning::plan::PlanNodeEnum::Select(cloned)
-            }
-            crate::planning::plan::PlanNodeEnum::Loop(n) => {
-                let mut cloned = n.clone();
-                if let Some(body) = cloned.body().clone() {
-                    let new_body = Self::insert_flattens_at_leaves(&body, flattens);
-                    cloned.set_body(new_body);
-                }
-                crate::planning::plan::PlanNodeEnum::Loop(cloned)
-            }
-            _ => {
-                if node.children().is_empty() {
-                    return node.clone();
-                }
-                crate::optimizer::cost_based::traversal::rewrite_children(node, &mut |child| {
-                    Self::insert_flattens_at_leaves(child, flattens)
-                })
-            }
         }
     }
 

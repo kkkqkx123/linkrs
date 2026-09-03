@@ -6,7 +6,7 @@
 //! payloads are multi-MB memory-linear scans while the file write dominates
 //! on a tmp+rename path.
 //!
-//! Payload shapes mirror §2.1.1 of `vector_search_remaining_and_longterm_design.md`:
+//! Payload shapes for the benchmark:
 //! - `index.bin` (IVF): lists=256, dim=128, live=100K, ~500KB payload
 //! - `hnsw.bin`: dim=128, m=16, live=100K, ~12–15MB payload (`m*2*live` edges)
 //!

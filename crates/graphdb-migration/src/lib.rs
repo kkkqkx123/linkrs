@@ -8,7 +8,6 @@ pub mod file_registry;
 pub mod generator;
 pub mod lock;
 pub mod metrics;
-pub mod migration_lock;
 pub mod plan;
 pub mod progress;
 
@@ -30,8 +29,6 @@ pub use generator::{
 };
 pub use lock::MigrationFileLock;
 pub use metrics::{global_migration_metrics, MigrationMetrics, MigrationMetricsSnapshot};
-#[allow(deprecated)]
-pub use migration_lock::{MigrationLockRecord, MigrationStorageLock};
 pub use plan::{
     MigrationPlan, MigrationReport, MigrationStep, MigrationTarget, SafetyLevel, VersionRange,
 };

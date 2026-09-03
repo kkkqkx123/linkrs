@@ -112,11 +112,6 @@ impl AggregateNode {
         self.group_key_exprs = Some(exprs);
     }
 
-    /// Clear the lossless group key expressions (force legacy path).
-    pub fn clear_group_key_exprs(&mut self) {
-        self.group_key_exprs = None;
-    }
-
     /// Obtain a list of aggregate functions
     pub fn aggregation_functions(&self) -> &[AggregateFunction] {
         &self.aggregation_functions

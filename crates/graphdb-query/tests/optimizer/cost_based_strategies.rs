@@ -121,9 +121,9 @@ mod expression_precomputation {
 // ==================== Subquery Unnesting Tests ====================
 
 // Note: Pattern expressions in predicates (e.g., `size((a)-[:KNOWS]->()) > 0`)
-// are not yet supported by the parser. See `docs/query/unsupported_syntax.md`
-// for details. SubqueryUnnestingOptimizer is tested at the unit level with
-// programmatically constructed plans (cost_based/subquery_unnesting.rs).
+// are not yet supported by the parser. SubqueryUnnestingOptimizer is tested
+// at the unit level with programmatically constructed plans
+// (cost_based/subquery_unnesting.rs).
 
 // ==================== Memory Budget Tests ====================
 

@@ -469,6 +469,8 @@ mod tests {
             expression: None,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: None,
             col_names: vec!["a.name".to_string()],
             column_types: vec![],

@@ -70,7 +70,7 @@ pub enum OutboxCommand {
         #[arg(long)]
         end_lsn: u64,
     },
-    /// Trigger retry of all pending outbox entries (legacy)
+    /// Trigger retry of all pending outbox entries
     Retry,
 }
 

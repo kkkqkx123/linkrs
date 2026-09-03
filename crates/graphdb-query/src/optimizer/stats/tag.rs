@@ -13,7 +13,7 @@ pub struct TagStatistics {
     pub avg_out_degree: f64,
     /// Average Indegree
     pub avg_in_degree: f64,
-    /// Space this statistics was collected for (`None` = legacy/default).
+    /// Space this statistics was collected for (`None` = default).
     pub space: Option<String>,
     /// Schema version at collection time (used for staleness checks).
     pub schema_version: Option<u64>,

@@ -56,15 +56,12 @@ impl LogicalPlan {
     /// as `a.name` but hold distinct `ExpressionId` values — so the reverse
     /// conversion cannot synthesize `ExpressionId` without violating the
     /// single-source rule in `expression_context.rs::register_expression`.
-    /// The legacy `PlanNodeEnum::Aggregate` without `group_key_exprs` therefore
+    /// `PlanNodeEnum::Aggregate` without `group_key_exprs` therefore
     /// returns `ConversionError::NotYetImplemented` explicitly instead of
     /// fabricating IDs. Callers should produce `LogicalAggregateNode` via
     /// `BoundStatement` / `YieldClauseContext { group_keys: Vec<ContextualExpression> }`
     /// or upgrade the physical node through `physical_planner.rs` which
     /// transparently carries `group_key_exprs: Option<Vec<ContextualExpression>>`.
-    /// This bridge (`LogicalPlan::from_plan_node`) is legacy; the long-term
-    /// direction is to delete it and have every `SubPlan` emit `logical_root`
-    /// directly (see `logical_plan_boundary.md`).
     pub fn from_plan_node(
         plan: &crate::planning::plan::PlanNodeEnum,
     ) -> Result<Self, ConversionError> {

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use crate::optimizer::cost::SelectivityEstimator;
-use crate::optimizer::cost_based::factorization as factor_cost;
+use crate::optimizer::cost_based::ndv as factor_cost;
 use crate::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -702,6 +702,8 @@ mod tests {
             expression: None,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: None,
             col_names: vec![],
             column_types: vec![],
@@ -731,6 +733,8 @@ mod tests {
             expression: None,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: None,
             col_names: vec![],
             column_types: vec![],

@@ -1,7 +1,6 @@
-//! Node rewriter trait shared by the batch optimizer's node walker and the
-//! legacy single-loop plan rewriter.
+//! Node rewriter trait shared by the batch optimizer's node walker.
 //!
-//! The legacy [`PlanRewriter`] was removed as part of converging the heuristic
+//! The [`PlanRewriter`] was removed as part of converging the heuristic
 //! engine onto the single [`BatchOptimizer`](crate::optimizer::heuristic::batch::BatchOptimizer);
 //! the `NodeRewriter` trait remains because both the batch optimizer's node
 //! walker and the [`ChildRewriteVisitor`](super::visitor::ChildRewriteVisitor)

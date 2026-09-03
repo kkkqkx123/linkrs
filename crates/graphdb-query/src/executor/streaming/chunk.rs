@@ -27,7 +27,7 @@
 //!   layout slot metadata. Always preferred when a `SlotLayout` is available.
 //! - `new(rows, schema)` — Schema-driven path. Layout auto-created from column names.
 //! - `from_rows(rows)` / `from_rows_with_col_names(rows, col_names)` — Convenience
-//!   constructors for tests and legacy code. Always produce a layout (auto-created).
+//!   constructors for tests. Always produce a layout (auto-created).
 
 mod columnar_batch;
 mod core;

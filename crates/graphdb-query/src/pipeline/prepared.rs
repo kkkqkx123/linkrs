@@ -77,7 +77,7 @@ pub struct PreparedRequest {
     pub bound_statement: Option<BoundStatement>,
     /// Cloned AST statement for classification and diagnostic matching.
     pub stmt: Stmt,
-    /// The parsed AST, retained for the legacy `transform()` planning path.
+    /// The parsed AST, retained for planning.
     pub ast: Arc<crate::parser::ast::stmt::Ast>,
     /// whether the query text is a shape-normalized DML template that may
     /// reuse a cached physical plan with per-statement parameter values.
@@ -247,7 +247,7 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
 
 /// Build a minimal `ValidatedStatement` for the `plan_bound` → `transform` fallback path.
 ///
-/// When a planner does not yet implement `plan_bound`, we fall back to the legacy
+/// When a planner does not yet implement `plan_bound`, we fall back to the
 /// `transform` interface.  This helper constructs a lightweight `ValidatedStatement`
 /// with an empty `ValidationInfo` — sufficient because `transform` primarily reads
 /// from the AST, not from `ValidationInfo`.
@@ -796,10 +796,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     // ── Cache helpers ──────────────────────────────────────────────────────
 
     pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
-        self.schema_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.index_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Versions are locked to 1.
         self.optimizer_engine
             .stats_manager()
             .invalidate_space(space_name);

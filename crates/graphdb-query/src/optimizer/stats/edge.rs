@@ -51,7 +51,7 @@ pub struct EdgeTypeStatistics {
     pub degree_gini_coefficient: f64,
     /// List of the top K vertices (vertices with the highest degree)
     pub hot_vertices: Vec<HotVertexInfo>,
-    /// Space this statistics was collected for (`None` = legacy/default).
+    /// Space this statistics was collected for (`None` = default).
     pub space: Option<String>,
     /// Schema version at collection time (used for staleness checks).
     pub schema_version: Option<u64>,

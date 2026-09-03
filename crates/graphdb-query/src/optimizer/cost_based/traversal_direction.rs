@@ -359,7 +359,7 @@ impl TraversalDirectionOptimizer {
         base_cost * degree_factor
     }
 
-    /// Calculating the cost of traversal (legacy method for backward compatibility)
+    /// Calculating the cost of traversal
     fn calculate_cost(&self, context: &DirectionContext, is_super: bool) -> f64 {
         let base_cost = self.cost_calculator.calculate_expand_cost(
             &self.space,

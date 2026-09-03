@@ -167,7 +167,7 @@ pub struct SpilledRun {
     pub schema_fingerprint: u64,
 }
 
-/// Metadata for a simple spill file (legacy/unsorted format).
+/// Metadata for a simple spill file (unsorted format).
 #[derive(Debug, Clone)]
 pub struct SpilledFile {
     pub path: PathBuf,
@@ -789,7 +789,7 @@ impl SpillManager {
         })
     }
 
-    /// Create a writer for unsorted spill data (legacy format, no header).
+    /// Create a writer for unsorted spill data (no header).
     pub fn create_writer(&self) -> Result<SpillWriter, QueryError> {
         let id = self.file_counter.fetch_add(1, Ordering::Relaxed);
         let path = self.base_dir.join(format!("spill_{:016x}.bin", id));

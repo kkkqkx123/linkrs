@@ -62,6 +62,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 expression: n.filter().cloned(),
                 limit: n.limit(),
                 projected_properties: n.projected_properties().to_vec(),
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: n.output_var().map(|s| s.to_string()),
                 col_names: n.col_names().to_vec(),
                 column_types: n.column_types().to_vec(),
@@ -76,6 +78,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 expression: n.filter().cloned(),
                 limit: n.limit(),
                 projected_properties: n.projected_properties().to_vec(),
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: n.output_var().map(|s| s.to_string()),
                 col_names: n.col_names().to_vec(),
                 column_types: n.column_types().to_vec(),
@@ -117,6 +121,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     dedup: n.dedup(),
                     limit: n.limit(),
                     projected_properties: n.projected_properties().to_vec(),
+                    index_hint: None,
+                    estimated_cardinality: None,
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -135,6 +141,16 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 expression: None,
                 limit: n.limit(),
                 projected_properties: vec![],
+                index_hint: Some(
+                    crate::planning::plan::logical::logical_nodes::access::IndexHint::new(
+                        n.index_name().to_string(),
+                        n.schema_name().to_string(),
+                        n.tag_id(),
+                        n.index_id(),
+                        n.scan_type().as_str().to_string(),
+                    ),
+                ),
+                estimated_cardinality: None,
                 output_var: n.output_var().map(|s| s.to_string()),
                 col_names: n.col_names().to_vec(),
                 column_types: n.column_types().to_vec(),
@@ -269,7 +285,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 ))
             } else {
                 Err(ConversionError::NotYetImplemented(
-                    "Aggregate: legacy group_keys string conversion synthesizes ExpressionId; use binder LogicalAggregateNode with group_key_exprs or upgrade physical node via physical_planner group_key_exprs pass-through".to_string(),
+                    "Aggregate: group_keys string conversion synthesizes ExpressionId; use binder LogicalAggregateNode with group_key_exprs or upgrade physical node via physical_planner group_key_exprs pass-through".to_string(),
                 ))
             }
         }
@@ -833,10 +849,11 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         // Physical join nodes → logical equivalents
 
         // === Fallback for unsupported nodes ===
-        // Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
-        // and Fulltext/Vector search remain NotYetImplemented. They are not
-        // on the factorization partition chain, so reverse mapping is optional
-        // (see factorization_model.md).
+        // Intentionally not mapped: Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
+        // and Fulltext/Vector search remain `NotYetImplemented`.
+        // They are non-factorized operators not on the factorization / partitioning chain,
+        // so reverse mapping is optional; `ensure_logical_plan` will record the failure in
+        // `cbo_notes` and fall back to flat execution without factorization.
         _ => Err(ConversionError::NotYetImplemented(
             node.type_name().to_string(),
         )),

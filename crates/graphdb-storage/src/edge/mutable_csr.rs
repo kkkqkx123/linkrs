@@ -1340,7 +1340,7 @@ impl MutableCsr {
     ///
     /// When `calibrated_deletion_ratio` is Some, a region is considered dirty
     /// only when its deletion ratio meets the calibrated threshold; otherwise
-    /// any reclaimable deletion makes the region dirty (legacy behavior).
+    /// any reclaimable deletion makes the region dirty.
     pub fn compact_regions_with_ts_reporting_calibrated(
         &mut self,
         cutoff: Timestamp,

@@ -205,7 +205,7 @@ impl QueryPlanCache {
 
     /// Put the plan in the cache.
     ///
-    /// M3: stores an [`Arc<PhysicalPlan>`] instead of the legacy [`ExecutionPlan`].
+    /// M3: stores an [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`].
     ///
     /// # Parameters
     /// - `query`: Query text

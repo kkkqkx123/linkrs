@@ -4,6 +4,40 @@ use crate::define_logical_plan_node;
 use crate::planning::plan::core::common::{EdgeProp, TagProp};
 use graphdb_core::types::expr::contextual::ContextualExpression;
 
+/// Physical index choice hint carried on logical scan nodes.
+///
+/// The cost-based index decision is taken on the logical tree and recorded
+/// here so the full logical-to-physical mapping can reconstruct the chosen
+/// index access without consulting the diverged physical tree. The
+/// factorization rewriters clone logical nodes opaquely and never mutate
+/// this field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexHint {
+    pub index_name: String,
+    pub schema_name: String,
+    pub tag_id: i32,
+    pub index_id: u64,
+    pub scan_type: String,
+}
+
+impl IndexHint {
+    pub fn new(
+        index_name: String,
+        schema_name: String,
+        tag_id: i32,
+        index_id: u64,
+        scan_type: String,
+    ) -> Self {
+        Self {
+            index_name,
+            schema_name,
+            tag_id,
+            index_id,
+            scan_type,
+        }
+    }
+}
+
 define_logical_plan_node! {
     pub struct LogicalStartNode {}
     enum: Start
@@ -72,6 +106,8 @@ define_logical_plan_node! {
         dedup: bool,
         limit: Option<i64>,
         projected_properties: Vec<String>,
+        index_hint: Option<IndexHint>,
+        estimated_cardinality: Option<u64>,
     }
     enum: GetNeighbors
     input: MultipleInputNode
@@ -85,6 +121,8 @@ define_logical_plan_node! {
         expression: Option<ContextualExpression>,
         limit: Option<i64>,
         projected_properties: Vec<String>,
+        index_hint: Option<IndexHint>,
+        estimated_cardinality: Option<u64>,
     }
     enum: ScanVertices
     input: ZeroInputNode
@@ -97,6 +135,8 @@ define_logical_plan_node! {
         expression: Option<ContextualExpression>,
         limit: Option<i64>,
         projected_properties: Vec<String>,
+        index_hint: Option<IndexHint>,
+        estimated_cardinality: Option<u64>,
     }
     enum: ScanEdges
     input: ZeroInputNode

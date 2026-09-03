@@ -75,7 +75,7 @@ pub mod vector_config {
 
     /// Map raw TOML quantization settings to the local engine's quantization config.
     ///
-    /// Mirrors Qdrant's scalar/product/binary builders (`qdrant_features.md:4`);
+    /// Mirrors Qdrant's scalar/product/binary builders;
     /// `enabled=false` or missing/unknown type yields `None` (exact f32).
     pub fn local_quantization_config(
         local: &LocalVectorConfig,

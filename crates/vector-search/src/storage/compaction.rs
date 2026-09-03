@@ -21,9 +21,8 @@ use std::sync::Arc;
 
 use memmap2::Mmap;
 
-use super::directory::{KEY_REC_SIZE, SLOT_REC_SIZE};
+use super::directory::KEY_REC_SIZE;
 use super::keys::Keys;
-use super::payloads::Payloads;
 use super::tombstones::TombstoneBits;
 use super::{CollectionStore, Meta, WalRecord, WalTxn};
 use crate::error::{Result, VectorSearchError};
@@ -322,56 +321,28 @@ impl CollectionStore {
             )?;
         }
 
-        // 3. payloads.bin (legacy) or PayloadStore (new)
-        if self.payload_store.load().as_ref().is_some() {
-            // Compact the PayloadStore: read live payloads from the old store
-            // and write them to a temporary compacted store.
-            let tmp_payload_store = self.dir.join("payloads_store_tmp");
-            if tmp_payload_store.exists() {
-                std::fs::remove_dir_all(&tmp_payload_store)?;
-            }
-            let live_slots: Vec<(u32, u32)> = plan
-                .map
-                .iter()
-                .enumerate()
-                .filter(|(_, new_slot)| **new_slot != u32::MAX)
-                .map(|(old, &new)| (old as u32, new))
-                .collect();
-            let ps_guard = self.payload_store.load();
-            let old_store = ps_guard.as_ref().as_ref().expect("checked above");
-            let new_store = old_store.compact_to(&tmp_payload_store, &live_slots)?;
-            let _ = old_store;
-            drop(ps_guard);
-            // Persist tracker of the new store.
-            let tracker_guard = new_store.tracker().write();
-            let config = new_store.config().clone();
-            tracker_guard.save(&tmp_payload_store, &config)?;
-        } else {
-            let tmp_payloads = self.dir.join("payloads_tmp.bin");
-            let payloads_view = self.payloads.snapshot();
-            let mut entries = Vec::with_capacity(plan.live_count as usize);
-            for (old_slot, new_slot) in plan.map.iter().enumerate() {
-                if *new_slot == u32::MAX {
-                    continue;
-                }
-                let blob = match Payloads::read_payload(&payloads_view, old_slot)? {
-                    Some(p) => serde_json::to_vec(&p)?,
-                    None => Vec::new(),
-                };
-                entries.push(DirEntry {
-                    slot: *new_slot,
-                    blob,
-                    flags: 0,
-                });
-            }
-            write_dir_file(
-                &tmp_payloads,
-                *b"VPLD",
-                SLOT_REC_SIZE,
-                plan.new_capacity,
-                &entries,
-            )?;
+        let tmp_payload_store = self.dir.join("payloads_store_tmp");
+        if tmp_payload_store.exists() {
+            std::fs::remove_dir_all(&tmp_payload_store)?;
         }
+        let live_slots: Vec<(u32, u32)> = plan
+            .map
+            .iter()
+            .enumerate()
+            .filter(|(_, new_slot)| **new_slot != u32::MAX)
+            .map(|(old, &new)| (old as u32, new))
+            .collect();
+        let ps_guard = self.payload_store.load();
+        let old_store = ps_guard
+            .as_ref()
+            .as_ref()
+            .expect("PayloadStore must be present");
+        let new_store = old_store.compact_to(&tmp_payload_store, &live_slots)?;
+        let _ = old_store;
+        drop(ps_guard);
+        let tracker_guard = new_store.tracker().write();
+        let config = new_store.config().clone();
+        tracker_guard.save(&tmp_payload_store, &config)?;
         Ok(())
     }
 
@@ -399,25 +370,16 @@ impl CollectionStore {
         }
         self.keys.replace_from(&self.dir.join("keys_tmp.bin"))?;
 
-        // Swap payload storage: either the new PayloadStore or legacy blobs.
         {
-            let ps_guard = self.payload_store.load();
-            if ps_guard.is_some() {
-                drop(ps_guard);
-                let live_store = self.dir.join("payloads_store");
-                let tmp_store = self.dir.join("payloads_store_tmp");
-                if tmp_store.exists() {
-                    if live_store.exists() {
-                        std::fs::remove_dir_all(&live_store)?;
-                    }
-                    std::fs::rename(&tmp_store, &live_store)?;
-                    // Re-open the compacted PayloadStore and swap it in.
-                    let new_ps = super::PayloadStore::open(&live_store)?;
-                    self.payload_store.store(Arc::new(Some(new_ps)));
+            let live_store = self.dir.join("payloads_store");
+            let tmp_store = self.dir.join("payloads_store_tmp");
+            if tmp_store.exists() {
+                if live_store.exists() {
+                    std::fs::remove_dir_all(&live_store)?;
                 }
-            } else {
-                self.payloads
-                    .replace_from(&self.dir.join("payloads_tmp.bin"))?;
+                std::fs::rename(&tmp_store, &live_store)?;
+                let new_ps = super::PayloadStore::open(&live_store)?;
+                self.payload_store.store(Arc::new(Some(new_ps)));
             }
         }
 

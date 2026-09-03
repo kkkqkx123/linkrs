@@ -206,7 +206,7 @@ impl FlattenAll {
     }
 }
 
-/// Legacy wrapper providing the Ladybug-style static API that the plan doc expects.
+/// Legacy wrapper providing the Ladybug-style static API.
 pub struct FlattenResolver;
 
 impl FlattenResolver {

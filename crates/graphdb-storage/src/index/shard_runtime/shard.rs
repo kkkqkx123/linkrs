@@ -61,7 +61,7 @@ impl ShardRuntime {
     }
 
     /// Build a ChunkedIndex from a BTreeMap and install it as the forward base.
-    /// Used during load/init to populate the chunked index from legacy data.
+    /// Used during load/init to populate the chunked index.
     pub(crate) fn install_forward_from_btree(&self, map: BTreeMap<SecondaryIndexKey, IndexRecord>) {
         let idx = ChunkedIndex::from_btree(vec![], &map, self.pool_capacity);
         let dir = self.checkpoint_file.join("forward_chunks");

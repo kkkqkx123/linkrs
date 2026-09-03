@@ -332,7 +332,7 @@ impl WalFileHeader {
     }
 
     /// Whether checksums were enabled when this file was created.
-    /// Stored in `reserved[0]` (0 = disabled, 1 = enabled, 0xFF = unknown/legacy).
+    /// Stored in `reserved[0]` (0 = disabled, 1 = enabled, 0xFF = unknown).
     pub fn checksum_enabled(&self) -> Option<bool> {
         match self.reserved[0] {
             0 => Some(false),

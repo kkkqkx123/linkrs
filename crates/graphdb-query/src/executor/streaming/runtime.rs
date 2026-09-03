@@ -638,7 +638,7 @@ impl ResourceOwner {
 /// lifecycle, and query-registration so that operators do not each
 /// carry ad-hoc context.
 ///
-/// M2: unified cancellation via [`CancelToken`] — the legacy `AtomicBool`
+/// M2: unified cancellation via [`CancelToken`]
 /// has been removed; operators check [`CancelToken::is_cancelled`].
 #[derive(Debug)]
 pub struct ExecutionRuntime {
@@ -680,7 +680,7 @@ pub struct ExecutionRuntime {
     /// mutability pattern used throughout [`ExecutionRuntime`]).
     shared_scheduler: parking_lot::Mutex<Option<Arc<super::pool::SharedScheduler>>>,
     /// Query-level morsel worker pool for dynamic partition execution
-    /// (legacy, kept for backward compat during M6 migration).
+    /// Kept for backward compat during M6 migration.
     /// Created when `max_workers > 1` and no `shared_scheduler` is set;
     /// `None` means serial fallback.
     /// Behind a Mutex so the engine can set the pool after construction.
@@ -1081,7 +1081,7 @@ impl ExecutionRuntime {
     }
 
     /// Return the effective worker pool — either from the shared scheduler,
-    /// or from the legacy per-query pool, or `None` for serial fallback.
+    /// or from the per-query pool, or `None` for serial fallback.
     pub fn effective_worker_pool(&self) -> Option<Arc<dyn TaskScheduler>> {
         self.worker_pool.lock().clone()
     }

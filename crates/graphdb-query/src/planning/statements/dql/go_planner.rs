@@ -368,7 +368,7 @@ impl Planner for GoPlanner {
 }
 
 impl GoPlanner {
-    /// Create the YIELD column from AST statement (legacy transform path)
+    /// Create the YIELD column from AST statement
     fn build_yield_columns(
         go_stmt: &GoStmt,
         expr_context: &Arc<ExpressionAnalysisContext>,

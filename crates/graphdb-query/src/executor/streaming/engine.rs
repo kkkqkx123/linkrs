@@ -44,7 +44,7 @@ pub struct StreamingExecutionEngine {
     /// Partition executors for partitioned execution (one per partition).
     partition_executors: Vec<StreamingExecutor>,
     /// Number of local trees currently owned by a Gather root. This remains
-    /// meaningful after the legacy `partition_executors` vector is cleared.
+    /// meaningful after the `partition_executors` vector is cleared.
     partition_count: usize,
     /// Maximum worker threads for intra-query parallelism.
     /// 1 (default) means fully serial.
@@ -617,7 +617,7 @@ impl StreamingExecutionEngine {
         }
     }
 
-    /// Execute the legacy uncomposed partition list sequentially.
+    /// Execute the uncomposed partition list sequentially.
     ///
     /// Formal parallelism is intentionally attached to the Gather-based
     /// partitioned root. This compatibility helper has no Gather semantics

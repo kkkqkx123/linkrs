@@ -130,7 +130,7 @@ impl OperatorBase {
             .lock()
     }
 
-    /// Override the legacy tree-node identity with the arena-assigned physical
+    /// Override the tree-node identity with the arena-assigned physical
     /// operator identity. This is required by production materialization.
     pub fn with_physical_operator_id(mut self, operator_id: PhysicalOperatorId) -> Self {
         self.physical_operator_id = operator_id;

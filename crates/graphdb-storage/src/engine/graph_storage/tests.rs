@@ -2661,7 +2661,7 @@ mod tests {
     }
 
     #[test]
-    fn test_p9_phase3_cleanup_threshold_gc_integration() {
+    fn test_cleanup_threshold_gc_integration() {
         // Test that compaction uses cleanup_threshold from SnapshotTracker
         let (_, mut storage) = create_persistent_storage();
         let _space_id = setup_space(&mut storage);

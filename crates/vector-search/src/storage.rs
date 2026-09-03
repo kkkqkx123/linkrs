@@ -98,8 +98,7 @@ pub struct CollectionStore {
     vectors: Vectors,
     keys: Keys,
     payloads: Payloads,
-    /// Gridstore-style payload storage. When present, payload operations
-    /// are routed here instead of the legacy `Payloads` blob directory.
+    /// Gridstore-style payload storage for all payload operations.
     /// Wrapped in `ArcSwap` for lock-free snapshot reads during search.
     payload_store: ArcSwap<Option<PayloadStore>>,
     /// Optional quantized storage (Scalar/Binary/Product). `None` when
@@ -315,16 +314,11 @@ impl CollectionStore {
         let keys = Keys::open(&dir.join("keys.bin"))?;
         let payloads = Payloads::open(&dir.join("payloads.bin"))?;
 
-        // Detect PayloadStore early — when present, tombstone/payload reads
-        // come from the Gridstore, not the legacy payloads.bin.
         let payload_store_path = dir.join("payloads_store");
-        let has_payload_store = payload_store_path.exists();
 
         let mut reverse = HashMap::new();
-        let mut tombstones = bitvec![0; meta.slot_capacity as usize];
+        let tombstones = bitvec![0; meta.slot_capacity as usize];
         let mut filter_bitmap = FilterBitmap::with_capacity(meta.slot_capacity as usize);
-        // Declared payload indexes are rebuilt from the payload storage (a
-        // derived structure) on every open.
         let mut payload_indexes = PayloadIndexManager::new();
         for def in PayloadIndexManager::load_defs(dir) {
             if payload_indexes
@@ -336,37 +330,14 @@ impl CollectionStore {
         }
         {
             let keys_view = keys.snapshot();
-            if has_payload_store {
-                // PayloadStore is present: derive tombstone status from whether
-                // the key exists and the PayloadStore has data.  We open the
-                // PayloadStore temporarily for reads.
-                let ps = PayloadStore::open(&payload_store_path)?;
-                for slot in 0..meta.next_slot as usize {
-                    if let Some(key) = Keys::read_key(&keys_view, slot)? {
-                        let id = PointId::from(key);
-                        reverse.insert(id, slot as u32);
-                        if let Ok(Some(p)) = ps.get(slot as u32) {
-                            filter_bitmap.register_slot(slot as u32, Some(&p));
-                            payload_indexes.register_slot(slot as u32, Some(&p));
-                        }
-                    }
-                }
-            } else {
-                // Legacy path: read tombstone flags and payloads from
-                // the old payloads.bin blob directory.
-                let payloads_view = payloads.snapshot();
-                for slot in 0..meta.next_slot as usize {
-                    if Payloads::is_tombstoned(&payloads_view, slot) {
-                        tombstones.set(slot, true);
-                        continue;
-                    }
-                    if let Some(key) = Keys::read_key(&keys_view, slot)? {
-                        let id = PointId::from(key);
-                        reverse.insert(id, slot as u32);
-                        if let Ok(Some(p)) = Payloads::read_payload(&payloads_view, slot) {
-                            filter_bitmap.register_slot(slot as u32, Some(&p));
-                            payload_indexes.register_slot(slot as u32, Some(&p));
-                        }
+            let ps = PayloadStore::open(&payload_store_path)?;
+            for slot in 0..meta.next_slot as usize {
+                if let Some(key) = Keys::read_key(&keys_view, slot)? {
+                    let id = PointId::from(key);
+                    reverse.insert(id, slot as u32);
+                    if let Ok(Some(p)) = ps.get(slot as u32) {
+                        filter_bitmap.register_slot(slot as u32, Some(&p));
+                        payload_indexes.register_slot(slot as u32, Some(&p));
                     }
                 }
             }
@@ -391,12 +362,7 @@ impl CollectionStore {
             None
         };
 
-        // Detect and open the new PayloadStore if present.
-        let payload_store = if has_payload_store {
-            PayloadStore::open(&payload_store_path).ok()
-        } else {
-            None
-        };
+        let payload_store = Some(PayloadStore::open(&payload_store_path)?);
 
         let store = Self {
             dir: dir.to_path_buf(),
@@ -438,63 +404,44 @@ impl CollectionStore {
 
     // ── Payload routing helpers ────────────────────────────────────────
 
-    /// Read the payload for a slot, preferring the new PayloadStore when
-    /// available and falling back to the legacy blob directory.
+    /// Read the payload for a slot from PayloadStore.
     fn read_payload_at(&self, slot: u32) -> Result<Option<Payload>> {
         let ps_guard = self.payload_store.load();
-        if let Some(ps) = ps_guard.as_ref().as_ref() {
-            ps.get(slot)
-        } else {
-            Payloads::read_payload(&self.payloads.snapshot(), slot as usize)
-        }
+        let ps = ps_guard
+            .as_ref()
+            .as_ref()
+            .expect("PayloadStore must be present");
+        ps.get(slot)
     }
 
-    /// Write a payload for a slot. When the new PayloadStore is present
-    /// the write goes there; otherwise it goes to the legacy blob directory.
+    /// Write a payload for a slot to PayloadStore.
     fn write_payload_at(&self, slot: u32, payload: Option<&Payload>) -> Result<()> {
         let ps_guard = self.payload_store.load();
-        if let Some(ps) = ps_guard.as_ref().as_ref() {
-            ps.put(slot, payload)
-        } else {
-            self.payloads.append_payload(slot as usize, payload)
-        }
+        let ps = ps_guard
+            .as_ref()
+            .as_ref()
+            .expect("PayloadStore must be present");
+        ps.put(slot, payload)
     }
 
-    /// Delete specific keys from a slot's payload, preferring the new
-    /// PayloadStore and falling back to the legacy blob directory.
+    /// Delete specific keys from a slot's payload in PayloadStore.
     fn delete_keys_at(&self, slot: u32, keys: &[&str]) -> Result<()> {
         let ps_guard = self.payload_store.load();
-        if let Some(ps) = ps_guard.as_ref().as_ref() {
-            ps.delete_keys(slot, keys)
-        } else {
-            // Legacy path: read-modify-write through the blob directory.
-            let current = Payloads::read_payload(&self.payloads.snapshot(), slot as usize)?;
-            if let Some(mut current) = current {
-                for key in keys {
-                    current.remove(*key);
-                }
-                self.payloads
-                    .append_payload(slot as usize, Some(&current))?;
-            }
-            Ok(())
-        }
+        let ps = ps_guard
+            .as_ref()
+            .as_ref()
+            .expect("PayloadStore must be present");
+        ps.delete_keys(slot, keys)
     }
 
-    /// Merge the given fields into a slot's payload: keys in `partial`
-    /// overwrite their previous values while all other keys are preserved.
-    /// A missing payload is created. Prefers the new PayloadStore and falls
-    /// back to the legacy blob directory.
+    /// Merge the given fields into a slot's payload in PayloadStore.
     fn merge_payload_at(&self, slot: u32, partial: &Payload) -> Result<()> {
         let ps_guard = self.payload_store.load();
-        if let Some(ps) = ps_guard.as_ref().as_ref() {
-            return ps.merge(slot, partial.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        let mut current =
-            Payloads::read_payload(&self.payloads.snapshot(), slot as usize)?.unwrap_or_default();
-        for (key, value) in partial {
-            current.insert(key.clone(), value.clone());
-        }
-        self.payloads.append_payload(slot as usize, Some(&current))
+        let ps = ps_guard
+            .as_ref()
+            .as_ref()
+            .expect("PayloadStore must be present");
+        ps.merge(slot, partial.iter().map(|(k, v)| (k.clone(), v.clone())))
     }
 
     /// Re-index a slot's pre-filter structures after a non-upsert payload

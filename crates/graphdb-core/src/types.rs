@@ -133,7 +133,7 @@ impl std::fmt::Display for DataType {
             DataType::Edge => write!(f, "EDGE"),
             DataType::Path => write!(f, "PATH"),
             DataType::List(element) => {
-                // Untyped containers (element `Empty`) keep the legacy bare
+                // Untyped containers (element `Empty`) keep the bare
                 // spelling so `Display` roundtrips through `from_str`.
                 if element.as_ref() == &DataType::Empty {
                     write!(f, "LIST")

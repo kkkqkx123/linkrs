@@ -2,7 +2,7 @@
 //!
 //! Extracted from `execution_plan.rs` so that downstream consumers (the
 //! arena `PhysicalPlan`, the plan cache, the partitioned arena builder, the
-//! streaming partition view) no longer depend on the legacy `ExecutionPlan`
+//! streaming partition view) no longer depend on `ExecutionPlan`
 //! module just to reach `PartitionSpec`.  The optimizer and cache — which
 //! sit upstream of the executor — also import from here, keeping the
 //! dependency direction flat (`planning::plan::partition_spec` has no

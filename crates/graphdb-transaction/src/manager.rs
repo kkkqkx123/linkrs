@@ -486,7 +486,7 @@ impl TransactionManager {
         self.certifier.prune(oldest_active_ts);
     }
 
-    /// Start a new transaction (legacy API for compatibility)
+    /// Start a new transaction
     pub fn begin_transaction(
         &self,
         options: TransactionOptions,

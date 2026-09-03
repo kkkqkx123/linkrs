@@ -319,18 +319,41 @@ impl FactorizationRewriter {
                 tmp.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::Traverse(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
-                    Self::visit_operator(child)
+                let effective_schema = if let Some(child) = n.input.as_mut() {
+                    let schema = Self::visit_operator(child);
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        let mut to_flatten = HashSet::new();
+                        to_flatten.insert(pos);
+                        let new_child =
+                            Self::append_flattens((**child).clone(), &to_flatten, &schema);
+                        **child = new_child;
+                        let mut flattened = schema.clone();
+                        flattened.flatten_group(pos);
+                        flattened
+                    } else {
+                        schema
+                    }
                 } else {
                     FactorizedSchema::new()
                 };
                 let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                tmp.compute_factorized_schema(&[effective_schema])
             }
             LogicalNodeEnum::Expand(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    child_schemas.push(Self::visit_operator(dep));
+                    let schema = Self::visit_operator(dep);
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        let mut to_flatten = HashSet::new();
+                        to_flatten.insert(pos);
+                        let new_dep = Self::append_flattens(dep.clone(), &to_flatten, &schema);
+                        *dep = new_dep;
+                        let mut flattened = schema.clone();
+                        flattened.flatten_group(pos);
+                        child_schemas.push(flattened);
+                    } else {
+                        child_schemas.push(schema);
+                    }
                 }
                 let child_schema = child_schemas.first().cloned().unwrap_or_default();
                 let mut tmp = node.clone();
@@ -339,28 +362,82 @@ impl FactorizationRewriter {
             LogicalNodeEnum::ExpandAll(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    child_schemas.push(Self::visit_operator(dep));
+                    let schema = Self::visit_operator(dep);
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        let mut to_flatten = HashSet::new();
+                        to_flatten.insert(pos);
+                        let new_dep = Self::append_flattens(dep.clone(), &to_flatten, &schema);
+                        *dep = new_dep;
+                        let mut flattened = schema.clone();
+                        flattened.flatten_group(pos);
+                        child_schemas.push(flattened);
+                    } else {
+                        child_schemas.push(schema);
+                    }
                 }
                 let child_schema = child_schemas.first().cloned().unwrap_or_default();
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::BiExpand(n) => {
-                let left_schema = Self::visit_operator(&mut n.left);
-                let right_schema = Self::visit_operator(&mut n.right);
+                let mut left_schema = Self::visit_operator(&mut n.left);
+                let mut right_schema = Self::visit_operator(&mut n.right);
+                if let Some(pos) = left_schema.unflat_group_pos() {
+                    let mut to_flatten = HashSet::new();
+                    to_flatten.insert(pos);
+                    let new_left =
+                        Self::append_flattens((*n.left).clone(), &to_flatten, &left_schema);
+                    *n.left = new_left;
+                    left_schema.flatten_group(pos);
+                }
+                if let Some(pos) = right_schema.unflat_group_pos() {
+                    let mut to_flatten = HashSet::new();
+                    to_flatten.insert(pos);
+                    let new_right =
+                        Self::append_flattens((*n.right).clone(), &to_flatten, &right_schema);
+                    *n.right = new_right;
+                    right_schema.flatten_group(pos);
+                }
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::BiTraverse(n) => {
-                let left_schema = Self::visit_operator(&mut n.left);
-                let right_schema = Self::visit_operator(&mut n.right);
+                let mut left_schema = Self::visit_operator(&mut n.left);
+                let mut right_schema = Self::visit_operator(&mut n.right);
+                if let Some(pos) = left_schema.unflat_group_pos() {
+                    let mut to_flatten = HashSet::new();
+                    to_flatten.insert(pos);
+                    let new_left =
+                        Self::append_flattens((*n.left).clone(), &to_flatten, &left_schema);
+                    *n.left = new_left;
+                    left_schema.flatten_group(pos);
+                }
+                if let Some(pos) = right_schema.unflat_group_pos() {
+                    let mut to_flatten = HashSet::new();
+                    to_flatten.insert(pos);
+                    let new_right =
+                        Self::append_flattens((*n.right).clone(), &to_flatten, &right_schema);
+                    *n.right = new_right;
+                    right_schema.flatten_group(pos);
+                }
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::AppendVertices(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    child_schemas.push(Self::visit_operator(dep));
+                    let schema = Self::visit_operator(dep);
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        let mut to_flatten = HashSet::new();
+                        to_flatten.insert(pos);
+                        let new_dep = Self::append_flattens(dep.clone(), &to_flatten, &schema);
+                        *dep = new_dep;
+                        let mut flattened = schema.clone();
+                        flattened.flatten_group(pos);
+                        child_schemas.push(flattened);
+                    } else {
+                        child_schemas.push(schema);
+                    }
                 }
                 let child_schema = child_schemas.first().cloned().unwrap_or_default();
                 let mut tmp = node.clone();
@@ -420,7 +497,18 @@ impl FactorizationRewriter {
             LogicalNodeEnum::GetNeighbors(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    child_schemas.push(Self::visit_operator(dep));
+                    let schema = Self::visit_operator(dep);
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        let mut to_flatten = HashSet::new();
+                        to_flatten.insert(pos);
+                        let new_dep = Self::append_flattens(dep.clone(), &to_flatten, &schema);
+                        *dep = new_dep;
+                        let mut flattened = schema.clone();
+                        flattened.flatten_group(pos);
+                        child_schemas.push(flattened);
+                    } else {
+                        child_schemas.push(schema);
+                    }
                 }
                 let child_schema = child_schemas.first().cloned().unwrap_or_default();
                 let mut tmp = node.clone();
@@ -762,6 +850,8 @@ mod tests {
             expression: None,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: None,
             col_names: vec!["a".to_string()],
             column_types: vec![],

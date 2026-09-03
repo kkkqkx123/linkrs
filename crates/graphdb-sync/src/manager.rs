@@ -79,7 +79,7 @@ pub struct OutboxConsumerConfig {
     pub lease_duration_ms: u64,
     pub max_retries: u64,
     /// Max concurrent `claim → apply → ack` workers per target.
-    /// `1` = legacy single-threaded delivery (Local); `4` = Qdrant concurrent.
+    /// `1` = single-threaded delivery (Local); `4` = Qdrant concurrent.
     pub max_concurrency: usize,
 }
 
@@ -706,7 +706,7 @@ impl SyncManager {
                     consumer.max_concurrency.max(1)
                 };
                 if max_concurrency <= 1 {
-                    // Single-threaded path (Local and legacy): preserves global
+                    // Single-threaded path (Local): preserves global
                     // commit_lsn ordering and keeps SQLite contention minimal.
                     let mut target_processed = 0usize;
                     while target_processed < consumer.batch_size {

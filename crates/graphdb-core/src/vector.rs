@@ -22,8 +22,7 @@
 //! # Future improvement
 //! A dedicated `graphdb-vector-types` crate could break this coupling. The new
 //! crate would sit at the same level as `graphdb-core` in the DAG, and both
-//! `graphdb-core` and `vector-search` would depend on it. See
-//! `docs/plan/fulltext_vector_architecture_refactor.md` for details.
+//! `graphdb-core` and `vector-search` would depend on it.
 
 use std::collections::HashMap;
 

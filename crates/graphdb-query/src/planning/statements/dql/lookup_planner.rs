@@ -316,6 +316,8 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
                 column_types: vec![],
@@ -329,6 +331,8 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
                 column_types: vec![],
@@ -487,6 +491,8 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
                 column_types: vec![],
@@ -500,6 +506,8 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
                 column_types: vec![],
@@ -597,7 +605,7 @@ impl LookupPlanner {
         Ok(columns)
     }
 
-    /// Construct the YIELD column (legacy transform path)
+    /// Construct the YIELD column
     fn build_yield_columns(
         lookup_stmt: &LookupStmt,
         validated: &ValidatedStatement,

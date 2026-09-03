@@ -726,17 +726,16 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Documented node-name list, mirrored from
-    /// `__analysis__/plan_node_category_analysis.md`. The doc itself cannot be
-    /// compile-checked, so this mirror is the only hand-maintained part; the
-    /// registry side comes from the macro-generated `ALL_VARIANT_NAMES` above.
+    /// Documented node-name list mirrored from the macro-generated registry.
+    /// The registry side comes from the macro-generated `ALL_VARIANT_NAMES` above;
+    /// this mirror is the only hand-maintained part and is test-enforced
+    /// against the macro table.
     ///
     /// When adding/removing a plan node you MUST update:
     /// 1. the enum variant + the four macro tables in this file
     ///    (is_/as_/as_mut_ + the unified `define_all_plan_nodes!` table;
     ///    compiler-enforced),
-    /// 2. this mirror list (test-enforced against the macro table),
-    /// 3. the two docs in `__analysis__/`.
+    /// 2. this mirror list (test-enforced against the macro table).
     #[cfg(not(feature = "vector"))]
     const DOCUMENTED_NAMES: &[&str] = &[
         // Access (7)
@@ -932,7 +931,7 @@ mod tests {
             PlanNodeEnum::ALL_VARIANT_NAMES.len(),
             EXPECTED_VARIANT_COUNT,
             "PlanNodeEnum variant count drifted from the documented {EXPECTED_VARIANT_COUNT}. \
-             Update the macro tables / enum in this file and the __analysis__ docs."
+             Update the macro tables / enum in this file and the documented list."
         );
     }
 
@@ -951,7 +950,7 @@ mod tests {
         assert_eq!(
             from_macro,
             documented,
-            "macro registry and __analysis__ documented list drifted. \
+            "macro registry and documented list drifted. \
              Missing in macro table: {:?}. Extraneous in macro table: {:?}.",
             documented.difference(&from_macro).collect::<Vec<_>>(),
             from_macro.difference(&documented).collect::<Vec<_>>(),
@@ -959,11 +958,11 @@ mod tests {
     }
 
     #[test]
-    fn removed_legacy_variants_are_absent() {
-        for legacy in ["HashInnerJoin", "HashLeftJoin", "FulltextIndexScan"] {
+    fn removed_variants_are_absent() {
+        for name in ["HashInnerJoin", "HashLeftJoin", "FulltextIndexScan"] {
             assert!(
-                !PlanNodeEnum::ALL_VARIANT_NAMES.contains(&legacy),
-                "removed legacy variant {legacy} is still registered"
+                !PlanNodeEnum::ALL_VARIANT_NAMES.contains(&name),
+                "removed variant {name} is still registered"
             );
         }
     }

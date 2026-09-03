@@ -512,8 +512,8 @@ impl GraphStorageContext {
                 snapshot.budget.max_memory_bytes
             );
         }
-        // Version-chain memory diagnostic and long-transaction backpressure
-        // (phase-4). Long-lived snapshots pin history; we warn and surface
+        // Version-chain memory diagnostic and long-transaction backpressure.
+        // Long-lived snapshots pin history; we warn and surface
         // blocked bytes but do not force the safe GC frontier forward.
         {
             let coordinator = crate::engine::gc_coordinator::GcCoordinator::new(
@@ -552,7 +552,7 @@ impl GraphStorageContext {
                     "Oldest active snapshot exceeded max_snapshot_age",
                 ));
             }
-            // Long-transaction diagnostic (phase-4): warn when oldest snapshot
+            // Long-transaction diagnostic: warn when oldest snapshot
             // ages past 30s and blocks GC. Does not force watermark forward;
             // caller may retry or apply backpressure upstream.
             if age.as_secs() > 30 {

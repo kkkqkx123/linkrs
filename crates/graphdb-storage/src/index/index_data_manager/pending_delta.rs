@@ -41,7 +41,7 @@ impl IndexDataManagerImpl {
     /// once the entry threshold is reached.
     ///
     /// When `delta_publish_threshold <= 1` the delta is published immediately,
-    /// preserving the legacy per-statement publish behavior (rollback path).
+    /// preserving per-statement publish behavior (rollback path).
     pub(crate) fn accumulate_delta(
         &self,
         identity: IndexIdentity,

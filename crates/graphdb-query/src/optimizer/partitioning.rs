@@ -895,7 +895,7 @@ mod tests {
     fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         // The storage self-proven domain (PartitioningLayoutInfo) must be
         // sufficient to enable partitioning even when the config carries no
-        // trusted range (the phase-4 enablement path).
+        // trusted range.
         let stats = make_stats();
         let planner = PartitioningPlanner::new(PartitioningConfig {
             enabled: true,

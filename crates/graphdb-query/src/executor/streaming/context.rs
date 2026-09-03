@@ -91,7 +91,7 @@ impl ValueRowContext {
     /// Create a new context by building a layout from column names.
     ///
     /// This is a convenience for sites that only have column-name strings
-    /// (e.g. legacy signatures or helper functions).  The layout is
+    /// (e.g. helper functions).  The layout is
     /// created once and reused for all subsequent `get_variable()` calls
     /// so there is never a name-map fallback at runtime.
     pub fn from_names(row: Vec<Value>, col_names: Vec<String>) -> Self {

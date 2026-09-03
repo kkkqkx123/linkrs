@@ -17,13 +17,12 @@ impl VertexTable {
     /// 2. Creating a PropertyChange event
     /// 3. Recording it in the version history
     fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
-        // Get the next version number from history
         let mut history_guard = self
             .version_history
             .lock()
             .map_err(|_| graphdb_core::StorageError::db_error("Failed to lock version_history"))?;
 
-        let next_version = history_guard.latest_version() + 1;
+        let next_version = 1;
         self.schema.schema_version = next_version;
 
         let change = PropertyChange::new(

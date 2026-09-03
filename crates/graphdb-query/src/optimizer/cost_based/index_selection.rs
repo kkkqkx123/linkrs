@@ -616,6 +616,8 @@ mod tests {
             expression: None,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: Some("n".to_string()),
             col_names: vec!["n".to_string()],
             column_types: vec![],

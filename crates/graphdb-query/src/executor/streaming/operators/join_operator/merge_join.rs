@@ -16,7 +16,7 @@ use graphdb_core::Value;
 use super::build_combined_names;
 
 /// Drain the right child into the build side for the symmetric inner/left
-/// merge joins. `build_done` mirrors the design rename of the legacy
+/// merge joins. `build_done` mirrors the design rename of the previous
 /// `left_consumed` flag: the phase it guards is the build phase.
 fn drain_build_side(
     build_side_tuples: &mut Vec<Vec<Value>>,

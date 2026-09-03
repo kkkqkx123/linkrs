@@ -13,7 +13,6 @@ use std::sync::Arc;
 use graphdb::config::{Config, VectorEngineKind};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig};
 use graphdb::sync::vector_sync::{DistanceMetric, PointId, SearchOptions, VectorPoint};
-use graphdb_api::api_core::vector_api::VectorWriteMode;
 use graphdb_server::GraphService;
 
 fn point(id: i64, vector: Vec<f32>, group_id: &str) -> VectorPoint {
@@ -53,22 +52,18 @@ async fn local_vector_engine_startup_e2e() {
         .expect("create_index should succeed");
     assert_eq!(collection, "space_1");
 
-    #[allow(deprecated)]
     {
-        vector_api
-            .insert_vector_batch_with_mode(
-                1,
-                "item",
-                "vec",
-                vec![
-                    point(1, vec![1.0, 0.0, 0.0], "item_vec"),
-                    point(2, vec![0.0, 1.0, 0.0], "item_vec"),
-                    point(3, vec![0.0, 0.0, 1.0], "item_vec"),
-                ],
-                VectorWriteMode::Direct,
-            )
-            .await
-            .expect("insert_vector_batch should succeed");
+        let backend = vector_api.backend();
+        for p in vec![
+            point(1, vec![1.0, 0.0, 0.0], "item_vec"),
+            point(2, vec![0.0, 1.0, 0.0], "item_vec"),
+            point(3, vec![0.0, 0.0, 1.0], "item_vec"),
+        ] {
+            backend
+                .upsert(&collection, p)
+                .await
+                .expect("insert should succeed");
+        }
     }
 
     let results = vector_api
@@ -92,10 +87,10 @@ async fn local_vector_engine_startup_e2e() {
         .expect("count should succeed");
     assert_eq!(count, 3);
 
-    #[allow(deprecated)]
     {
         vector_api
-            .delete_vector_with_mode(1, "item", "vec", "2", VectorWriteMode::Direct)
+            .backend()
+            .delete(&collection, "2")
             .await
             .expect("delete_vector should succeed");
     }
@@ -136,31 +131,27 @@ async fn local_vector_engine_restart_consistency_e2e() {
         let graph_service = build_service().await;
         let vector_api = graph_service.vector_api().unwrap();
 
-        vector_api
+        let collection2 = vector_api
             .create_index(1, "item", "vec", 2, DistanceMetric::Cosine)
             .await
             .expect("create_index should succeed");
-        #[allow(deprecated)]
         {
-            vector_api
-                .insert_vector_batch_with_mode(
-                    1,
-                    "item",
-                    "vec",
-                    vec![
-                        point(1, vec![1.0, 0.0], "item_vec"),
-                        point(2, vec![0.0, 1.0], "item_vec"),
-                        point(3, vec![1.0, 1.0], "item_vec"),
-                    ],
-                    VectorWriteMode::Direct,
-                )
-                .await
-                .expect("insert_vector_batch should succeed");
+            let backend = vector_api.backend();
+            for p in vec![
+                point(1, vec![1.0, 0.0], "item_vec"),
+                point(2, vec![0.0, 1.0], "item_vec"),
+                point(3, vec![1.0, 1.0], "item_vec"),
+            ] {
+                backend
+                    .upsert(&collection2, p)
+                    .await
+                    .expect("insert should succeed");
+            }
         }
-        #[allow(deprecated)]
         {
             vector_api
-                .delete_vector_with_mode(1, "item", "vec", "3", VectorWriteMode::Direct)
+                .backend()
+                .delete(&collection2, "3")
                 .await
                 .expect("delete_vector should succeed");
         }

@@ -1,4 +1,4 @@
-#[cfg(any(feature = "fulltext", feature = "vector"))]
+#[cfg(feature = "fulltext")]
 use std::collections::HashSet;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 use std::sync::Arc;
@@ -201,13 +201,6 @@ struct VectorCommitState {
 }
 
 #[cfg(feature = "vector")]
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct VectorCommitStateLegacy {
-    applied_lsn: u64,
-    receipts: HashSet<String>,
-}
-
-#[cfg(feature = "vector")]
 const VECTOR_RECEIPT_MAX_ENTRIES: usize = 8192;
 #[cfg(feature = "vector")]
 const VECTOR_RECEIPT_RETENTION_LSN_WINDOW: u64 = 100_000;
@@ -249,23 +242,7 @@ impl VectorReceiver {
         let state_path = Self::state_file_path(&path);
         let state = std::fs::read(&state_path)
             .ok()
-            .and_then(|bytes| {
-                if let Ok(state) = postcard::from_bytes::<VectorCommitState>(&bytes) {
-                    return Some(state);
-                }
-                // Backward compatibility: legacy file stored HashSet
-                if let Ok(legacy) = postcard::from_bytes::<VectorCommitStateLegacy>(&bytes) {
-                    let mut receipts = std::collections::HashMap::new();
-                    for key in legacy.receipts {
-                        receipts.insert(key, legacy.applied_lsn);
-                    }
-                    return Some(VectorCommitState {
-                        applied_lsn: legacy.applied_lsn,
-                        receipts,
-                    });
-                }
-                None
-            })
+            .and_then(|bytes| postcard::from_bytes::<VectorCommitState>(&bytes).ok())
             .unwrap_or(VectorCommitState {
                 applied_lsn: 0,
                 receipts: std::collections::HashMap::new(),

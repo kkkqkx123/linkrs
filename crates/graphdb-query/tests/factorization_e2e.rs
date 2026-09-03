@@ -28,6 +28,8 @@ fn scan() -> LogicalNodeEnum {
         expression: None,
         limit: None,
         projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
         output_var: None,
         col_names: vec!["a".to_string()],
         column_types: vec![],
@@ -143,6 +145,8 @@ fn e2e_match_return_no_flatten() {
             dedup: false,
             limit: None,
             projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
             output_var: None,
             col_names: vec!["b".to_string()],
             column_types: vec![],
@@ -268,9 +272,7 @@ fn e2e_union_flattens() {
     let out = union_node.compute_factorized_schema(&[left, right]);
     assert!(out.is_flat_schema(), "Union should flatten all inputs");
     out.validate_at_most_one_unflat();
-    // Check that disabled vs enabled produce same flattened row count via FactorizedTable
-    // Simulate FactorizedTable flat_rows equivalence: both should flatten to same
-    // We test that RemoveFactorizationRewriter can strip flatten
+    // Verify that RemoveFactorizationRewriter can strip Flatten and restore flat schema.
     let mut with_flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(1, scan()));
     assert!(explain_contains_flatten(&with_flatten));
     let mut without = with_flatten.clone();
@@ -385,6 +387,8 @@ fn get_neighbors_chain_keeps_one_unflat() {
                 dedup: false,
                 limit: None,
                 projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
                 output_var: None,
                 col_names: vec!["b".to_string()],
                 column_types: vec![],
@@ -402,7 +406,7 @@ fn get_neighbors_chain_keeps_one_unflat() {
 #[test]
 fn factorization_disabled_vs_enabled_semantics() {
     // Verify that disabling factorization (flat copy) yields same logical row count
-    // Simulated via FactorizedTable flatten logic: disabled path is flat schema
+    // Disabled path is flat schema via FactorizedSchema::flat_copy.
     let ctx = Arc::new(ExpressionAnalysisContext::new());
     let id_a = ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
     let id_b = ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));

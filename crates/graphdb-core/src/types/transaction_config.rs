@@ -11,7 +11,7 @@ pub enum DurabilityLevel {
     None,
     /// Async WAL - may lose recent transactions on crash
     Async,
-    /// Sync WAL - guaranteed durability (was Immediate in legacy code)
+    /// Sync WAL - guaranteed durability
     #[default]
     Sync,
 }

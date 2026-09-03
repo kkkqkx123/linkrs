@@ -70,18 +70,6 @@ impl DirView {
         let start = self.blob_offset(rec_size) + off as usize;
         self.mmap.get(start..start + len as usize)
     }
-
-    /// Flags byte for a slot (payloads only).
-    pub fn flags(&self, rec_size: usize, slot: usize) -> Option<u8> {
-        if rec_size < 12 {
-            return Some(0);
-        }
-        if slot >= self.rec_capacity {
-            return None;
-        }
-        let start = HEADER_LEN + slot * rec_size + 8;
-        self.mmap.get(start).copied()
-    }
 }
 
 /// Append-only directory file with a fixed-size record array and blob area.

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use graphdb::config::{Config, VectorEngineKind};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig};
 use graphdb::sync::vector_sync::{PointId, VectorPoint};
-use graphdb_api::api_core::vector_api::{VectorApi, VectorWriteMode};
+use graphdb_api::api_core::vector_api::VectorApi;
 use graphdb_server::GraphService;
 
 type Service = Arc<GraphService<GraphStorage>>;
@@ -94,22 +94,20 @@ async fn setup_env() -> TestEnv {
     let mut names_b = HashMap::new();
     names_b.insert("name".to_string(), serde_json::Value::String("b".into()));
 
-    #[allow(deprecated)]
     {
-        vector_api
-            .insert_vector_batch_with_mode(
-                1,
-                "item",
-                "vec",
-                vec![
-                    point(1, vec![1.0, 0.0, 0.0], Some(names)),
-                    point(2, vec![0.0, 1.0, 0.0], Some(names_b)),
-                    point(3, vec![0.9, 0.1, 0.0], None),
-                ],
-                VectorWriteMode::Direct,
-            )
-            .await
-            .expect("insert_vector_batch should succeed");
+        // Direct backend insert for test setup; transactional path requires SyncManager.
+        let collection = "space_1".to_string();
+        let backend = vector_api.backend();
+        for p in vec![
+            point(1, vec![1.0, 0.0, 0.0], Some(names)),
+            point(2, vec![0.0, 1.0, 0.0], Some(names_b)),
+            point(3, vec![0.9, 0.1, 0.0], None),
+        ] {
+            backend
+                .upsert(&collection, p)
+                .await
+                .expect("insert should succeed");
+        }
     }
 
     TestEnv {
@@ -198,10 +196,10 @@ async fn case2_vector_search_filter_and_limit() {
 async fn case3_vector_delete_visibility() {
     let env = setup_env().await;
 
-    #[allow(deprecated)]
     {
         env.vector_api
-            .delete_vector_with_mode(1, "item", "vec", "1", VectorWriteMode::Direct)
+            .backend()
+            .delete(&"space_1".to_string(), "1")
             .await
             .expect("delete_vector should succeed");
     }

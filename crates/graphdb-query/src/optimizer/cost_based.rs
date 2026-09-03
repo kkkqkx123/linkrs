@@ -38,12 +38,12 @@
 pub mod aggregate_strategy;
 pub mod bidirectional_traversal;
 pub mod expression_precomputation;
-pub mod factorization;
 pub mod index;
 pub mod index_selection;
 pub mod join_order;
 pub mod join_order_rewriter;
 pub mod memory_budget;
+pub mod ndv;
 pub mod precomputation_wiring;
 pub mod row_estimates;
 pub mod subquery_unnesting;
