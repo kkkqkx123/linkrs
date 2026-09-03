@@ -89,8 +89,15 @@ impl Binder {
             .map(|dc| self.bind_match_delete(dc))
             .transpose()?;
 
+        let join_hint = stmt
+            .join_hint
+            .as_ref()
+            .map(|hint| self.bind_join_hint(hint))
+            .transpose()?;
+
         Ok(BoundStatement::Match(BoundMatchStatement {
             query_graph,
+            join_hint,
             where_clause,
             return_clause,
             order_by,
@@ -99,6 +106,37 @@ impl Binder {
             optional: stmt.optional,
             delete_clause,
         }))
+    }
+
+    /// Bind a `USING JOIN` hint, checking that every named variable is in
+    /// scope. Unknown variables are a hard bind error (unlike the
+    /// planner fallback, which only sees resolved graphs).
+    pub(crate) fn bind_join_hint(
+        &self,
+        hint: &crate::parser::ast::JoinHintAst,
+    ) -> DBResult<BoundJoinHint> {
+        use crate::parser::ast::JoinHintAst as Ast;
+        let bound = match hint {
+            Ast::Binary { left, right } => BoundJoinHint::Binary {
+                left: left.clone(),
+                right: right.clone(),
+            },
+            Ast::Multiway { probe, builds } => BoundJoinHint::Multiway {
+                probe: probe.clone(),
+                builds: builds.clone(),
+            },
+        };
+        for var in bound.variables() {
+            if !self.scope.contains(var) {
+                return Err(DBError::from(
+                    graphdb_core::error::QueryError::invalid_query(format!(
+                        "Unknown variable in USING JOIN hint: {}",
+                        var
+                    )),
+                ));
+            }
+        }
+        Ok(bound)
     }
 
     pub(crate) fn bind_match_delete(
@@ -237,6 +275,7 @@ impl Binder {
 
         Ok(BoundStatement::Match(BoundMatchStatement {
             query_graph,
+            join_hint: None,
             where_clause,
             return_clause,
             order_by: None,

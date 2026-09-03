@@ -295,6 +295,71 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_rollup_apply_sp
     })
 }
 
+/// Build the N-way WCO intersect spec: bound/intersect variable names plus
+/// the output column order. Column presence is validated against the static
+/// child layouts here so a plan whose build side cannot key its adjacency
+/// table fails loudly at build time instead of producing wrong rows.
+pub(in crate::executor::streaming::plan::arena_builder) fn build_wco_spec(
+    node: &crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode,
+) -> Result<crate::executor::streaming::operators::spec::WcoSpec, PlanBuildError> {
+    use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+    let builds = node.build_inputs();
+    if builds.is_empty() || builds.len() != node.bound_keys().len() {
+        return Err(PlanBuildError::unsupported(
+            "WcoIntersect",
+            node.id(),
+            "each build side needs exactly one bound key",
+        ));
+    }
+    let intersect_name =
+        node.intersect_key()
+            .as_variable()
+            .ok_or_else(|| PlanBuildError::unsupported(
+                "WcoIntersect",
+                node.id(),
+                "intersect key must be a plain variable",
+            ))?;
+    let probe_cols = node.probe_input().col_names();
+    let mut bound_names = Vec::with_capacity(builds.len());
+    for (side, bound_key) in node.bound_keys().iter().enumerate() {
+        let name = bound_key.as_variable().ok_or_else(|| {
+            PlanBuildError::unsupported(
+                "WcoIntersect",
+                node.id(),
+                "bound key must be a plain variable",
+            )
+        })?;
+        if !probe_cols.iter().any(|c| c == &name) {
+            return Err(PlanBuildError::unsupported(
+                "WcoIntersect",
+                node.id(),
+                format!("probe side is missing bound column `{name}`"),
+            ));
+        }
+        let build_cols = builds[side].col_names();
+        if !build_cols.iter().any(|c| c == &name) {
+            return Err(PlanBuildError::unsupported(
+                "WcoIntersect",
+                node.id(),
+                format!("build side {side} is missing bound column `{name}`"),
+            ));
+        }
+        if !build_cols.iter().any(|c| c == &intersect_name) {
+            return Err(PlanBuildError::unsupported(
+                "WcoIntersect",
+                node.id(),
+                format!("build side {side} is missing intersect column `{intersect_name}`"),
+            ));
+        }
+        bound_names.push(name);
+    }
+    Ok(crate::executor::streaming::operators::spec::WcoSpec {
+        bound_names,
+        intersect_name,
+        output_col_names: node.col_names().to_vec(),
+    })
+}
+
 pub(in crate::executor::streaming::plan::arena_builder) fn build_apply_spec(
     node: &crate::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyNode,
 ) -> Result<ApplySpec, PlanBuildError> {

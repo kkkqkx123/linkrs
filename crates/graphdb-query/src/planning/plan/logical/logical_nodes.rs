@@ -12,3 +12,4 @@ pub mod join;
 pub mod operation;
 pub mod search;
 pub mod traversal;
+pub mod wco_intersect;

@@ -124,6 +124,7 @@ mod tests {
             order_by: None,
             limit: limit(10),
             skip: skip(5),
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -143,6 +144,7 @@ mod tests {
             order_by: None,
             limit: None,
             skip: None,
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -162,6 +164,7 @@ mod tests {
             order_by: None,
             limit: limit(20),
             skip: None,
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -181,6 +184,7 @@ mod tests {
             order_by: None,
             limit: None,
             skip: skip(15),
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -200,6 +204,7 @@ mod tests {
             order_by: None,
             limit: limit(10),
             skip: skip(5),
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -246,6 +251,7 @@ mod tests {
             order_by: None,
             limit: None,
             skip: None,
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });
@@ -292,6 +298,7 @@ mod tests {
             order_by: None,
             limit: limit(10),
             skip: skip(5),
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });

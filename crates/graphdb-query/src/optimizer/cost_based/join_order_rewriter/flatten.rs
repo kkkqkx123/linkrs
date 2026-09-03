@@ -287,7 +287,8 @@ pub(super) fn classify_join_logical(node: &LogicalNodeEnum) -> JoinNodeType {
         LogicalNodeEnum::LeftJoin(_)
         | LogicalNodeEnum::RightJoin(_)
         | LogicalNodeEnum::SemiJoin(_)
-        | LogicalNodeEnum::FullOuterJoin(_) => JoinNodeType::NonReorderable,
+        | LogicalNodeEnum::FullOuterJoin(_)
+        | LogicalNodeEnum::WcoIntersect(_) => JoinNodeType::NonReorderable,
         _ => JoinNodeType::NotJoin,
     }
 }
@@ -357,6 +358,7 @@ pub(super) fn logical_output_var(node: &LogicalNodeEnum) -> Option<&str> {
         LogicalNodeEnum::CrossJoin(n) => n.output_var(),
         LogicalNodeEnum::FullOuterJoin(n) => n.output_var(),
         LogicalNodeEnum::SemiJoin(n) => n.output_var(),
+        LogicalNodeEnum::WcoIntersect(n) => n.output_var(),
         _ => None,
     }
 }
@@ -385,6 +387,7 @@ pub(super) fn logical_column_types(node: &LogicalNodeEnum) -> Vec<graphdb_core::
         LogicalNodeEnum::CrossJoin(n) => n.column_types().to_vec(),
         LogicalNodeEnum::FullOuterJoin(n) => n.column_types().to_vec(),
         LogicalNodeEnum::SemiJoin(n) => n.column_types().to_vec(),
+        LogicalNodeEnum::WcoIntersect(n) => n.column_types().to_vec(),
         _ => vec![],
     }
 }

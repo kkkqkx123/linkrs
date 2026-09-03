@@ -407,6 +407,7 @@ mod tests {
                     order_by: None,
                     limit: None,
                     skip: None,
+                    join_hint: None,
                     optional: false,
                     delete_clause: None,
                 }),
@@ -1039,6 +1040,7 @@ mod tests {
             order_by: None,
             limit: None,
             skip: None,
+            join_hint: None,
             optional: false,
             delete_clause: None,
         });

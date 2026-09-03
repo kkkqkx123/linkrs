@@ -579,6 +579,12 @@ fn take_external_inputs(
             ordered.sort_by_key(|member| member.partition_id);
             ordered.into_iter().map(|member| member.fragment).collect()
         }
+        InputContract::WcoInputs { probe, builds } => {
+            let mut ids = Vec::with_capacity(builds.len() + 1);
+            ids.push(probe.fragment);
+            ids.extend(builds.iter().map(|build| build.fragment));
+            ids
+        }
     };
 
     ids.into_iter()

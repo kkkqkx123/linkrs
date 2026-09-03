@@ -1100,5 +1100,43 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             node.set_column_types(n.column_types);
             PlanNodeEnum::Flatten(node)
         }
+
+        LogicalNodeEnum::WcoIntersect(n) => lower_wco_intersect(n),
     }
+}
+
+/// Lower an N-way WCO intersect to the dedicated physical node.
+///
+/// The probe side converts to `input`/`deps[0]` and each build side to
+/// `deps[1..]`; the streaming `WcoIntersectOperator` resolves the bound
+/// and intersect columns by variable name at execution time. Build sides
+/// must therefore carry both their bound variable and the intersect
+/// variable (the join-order DP selects endpoint-covering build plans);
+/// the assembler reports a build error otherwise instead of silently
+/// producing wrong rows.
+fn lower_wco_intersect(
+    n: crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode,
+) -> PlanNodeEnum {
+    use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
+    let crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode {
+        deps,
+        intersect_key,
+        bound_keys,
+        output_var,
+        col_names,
+        column_types,
+        ..
+    } = n;
+    let mut inputs = deps.into_iter();
+    let probe = inputs.next().expect("WCO intersect needs a probe side");
+    let probe_physical = convert_logical_to_physical(probe);
+    let builds: Vec<PlanNodeEnum> = inputs.map(convert_logical_to_physical).collect();
+    let mut node = WcoIntersectNode::new(probe_physical, builds, intersect_key, bound_keys)
+        .expect("Failed to construct WcoIntersectNode");
+    if let Some(var) = output_var {
+        node.set_output_var(var);
+    }
+    node.set_col_names(col_names);
+    node.set_column_types(column_types);
+    PlanNodeEnum::WcoIntersect(node)
 }

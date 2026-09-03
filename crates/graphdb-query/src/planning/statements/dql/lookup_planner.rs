@@ -412,7 +412,10 @@ impl LookupPlanner {
             crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
             crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
         };
-        let is_edge = matches!(&lookup.target, crate::binder::bound::BoundLookupTarget::Edge(_));
+        let is_edge = matches!(
+            &lookup.target,
+            crate::binder::bound::BoundLookupTarget::Edge(_)
+        );
 
         // Extract scan limits from WHERE when an index is available
         let (scan_limits, scan_type) = if let Some(index) = selected_index {

@@ -210,7 +210,7 @@ impl Planner for SubgraphPlanner {
                     &where_clause.condition,
                     &expr_ctx,
                 )
-            .map_err(PlannerError::PlanGenerationFailed)?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 current_node = match FilterNode::new(current_node.clone(), condition) {
                     Ok(node) => PlanNodeEnum::Filter(node),
                     Err(_) => current_node,

@@ -377,6 +377,7 @@ pub struct BoundAssignVariable {
 #[derive(Debug, Clone)]
 pub struct BoundMatchStatement {
     pub query_graph: QueryGraph,
+    pub join_hint: Option<BoundJoinHint>,
     pub where_clause: Option<BoundWhereClause>,
     pub return_clause: Option<BoundReturnClause>,
     pub order_by: Option<Vec<BoundOrderByItem>>,
@@ -384,6 +385,30 @@ pub struct BoundMatchStatement {
     pub skip: Option<SkipClause>,
     pub optional: bool,
     pub delete_clause: Option<BoundMatchDeleteClause>,
+}
+
+/// Bound `USING JOIN` hint: pattern variables pinned to a join shape.
+/// Resolution against the planning query graph happens in the planner;
+/// the binder only checks that every named variable is in scope.
+#[derive(Debug, Clone)]
+pub enum BoundJoinHint {
+    Binary { left: String, right: String },
+    Multiway { probe: String, builds: Vec<String> },
+}
+
+impl BoundJoinHint {
+    /// Variables referenced by the hint, in order.
+    pub fn variables(&self) -> Vec<&str> {
+        match self {
+            BoundJoinHint::Binary { left, right } => vec![left.as_str(), right.as_str()],
+            BoundJoinHint::Multiway { probe, builds } => {
+                let mut vars = Vec::with_capacity(builds.len() + 1);
+                vars.push(probe.as_str());
+                vars.extend(builds.iter().map(String::as_str));
+                vars
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

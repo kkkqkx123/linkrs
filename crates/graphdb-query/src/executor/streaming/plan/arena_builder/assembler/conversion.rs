@@ -25,6 +25,7 @@ use super::fragment_ops::FragmentCtx;
 use super::{ArenaFragmentAllocator, ArenaPlanAssembler};
 
 mod binary;
+mod wco;
 mod write;
 
 impl ArenaPlanAssembler {
@@ -566,6 +567,11 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
+
+            // ── N-way WCO intersect ─────────────────────────────────────────────
+            PlanNodeEnum::WcoIntersect(wco_node) => Self::convert_wco_node(
+                wco_node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
 
             // ── Binary nodes (join/set/apply) ───────────────────────────────────
             PlanNodeEnum::InnerJoin(_)

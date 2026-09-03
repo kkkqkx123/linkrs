@@ -289,6 +289,7 @@ pub(crate) fn logical_children(
         LogicalNodeEnum::Union(n) => n.deps.iter().collect(),
         LogicalNodeEnum::Minus(n) => n.deps.iter().collect(),
         LogicalNodeEnum::Intersect(n) => n.deps.iter().collect(),
+        LogicalNodeEnum::WcoIntersect(n) => n.deps.iter().collect(),
         LogicalNodeEnum::Start(_)
         | LogicalNodeEnum::ScanVertices(_)
         | LogicalNodeEnum::ScanEdges(_)
@@ -624,20 +625,26 @@ pub(crate) fn rebuild_physical_with_new_children(
             }
             Ok(PlanNodeEnum::Intersect(cloned))
         }
+        PlanNodeEnum::WcoIntersect(n) => {
+            let mut cloned = n.clone();
+            *cloned.dependencies_mut() = new_children.clone();
+            if let Some(first) = new_children.first() {
+                *cloned.input_mut() = first.clone();
+            }
+            Ok(PlanNodeEnum::WcoIntersect(cloned))
+        }
         PlanNodeEnum::Select(n) => {
             let mut cloned = n.clone();
             let orig_has_if = n.if_branch().is_some();
             let orig_has_else = n.else_branch().is_some();
             let mut idx = 0;
-            if orig_has_if
-                && idx < new_children.len() {
-                    cloned.set_if_branch(new_children[idx].clone());
-                    idx += 1;
-                }
-            if orig_has_else
-                && idx < new_children.len() {
-                    cloned.set_else_branch(new_children[idx].clone());
-                }
+            if orig_has_if && idx < new_children.len() {
+                cloned.set_if_branch(new_children[idx].clone());
+                idx += 1;
+            }
+            if orig_has_else && idx < new_children.len() {
+                cloned.set_else_branch(new_children[idx].clone());
+            }
             Ok(PlanNodeEnum::Select(cloned))
         }
         PlanNodeEnum::Loop(n) => {

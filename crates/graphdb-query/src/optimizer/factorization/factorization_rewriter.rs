@@ -476,6 +476,46 @@ impl FactorizationRewriter {
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&child_schemas)
             }
+            LogicalNodeEnum::WcoIntersect(n) => {
+                let mut child_schemas = Vec::new();
+                for dep in &mut n.deps {
+                    child_schemas.push(Self::visit_operator(dep));
+                }
+                if let Some(probe_schema) = child_schemas.first() {
+                    let to_flatten = n.get_groups_to_flatten_on_probe_side(probe_schema);
+                    if !to_flatten.is_empty() {
+                        let new_probe =
+                            Self::append_flattens(n.deps[0].clone(), &to_flatten, probe_schema);
+                        n.deps[0] = new_probe;
+                        let mut flattened = probe_schema.clone();
+                        for pos in &to_flatten {
+                            flattened.flatten_group(*pos);
+                        }
+                        child_schemas[0] = flattened;
+                    }
+                }
+                for build_idx in 0..n.num_builds() {
+                    let child_idx = build_idx + 1;
+                    if child_idx >= child_schemas.len() {
+                        break;
+                    }
+                    let to_flatten =
+                        n.get_groups_to_flatten_on_build_side(build_idx, &child_schemas[child_idx]);
+                    if !to_flatten.is_empty() {
+                        let schema = child_schemas[child_idx].clone();
+                        let new_build =
+                            Self::append_flattens(n.deps[child_idx].clone(), &to_flatten, &schema);
+                        n.deps[child_idx] = new_build;
+                        let mut flattened = schema;
+                        for pos in &to_flatten {
+                            flattened.flatten_group(*pos);
+                        }
+                        child_schemas[child_idx] = flattened;
+                    }
+                }
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&child_schemas)
+            }
             LogicalNodeEnum::Flatten(n) => {
                 let child_schema = if let Some(child) = n.input.as_mut() {
                     Self::visit_operator(child)
@@ -628,12 +668,9 @@ impl FactorizationRewriter {
                 let mut branch_schemas = Vec::new();
                 if let Some(branch) = n.if_branch.as_mut() {
                     let schema = Self::visit_operator(branch);
-                    let to_flatten =
-                        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
-                            &cond_id,
-                            &schema,
-                            &store,
-                        );
+                    let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                        &cond_id, &schema, &store,
+                    );
                     if !to_flatten.is_empty() {
                         let new_branch =
                             Self::append_flattens((**branch).clone(), &to_flatten, &schema);
@@ -649,12 +686,9 @@ impl FactorizationRewriter {
                 }
                 if let Some(branch) = n.else_branch.as_mut() {
                     let schema = Self::visit_operator(branch);
-                    let to_flatten =
-                        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
-                            &cond_id,
-                            &schema,
-                            &store,
-                        );
+                    let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                        &cond_id, &schema, &store,
+                    );
                     if !to_flatten.is_empty() {
                         let new_branch =
                             Self::append_flattens((**branch).clone(), &to_flatten, &schema);
@@ -688,9 +722,7 @@ impl FactorizationRewriter {
                 let child_schema = if let Some(body) = n.body.as_mut() {
                     let schema = Self::visit_operator(body);
                     let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
-                        &cond_id,
-                        &schema,
-                        &store,
+                        &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
                         let new_body =
@@ -1072,7 +1104,9 @@ mod tests {
         assert_eq!(window.type_name(), "Window");
     }
 
-    fn ctx_var(var: &str) -> (
+    fn ctx_var(
+        var: &str,
+    ) -> (
         graphdb_core::types::expr::contextual::ContextualExpression,
         graphdb_core::types::expr::ExpressionId,
     ) {
@@ -1081,9 +1115,9 @@ mod tests {
         use graphdb_core::types::expr::ExpressionMeta;
         use std::sync::Arc;
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id = ctx.register_expression(ExpressionMeta::new(
-            graphdb_core::Expression::Variable(var.to_string()),
-        ));
+        let id = ctx.register_expression(ExpressionMeta::new(graphdb_core::Expression::Variable(
+            var.to_string(),
+        )));
         (ContextualExpression::new(id.clone(), ctx), id)
     }
 
@@ -1114,8 +1148,8 @@ mod tests {
 
     #[test]
     fn select_rewriter_keeps_branch_factorization() {
-        use crate::planning::plan::logical::logical_nodes::control_flow::LogicalSelectNode;
         use crate::optimizer::factorization::RemoveFactorizationRewriter;
+        use crate::planning::plan::logical::logical_nodes::control_flow::LogicalSelectNode;
         // Branch output "b" is unflat; the condition only reads "b", so a
         // single unflat group survives FlattenAllButOne and no Flatten is
         // inserted: refined per-branch handling, not a blind flatten-all.

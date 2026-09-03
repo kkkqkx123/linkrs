@@ -18,6 +18,10 @@ pub mod macros;
 // Pattern definition
 pub mod pattern;
 
+// Join hint definition (`USING JOIN` clauses)
+pub mod hint;
+pub use hint::JoinHintAst;
+
 // Full-text search definitions
 pub mod fulltext;
 

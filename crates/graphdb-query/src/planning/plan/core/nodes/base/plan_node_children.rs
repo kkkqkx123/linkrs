@@ -151,6 +151,7 @@ impl PlanNodeEnum {
                 super::plan_node_traits::BinaryInputNode::right_input(node),
             ],
 
+            PlanNodeEnum::WcoIntersect(node) => node.dependencies().iter().collect(),
             PlanNodeEnum::Union(node) => node.dependencies().iter().collect(),
             PlanNodeEnum::Minus(node) => {
                 vec![node.input(), node.minus_input()]

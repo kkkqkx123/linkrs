@@ -574,6 +574,68 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_match_binary_join_hint() {
+        let mut ctx = create_parser_context(
+            "MATCH (a)-[e1]->(b), (a)-[e2]->(c) USING JOIN BINARY(e1, e2) RETURN a",
+        );
+        let stmt = StmtParser::parse_statement(&mut ctx).expect("hint must parse");
+        let crate::parser::ast::Stmt::Match(m) = stmt else {
+            panic!("expected MATCH");
+        };
+        assert_eq!(
+            m.join_hint,
+            Some(crate::parser::ast::JoinHintAst::Binary {
+                left: "e1".to_string(),
+                right: "e2".to_string(),
+            })
+        );
+        assert_eq!(m.patterns.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_match_multiway_join_hint() {
+        let mut ctx = create_parser_context(
+            "MATCH (a)-[e1]->(b), (a)-[e2]->(c) USING JOIN MULTIWAY(e1, e2) RETURN a",
+        );
+        let stmt = StmtParser::parse_statement(&mut ctx).expect("hint must parse");
+        let crate::parser::ast::Stmt::Match(m) = stmt else {
+            panic!("expected MATCH");
+        };
+        assert_eq!(
+            m.join_hint,
+            Some(crate::parser::ast::JoinHintAst::Multiway {
+                probe: "e1".to_string(),
+                builds: vec!["e2".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_match_without_hint_has_none() {
+        let mut ctx = create_parser_context("MATCH (a)-[e1]->(b) RETURN a");
+        let stmt = StmtParser::parse_statement(&mut ctx).expect("must parse");
+        let crate::parser::ast::Stmt::Match(m) = stmt else {
+            panic!("expected MATCH");
+        };
+        assert_eq!(m.join_hint, None);
+    }
+
+    #[test]
+    fn test_parse_match_using_as_variable_still_parses() {
+        let mut ctx = create_parser_context("MATCH (using) RETURN using");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(result.is_ok(), "plain `using` variable must parse");
+    }
+
+    #[test]
+    fn test_parse_match_join_hint_rejects_bad_shape() {
+        let mut ctx = create_parser_context("MATCH (a)-[e1]->(b) USING JOIN FOO(e1) RETURN a");
+        assert!(StmtParser::parse_statement(&mut ctx).is_err());
+        let mut ctx = create_parser_context("MATCH (a)-[e1]->(b) USING JOIN MULTIWAY(e1) RETURN a");
+        assert!(StmtParser::parse_statement(&mut ctx).is_err());
+    }
+
+    #[test]
     fn test_parse_go_statement() {
         let mut ctx = create_parser_context("GO 1 STEP FROM \"player100\" OVER follow");
         let result = StmtParser::parse_statement(&mut ctx);

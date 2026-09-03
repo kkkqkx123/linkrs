@@ -2,7 +2,7 @@
 
 use super::super::super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
-    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec, WcoSpec,
 };
 use super::super::super::super::slot::SlotLayout;
 use super::super::super::properties::PhysicalProperties;
@@ -662,6 +662,48 @@ impl ArenaPlanAssembler {
             operators: vec![op_id],
             root_operator: op_id,
             inputs: vec![input_fid],
+            output: None,
+            exchange_layout: None,
+        });
+        Ok((fid, op_id))
+    }
+
+    /// Create a fragment holding one N-way WCO intersect operator.
+    ///
+    /// `input_fids[0]` feeds the probe side; the rest feed the build sides
+    /// in order. The fragment is [`FragmentKind::Blocking`]: every build
+    /// input is fully drained into sorted adjacency tables before the
+    /// first probe row is produced.
+    pub(crate) fn push_nary_wco_op(
+        ctx: &mut FragmentCtx,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        input_fids: Vec<FragmentId>,
+        node_id: i64,
+        spec: WcoSpec,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        let op_id = ctx.op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::wco_explain_name(&spec);
+        ctx.operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: Some(LogicalNodeId(node_id)),
+            spec: OperatorKindSpec::Wco(spec),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_blocking_with_budget(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            choice_reason: None,
+            has_folded_expressions: false,
+            explain_name,
+        });
+        ctx.fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Blocking,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: input_fids,
             output: None,
             exchange_layout: None,
         });

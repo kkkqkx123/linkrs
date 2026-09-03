@@ -161,6 +161,10 @@ impl RemoveFactorizationRewriter {
                 n.deps = n.deps.into_iter().map(Self::visit_operator).collect();
                 LogicalNodeEnum::Intersect(n)
             }
+            LogicalNodeEnum::WcoIntersect(mut n) => {
+                n.deps = n.deps.into_iter().map(Self::visit_operator).collect();
+                LogicalNodeEnum::WcoIntersect(n)
+            }
             LogicalNodeEnum::InnerJoin(mut n) => {
                 let left = Self::visit_operator(*n.left);
                 let right = Self::visit_operator(*n.right);

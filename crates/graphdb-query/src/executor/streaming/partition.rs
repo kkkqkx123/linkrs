@@ -133,10 +133,7 @@ impl PartitionView {
 /// `parallel_fallback_reason` observability when the visible row count
 /// exceeds one batch (i.e. parallel execution could have split the work),
 /// otherwise `None` (single batch: no parallelism forgone).
-pub fn flatten_parallel_fallback_reason(
-    visible_rows: usize,
-    batch_size: usize,
-) -> Option<String> {
+pub fn flatten_parallel_fallback_reason(visible_rows: usize, batch_size: usize) -> Option<String> {
     let batch_size = batch_size.max(1);
     if visible_rows > batch_size {
         Some(format!(

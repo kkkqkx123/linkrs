@@ -57,6 +57,7 @@ pub use crate::planning::plan::core::nodes::graph_operations::window_node::{
 pub use crate::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
+pub use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
 pub use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 pub use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -156,6 +157,7 @@ pub enum PlanNodeEnum {
     CrossJoin(CrossJoinNode),
     FullOuterJoin(FullOuterJoinNode),
     SemiJoin(SemiJoinNode),
+    WcoIntersect(WcoIntersectNode),
 
     // Traversal of nodes
     Expand(ExpandNode),
@@ -293,6 +295,7 @@ crate::define_enum_is_methods! {
     (CrossJoin, is_cross_join),
     (FullOuterJoin, is_full_outer_join),
     (SemiJoin, is_semi_join),
+    (WcoIntersect, is_wco_intersect),
     // Traverse the nodes
     (Expand, is_expand),
     (ExpandAll, is_expand_all),
@@ -394,6 +397,7 @@ crate::define_enum_as_methods! {
     (CrossJoin, as_cross_join, CrossJoinNode),
     (FullOuterJoin, as_full_outer_join, FullOuterJoinNode),
     (SemiJoin, as_semi_join, SemiJoinNode),
+    (WcoIntersect, as_wco_intersect, WcoIntersectNode),
     // Traverse the nodes
     (Expand, as_expand, ExpandNode),
     (ExpandAll, as_expand_all, ExpandAllNode),
@@ -500,6 +504,7 @@ crate::define_enum_as_mut_methods! {
     (CrossJoin, as_cross_join_mut, CrossJoinNode),
     (FullOuterJoin, as_full_outer_join_mut, FullOuterJoinNode),
     (SemiJoin, as_semi_join_mut, SemiJoinNode),
+    (WcoIntersect, as_wco_intersect_mut, WcoIntersectNode),
     // Traverse the nodes
     (Expand, as_expand_mut, ExpandNode),
     (ExpandAll, as_expand_all_mut, ExpandAllNode),
@@ -612,6 +617,7 @@ crate::define_all_plan_nodes! {
     (CrossJoin, CrossJoinNode, PlanNodeCategory::Join, "CrossJoin"),
     (FullOuterJoin, FullOuterJoinNode, PlanNodeCategory::Join, "FullOuterJoin"),
     (SemiJoin, SemiJoinNode, PlanNodeCategory::Join, "SemiJoin"),
+    (WcoIntersect, WcoIntersectNode, PlanNodeCategory::Join, "WcoIntersect"),
     // Traverse the nodes
     (Expand, ExpandNode, PlanNodeCategory::Traversal, "Expand"),
     (ExpandAll, ExpandAllNode, PlanNodeCategory::Traversal, "ExpandAll"),
@@ -757,13 +763,14 @@ mod tests {
         "Dedup",
         "Aggregate",
         "Window",
-        // Join (6)
+        // Join (7)
         "InnerJoin",
         "LeftJoin",
         "RightJoin",
         "CrossJoin",
         "FullOuterJoin",
         "SemiJoin",
+        "WcoIntersect",
         // Traversal (6)
         "Expand",
         "ExpandAll",
@@ -856,6 +863,7 @@ mod tests {
         "CrossJoin",
         "FullOuterJoin",
         "SemiJoin",
+        "WcoIntersect",
         "Expand",
         "ExpandAll",
         "Traverse",
@@ -919,11 +927,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 81 variants. With `qdrant`: 84 variants.
+    /// Default build: 82 variants. With `qdrant`: 85 variants.
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 81;
+    const EXPECTED_VARIANT_COUNT: usize = 82;
     #[cfg(feature = "vector")]
-    const EXPECTED_VARIANT_COUNT: usize = 84;
+    const EXPECTED_VARIANT_COUNT: usize = 85;
 
     #[test]
     fn variant_count_matches_documented_number() {

@@ -293,6 +293,7 @@ impl PhysicalPlanValidator {
                 | OperatorKindSpec::Apply(
                     crate::executor::streaming::operators::spec::ApplySpec::RollUpApply { .. },
                 ) => 2,
+                OperatorKindSpec::Wco(wco) => 1 + wco.bound_names.len(),
                 OperatorKindSpec::Exchange(_) => {
                     continue;
                 }
@@ -621,6 +622,7 @@ impl PhysicalPlanValidator {
                     InputContract::UnaryInput(_) => 1,
                     InputContract::BinaryInputs { .. } => 2,
                     InputContract::PartitionedInputs { members, .. } => members.len(),
+                    InputContract::WcoInputs { builds, .. } => 1 + builds.len(),
                 };
                 let expected_arity = match &operator.spec {
                     OperatorKindSpec::Source(_) => 0,
@@ -639,6 +641,7 @@ impl PhysicalPlanValidator {
                             ..
                         },
                     ) => 2,
+                    OperatorKindSpec::Wco(wco) => 1 + wco.bound_names.len(),
                     OperatorKindSpec::Exchange(_) => arity,
                     _ => 1,
                 };

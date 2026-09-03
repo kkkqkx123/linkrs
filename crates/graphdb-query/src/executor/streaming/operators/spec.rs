@@ -26,6 +26,7 @@ pub mod source;
 pub mod txn;
 pub mod unary;
 pub mod vector;
+pub mod wco;
 
 pub use apply::{ApplyKind, ApplySpec};
 pub use blocking::BlockingSpec;
@@ -45,3 +46,4 @@ pub use source::{BoundIndexPredicate, IndexProjection, SourceSpec};
 pub use txn::TxnSpec;
 pub use unary::UnarySpec;
 pub use vector::{SpecVectorFilter, VectorManageCommand, VectorSpec};
+pub use wco::WcoSpec;

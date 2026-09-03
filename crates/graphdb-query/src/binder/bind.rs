@@ -243,6 +243,56 @@ mod tests {
     }
 
     #[test]
+    fn test_bind_using_join_binary_hint() {
+        let bound = bind_query(
+            "MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c) USING JOIN BINARY(e1, e2) RETURN a",
+        )
+        .expect("hint query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let hint = stmt.join_hint.expect("hint must be bound");
+        assert_eq!(hint.variables(), vec!["e1", "e2"]);
+    }
+
+    #[test]
+    fn test_bind_using_join_multiway_hint() {
+        let bound = bind_query(
+            "MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c) USING JOIN MULTIWAY(e1, e2) RETURN a",
+        )
+        .expect("hint query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        match stmt.join_hint.expect("hint must be bound") {
+            crate::binder::bound::BoundJoinHint::Multiway { probe, builds } => {
+                assert_eq!(probe, "e1");
+                assert_eq!(builds, vec!["e2".to_string()]);
+            }
+            other => panic!("expected multiway, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_using_join_unknown_variable_is_error() {
+        let err = bind_query("MATCH (a)-[e1:knows]->(b) USING JOIN BINARY(e1, zzz) RETURN a")
+            .expect_err("unknown hint variable must fail");
+        assert!(err.to_string().contains("zzz"), "error: {err}");
+    }
+
+    #[test]
+    fn test_bind_match_without_hint_has_none() {
+        let bound = bind_query("MATCH (a)-[e1]->(b) RETURN a").expect("must bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert!(stmt.join_hint.is_none());
+    }
+
+    #[test]
     fn test_bind_nested_exists() {
         let bound = bind_query(
             "MATCH (t:person) WHERE EXISTS { MATCH (p:person) \

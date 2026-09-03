@@ -25,6 +25,7 @@ pub mod fulltext_planner;
 pub mod vector_planner;
 
 // Modules organized by function
+pub mod join_order;
 pub mod scan_predicate;
 pub mod statements;
 

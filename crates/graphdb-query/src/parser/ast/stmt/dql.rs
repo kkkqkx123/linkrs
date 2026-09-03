@@ -27,6 +27,7 @@ impl PartialEq for QueryStmt {
 pub struct MatchStmt {
     pub span: Span,
     pub patterns: Vec<Pattern>,
+    pub join_hint: Option<super::super::hint::JoinHintAst>,
     pub where_clause: Option<ContextualExpression>,
     pub return_clause: Option<ReturnClause>,
     pub order_by: Option<OrderByClause>,

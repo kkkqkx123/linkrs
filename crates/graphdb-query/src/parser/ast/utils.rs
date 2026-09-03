@@ -339,6 +339,7 @@ impl StmtFactory {
         Stmt::Match(MatchStmt {
             span,
             patterns,
+            join_hint: None,
             where_clause,
             return_clause,
             order_by,

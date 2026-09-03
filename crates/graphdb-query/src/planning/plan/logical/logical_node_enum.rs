@@ -45,6 +45,7 @@ use super::logical_nodes::traversal::{
     LogicalAppendVerticesNode, LogicalBiExpandNode, LogicalBiTraverseNode, LogicalExpandAllNode,
     LogicalExpandNode, LogicalTraverseNode,
 };
+use super::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
 
 #[derive(Debug, Clone)]
 pub enum LogicalNodeEnum {
@@ -127,6 +128,9 @@ pub enum LogicalNodeEnum {
 
     // Factorization
     Flatten(LogicalFlattenNode),
+
+    // Worst-case optimal multi-way join
+    WcoIntersect(LogicalWcoIntersectNode),
 }
 
 impl LogicalNodeEnum {
@@ -192,6 +196,7 @@ impl LogicalNodeEnum {
             #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.id(),
             Self::Flatten(n) => n.id(),
+            Self::WcoIntersect(n) => n.id(),
         }
     }
 
@@ -257,6 +262,7 @@ impl LogicalNodeEnum {
             #[cfg(feature = "vector")]
             Self::VectorMatch(_) => "VectorMatch",
             Self::Flatten(_) => "Flatten",
+            Self::WcoIntersect(_) => "WcoIntersect",
         }
     }
 
@@ -322,6 +328,7 @@ impl LogicalNodeEnum {
             #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.col_names(),
             Self::Flatten(n) => n.col_names(),
+            Self::WcoIntersect(n) => n.col_names(),
         }
     }
 }

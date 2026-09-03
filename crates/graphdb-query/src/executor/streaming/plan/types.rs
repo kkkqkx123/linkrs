@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
-    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec, WcoSpec,
 };
 use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
@@ -365,6 +365,13 @@ pub enum InputContract {
         /// for backward compatibility with existing exchange operators.
         distribution: InputDistribution,
     },
+    /// One probe input plus N build inputs (WCO intersect). The first
+    /// fragment feeds the probe side; the rest feed the build sides in
+    /// order.
+    WcoInputs {
+        probe: FragmentInput,
+        builds: Vec<FragmentInput>,
+    },
 }
 
 // ── State ownership ─────────────────────────────────────────────────────────
@@ -428,6 +435,7 @@ pub enum OperatorKindSpec {
     RecursiveFragment(RecursiveFragmentSpec),
     Sink(SinkSpec),
     Set(SetSpec),
+    Wco(WcoSpec),
     Apply(ApplySpec),
     Exchange(ExchangeSpec),
     Ddl(DdlSpec),

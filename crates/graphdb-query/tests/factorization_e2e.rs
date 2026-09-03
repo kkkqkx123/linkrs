@@ -450,9 +450,7 @@ fn factorization_disabled_vs_enabled_semantics() {
 
 fn ctx_var(var: &str) -> (ContextualExpression, ExpressionId) {
     let ctx = Arc::new(ExpressionAnalysisContext::new());
-    let id = ctx.register_expression(ExpressionMeta::new(Expression::Variable(
-        var.to_string(),
-    )));
+    let id = ctx.register_expression(ExpressionMeta::new(Expression::Variable(var.to_string())));
     (ContextualExpression::new(id.clone(), ctx), id)
 }
 

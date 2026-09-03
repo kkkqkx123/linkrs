@@ -2,6 +2,7 @@
 //!
 //! Responsible for parsing statements related to graph traversal, including MATCH, GO, FIND PATH, GET SUBGRAPH, etc.
 
+use crate::parser::ast::hint::JoinHintAst;
 use crate::parser::ast::pattern::{
     EdgePattern, EdgeRange, NodePattern, PathElement, PathPattern, Pattern, VariablePattern,
 };
@@ -22,6 +23,7 @@ pub struct TraversalParser;
 /// The body of one MATCH clause, used when merging consecutive MATCH clauses.
 struct ParsedMatchClause {
     patterns: Vec<Pattern>,
+    join_hint: Option<JoinHintAst>,
     where_clause: Option<ContextualExpression>,
     where_explicit: bool,
     return_clause: Option<ReturnClause>,
@@ -44,6 +46,7 @@ impl TraversalParser {
 
         let first = self.parse_match_clause(ctx)?;
         let mut patterns = first.patterns;
+        let mut join_hint = first.join_hint;
         let mut where_clause = first.where_clause;
         let mut where_explicit = first.where_explicit;
         let mut return_clause = first.return_clause;
@@ -90,6 +93,9 @@ impl TraversalParser {
             if let Some(dc) = next.delete_clause {
                 delete_clause = Some(dc);
             }
+            if next.join_hint.is_some() {
+                join_hint = next.join_hint;
+            }
         }
 
         let (order_by, limit, skip) = if let Some(ref rc) = return_clause {
@@ -104,6 +110,7 @@ impl TraversalParser {
         Ok(Stmt::Match(MatchStmt {
             span,
             patterns,
+            join_hint,
             where_clause,
             return_clause,
             order_by,
@@ -140,6 +147,16 @@ impl TraversalParser {
                 break;
             }
         }
+
+        // Optional join hint right after the patterns
+        // (`MATCH ... USING JOIN BINARY(e1, e2)`), mirroring Neo4j's
+        // USING placement. Soft keywords only: a plain `using` variable
+        // elsewhere still parses as an identifier.
+        let join_hint = if ctx.check_keyword_sequence(&["USING", "JOIN"]) {
+            Some(self.parse_join_hint(ctx)?)
+        } else {
+            None
+        };
 
         let (mut where_clause, mut where_explicit) = if ctx.match_token(TokenKind::Where) {
             (
@@ -197,11 +214,55 @@ impl TraversalParser {
 
         Ok(ParsedMatchClause {
             patterns,
+            join_hint,
             where_clause,
             where_explicit,
             return_clause,
             delete_clause,
         })
+    }
+
+    /// Parse the hint body after `USING JOIN`: `BINARY(a, b)` pins a
+    /// binary hash join of two scans; `MULTIWAY(p, b1, b2, ...)` runs a
+    /// WCO intersect with `p` probing and the rest building.
+    fn parse_join_hint(&mut self, ctx: &mut ParseContext) -> Result<JoinHintAst, ParseError> {
+        ctx.consume_keyword("USING")?;
+        ctx.consume_keyword("JOIN")?;
+        if ctx.check_keyword("BINARY") {
+            ctx.consume_keyword("BINARY")?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let left = ctx.expect_identifier()?;
+            ctx.expect_token(TokenKind::Comma)?;
+            let right = ctx.expect_identifier()?;
+            ctx.expect_token(TokenKind::RParen)?;
+            Ok(JoinHintAst::Binary { left, right })
+        } else if ctx.check_keyword("MULTIWAY") {
+            ctx.consume_keyword("MULTIWAY")?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let probe = ctx.expect_identifier()?;
+            let mut builds = Vec::new();
+            while ctx.match_token(TokenKind::Comma) {
+                builds.push(ctx.expect_identifier()?);
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            if builds.is_empty() {
+                let pos = ctx.current_position();
+                return Err(ParseError::new(
+                    ParseErrorKind::UnexpectedToken,
+                    "MULTIWAY needs at least a probe and one build variable".to_string(),
+                    pos,
+                ));
+            }
+            Ok(JoinHintAst::Multiway { probe, builds })
+        } else {
+            let pos = ctx.current_position();
+            Err(ParseError::new(
+                ParseErrorKind::UnexpectedToken,
+                "Expected BINARY or MULTIWAY after USING JOIN".to_string(),
+                pos,
+            )
+            .with_expected_tokens(vec!["BINARY".to_string(), "MULTIWAY".to_string()]))
+        }
     }
 
     fn parse_match_delete_clause(

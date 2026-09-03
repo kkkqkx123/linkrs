@@ -490,6 +490,42 @@ pub fn estimate_node_output_rows_logical(
             left.saturating_add(right)
         }
         SemiJoin(_) => child_rows_of_logical(node, stats, selectivity),
+        LogicalNodeEnum::WcoIntersect(n) => {
+            let probe = estimate_node_output_rows_logical(n.probe_side(), stats, selectivity);
+            let mut build_cards = Vec::with_capacity(n.num_builds());
+            let mut smallest_build = u64::MAX;
+            for build in n.build_sides() {
+                let rows = estimate_node_output_rows_logical(build, stats, selectivity);
+                smallest_build = smallest_build.min(rows);
+                build_cards.push(rows);
+            }
+            if smallest_build == u64::MAX {
+                probe
+            } else {
+                // Conservative probe filtering, mirroring the join-order
+                // estimator's probe selectivity.
+                let conservative = (probe as f64
+                    * crate::planning::join_order::cardinality_estimator::NON_EQUALITY_PREDICATE_SELECTIVITY)
+                    .max(1.0) as u64;
+                // Independence-assumption upper bound over the vertex
+                // domain: the largest known tag count, else the largest
+                // observed side so the bound never divides by zero.
+                let mut domain = probe.max(smallest_build).max(1);
+                for tag in stats.manager().get_all_tags() {
+                    domain = domain.max(stats.vertex_count(&tag)).max(1);
+                }
+                let mut numerator = probe as u128;
+                for card in &build_cards {
+                    numerator = numerator.saturating_mul(*card as u128);
+                }
+                let mut denominator: u128 = 1;
+                for _ in 0..build_cards.len() {
+                    denominator = denominator.saturating_mul(domain as u128);
+                }
+                let independent = (numerator / denominator.max(1)).min(u64::MAX as u128) as u64;
+                conservative.min(independent).min(smallest_build).max(1)
+            }
+        }
 
         // ── Unsupported nodes: fall back to the child or a constant ──
         node => child_rows_of_logical(node, stats, selectivity),
@@ -525,6 +561,7 @@ fn logical_first_child(node: &LogicalNodeEnum) -> Option<&LogicalNodeEnum> {
         LogicalNodeEnum::CrossJoin(n) => Some(n.left_input()),
         LogicalNodeEnum::FullOuterJoin(n) => Some(n.left_input()),
         LogicalNodeEnum::SemiJoin(n) => Some(n.left_input()),
+        LogicalNodeEnum::WcoIntersect(n) => Some(n.probe_side()),
         LogicalNodeEnum::GetVertices(n) => n.dependencies().first(),
         LogicalNodeEnum::GetNeighbors(n) => n.dependencies().first(),
         _ => None,
@@ -532,6 +569,10 @@ fn logical_first_child(node: &LogicalNodeEnum) -> Option<&LogicalNodeEnum> {
 }
 
 /// The two inputs of a logical join node, if any.
+///
+/// `WcoIntersect` is N-way and intentionally returns `None` here; its
+/// estimate is handled by the dedicated `WcoIntersect` arm using the
+/// probe side as the driving cardinality.
 fn logical_binary_inputs(node: &LogicalNodeEnum) -> Option<(&LogicalNodeEnum, &LogicalNodeEnum)> {
     match node {
         LogicalNodeEnum::InnerJoin(n) => Some((n.left_input(), n.right_input())),
@@ -540,6 +581,7 @@ fn logical_binary_inputs(node: &LogicalNodeEnum) -> Option<(&LogicalNodeEnum, &L
         LogicalNodeEnum::CrossJoin(n) => Some((n.left_input(), n.right_input())),
         LogicalNodeEnum::FullOuterJoin(n) => Some((n.left_input(), n.right_input())),
         LogicalNodeEnum::SemiJoin(n) => Some((n.left_input(), n.right_input())),
+        LogicalNodeEnum::WcoIntersect(_) => None,
         _ => None,
     }
 }
@@ -832,5 +874,53 @@ mod tests {
             "corrected={} should inherit the factor",
             corrected
         );
+    }
+
+    #[test]
+    fn logical_wco_intersect_is_bounded_by_stats() {
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        use crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
+        use crate::planning::plan::logical::LogicalNodeEnum;
+
+        let (manager, selectivity) = setup();
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 10_000;
+        manager.update_tag_stats("test", tag_stats);
+        let view = StatsView::new(&manager, Some("test"));
+
+        let leaf = |id: i64, tag: &str| {
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id,
+                space_id: 1,
+                space_name: "test".to_string(),
+                tag: Some(tag.to_string()),
+                expression: None,
+                limit: None,
+                projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        };
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let key = |name: &str| {
+            let id = ctx
+                .register_expression(ExpressionMeta::new(Expression::Variable(name.to_string())));
+            ContextualExpression::new(id, ctx.clone())
+        };
+        let node = LogicalNodeEnum::WcoIntersect(LogicalWcoIntersectNode::new(
+            leaf(1, "person"),
+            vec![leaf(2, "person"), leaf(3, "person")],
+            key("c"),
+            vec![key("a"), key("b")],
+            vec![],
+        ));
+        let estimate = estimate_node_output_rows_logical(&node, &view, &selectivity);
+        // probe = 10000; conservative = 2000; must not exceed the builds.
+        assert!(estimate >= 1);
+        assert!(estimate <= 10_000);
+        assert!(estimate <= 2_000);
     }
 }

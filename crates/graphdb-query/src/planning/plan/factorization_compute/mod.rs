@@ -1,16 +1,21 @@
-use std::collections::{HashMap, HashSet};
+mod access;
+mod assign;
+mod control_flow;
+mod flat_leaf;
+mod join;
+mod operation;
+mod set_ops;
+mod traversal;
+mod unwind;
 
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::ExpressionId;
 
-use crate::optimizer::factorization::flatten_resolver::{FlattenAll, FlattenAllButOne};
-use crate::planning::plan::factorization::{
-    FGroupPos, FactorizedSchema, FactorizedSchemaCompute, SchemaUtils,
-};
+use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema, FactorizedSchemaCompute};
 
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 
-fn resolve_id(expr: &ContextualExpression) -> ExpressionId {
+pub(super) fn resolve_id(expr: &ContextualExpression) -> ExpressionId {
     expr.id().clone()
 }
 
@@ -22,7 +27,7 @@ fn resolve_id(expr: &ContextualExpression) -> ExpressionId {
 /// recorded explicitly. Without this the output group stays empty and every
 /// downstream use falls back to flatten-all via
 /// `GroupDependencyAnalyzer::mark_unresolved`.
-fn register_output_names(
+pub(super) fn register_output_names(
     schema: &mut FactorizedSchema,
     output_var: Option<&str>,
     col_names: &[String],
@@ -45,7 +50,10 @@ fn register_output_names(
 /// `output_aliases` are registered on the new group via
 /// `register_output_names` semantics so downstream variables resolve
 /// precisely instead of via flatten-all fallback.
-fn bi_expand_schema(child_schemas: &[FactorizedSchema], output_aliases: &[String]) -> FactorizedSchema {
+pub(super) fn bi_expand_schema(
+    child_schemas: &[FactorizedSchema],
+    output_aliases: &[String],
+) -> FactorizedSchema {
     let mut schema = child_schemas.first().cloned().unwrap_or_default();
     if schema.has_unflat_group() {
         if let Some(pos) = schema.unflat_group_pos() {
@@ -64,9 +72,6 @@ fn bi_expand_schema(child_schemas: &[FactorizedSchema], output_aliases: &[String
             }
         }
     }
-    // The expansion output carries no tracked expression identity, so
-    // output aliases are registered as bare names for downstream
-    // `Variable` resolution (see `register_output_names`).
     let out = schema.create_group();
     for alias in output_aliases {
         schema.insert_name_for_group(alias.clone(), out);
@@ -81,681 +86,69 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
         child_schemas: &[FactorizedSchema],
     ) -> FactorizedSchema {
         match self {
-            LogicalNodeEnum::ScanVertices(n) => {
-                let mut schema = FactorizedSchema::new();
-                let g = schema.create_flat_group(false);
-                if let Some(expr) = &n.expression {
-                    let eid = resolve_id(expr);
-                    let name = n
-                        .col_names()
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "scan".to_string());
-                    schema.insert_to_group_and_scope_with_name(eid, Some(name), g);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::ScanEdges(n) => {
-                let mut schema = FactorizedSchema::new();
-                let g = schema.create_flat_group(false);
-                if let Some(expr) = &n.expression {
-                    let eid = resolve_id(expr);
-                    let name = n
-                        .col_names()
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "scan".to_string());
-                    schema.insert_to_group_and_scope_with_name(eid, Some(name), g);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::GetVertices(n) => {
-                let mut schema = if let Some(cs) = child_schemas.first() {
-                    cs.clone()
-                } else {
-                    FactorizedSchema::new()
-                };
-                if schema.num_groups() == 0 {
-                    let g = schema.create_flat_group(false);
-                    {
-                        let eid = resolve_id(&n.src_ref);
-                        let name = n
-                            .col_names()
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| "getv".to_string());
-                        schema.insert_to_group_and_scope_with_name(eid, Some(name), g);
-                    }
-                    if let Some(expr) = &n.expression {
-                        let eid = resolve_id(expr);
-                        if !schema.is_expression_in_scope(&eid) {
-                            let name = expr.to_expression_string();
-                            schema.insert_to_group_and_scope_with_name(eid, Some(name), g);
-                        }
-                    }
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::GetNeighbors(n) => {
-                let mut schema = if let Some(cs) = child_schemas.first() {
-                    cs.clone()
-                } else {
-                    FactorizedSchema::new()
-                };
-                if schema.num_groups() == 0 {
-                    schema.create_flat_group(false);
-                }
-                if schema.has_unflat_group() {
-                    if let Some(pos) = schema.unflat_group_pos() {
-                        schema.flatten_group(pos);
-                    }
-                }
-                // The input side is the probe side: fan-out over an unflat
-                // probe would duplicate nested rows, so it is flattened
-                // above. The new group holds the expansion output.
-                let output_group = schema.create_group();
-                // Register the output explicitly when the node carries an
-                // output expression; otherwise register bare output names
-                // so downstream variables resolve precisely instead of
-                // via flatten-all fallback.
-                if let Some(expr) = &n.expression {
-                    let eid = resolve_id(expr);
-                    if !schema.is_expression_in_scope(&eid) {
-                        let name = n
-                            .col_names()
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| "neighbors".to_string());
-                        schema.insert_to_group_and_scope_with_name(eid, Some(name), output_group);
-                    }
-                } else {
-                    register_output_names(
-                        &mut schema,
-                        n.output_var.as_deref(),
-                        &n.col_names,
-                        output_group,
-                    );
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Flatten(n) => {
-                let mut schema = if let Some(cs) = child_schemas.first() {
-                    cs.clone()
-                } else {
-                    FactorizedSchema::new()
-                };
-                if (n.group_pos as usize) < schema.num_groups() {
-                    schema.flatten_group(n.group_pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Project(n) => {
-                let schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.num_groups() == 0 {
-                    let mut out = FactorizedSchema::new();
-                    let g = out.create_flat_group(false);
-                    for col in &n.columns {
-                        let alias = col.alias.clone();
-                        let eid = col.expression.id().clone();
-                        out.insert_to_group_and_scope_with_name(eid, Some(alias), g);
-                    }
-                    out.validate_at_most_one_unflat();
-                    return out;
-                }
-                let mut expr_store: HashMap<ExpressionId, graphdb_core::Expression> =
-                    HashMap::new();
-                for col in &n.columns {
-                    if let Some(expr) = col.expression.get_expression() {
-                        expr_store.insert(col.expression.id().clone(), expr);
-                    }
-                }
-                let mut out = schema.clone();
-                for col in &n.columns {
-                    let alias_id = col.expression.id().clone();
-                    let alias_name = col.alias.clone();
-                    if out.is_expression_in_scope(&alias_id) {
-                        continue;
-                    }
-                    let mut analyzer =
-                        crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
-                            &out,
-                            false,
-                            expr_store.clone(),
-                        );
-                    analyzer.visit(&alias_id);
-                    let dependent = analyzer.dependent_groups().clone();
-                    let required_flat = analyzer.required_flat_groups().clone();
-                    for pos in required_flat.iter() {
-                        if let Some(g) = out.get_group(*pos) {
-                            if !g.is_flat() {
-                                out.flatten_group(*pos);
-                            }
-                        }
-                    }
-                    let target = if dependent.is_empty() {
-                        out.groups()
-                            .iter()
-                            .enumerate()
-                            .find(|(_, g)| g.is_flat())
-                            .map(|(i, _)| i as FGroupPos)
-                            .unwrap_or_else(|| out.create_flat_group(false))
-                    } else if dependent.len() == 1 {
-                        *dependent.iter().next().unwrap()
-                    } else {
-                        let mut candidates: Vec<FGroupPos> = dependent
-                            .iter()
-                            .filter(|pos| {
-                                out.get_group(**pos)
-                                    .map(|g| !g.is_flat() && !required_flat.contains(pos))
-                                    .unwrap_or(false)
-                            })
-                            .copied()
-                            .collect();
-                        candidates.sort_unstable();
-                        if candidates.is_empty() {
-                            SchemaUtils::get_leading_group_pos(&dependent, &out)
-                        } else {
-                            candidates[0]
-                        }
-                    };
-                    out.insert_to_scope_with_name(alias_id.clone(), alias_name.clone(), target);
-                    if let Some(g) = out.get_group_mut(target) {
-                        if !g.contains(&alias_id) {
-                            g.insert_expression_with_name(
-                                alias_id.clone(),
-                                Some(alias_name.clone()),
-                            );
-                        }
-                    }
-                }
-                out.validate_at_most_one_unflat();
-                out
-            }
-            LogicalNodeEnum::Filter(filter) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let pred_id = filter.condition.id().clone();
-                let mut store = HashMap::new();
-                if let Some(expr) = filter.condition.get_expression() {
-                    store.insert(pred_id.clone(), expr);
-                }
-                let mut analyzer =
-                    crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
-                        &schema, false, store,
-                    );
-                analyzer.visit(&pred_id);
-                let dependent = analyzer.dependent_groups().clone();
-                let required = analyzer.required_flat_groups().clone();
-                let mut to_flatten: HashSet<FGroupPos> = HashSet::new();
-                for pos in dependent.iter().chain(required.iter()) {
-                    if let Some(g) = schema.get_group(*pos) {
-                        if !g.is_flat() {
-                            to_flatten.insert(*pos);
-                        }
-                    }
-                }
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Aggregate(n) => {
-                let mut out = FactorizedSchema::new();
-                let g = out.create_flat_group(false);
-                for expr in &n.group_key_exprs {
-                    let eid = resolve_id(expr);
-                    let name = expr.to_expression_string();
-                    out.insert_to_group_and_scope_with_name(eid, Some(name), g);
-                }
-                out.validate_at_most_one_unflat();
-                out
-            }
-            LogicalNodeEnum::Sort(_) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let groups = schema.groups_pos_in_scope();
-                let to_flatten =
-                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::TopN(_) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let groups = schema.groups_pos_in_scope();
-                let to_flatten =
-                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Window(_) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let groups = schema.groups_pos_in_scope();
-                let to_flatten =
-                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Dedup(_) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let groups = schema.groups_pos_in_scope();
-                let to_flatten = FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &schema);
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Limit(_) | LogicalNodeEnum::Sample(_) => {
-                let schema = child_schemas.first().cloned().unwrap_or_default();
-                schema
-            }
+            LogicalNodeEnum::ScanVertices(n) => access::scan_vertices(n),
+            LogicalNodeEnum::ScanEdges(n) => access::scan_edges(n),
+            LogicalNodeEnum::GetVertices(n) => access::get_vertices(n, child_schemas),
+            LogicalNodeEnum::GetEdges(n) => access::get_edges(n),
+            LogicalNodeEnum::GetNeighbors(n) => access::get_neighbors(n, child_schemas),
+            LogicalNodeEnum::Start(_) => access::start(),
+
+            LogicalNodeEnum::Project(n) => operation::project(n, child_schemas),
+            LogicalNodeEnum::Filter(n) => operation::filter(n, child_schemas),
+            LogicalNodeEnum::Aggregate(n) => operation::aggregate(n, child_schemas),
+            LogicalNodeEnum::Flatten(n) => operation::flatten(n, child_schemas),
+            LogicalNodeEnum::Sort(n) => operation::sort(n, child_schemas),
+            LogicalNodeEnum::TopN(n) => operation::top_n(n, child_schemas),
+            LogicalNodeEnum::Window(n) => operation::window(n, child_schemas),
+            LogicalNodeEnum::Dedup(n) => operation::dedup(n, child_schemas),
+            LogicalNodeEnum::Limit(n) => operation::limit(n, child_schemas),
+            LogicalNodeEnum::Sample(n) => operation::sample(n, child_schemas),
+
             LogicalNodeEnum::InnerJoin(_)
             | LogicalNodeEnum::LeftJoin(_)
             | LogicalNodeEnum::RightJoin(_)
             | LogicalNodeEnum::CrossJoin(_)
             | LogicalNodeEnum::FullOuterJoin(_)
-            | LogicalNodeEnum::SemiJoin(_) => {
-                if child_schemas.len() >= 2 {
-                    let left = &child_schemas[0];
-                    let right = &child_schemas[1];
-                    let mut merged = left.clone();
-                    let mapping = merged.merge_groups_from(right);
-                    for (expr_id, gpos) in right.expression_to_group_iter() {
-                        let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
-                        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
-                    }
-                    if merged.has_unflat_group() {
-                        let unflat_count = merged.groups().iter().filter(|g| !g.is_flat()).count();
-                        if unflat_count > 1 {
-                            let mut first = true;
-                            for i in 0..merged.num_groups() {
-                                let pos = i as FGroupPos;
-                                if let Some(g) = merged.get_group(pos) {
-                                    if !g.is_flat() {
-                                        if first {
-                                            first = false;
-                                        } else {
-                                            merged.flatten_group(pos);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    merged.validate_at_most_one_unflat();
-                    merged
-                } else {
-                    child_schemas.first().cloned().unwrap_or_default()
-                }
-            }
-            LogicalNodeEnum::Traverse(n) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                // Single-input expansion: the input is the probe side and
-                // is flattened before fan-out.
-                if schema.has_unflat_group() {
-                    if let Some(pos) = schema.unflat_group_pos() {
-                        schema.flatten_group(pos);
-                    }
-                }
-                let out = schema.create_group();
-                if let Some(alias) = &n.vertex_alias {
-                    schema.insert_name_for_group(alias.clone(), out);
-                }
-                if let Some(alias) = &n.edge_alias {
-                    schema.insert_name_for_group(alias.clone(), out);
-                }
-                register_output_names(&mut schema, n.output_var.as_deref(), &n.col_names, out);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Expand(n) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.has_unflat_group() {
-                    if let Some(pos) = schema.unflat_group_pos() {
-                        schema.flatten_group(pos);
-                    }
-                }
-                let out = schema.create_group();
-                register_output_names(&mut schema, n.output_var.as_deref(), &n.col_names, out);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::ExpandAll(n) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.has_unflat_group() {
-                    if let Some(pos) = schema.unflat_group_pos() {
-                        schema.flatten_group(pos);
-                    }
-                }
-                let out = schema.create_group();
-                register_output_names(&mut schema, n.output_var.as_deref(), &n.col_names, out);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::AppendVertices(n) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.has_unflat_group() {
-                    if let Some(pos) = schema.unflat_group_pos() {
-                        schema.flatten_group(pos);
-                    }
-                }
-                let out = schema.create_group();
-                if let Some(alias) = &n.node_alias {
-                    schema.insert_name_for_group(alias.clone(), out);
-                }
-                register_output_names(&mut schema, n.output_var.as_deref(), &n.col_names, out);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::BiExpand(n) => {
-                let mut aliases = Vec::new();
-                if let Some(var) = &n.meeting_point_var {
-                    aliases.push(var.clone());
-                }
-                if let Some(var) = n.output_var.as_deref() {
-                    aliases.push(var.to_string());
-                }
-                aliases.extend(n.col_names.iter().cloned());
-                bi_expand_schema(child_schemas, &aliases)
-            }
-            LogicalNodeEnum::BiTraverse(n) => {
-                let mut aliases = vec![n.path_var.clone()];
-                if let Some(alias) = &n.edge_alias {
-                    aliases.push(alias.clone());
-                }
-                if let Some(alias) = &n.vertex_alias {
-                    aliases.push(alias.clone());
-                }
-                if let Some(var) = n.output_var.as_deref() {
-                    aliases.push(var.to_string());
-                }
-                aliases.extend(n.col_names.iter().cloned());
-                bi_expand_schema(child_schemas, &aliases)
-            }
-            LogicalNodeEnum::GetEdges(n) => {
-                let mut schema = FactorizedSchema::new();
-                let g = schema.create_flat_group(false);
-                let eid = resolve_id(&n.edge_ref);
-                schema.insert_to_group_and_scope_with_name(eid, Some(n.edge_type.clone()), g);
-                if let Some(expr) = &n.expression {
-                    let eid2 = resolve_id(expr);
-                    if !schema.is_expression_in_scope(&eid2) {
-                        let name = expr.to_expression_string();
-                        schema.insert_to_group_and_scope_with_name(eid2, Some(name), g);
-                    }
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Start(_) => {
-                let mut schema = FactorizedSchema::new();
-                schema.create_flat_group(false);
-                schema
-            }
+            | LogicalNodeEnum::SemiJoin(_) => join::binary_join(child_schemas),
+
+            LogicalNodeEnum::Traverse(n) => traversal::traverse(n, child_schemas),
+            LogicalNodeEnum::Expand(n) => traversal::expand(n, child_schemas),
+            LogicalNodeEnum::ExpandAll(n) => traversal::expand_all(n, child_schemas),
+            LogicalNodeEnum::AppendVertices(n) => traversal::append_vertices(n, child_schemas),
+            LogicalNodeEnum::BiExpand(n) => traversal::bi_expand(n, child_schemas),
+            LogicalNodeEnum::BiTraverse(n) => traversal::bi_traverse(n, child_schemas),
+
             LogicalNodeEnum::Union(_) | LogicalNodeEnum::Minus(_) => {
-                if child_schemas.len() >= 2 {
-                    let left = &child_schemas[0];
-                    let right = &child_schemas[1];
-                    let mut merged = left.clone();
-                    let mapping = merged.merge_groups_from(right);
-                    for (expr_id, gpos) in right.expression_to_group_iter() {
-                        let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
-                        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
-                    }
-                    merged.flatten_all();
-                    merged.validate_at_most_one_unflat();
-                    merged
-                } else {
-                    child_schemas.first().cloned().unwrap_or_default()
-                }
+                set_ops::union_minus(child_schemas)
             }
-            LogicalNodeEnum::Intersect(_) => {
-                if child_schemas.len() > 2 {
-                    let mut schema = child_schemas[0].clone();
-                    if schema.has_unflat_group() {
-                        schema.flatten_all();
-                    }
-                    let out_pos = schema.create_group();
-                    for build_schema in &child_schemas[1..] {
-                        for expr in build_schema.expressions_in_scope() {
-                            if !schema.is_expression_in_scope(expr) {
-                                schema.insert_to_group_and_scope(expr.clone(), out_pos);
-                            }
-                        }
-                    }
-                    schema.validate_at_most_one_unflat();
-                    schema
-                } else if child_schemas.len() >= 2 {
-                    let left = &child_schemas[0];
-                    let right = &child_schemas[1];
-                    let mut merged = left.clone();
-                    let mapping = merged.merge_groups_from(right);
-                    for (expr_id, gpos) in right.expression_to_group_iter() {
-                        let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
-                        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
-                    }
-                    merged.flatten_all();
-                    merged.validate_at_most_one_unflat();
-                    merged
-                } else {
-                    child_schemas.first().cloned().unwrap_or_default()
-                }
-            }
-            LogicalNodeEnum::FulltextSearch(_)
-            | LogicalNodeEnum::FulltextLookup(_)
-            | LogicalNodeEnum::MatchFulltext(_) => {
-                let mut schema = FactorizedSchema::new();
-                schema.create_flat_group(false);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            #[cfg(feature = "vector")]
-            LogicalNodeEnum::VectorSearch(_)
-            | LogicalNodeEnum::VectorLookup(_)
-            | LogicalNodeEnum::VectorMatch(_) => {
-                let mut schema = FactorizedSchema::new();
-                schema.create_flat_group(false);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Unwind(n) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let list_id = resolve_id(&n.list_expression);
-                let is_list_literal = n
-                    .list_expression
-                    .expression()
-                    .map(|meta| matches!(meta.inner(), graphdb_core::Expression::List(_)))
-                    .unwrap_or(false);
-                if is_list_literal {
-                    // A literal list fans out into a new nested group whose
-                    // elements are named by the alias.
-                    let group = schema.create_group();
-                    if !schema.is_expression_in_scope(&list_id) {
-                        schema.insert_to_group_and_scope_with_name(
-                            list_id,
-                            Some(n.alias.clone()),
-                            group,
-                        );
-                    } else {
-                        schema.insert_name_for_group(n.alias.clone(), group);
-                    }
-                } else if let Some(pos) = schema.get_group_pos(&list_id) {
-                    // Unwinding an already-tracked column flattens its group
-                    // first so each element lands in a flat row; the alias
-                    // then refers to that group.
-                    schema.flatten_group(pos);
-                    schema.insert_name_for_group(n.alias.clone(), pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
+            LogicalNodeEnum::Intersect(_) => set_ops::intersect(child_schemas),
+            LogicalNodeEnum::WcoIntersect(n) => set_ops::wco_intersect(n, child_schemas),
+
+            LogicalNodeEnum::Assign(n) => assign::assign(n, child_schemas),
+
+            LogicalNodeEnum::Select(n) => control_flow::select(n, child_schemas),
+            LogicalNodeEnum::Loop(n) => control_flow::loop_node(n, child_schemas),
             LogicalNodeEnum::BeginTransaction(_)
             | LogicalNodeEnum::Commit(_)
             | LogicalNodeEnum::Rollback(_)
             | LogicalNodeEnum::PassThrough(_)
-            | LogicalNodeEnum::Argument(_) => {
-                let mut schema = FactorizedSchema::new();
-                schema.create_flat_group(false);
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Assign(n) => {
-                // Write-path counterpart of Project: each assignment only
-                // flattens the groups its right-hand side depends on, so an
-                // assignment that does not touch unflat groups keeps their
-                // factorization instead of a blind flatten-all.
-                let schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.num_groups() == 0 {
-                    let mut out = FactorizedSchema::new();
-                    let g = out.create_flat_group(false);
-                    for (alias, expr) in &n.assignments {
-                        let eid = expr.id().clone();
-                        out.insert_to_group_and_scope_with_name(eid, Some(alias.clone()), g);
-                    }
-                    out.validate_at_most_one_unflat();
-                    return out;
-                }
-                let mut expr_store: HashMap<ExpressionId, graphdb_core::Expression> =
-                    HashMap::new();
-                for (_, expr) in &n.assignments {
-                    if let Some(rhs) = expr.get_expression() {
-                        expr_store.insert(expr.id().clone(), rhs);
-                    }
-                }
-                let mut out = schema.clone();
-                for (alias, expr) in &n.assignments {
-                    let alias_id = expr.id().clone();
-                    if out.is_expression_in_scope(&alias_id) {
-                        continue;
-                    }
-                    let mut analyzer =
-                        crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
-                            &out,
-                            false,
-                            expr_store.clone(),
-                        );
-                    analyzer.visit(&alias_id);
-                    let dependent = analyzer.dependent_groups().clone();
-                    let required_flat = analyzer.required_flat_groups().clone();
-                    for pos in required_flat.iter() {
-                        if let Some(g) = out.get_group(*pos) {
-                            if !g.is_flat() {
-                                out.flatten_group(*pos);
-                            }
-                        }
-                    }
-                    let target = if dependent.is_empty() {
-                        out.groups()
-                            .iter()
-                            .enumerate()
-                            .find(|(_, g)| g.is_flat())
-                            .map(|(i, _)| i as FGroupPos)
-                            .unwrap_or_else(|| out.create_flat_group(false))
-                    } else if dependent.len() == 1 {
-                        *dependent.iter().next().unwrap()
-                    } else {
-                        let mut candidates: Vec<FGroupPos> = dependent
-                            .iter()
-                            .filter(|pos| {
-                                out.get_group(**pos)
-                                    .map(|g| !g.is_flat() && !required_flat.contains(pos))
-                                    .unwrap_or(false)
-                            })
-                            .copied()
-                            .collect();
-                        candidates.sort_unstable();
-                        if candidates.is_empty() {
-                            SchemaUtils::get_leading_group_pos(&dependent, &out)
-                        } else {
-                            candidates[0]
-                        }
-                    };
-                    out.insert_to_scope_with_name(alias_id.clone(), alias.clone(), target);
-                    if let Some(g) = out.get_group_mut(target) {
-                        if !g.contains(&alias_id) {
-                            g.insert_expression_with_name(
-                                alias_id.clone(),
-                                Some(alias.clone()),
-                            );
-                        }
-                    }
-                }
-                out.validate_at_most_one_unflat();
-                out
-            }
+            | LogicalNodeEnum::Argument(_) => control_flow::passthrough(child_schemas),
+
+            LogicalNodeEnum::Unwind(n) => unwind::unwind(n, child_schemas),
+
+            LogicalNodeEnum::FulltextSearch(_)
+            | LogicalNodeEnum::FulltextLookup(_)
+            | LogicalNodeEnum::MatchFulltext(_) => flat_leaf::flat_leaf(),
+            #[cfg(feature = "vector")]
+            LogicalNodeEnum::VectorSearch(_)
+            | LogicalNodeEnum::VectorLookup(_)
+            | LogicalNodeEnum::VectorMatch(_) => flat_leaf::flat_leaf(),
+
             LogicalNodeEnum::Remove(_)
             | LogicalNodeEnum::DataCollect(_)
-            | LogicalNodeEnum::Materialize(_) => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                schema.flatten_all();
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Select(n) => {
-                // Per-branch refinement: the branch condition decides
-                // flattens through FlattenAllButOne on the effective (first
-                // present branch) schema instead of a blind flatten-all, so
-                // branches that do not touch unflat groups keep their
-                // factorization. An unresolvable condition conservatively
-                // flattens every unflat group via the analyzer fallback.
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let cond_id = n.condition.id().clone();
-                let mut store = HashMap::new();
-                if let Some(expr) = n.condition.get_expression() {
-                    store.insert(cond_id.clone(), expr);
-                }
-                let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
-                    &cond_id,
-                    &schema,
-                    &store,
-                );
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            LogicalNodeEnum::Loop(n) => {
-                // Body refinement mirrors Select: the loop condition drives
-                // FlattenAllButOne on the body schema.
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                let cond_id = n.condition.id().clone();
-                let mut store = HashMap::new();
-                if let Some(expr) = n.condition.get_expression() {
-                    store.insert(cond_id.clone(), expr);
-                }
-                let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
-                    &cond_id,
-                    &schema,
-                    &store,
-                );
-                for pos in to_flatten {
-                    schema.flatten_group(pos);
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
-            _ => {
-                let mut schema = child_schemas.first().cloned().unwrap_or_default();
-                if schema.has_unflat_group() {
-                    schema.flatten_all();
-                }
-                schema.validate_at_most_one_unflat();
-                schema
-            }
+            | LogicalNodeEnum::Materialize(_) => flat_leaf::flatten_all_from_child(child_schemas),
+
+            _ => flat_leaf::flatten_all_from_child(child_schemas),
         }
     }
 
@@ -783,6 +176,7 @@ mod tests {
     use graphdb_core::types::expr::contextual::ContextualExpression;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn test_id(n: u64) -> ExpressionId {
@@ -1307,12 +701,11 @@ mod tests {
         let schema = node.compute_factorized_schema(&[child_schema]);
         schema.validate_at_most_one_unflat();
         let pos = schema.unflat_group_pos().expect("unflat");
-        let mut analyzer =
-            GroupDependencyAnalyzer::with_expr_store(&schema, false, HashMap::new());
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, HashMap::new());
         analyzer.visit_expression(&graphdb_core::Expression::Variable("b".to_string()));
         assert!(!analyzer.has_unresolved());
         assert!(analyzer.dependent_groups().contains(&pos));
-        let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_groups(
+        let to_flatten = crate::optimizer::factorization::flatten_resolver::FlattenAllButOne::get_groups_pos_to_flatten_for_groups(
             analyzer.dependent_groups(),
             &schema,
         );
@@ -1320,7 +713,8 @@ mod tests {
     }
 
     #[test]
-    fn bi_expand_merges_both_children() {        let mut left_schema = FactorizedSchema::new();
+    fn bi_expand_merges_both_children() {
+        let mut left_schema = FactorizedSchema::new();
         let g0 = left_schema.create_flat_group(false);
         left_schema.insert_to_group_and_scope(test_id(1), g0);
         let mut right_schema = FactorizedSchema::new();
@@ -1352,9 +746,9 @@ mod tests {
 
     fn ctx_var(var: &str) -> (ContextualExpression, ExpressionId) {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id = ctx.register_expression(ExpressionMeta::new(
-            graphdb_core::Expression::Variable(var.to_string()),
-        ));
+        let id = ctx.register_expression(ExpressionMeta::new(graphdb_core::Expression::Variable(
+            var.to_string(),
+        )));
         (ContextualExpression::new(id.clone(), ctx), id)
     }
 
@@ -1418,12 +812,6 @@ mod tests {
 
     #[test]
     fn semi_join_compute_keeps_first_unflat_with_keys() {
-        // Boundary documentation: with hand-built schemas the generic
-        // join arm keeps the first unflat group even when it holds a hash
-        // key, while a key-aware rule would flatten the probe key groups
-        // first. This shape is unreachable through the rewriter, which
-        // flattens probe key groups before compute (see
-        // semi_join_rewriter_flattens_unflat_probe_keys).
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let key_id = ctx.register_expression(ExpressionMeta::new(
             graphdb_core::Expression::Variable("a".to_string()),
@@ -1454,7 +842,6 @@ mod tests {
         });
         let out = node.compute_factorized_schema(&[left_schema, right_schema]);
         out.validate_at_most_one_unflat();
-        // Generic rule keeps the first (left) unflat group, keys included.
         assert_eq!(out.unflat_group_pos(), Some(lg1));
         assert_eq!(out.get_group_pos(&key_id), Some(lg1));
     }
@@ -1493,9 +880,9 @@ mod tests {
     #[test]
     fn select_unresolvable_condition_falls_back_to_flat() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id = ctx.register_expression(ExpressionMeta::new(
-            graphdb_core::Expression::Variable("ghost".to_string()),
-        ));
+        let id = ctx.register_expression(ExpressionMeta::new(graphdb_core::Expression::Variable(
+            "ghost".to_string(),
+        )));
         let cond = ContextualExpression::new(id, ctx);
         let mut branch = FactorizedSchema::new();
         let g0 = branch.create_flat_group(false);
@@ -1520,8 +907,7 @@ mod tests {
         body.insert_to_group_and_scope(test_id(1), g0);
         body.insert_to_group_and_scope(test_id(2), g1);
         body.insert_to_group_and_scope_with_name(test_id(3), Some("a".to_string()), g0);
-        let mut node =
-            LogicalNodeEnum::Loop(LogicalLoopNode::new_with_body(cond, scan()));
+        let mut node = LogicalNodeEnum::Loop(LogicalLoopNode::new_with_body(cond, scan()));
         let out = node.compute_factorized_schema(&[body]);
         out.validate_at_most_one_unflat();
         assert_eq!(out.unflat_group_pos(), Some(g1));

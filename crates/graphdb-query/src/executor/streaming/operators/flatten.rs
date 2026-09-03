@@ -67,8 +67,7 @@ pub(crate) fn flatten_next_batch(
                     let sel_vec = saved_sel_vector
                         .as_ref()
                         .expect("saved sel vector must be present");
-                    let positions: Vec<usize> =
-                        sel_vec[*current_idx..*current_idx + take].to_vec();
+                    let positions: Vec<usize> = sel_vec[*current_idx..*current_idx + take].to_vec();
                     build_flatten_batch_chunk(chunk, &positions)
                 };
                 *current_idx += take;
@@ -300,10 +299,7 @@ mod tests {
         assert_eq!(sel.len(), 0);
     }
 
-    fn drain_batch(
-        src: &mut StreamingExecutor,
-        batch_size: usize,
-    ) -> Vec<DataChunk> {
+    fn drain_batch(src: &mut StreamingExecutor, batch_size: usize) -> Vec<DataChunk> {
         let mut current_idx = 0usize;
         let mut size_to_flatten = 0usize;
         let mut saved = None;

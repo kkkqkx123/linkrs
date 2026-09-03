@@ -148,6 +148,20 @@ pub(super) fn populate_input_contracts(
                         InputContract::NoInput
                     }
                 }
+                OperatorKindSpec::Wco(wco) => {
+                    if inputs.len() >= 1 + wco.bound_names.len() {
+                        InputContract::WcoInputs {
+                            probe: inputs[0].clone(),
+                            builds: inputs[1..]
+                                .iter()
+                                .take(wco.bound_names.len())
+                                .cloned()
+                                .collect(),
+                        }
+                    } else {
+                        InputContract::NoInput
+                    }
+                }
                 OperatorKindSpec::Exchange(ExchangeSpec::RepartitionHash {
                     hash_expressions,
                     ..
@@ -490,6 +504,9 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
                 (0..rollup_expressions.len()).map(|index| format!("rollup_{index}")),
             )
         }
+        OperatorKindSpec::Wco(wco) => {
+            SlotLayout::from_names(&wco.output_col_names)
+        }
         OperatorKindSpec::Join(JoinSpec::SemiJoin { .. }) => input,
         OperatorKindSpec::Join(_) => inputs
             .get(1)
@@ -740,6 +757,10 @@ pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
         JoinSpec::HashLeftJoin { .. } => "HashLeftJoin",
         JoinSpec::NestedLoopJoin { .. } => "NestedLoopJoin",
     }
+}
+
+pub(super) fn wco_explain_name(_spec: &crate::executor::streaming::operators::spec::WcoSpec) -> &'static str {
+    "WcoIntersect"
 }
 
 pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
