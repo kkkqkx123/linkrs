@@ -204,7 +204,7 @@ impl Planner for SubgraphPlanner {
             let get_vertices_node = GetVerticesNode::new(1, "default", var_name);
             current_node = PlanNodeEnum::GetVertices(get_vertices_node);
 
-            let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+            let expr_ctx = ctx.validated.expr_context().clone();
             if let Some(ref where_clause) = subgraph.where_clause {
                 let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                     &where_clause.condition,
@@ -250,7 +250,7 @@ impl Planner for SubgraphPlanner {
             }
         }
 
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_ctx = ctx.validated.expr_context().clone();
         if let Some(ref where_clause) = subgraph.where_clause {
             let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                 &where_clause.condition,

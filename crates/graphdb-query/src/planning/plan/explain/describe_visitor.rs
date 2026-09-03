@@ -36,6 +36,7 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
     UserManageNode, VectorManageNode,
 };
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
@@ -577,6 +578,19 @@ impl PlanNodeVisitor for DescribeVisitor {
         if !edge_types.is_empty() {
             desc.add_description("edge_types", edge_types.join(", "));
         }
+
+        self.descriptions.push(desc);
+        self.visited_ids.insert(node.id());
+    }
+
+    fn visit_flatten(&mut self, node: &FlattenNode) {
+        let deps = self.visit_children_single(node);
+        let mut desc = PlanNodeDescription::new("Flatten", node.id());
+        if let Some(var) = node.output_var() {
+            desc = desc.with_output_var(var.to_string());
+        }
+        desc.set_dependencies(deps);
+        desc.add_description("group", node.group_pos().to_string());
 
         self.descriptions.push(desc);
         self.visited_ids.insert(node.id());

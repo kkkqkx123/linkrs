@@ -261,7 +261,7 @@ impl FactorizationRewriter {
             LogicalNodeEnum::RightJoin(n) => {
                 let left_schema = Self::visit_operator(&mut n.left);
                 let right_schema = Self::visit_operator(&mut n.right);
-                Self::visit_hash_join_generic_inner(
+                Self::visit_hash_join_right(
                     &left_schema,
                     &right_schema,
                     &n.hash_keys,
@@ -275,14 +275,18 @@ impl FactorizationRewriter {
             LogicalNodeEnum::CrossJoin(n) => {
                 let left_schema = Self::visit_operator(&mut n.left);
                 let right_schema = Self::visit_operator(&mut n.right);
-                Self::visit_hash_join_generic_inner(
-                    &left_schema,
-                    &right_schema,
-                    &n.hash_keys,
-                    &n.probe_keys,
-                    &mut n.left,
-                    &mut n.right,
-                );
+                if n.hash_keys.is_empty() && n.probe_keys.is_empty() {
+                    // No join keys: cross product needs no flatten; preserve factorization.
+                } else {
+                    Self::visit_hash_join_generic_inner(
+                        &left_schema,
+                        &right_schema,
+                        &n.hash_keys,
+                        &n.probe_keys,
+                        &mut n.left,
+                        &mut n.right,
+                    );
+                }
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[left_schema, right_schema])
             }
@@ -476,6 +480,31 @@ impl FactorizationRewriter {
             FlattenAll::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema);
         let right_to_flatten =
             FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
+        if !left_to_flatten.is_empty() {
+            let new_left = Self::append_flattens((**left).clone(), &left_to_flatten, left_schema);
+            **left = new_left;
+        }
+        if !right_to_flatten.is_empty() {
+            let new_right =
+                Self::append_flattens((**right).clone(), &right_to_flatten, right_schema);
+            **right = new_right;
+        }
+    }
+
+    fn visit_hash_join_right(
+        left_schema: &FactorizedSchema,
+        right_schema: &FactorizedSchema,
+        hash_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
+        probe_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
+        left: &mut Box<LogicalNodeEnum>,
+        right: &mut Box<LogicalNodeEnum>,
+    ) {
+        let left_keys = Self::contextual_keys_to_groups(hash_keys, left_schema);
+        let right_keys = Self::contextual_keys_to_groups(probe_keys, right_schema);
+        let left_to_flatten =
+            FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema);
+        let right_to_flatten =
+            FlattenAll::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
         if !left_to_flatten.is_empty() {
             let new_left = Self::append_flattens((**left).clone(), &left_to_flatten, left_schema);
             **left = new_left;

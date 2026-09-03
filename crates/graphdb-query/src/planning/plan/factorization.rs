@@ -416,11 +416,23 @@ impl FactorizedSchema {
             self.groups.push(group.clone());
             mapping.insert(old_pos, new_pos);
         }
+        for (name, pos) in &other.expression_name_to_group {
+            if let Some(new_pos) = mapping.get(pos) {
+                self.expression_name_to_group
+                    .insert(name.clone(), *new_pos);
+            }
+        }
         mapping
     }
 
     pub fn expression_to_group_iter(&self) -> impl Iterator<Item = (&ExpressionId, &FGroupPos)> {
         self.expression_to_group.iter()
+    }
+
+    pub fn expression_name_to_group_iter(
+        &self,
+    ) -> impl Iterator<Item = (&String, &FGroupPos)> {
+        self.expression_name_to_group.iter()
     }
 }
 

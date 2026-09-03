@@ -398,7 +398,7 @@ impl Planner for MergePlanner {
         };
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_ctx = validated.expr_context().clone();
 
         match &merge.pattern {
             BoundMergePattern::Node(vertex) => {

@@ -21,7 +21,6 @@ use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::YieldColumn;
 
 /// UNWIND statement planner
@@ -90,7 +89,7 @@ impl Planner for UnwindPlanner {
             }
         };
 
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_ctx = ctx.validated.expr_context().clone();
         let list_expr = crate::binder::expr_converter::bound_expr_to_contextual(
             &unwind_stmt.expression,
             &expr_ctx,

@@ -161,7 +161,7 @@ impl Planner for CreatePlanner {
             .clone()
             .unwrap_or_else(|| "default".to_string());
 
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_ctx = validated.expr_context().clone();
         let arg_node = ArgumentNode::new(next_node_id(), "create_args");
 
         let (insert_node, created_count) = match &create.target {

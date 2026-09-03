@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::ExpressionId;
 
+use crate::optimizer::factorization::flatten_resolver::{FlattenAll, FlattenAllButOne};
 use crate::planning::plan::factorization::{
     FGroupPos, FactorizedSchema, FactorizedSchemaCompute, SchemaUtils,
 };
@@ -237,18 +238,53 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
                 out.validate_at_most_one_unflat();
                 out
             }
-            LogicalNodeEnum::Sort(sort) => {
-                let schema = child_schemas.first().cloned().unwrap_or_default();
-                let _ = sort;
-                let out = schema.clone();
-                out.validate_at_most_one_unflat();
-                out
+            LogicalNodeEnum::Sort(_) => {
+                let mut schema = child_schemas.first().cloned().unwrap_or_default();
+                let groups = schema.groups_pos_in_scope();
+                let to_flatten =
+                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
+                for pos in to_flatten {
+                    schema.flatten_group(pos);
+                }
+                schema.validate_at_most_one_unflat();
+                schema
             }
-            LogicalNodeEnum::Limit(_)
-            | LogicalNodeEnum::TopN(_)
-            | LogicalNodeEnum::Sample(_)
-            | LogicalNodeEnum::Dedup(_)
-            | LogicalNodeEnum::Window(_) => child_schemas.first().cloned().unwrap_or_default(),
+            LogicalNodeEnum::TopN(_) => {
+                let mut schema = child_schemas.first().cloned().unwrap_or_default();
+                let groups = schema.groups_pos_in_scope();
+                let to_flatten =
+                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
+                for pos in to_flatten {
+                    schema.flatten_group(pos);
+                }
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            LogicalNodeEnum::Window(_) => {
+                let mut schema = child_schemas.first().cloned().unwrap_or_default();
+                let groups = schema.groups_pos_in_scope();
+                let to_flatten =
+                    FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
+                for pos in to_flatten {
+                    schema.flatten_group(pos);
+                }
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            LogicalNodeEnum::Dedup(_) => {
+                let mut schema = child_schemas.first().cloned().unwrap_or_default();
+                let groups = schema.groups_pos_in_scope();
+                let to_flatten = FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &schema);
+                for pos in to_flatten {
+                    schema.flatten_group(pos);
+                }
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            LogicalNodeEnum::Limit(_) | LogicalNodeEnum::Sample(_) => {
+                let schema = child_schemas.first().cloned().unwrap_or_default();
+                schema
+            }
             LogicalNodeEnum::InnerJoin(_)
             | LogicalNodeEnum::LeftJoin(_)
             | LogicalNodeEnum::RightJoin(_)
@@ -325,10 +361,40 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
                 schema.create_flat_group(false);
                 schema
             }
-            LogicalNodeEnum::Union(_)
-            | LogicalNodeEnum::Minus(_)
-            | LogicalNodeEnum::Intersect(_) => {
+            LogicalNodeEnum::Union(_) | LogicalNodeEnum::Minus(_) => {
                 if child_schemas.len() >= 2 {
+                    let left = &child_schemas[0];
+                    let right = &child_schemas[1];
+                    let mut merged = left.clone();
+                    let mapping = merged.merge_groups_from(right);
+                    for (expr_id, gpos) in right.expression_to_group_iter() {
+                        let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
+                        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
+                    }
+                    merged.flatten_all();
+                    merged.validate_at_most_one_unflat();
+                    merged
+                } else {
+                    child_schemas.first().cloned().unwrap_or_default()
+                }
+            }
+            LogicalNodeEnum::Intersect(_) => {
+                if child_schemas.len() > 2 {
+                    let mut schema = child_schemas[0].clone();
+                    if schema.has_unflat_group() {
+                        schema.flatten_all();
+                    }
+                    let out_pos = schema.create_group();
+                    for build_schema in &child_schemas[1..] {
+                        for expr in build_schema.expressions_in_scope() {
+                            if !schema.is_expression_in_scope(expr) {
+                                schema.insert_to_group_and_scope(expr.clone(), out_pos);
+                            }
+                        }
+                    }
+                    schema.validate_at_most_one_unflat();
+                    schema
+                } else if child_schemas.len() >= 2 {
                     let left = &child_schemas[0];
                     let right = &child_schemas[1];
                     let mut merged = left.clone();
