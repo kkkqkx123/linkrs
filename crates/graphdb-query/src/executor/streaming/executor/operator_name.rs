@@ -161,6 +161,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             ExchangeState::Barrier { .. } => "Exchange(Barrier)",
             ExchangeState::Materialize { .. } => "Exchange(Materialize)",
         },
+        Wco(..) => "WcoIntersect",
         HashShuffleJoin(_, _, _, op) => match op.join_kind {
             super::super::operators::shuffle_join_operator::HashJoinKind::Inner => {
                 "HashShuffleJoin(Inner)"

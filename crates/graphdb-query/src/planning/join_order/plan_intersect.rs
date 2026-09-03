@@ -260,6 +260,7 @@ impl JoinOrderEnumerator {
             probe_plan.cost,
             probe_plan.cardinality,
             &build_costs,
+            cardinality,
         );
         let plan = LogicalNodeEnum::WcoIntersect(LogicalWcoIntersectNode::new(
             probe_plan.plan.clone(),

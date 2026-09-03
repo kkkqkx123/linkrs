@@ -34,6 +34,7 @@ use crate::planning::plan::core::nodes::graph_operations::window_node::WindowNod
 use crate::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
+use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
@@ -328,6 +329,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_minus => MinusNode, Minus,
         visit_intersect => IntersectNode, Intersect,
         visit_traverse => TraverseNode, Traverse,
+        visit_wco_intersect => WcoIntersectNode, WcoIntersect,
     );
 
     // Custom implementations for nodes with special handling

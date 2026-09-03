@@ -43,6 +43,7 @@ pub use crate::planning::plan::core::nodes::graph_operations::window_node::Windo
 pub use crate::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
+pub use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
 pub use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 pub use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -87,6 +88,7 @@ pub trait PlanNodeVisitor {
         CrossJoin, CrossJoinNode, visit_cross_join;
         FullOuterJoin, FullOuterJoinNode, visit_full_outer_join;
         SemiJoin, SemiJoinNode, visit_semi_join;
+        WcoIntersect, WcoIntersectNode, visit_wco_intersect;
     );
 
     impl_visitor_methods!(
@@ -225,6 +227,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::RightJoin(node) => visitor.visit_right_join(node),
             PlanNodeEnum::CrossJoin(node) => visitor.visit_cross_join(node),
             PlanNodeEnum::SemiJoin(node) => visitor.visit_semi_join(node),
+            PlanNodeEnum::WcoIntersect(node) => visitor.visit_wco_intersect(node),
             PlanNodeEnum::GetVertices(node) => visitor.visit_get_vertices(node),
             PlanNodeEnum::GetEdges(node) => visitor.visit_get_edges(node),
             PlanNodeEnum::GetNeighbors(node) => visitor.visit_get_neighbors(node),

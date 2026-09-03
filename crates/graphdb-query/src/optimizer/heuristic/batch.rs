@@ -237,6 +237,7 @@ impl PlanNodeVisitor for SubqueryHostFinder {
         visit_minus => crate::planning::plan::core::nodes::graph_operations::set_operations_node::MinusNode,
         visit_intersect => crate::planning::plan::core::nodes::graph_operations::set_operations_node::IntersectNode,
         visit_traverse => crate::planning::plan::core::nodes::traversal::traversal_node::TraverseNode,
+        visit_wco_intersect => crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode,
     );
 
     fn visit_loop(

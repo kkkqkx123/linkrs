@@ -33,6 +33,7 @@ use super::super::operators::spec::ApplySpec;
 use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
+use super::super::operators::wco_operator::WcoIntersectOperator;
 use super::super::runtime::ExecutionRuntime;
 use super::super::subquery::SubqueryExecutor;
 use super::types::{
@@ -204,6 +205,23 @@ impl PhysicalPlanMaterializer {
                         output_layout.clone(),
                     );
                     StreamingExecutor::Join(base, Box::new(left), Box::new(right), op)
+                }
+                OperatorKindSpec::Wco(wco_spec) => {
+                    require_input_count(fragment.id, op_id, &inputs, 1 + wco_spec.num_builds())?;
+                    let mut inputs = inputs.into_iter();
+                    let probe = inputs.next().ok_or_else(|| {
+                        QueryError::execution(format!(
+                            "Wco operator {:?} in fragment {:?} has no probe input",
+                            op_id, fragment.id
+                        ))
+                    })?;
+                    let builds: Vec<StreamingExecutor> = inputs.collect();
+                    let op = WcoIntersectOperator::from_spec(
+                        wco_spec,
+                        &bindings.memory_budget,
+                        output_layout.clone(),
+                    );
+                    StreamingExecutor::Wco(base, Box::new(probe), builds, op)
                 }
                 OperatorKindSpec::Graph(graph_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;

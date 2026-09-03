@@ -3,7 +3,6 @@ use super::super::super::specs::*;
 use super::super::fragment_ops::FragmentCtx;
 use super::super::{ArenaFragmentAllocator, ArenaPlanAssembler};
 use crate::executor::build_error::PlanBuildError;
-use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
 
 impl ArenaPlanAssembler {
@@ -17,9 +16,8 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let mut input_fids = Vec::with_capacity(node.num_builds() + 1);
         for child in node.dependencies() {
-            let (fid, _) = Self::convert_node(
-                child, operators, fragments, op_alloc, frag_alloc, exec_ctx,
-            )?;
+            let (fid, _) =
+                Self::convert_node(child, operators, fragments, op_alloc, frag_alloc, exec_ctx)?;
             input_fids.push(fid);
         }
         let spec = build_wco_spec(node)?;

@@ -302,7 +302,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_rollup_apply_sp
 pub(in crate::executor::streaming::plan::arena_builder) fn build_wco_spec(
     node: &crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode,
 ) -> Result<crate::executor::streaming::operators::spec::WcoSpec, PlanBuildError> {
-    use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     let builds = node.build_inputs();
     if builds.is_empty() || builds.len() != node.bound_keys().len() {
         return Err(PlanBuildError::unsupported(
@@ -311,14 +310,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_wco_spec(
             "each build side needs exactly one bound key",
         ));
     }
-    let intersect_name =
-        node.intersect_key()
-            .as_variable()
-            .ok_or_else(|| PlanBuildError::unsupported(
-                "WcoIntersect",
-                node.id(),
-                "intersect key must be a plain variable",
-            ))?;
+    let intersect_name = node.intersect_key().as_variable().ok_or_else(|| {
+        PlanBuildError::unsupported(
+            "WcoIntersect",
+            node.id(),
+            "intersect key must be a plain variable",
+        )
+    })?;
     let probe_cols = node.probe_input().col_names();
     let mut bound_names = Vec::with_capacity(builds.len());
     for (side, bound_key) in node.bound_keys().iter().enumerate() {

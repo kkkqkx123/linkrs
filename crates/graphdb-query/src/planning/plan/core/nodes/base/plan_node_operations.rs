@@ -22,6 +22,7 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::CrossJoin(node) => node.$method(),
             PlanNodeEnum::FullOuterJoin(node) => node.$method(),
             PlanNodeEnum::SemiJoin(node) => node.$method(),
+            PlanNodeEnum::WcoIntersect(node) => node.$method(),
             PlanNodeEnum::IndexScan(node) => node.$method(),
             PlanNodeEnum::GetVertices(node) => node.$method(),
             PlanNodeEnum::GetEdges(node) => node.$method(),
@@ -92,6 +93,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::CrossJoin(_) => "CrossJoin",
             PlanNodeEnum::FullOuterJoin(_) => "FullOuterJoin",
             PlanNodeEnum::SemiJoin(_) => "SemiJoin",
+            PlanNodeEnum::WcoIntersect(_) => "WcoIntersect",
             PlanNodeEnum::IndexScan(_) => "IndexScan",
             PlanNodeEnum::GetVertices(_) => "GetVertices",
             PlanNodeEnum::GetEdges(_) => "GetEdges",
@@ -318,6 +320,9 @@ impl PlanNodeEnum {
 
             PlanNodeEnum::Minus(node) => Cow::Owned(vec![node.input(), node.minus_input()]),
             PlanNodeEnum::Intersect(node) => Cow::Owned(vec![node.input(), node.intersect_input()]),
+            PlanNodeEnum::WcoIntersect(node) => {
+                Cow::Owned(node.dependencies().iter().collect::<Vec<_>>())
+            }
 
             PlanNodeEnum::RightJoin(_)
             | PlanNodeEnum::SemiJoin(_)

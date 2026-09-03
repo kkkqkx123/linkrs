@@ -460,12 +460,19 @@ impl JoinOrderEnumerator {
             &domains,
         );
         let join_key_card = domains.into_iter().min().unwrap_or(cardinality);
+        // Charge the emitted rows on top of the probe/build scan price:
+        // the executor materializes every output row (hash table plus
+        // downstream rescans), and pricing scans alone lets deep binary
+        // chains hide intermediate blowup. Without this, honestly priced
+        // WCO intersects could never win automatic cost competition on
+        // cyclic queries.
         let cost = CostModel::compute_hash_join_cost(
             probe.cost,
             probe.cardinality,
             build.cost,
             join_key_card,
-        );
+        )
+        .saturating_add(cardinality);
         let mut col_names = probe.plan.col_names().to_vec();
         for name in build.plan.col_names() {
             if !col_names.contains(name) {
@@ -503,7 +510,14 @@ impl JoinOrderEnumerator {
             .context
             .cardinality_estimator
             .estimate_extend(probe.cardinality, fanout);
-        let cost = CostModel::compute_extend_cost(probe.cost, probe.cardinality) + build.cost;
+        // Charge the emitted rows as well: a keyless extend buffers the
+        // build side and writes every fanned-out row, so pricing the probe
+        // scan alone hides the blowup (e.g. a triangle extend chain emitting
+        // millions of rows for a few hundred thousand cost units) and prices
+        // WCO intersects out of automatic selection.
+        let cost = CostModel::compute_extend_cost(probe.cost, probe.cardinality)
+            .saturating_add(build.cost)
+            .saturating_add(cardinality);
         let mut col_names = probe.plan.col_names().to_vec();
         for name in build.plan.col_names() {
             if !col_names.contains(name) {

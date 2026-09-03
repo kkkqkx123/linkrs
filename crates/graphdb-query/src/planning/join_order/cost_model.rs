@@ -28,17 +28,20 @@ impl CostModel {
             .saturating_add(BUILD_PENALTY.saturating_mul(join_key_cardinality))
     }
 
-    /// Intersect (WCO) cost: probe cost plus probe scan plus every build cost.
+    /// Intersect (WCO) cost: probe cost plus probe scan plus every build
+    /// cost plus the output cardinality (every emitted row must be
+    /// materialized, mirroring the hash join discipline).
     pub fn compute_intersect_cost(
         probe_cost: u64,
         probe_cardinality: u64,
         build_costs: &[u64],
+        output_cardinality: u64,
     ) -> u64 {
         let mut cost = probe_cost.saturating_add(probe_cardinality);
         for build_cost in build_costs {
             cost = cost.saturating_add(*build_cost);
         }
-        cost
+        cost.saturating_add(output_cardinality)
     }
 
     /// Extend cost: child cost plus child scan.
@@ -69,8 +72,8 @@ mod tests {
 
     #[test]
     fn intersect_sums_probe_and_builds() {
-        assert_eq!(CostModel::compute_intersect_cost(10, 100, &[20, 30]), 160);
-        assert_eq!(CostModel::compute_intersect_cost(10, 100, &[]), 110);
+        assert_eq!(CostModel::compute_intersect_cost(10, 100, &[20, 30], 50), 210);
+        assert_eq!(CostModel::compute_intersect_cost(10, 100, &[], 0), 110);
     }
 
     #[test]

@@ -6,13 +6,15 @@
 //! [`CardinalityEstimator`], the [`JoinOrderEnumerator`], and the join-hint
 //! [`JoinTree`] support.
 //!
-//! Status: library-ready but not yet wired into MATCH planning.
-//! `JoinOrderEnumerator::plan_query_graph` runs DP enumeration over an
-//! explicitly built `QueryGraph`, and `plan_with_hint` solves a programmatic
-//! `JoinHint` without Cypher syntax or binder support. Physical lowering
-//! currently degrades `WcoIntersect` to a hash-join chain; the sorted
-//! merge executors are tested building blocks for a future streaming
-//! operator.
+//! Status: fully implemented and wired into MATCH planning.
+//! `MatchStatementPlanner::try_join_order_plan` routes conjunctive MATCH
+//! patterns through `JoinOrderEnumerator`, which runs DP enumeration over
+//! an explicitly built `QueryGraph` and generates `LogicalWcoIntersect`
+//! nodes when WCO is cost-optimal. `plan_with_hint` solves a programmatic
+//! `JoinHint` via `USING JOIN BINARY/MULTIWAY` syntax. Physical lowering
+//! maps `LogicalWcoIntersect` to a dedicated `WcoIntersectNode`, and the
+//! streaming `WcoIntersectOperator` executes sorted-merge intersection
+//! over sealed build tables.
 
 pub mod cardinality_estimator;
 pub mod cost_model;

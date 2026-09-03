@@ -110,9 +110,8 @@ mod tests {
 
     fn key(name: &str) -> ContextualExpression {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id = ctx.register_expression(ExpressionMeta::new(Expression::Variable(
-            name.to_string(),
-        )));
+        let id =
+            ctx.register_expression(ExpressionMeta::new(Expression::Variable(name.to_string())));
         ContextualExpression::new(id, ctx)
     }
 

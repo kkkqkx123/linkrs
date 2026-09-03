@@ -117,6 +117,117 @@ mod index {
     }
 }
 
+/// WCO (Worst-Case Optimal Join) tests
+mod wco {
+    use super::*;
+
+    /// Diagnostic: understand what scan returns for simple queries.
+    #[test]
+    fn test_scan_debug() {
+        let mut db = create_test_db();
+        setup_test_space(
+            &mut db,
+            "e2e_wco_debug",
+            &["CREATE TAG person(name: STRING NOT NULL)"],
+            &["CREATE EDGE knows()"],
+        )
+        .expect("Failed to setup test space");
+
+        let inserts = [
+            "INSERT VERTEX person(name) VALUES 'a': ('Alice')",
+            "INSERT VERTEX person(name) VALUES 'b': ('Bob')",
+            "INSERT EDGE knows() VALUES 'a' -> 'b': ()",
+        ];
+        for stmt in &inserts {
+            db.execute_query(stmt).expect("INSERT should succeed");
+        }
+
+        // 1. Vertices only
+        let r = db
+            .execute_query("MATCH (a:person) RETURN a.name ORDER BY a.name")
+            .expect("vertex scan should succeed");
+        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
+            row.iter().map(|v| match v {
+                graphdb::core::Value::String(s) => s.to_string(),
+                other => format!("{:?}", other),
+            }).collect()
+        }).collect();
+        eprintln!("Vertex scan: {} rows: {:?}", rows.len(), rows);
+
+        // 2. Edges only (two vertices + edge)
+        let r = db
+            .execute_query("MATCH (a)-[e:knows]->(b) RETURN a.name, b.name ORDER BY a.name")
+            .expect("edge scan should succeed");
+        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
+            row.iter().map(|v| match v {
+                graphdb::core::Value::String(s) => s.to_string(),
+                other => format!("{:?}", other),
+            }).collect()
+        }).collect();
+        eprintln!("Edge scan: {} rows: {:?}", rows.len(), rows);
+
+        // 3. EXPLAIN to see the plan
+        let r = db
+            .execute_query("EXPLAIN MATCH (a)-[e:knows]->(b) RETURN a.name, b.name")
+            .expect("explain should succeed");
+        eprintln!("Explain: {:?}", r);
+
+        // 4. Profile to see actual counts
+        let r = db
+            .execute_query("PROFILE MATCH (a)-[e:knows]->(b) RETURN a.name, b.name")
+            .expect("profile should succeed");
+        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
+            row.iter().map(|v| match v {
+                graphdb::core::Value::String(s) => s.to_string(),
+                other => format!("{:?}", other),
+            }).collect()
+        }).collect();
+        eprintln!("Profile: {} rows: {:?}", rows.len(), rows);
+
+        // Expect 1 edge row (a->b)
+        assert_eq!(rows.len(), 1, "expected 1 edge row, got {}: {:?}", rows.len(), rows);
+    }
+
+    /// EXPLAIN should list WcoIntersect when a triangle query uses WCO.
+    #[test]
+    fn test_triangle_explain_shows_wco_intersect() {
+        let mut db = create_test_db();
+        setup_test_space(
+            &mut db,
+            "e2e_wco_explain",
+            &["CREATE TAG person(name: STRING NOT NULL)"],
+            &["CREATE EDGE knows()"],
+        )
+        .expect("Failed to setup test space");
+
+        let inserts = [
+            "INSERT VERTEX person(name) VALUES 'a': ('A')",
+            "INSERT VERTEX person(name) VALUES 'b': ('B')",
+            "INSERT VERTEX person(name) VALUES 'c': ('C')",
+            "INSERT EDGE knows() VALUES 'a' -> 'b': ()",
+            "INSERT EDGE knows() VALUES 'b' -> 'c': ()",
+            "INSERT EDGE knows() VALUES 'a' -> 'c': ()",
+        ];
+        for stmt in &inserts {
+            db.execute_query(stmt).expect("INSERT should succeed");
+        }
+
+        let result = db
+            .execute_query(
+                "EXPLAIN MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c), (b)-[e3:knows]->(c) \
+                 RETURN a.name",
+            )
+            .expect("EXPLAIN should succeed");
+
+        let explain_text = format!("{:?}", result);
+        assert!(
+            explain_text.contains("WcoIntersect") || explain_text.contains("wco_intersect"),
+            "EXPLAIN output should reference WcoIntersect, got: {}",
+            explain_text
+        );
+    }
+}
+
 /// Join optimization tests
 mod join {
     use super::*;
@@ -336,6 +447,9 @@ mod cleanup {
             "e2e_optimizer_explain",
             "e2e_optimizer_dot",
             "e2e_optimizer_profile",
+            "e2e_wco_triangle",
+            "e2e_wco_star",
+            "e2e_wco_explain",
         ];
 
         for space in &spaces {

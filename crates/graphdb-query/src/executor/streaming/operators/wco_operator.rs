@@ -12,7 +12,6 @@
 //! sorted adjacency tables is future work, shared with the other blocking
 //! join builds.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::executor::base::MemoryTracker;
@@ -62,7 +61,9 @@ impl WcoIntersectOperator {
             builds: Vec::new(),
             build_layouts: Vec::new(),
             build_done: false,
-            memory_tracker: MemoryTracker::new(crate::executor::base::MemoryBudget::new(crate::executor::base::MemoryBudget::DEFAULT_MAX)),
+            memory_tracker: MemoryTracker::new(crate::executor::base::MemoryBudget::new(
+                crate::executor::base::MemoryBudget::DEFAULT_MAX,
+            )),
             runtime: None,
             output_layout,
             config: OperatorConfig::default(),
@@ -242,17 +243,23 @@ impl WcoIntersectOperator {
         col_names: &[String],
     ) -> Result<BuildLayout, QueryError> {
         let bound_name = &self.spec.bound_names[side];
-        let bound_col = col_names.iter().position(|c| c == bound_name).ok_or_else(|| {
-            QueryError::execution(format!(
-                "WcoIntersect build side {side} is missing bound column `{bound_name}`"
-            ))
-        })?;
+        let bound_col = col_names
+            .iter()
+            .position(|c| c == bound_name)
+            .ok_or_else(|| {
+                QueryError::execution(format!(
+                    "WcoIntersect build side {side} is missing bound column `{bound_name}`"
+                ))
+            })?;
         let intersect_name = &self.spec.intersect_name;
-        let intersect_col = col_names.iter().position(|c| c == intersect_name).ok_or_else(|| {
-            QueryError::execution(format!(
-                "WcoIntersect build side {side} is missing intersect column `{intersect_name}`"
-            ))
-        })?;
+        let intersect_col = col_names
+            .iter()
+            .position(|c| c == intersect_name)
+            .ok_or_else(|| {
+                QueryError::execution(format!(
+                    "WcoIntersect build side {side} is missing intersect column `{intersect_name}`"
+                ))
+            })?;
         Ok(BuildLayout {
             bound_col,
             intersect_col,
@@ -272,7 +279,10 @@ impl WcoIntersectOperator {
             build_offsets.push(offset);
             offset += layout.col_names.len();
         }
-        let rep = wide.get(probe_len).cloned().unwrap_or(Value::Null(NullType::Null));
+        let rep = wide
+            .get(probe_len)
+            .cloned()
+            .unwrap_or(Value::Null(NullType::Null));
         let mut out = Vec::with_capacity(self.spec.output_col_names.len());
         for name in &self.spec.output_col_names {
             if name == &self.spec.intersect_name {
@@ -280,14 +290,22 @@ impl WcoIntersectOperator {
                 continue;
             }
             if let Some(idx) = probe_names.iter().position(|c| c == name) {
-                out.push(wide.get(idx).cloned().unwrap_or(Value::Null(NullType::Null)));
+                out.push(
+                    wide.get(idx)
+                        .cloned()
+                        .unwrap_or(Value::Null(NullType::Null)),
+                );
                 continue;
             }
             let mut pushed = false;
             for (side, layout) in self.build_layouts.iter().enumerate() {
                 if let Some(idx) = layout.col_names.iter().position(|c| c == name) {
                     let pos = build_offsets[side] + idx;
-                    out.push(wide.get(pos).cloned().unwrap_or(Value::Null(NullType::Null)));
+                    out.push(
+                        wide.get(pos)
+                            .cloned()
+                            .unwrap_or(Value::Null(NullType::Null)),
+                    );
                     pushed = true;
                     break;
                 }
@@ -298,7 +316,6 @@ impl WcoIntersectOperator {
         }
         out
     }
-
 }
 
 #[cfg(test)]
@@ -347,7 +364,9 @@ mod tests {
         let layout = Arc::new(SlotLayout::from_names(&triangle_spec().output_col_names));
         let mut op = WcoIntersectOperator::from_spec(
             &triangle_spec(),
-            &crate::executor::base::MemoryBudget::new(crate::executor::base::MemoryBudget::DEFAULT_MAX),
+            &crate::executor::base::MemoryBudget::new(
+                crate::executor::base::MemoryBudget::DEFAULT_MAX,
+            ),
             layout.clone(),
         );
         let mut probe = source(
@@ -396,7 +415,9 @@ mod tests {
         let layout = Arc::new(SlotLayout::from_names(&triangle_spec().output_col_names));
         let mut op = WcoIntersectOperator::from_spec(
             &triangle_spec(),
-            &crate::executor::base::MemoryBudget::new(crate::executor::base::MemoryBudget::DEFAULT_MAX),
+            &crate::executor::base::MemoryBudget::new(
+                crate::executor::base::MemoryBudget::DEFAULT_MAX,
+            ),
             layout,
         );
         let mut probe = source(
@@ -423,7 +444,9 @@ mod tests {
         let layout = Arc::new(SlotLayout::from_names(&triangle_spec().output_col_names));
         let mut op = WcoIntersectOperator::from_spec(
             &triangle_spec(),
-            &crate::executor::base::MemoryBudget::new(crate::executor::base::MemoryBudget::DEFAULT_MAX),
+            &crate::executor::base::MemoryBudget::new(
+                crate::executor::base::MemoryBudget::DEFAULT_MAX,
+            ),
             layout,
         );
         let mut probe = source(
@@ -451,7 +474,9 @@ mod tests {
         let layout = Arc::new(SlotLayout::from_names(&triangle_spec().output_col_names));
         let mut op = WcoIntersectOperator::from_spec(
             &triangle_spec(),
-            &crate::executor::base::MemoryBudget::new(crate::executor::base::MemoryBudget::DEFAULT_MAX),
+            &crate::executor::base::MemoryBudget::new(
+                crate::executor::base::MemoryBudget::DEFAULT_MAX,
+            ),
             layout,
         );
         let mut probe = source(
@@ -469,10 +494,16 @@ mod tests {
             ),
         ];
         op.open(&mut probe, &mut builds).expect("open");
-        let first = op.next(&mut probe, &mut builds).expect("next").expect("rows");
+        let first = op
+            .next(&mut probe, &mut builds)
+            .expect("next")
+            .expect("rows");
         assert_eq!(first.rows.len(), 1);
         op.reset(&mut probe, &mut builds).expect("reset");
-        let replayed = op.next(&mut probe, &mut builds).expect("next").expect("rows");
+        let replayed = op
+            .next(&mut probe, &mut builds)
+            .expect("next")
+            .expect("rows");
         assert_eq!(replayed.rows, first.rows);
         op.close().expect("close");
     }

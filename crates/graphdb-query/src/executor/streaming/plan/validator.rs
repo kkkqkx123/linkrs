@@ -603,6 +603,12 @@ impl PhysicalPlanValidator {
                     InputContract::PartitionedInputs { members, .. } => {
                         members.iter().map(|member| member.fragment).collect()
                     }
+                    InputContract::WcoInputs { probe, builds } => {
+                        let mut references = Vec::with_capacity(builds.len() + 1);
+                        references.push(probe.fragment);
+                        references.extend(builds.iter().map(|build| build.fragment));
+                        references
+                    }
                 };
 
                 let expected: Vec<FragmentId> = if index == 0 {

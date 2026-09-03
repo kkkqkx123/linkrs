@@ -37,6 +37,7 @@ use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::operators::unary_operator::UnaryOperatorKind;
 use super::operators::vector_operator::VectorOperator;
+use super::operators::wco_operator::WcoIntersectOperator;
 
 mod operator_name;
 #[cfg(test)]
@@ -57,7 +58,7 @@ pub enum FullOuterJoinPhase {
     EmitUnmatchedRight,
 }
 
-/// StreamingExecutor: 16-variant dispatch enum over domain-specific operators.
+/// StreamingExecutor: 17-variant dispatch enum over domain-specific operators.
 ///
 /// Each variant holds an OperatorBase (shared lifecycle/base fields), zero
 /// or more child executors, and a domain-specific operator wrapper that
@@ -114,6 +115,14 @@ pub enum StreamingExecutor {
         Vec<StreamingExecutor>,
         HashShuffleJoinOperator,
     ),
+    /// N-way worst-case-optimal intersect: one probe input plus N build
+    /// inputs sharing a single intersect variable.
+    Wco(
+        OperatorBase,
+        Box<StreamingExecutor>,
+        Vec<StreamingExecutor>,
+        WcoIntersectOperator,
+    ),
 }
 
 /// Dispatch `open` (all operators open their children themselves).
@@ -136,6 +145,7 @@ macro_rules! dispatch_open {
             Self::Gather(_, children, op) => op.open(children),
             Self::Exchange(_, children, op) => op.open(children),
             Self::HashShuffleJoin(_, left, right, op) => op.open(left, right),
+            Self::Wco(_, probe, builds, op) => op.open(probe, builds),
         }
     };
 }
@@ -160,6 +170,7 @@ macro_rules! dispatch_next {
             Self::Gather(_, children, op) => op.next(children),
             Self::Exchange(_, children, op) => op.next(children),
             Self::HashShuffleJoin(_, left, right, op) => op.next(left, right),
+            Self::Wco(_, probe, builds, op) => op.next(probe, builds),
         }
     };
 }
@@ -179,6 +190,7 @@ macro_rules! dispatch_reset {
             Self::Apply(_, left, right, op) => op.reset(left, right),
             Self::Graph(_, input, op) => op.reset(input),
             Self::RecursiveFragment(_, input, op) => op.reset(input),
+            Self::Wco(_, probe, builds, op) => op.reset(probe, builds),
             _ => $self.fallback_reset(),
         }
     };
@@ -204,6 +216,7 @@ macro_rules! dispatch_stop {
             Self::Gather(_, _, op) => op.stop(),
             Self::Exchange(_, _, op) => op.stop(),
             Self::HashShuffleJoin(_, _, _, op) => op.stop(),
+            Self::Wco(_, _, _, op) => op.stop(),
         }
     };
 }
@@ -228,6 +241,7 @@ macro_rules! dispatch_close {
             Self::Gather(_, _, op) => op.close(),
             Self::Exchange(_, _, op) => op.close(),
             Self::HashShuffleJoin(_, _, _, op) => op.close(),
+            Self::Wco(_, _, _, op) => op.close(),
         }
     };
 }
@@ -260,6 +274,7 @@ impl StreamingExecutor {
             Self::Gather(_, _, op) => op.inject_context(runtime_ref, config),
             Self::Exchange(_, _, op) => op.inject_context(runtime_ref, config),
             Self::HashShuffleJoin(_, _, _, op) => op.inject_context(runtime_ref, config),
+            Self::Wco(_, _, _, op) => op.inject_context(runtime_ref, config),
         }
         for child in self.children_mut() {
             child.inject_context(runtime.clone(), config);
@@ -458,6 +473,9 @@ impl StreamingExecutor {
                 .iter()
                 .find_map(|c| c.parallel_fallback_reason())
                 .or_else(|| right.iter().find_map(|c| c.parallel_fallback_reason())),
+            Self::Wco(_, probe, builds, _) => probe
+                .parallel_fallback_reason()
+                .or_else(|| builds.iter().find_map(|c| c.parallel_fallback_reason())),
             Self::Source(..) => None,
         }
     }
@@ -524,6 +542,7 @@ impl StreamingExecutor {
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
+            Self::Wco(base, _, _, _) => base,
         }
     }
 
@@ -542,6 +561,7 @@ impl StreamingExecutor {
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
+            Self::Wco(base, _, _, _) => base,
         }
     }
 
@@ -567,6 +587,11 @@ impl StreamingExecutor {
             Self::HashShuffleJoin(_, left, right, _) => {
                 let mut all: Vec<&mut Self> = left.iter_mut().collect();
                 all.extend(right.iter_mut());
+                all
+            }
+            Self::Wco(_, probe, builds, _) => {
+                let mut all = vec![probe.as_mut()];
+                all.extend(builds.iter_mut());
                 all
             }
         }
@@ -597,6 +622,7 @@ impl StreamingExecutor {
             }
             Self::Apply(_, _, _, op) => Some(op.memory_tracker()),
             Self::HashShuffleJoin(_, _, _, op) => Some(op.memory_tracker()),
+            Self::Wco(_, _, _, op) => Some(op.memory_tracker()),
         }
     }
 
@@ -850,6 +876,7 @@ impl Spillable for StreamingExecutor {
                 }
                 Ok(())
             }
+            Self::Wco(_, _, _, op) => op.spill_with_manager(&sm),
             // Other operators (Source, Unary, Graph, etc.) don't accumulate
             // enough memory to warrant spill.  Propagate to children so that
             // deep-nested blocking operators can still be reached.
@@ -878,6 +905,7 @@ impl Spillable for StreamingExecutor {
             Self::Blocking(_, _, op) => op.spilled_bytes(),
             Self::Join(_, _, _, op) => op.spilled_bytes(),
             Self::Set(_, _, _, op) => op.spilled_bytes(),
+            Self::Wco(_, _, _, op) => op.spilled_bytes(),
             _ => 0,
         }
     }
@@ -887,6 +915,7 @@ impl Spillable for StreamingExecutor {
             Self::Blocking(_, _, op) => op.spill_count(),
             Self::Join(_, _, _, _op) => 0,
             Self::Set(_, _, _, _op) => 0,
+            Self::Wco(_, _, _, _op) => 0,
             _ => 0,
         }
     }

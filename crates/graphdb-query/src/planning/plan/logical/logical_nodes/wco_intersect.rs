@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_fallback_is_inner_join_chain() {
+    fn physical_lowering_is_dedicated_wco_node() {
         use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
         use crate::planning::plan::logical::logical_node_traits::LogicalNode;
         let ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -189,14 +189,24 @@ mod tests {
         );
         let physical =
             crate::planning::physical_planner::convert_logical_to_physical(node.into_enum());
-        // Two build sides lower to two nested binary joins.
-        let mut depth = 0;
-        let mut current = &physical;
-        while let PlanNodeEnum::InnerJoin(join) = current {
-            depth += 1;
-            current = join.left_input();
-        }
-        assert_eq!(depth, 2);
+        // The logical N-way intersect lowers to the dedicated physical
+        // node (probe plus one build side per bound key), not to a
+        // binary join chain.
+        let PlanNodeEnum::WcoIntersect(wco) = &physical else {
+            panic!("expected physical WcoIntersect, got {:?}", physical.name());
+        };
+        assert_eq!(wco.num_builds(), 2);
+        assert_eq!(wco.intersect_key().as_variable().as_deref(), Some("c"));
+        let bound_names: Vec<_> = wco
+            .bound_keys()
+            .iter()
+            .map(|k| k.as_variable().expect("bound key is a variable"))
+            .collect();
+        assert_eq!(bound_names, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            wco.col_names(),
+            &["a".to_string(), "e1".to_string(), "e2".to_string()]
+        );
     }
 
     #[test]

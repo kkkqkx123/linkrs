@@ -386,9 +386,10 @@ pub(super) fn derive_physical_properties(spec: &OperatorKindSpec) -> PhysicalPro
                 _ => PhysicalProperties::single_blocking_with_budget(),
             }
         }
-        OperatorKindSpec::Join(_) | OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) => {
-            PhysicalProperties::single_blocking_with_budget()
-        }
+        OperatorKindSpec::Join(_)
+        | OperatorKindSpec::Set(_)
+        | OperatorKindSpec::Apply(_)
+        | OperatorKindSpec::Wco(_) => PhysicalProperties::single_blocking_with_budget(),
         OperatorKindSpec::Exchange(_) => PhysicalProperties::single_blocking(),
         OperatorKindSpec::Graph(_) | OperatorKindSpec::RecursiveFragment(_) => {
             PhysicalProperties::single_streaming()
@@ -405,9 +406,10 @@ pub(super) fn capability_for_operator(spec: &OperatorKindSpec) -> CapabilitySet 
     match spec {
         OperatorKindSpec::Source(_) | OperatorKindSpec::Unary(_) => CapabilitySet::PARALLEL_BASIC,
         OperatorKindSpec::Blocking(_) => CapabilitySet::PARALLEL_BLOCKING,
-        OperatorKindSpec::Join(_) | OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) => {
-            CapabilitySet::PARALLEL_JOIN
-        }
+        OperatorKindSpec::Join(_)
+        | OperatorKindSpec::Set(_)
+        | OperatorKindSpec::Apply(_)
+        | OperatorKindSpec::Wco(_) => CapabilitySet::PARALLEL_JOIN,
         OperatorKindSpec::Exchange(_)
         | OperatorKindSpec::Graph(_)
         | OperatorKindSpec::RecursiveFragment(_)
@@ -504,9 +506,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
                 (0..rollup_expressions.len()).map(|index| format!("rollup_{index}")),
             )
         }
-        OperatorKindSpec::Wco(wco) => {
-            SlotLayout::from_names(&wco.output_col_names)
-        }
+        OperatorKindSpec::Wco(wco) => SlotLayout::from_names(&wco.output_col_names),
         OperatorKindSpec::Join(JoinSpec::SemiJoin { .. }) => input,
         OperatorKindSpec::Join(_) => inputs
             .get(1)
@@ -759,7 +759,9 @@ pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
     }
 }
 
-pub(super) fn wco_explain_name(_spec: &crate::executor::streaming::operators::spec::WcoSpec) -> &'static str {
+pub(super) fn wco_explain_name(
+    _spec: &crate::executor::streaming::operators::spec::WcoSpec,
+) -> &'static str {
     "WcoIntersect"
 }
 
