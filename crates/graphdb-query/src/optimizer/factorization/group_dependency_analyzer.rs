@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use graphdb_core::function::{is_list_lambda, list_lambda_arg_index};
 use graphdb_core::types::expr::ExpressionId;
 
 use crate::planning::plan::factorization::FactorizedSchema;
@@ -25,6 +26,11 @@ pub struct GroupDependencyAnalyzer<'a> {
     dependent_exprs: HashSet<ExpressionId>,
     /// For function handling: maps expr id to inner expression for recursion
     expr_store: HashMap<ExpressionId, graphdb_core::Expression>,
+    /// Descriptions of expressions that could not be resolved to any group.
+    /// Unresolved expressions conservatively require every unflat group to
+    /// be flattened (see `mark_unresolved`) instead of silently contributing
+    /// no groups.
+    unresolved: Vec<String>,
 }
 
 impl<'a> GroupDependencyAnalyzer<'a> {
@@ -36,6 +42,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             required_flat_groups: HashSet::new(),
             dependent_exprs: HashSet::new(),
             expr_store: HashMap::new(),
+            unresolved: Vec::new(),
         }
     }
 
@@ -51,6 +58,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             required_flat_groups: HashSet::new(),
             dependent_exprs: HashSet::new(),
             expr_store: store,
+            unresolved: Vec::new(),
         }
     }
 
@@ -64,6 +72,28 @@ impl<'a> GroupDependencyAnalyzer<'a> {
 
     pub fn dependent_exprs(&self) -> &HashSet<ExpressionId> {
         &self.dependent_exprs
+    }
+
+    /// Whether any expression could not be resolved to a group.
+    pub fn has_unresolved(&self) -> bool {
+        !self.unresolved.is_empty()
+    }
+
+    /// Descriptions of the unresolved expressions, for diagnostics.
+    pub fn unresolved(&self) -> &[String] {
+        &self.unresolved
+    }
+
+    /// Record an unresolvable expression and fall back to flattening every
+    /// unflat group, so callers never silently miss a required flatten.
+    fn mark_unresolved(&mut self, what: String) {
+        log::warn!("GroupDependencyAnalyzer: unresolved {what}");
+        self.unresolved.push(what);
+        for (pos, group) in self.schema.groups().iter().enumerate() {
+            if !group.is_flat() {
+                self.required_flat_groups.insert(pos as u32);
+            }
+        }
     }
 
     pub fn into_analysis(self) -> GroupDependencyAnalysis {
@@ -91,7 +121,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
         if let Some(expr) = self.expr_store.get(expr_id).cloned() {
             self.visit_expression(&expr);
         } else {
-            // Fallback: treat as opaque dependency – no groups.
+            self.mark_unresolved(format!("expression {expr_id:?} not in scope"));
         }
     }
 
@@ -99,8 +129,13 @@ impl<'a> GroupDependencyAnalyzer<'a> {
         use graphdb_core::Expression;
         match expr {
             Expression::Variable(name) => {
+                // Variables carry no expression id, so the scope
+                // name mapping (populated for aliases and output names)
+                // is their primary resolution path.
                 if let Some(pos) = self.schema.get_group_pos_by_name_opt(name) {
                     self.dependent_groups.insert(pos);
+                } else {
+                    self.mark_unresolved(format!("variable `{name}` not bound in scope"));
                 }
             }
             Expression::Property { object, .. } => {
@@ -118,18 +153,20 @@ impl<'a> GroupDependencyAnalyzer<'a> {
                     self.visit_expression(arg);
                 }
                 // List lambda functions require their lambda body to be flat.
-                // Heuristic: names starting with list_ and containing lambda.
                 if is_list_lambda(name) {
                     // For list lambda, all dependent groups of the lambda
-                    // expression must be flat.
-                    // Here args[1] is typically the lambda body.
-                    if args.len() > 1 {
+                    // expression must be flat. The body position comes from
+                    // the function registry, not a hardcoded index.
+                    if let Some(body) = list_lambda_arg_index(name).and_then(|i| args.get(i)) {
                         let mut lambda_analyzer =
                             GroupDependencyAnalyzer::new(self.schema, self.collect_dependent_expr);
                         lambda_analyzer.expr_store = self.expr_store.clone();
-                        lambda_analyzer.visit_expression(&args[1]);
+                        lambda_analyzer.visit_expression(body);
                         self.required_flat_groups
-                            .extend(lambda_analyzer.dependent_groups);
+                            .extend(lambda_analyzer.dependent_groups.iter().copied());
+                        self.required_flat_groups
+                            .extend(lambda_analyzer.required_flat_groups.iter().copied());
+                        self.unresolved.extend(lambda_analyzer.unresolved);
                     }
                 }
             }
@@ -188,7 +225,11 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             | Expression::Parameter(_)
             | Expression::Label(_)
             | Expression::SessionVariable(_) => {}
-            Expression::Path { .. } => {}
+            Expression::Path(items) | Expression::PathBuild(items) => {
+                for item in items {
+                    self.visit_expression(item);
+                }
+            }
             Expression::TypeCast {
                 expression: inner, ..
             } => {
@@ -239,15 +280,6 @@ impl<'a> GroupDependencyAnalyzer<'a> {
         }
         analyzer.into_analysis()
     }
-}
-
-fn is_list_lambda(name: &str) -> bool {
-    // Ladybug checks function.isListLambda
-    // Heuristic list lambda names in linkrs.
-    matches!(
-        name.to_lowercase().as_str(),
-        "list_filter" | "list_extract" | "list_transform" | "list_reduce"
-    )
 }
 
 #[cfg(test)]
@@ -303,6 +335,22 @@ mod tests {
     }
 
     #[test]
+    fn variable_id_primary() {
+        // Resolution by expression id is the primary path: it works without
+        // any name registration.
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope(expr(10), g0);
+        schema.insert_to_group_and_scope(expr(20), g1);
+
+        let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
+        analyzer.visit(&expr(20));
+        assert!(analyzer.dependent_groups().contains(&g1));
+        assert!(!analyzer.has_unresolved());
+    }
+
+    #[test]
     fn variable_name_fallback() {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
@@ -323,5 +371,85 @@ mod tests {
         assert!(analyzer.dependent_groups().contains(&g0));
         assert!(analyzer.dependent_groups().contains(&g1));
         assert_eq!(analyzer.dependent_groups().len(), 2);
+    }
+
+    #[test]
+    fn unscoped_expression_requires_flatten_all() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope(expr(1), g0);
+        schema.insert_to_group_and_scope(expr(2), g1);
+
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, HashMap::new());
+        analyzer.visit(&expr(999));
+        assert!(analyzer.has_unresolved());
+        assert_eq!(analyzer.unresolved().len(), 1);
+        assert!(analyzer.required_flat_groups().contains(&g1));
+        assert!(!analyzer.required_flat_groups().contains(&g0));
+    }
+
+    #[test]
+    fn unbound_variable_requires_flatten_all() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope(expr(1), g0);
+        schema.insert_to_group_and_scope(expr(2), g1);
+
+        let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
+        analyzer.visit_expression(&graphdb_core::Expression::Variable("ghost".to_string()));
+        assert!(analyzer.has_unresolved());
+        assert!(analyzer.required_flat_groups().contains(&g1));
+    }
+
+    #[test]
+    fn list_filter_lambda_body_requires_flat() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
+        schema.insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1);
+
+        // list_filter(a, items.age > 30): the lambda body over the unflat
+        // group must be flattened.
+        let body = graphdb_core::Expression::Binary {
+            left: Box::new(graphdb_core::Expression::Property {
+                object: Box::new(graphdb_core::Expression::Variable("items".to_string())),
+                property: "age".to_string(),
+            }),
+            op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+            right: Box::new(graphdb_core::Expression::Literal(
+                graphdb_core::value::Value::Int(30),
+            )),
+        };
+        let the_expr = graphdb_core::Expression::Function {
+            name: "list_filter".to_string(),
+            args: vec![graphdb_core::Expression::Variable("a".to_string()), body],
+        };
+        let mut store = HashMap::new();
+        let fake_id = expr(999);
+        store.insert(fake_id.clone(), the_expr);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+        analyzer.visit(&fake_id);
+        assert!(analyzer.required_flat_groups().contains(&g1));
+        assert!(!analyzer.has_unresolved());
+    }
+
+    #[test]
+    fn path_expression_visits_items() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
+        schema.insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1);
+
+        let the_expr = graphdb_core::Expression::Path(vec![graphdb_core::Expression::Variable(
+            "b".to_string(),
+        )]);
+        let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
+        analyzer.visit_expression(&the_expr);
+        assert!(analyzer.dependent_groups().contains(&g1));
+        assert!(!analyzer.has_unresolved());
     }
 }

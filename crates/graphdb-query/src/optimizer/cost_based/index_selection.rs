@@ -20,6 +20,7 @@ use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNod
 use crate::planning::plan::core::nodes::access::index_scan::{IndexLimit, IndexScanNode, ScanType};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::planning::plan::logical::logical_nodes::access::IndexHint;
 use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
 use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
@@ -334,12 +335,24 @@ fn full_scan_cost(
 // by the physical walker on the executable root.
 // =====================================================================
 
+// =====================================================================
+// Logical-plan variant (PlanNodeEnum logic/physical separation).
+//
+// The index selection decision is taken on the pure logical tree
+// (`LogicalNodeEnum`) and emits the same `index:` note as the physical
+// walker. The winning decision is additionally stamped onto the logical
+// scan as an index hint plus estimated cardinality, so the full
+// logical-to-physical mapping rebuilds the index access without
+// consulting the diverged physical tree. The physical walker still
+// applies the structural rewrite on the executable root.
+// =====================================================================
+
 /// Walk a logical plan tree and record the cost-based index selection
 /// decision for every `Filter -> ScanVertices` pair as a CBO note.
 ///
-/// The tree itself is returned unchanged (IndexScan is a physical operator
-/// and cannot appear in the logical tree); the physical rewriter consumes
-/// the same statistics to apply the structural rewrite.
+/// Returns the tree with winning scans marked with their index hint; the
+/// physical rewriter consumes the same statistics to apply the structural
+/// rewrite with scan limits.
 pub fn rewrite_index_scans_logical(
     node: &LogicalNodeEnum,
     selector: &IndexSelector,
@@ -349,34 +362,42 @@ pub fn rewrite_index_scans_logical(
 ) -> LogicalNodeEnum {
     use LogicalNodeEnum::*;
 
-    // Try index selection at this level first.
-    if let Filter(filter) = node {
+    // Post-order: mark nested scans before deciding at this level.
+    let rewritten = rewrite_children_logical(node, &mut |child| {
+        rewrite_index_scans_logical(child, selector, stats_manager, space_hint, notes)
+    });
+
+    // Try index selection at this level, stamping the hint onto the
+    // logical scan when an index wins.
+    if let Filter(filter) = &rewritten {
         let input = filter.input();
         if let ScanVertices(scan) = input {
-            if let Some(note) =
+            if let Some((hint, estimated, note)) =
                 try_decide_index_scan_logical(scan, filter, selector, stats_manager, space_hint)
             {
                 notes.push(note);
+                let mut marked = scan.clone();
+                marked.index_hint = Some(hint);
+                marked.estimated_cardinality = Some(estimated);
+                let mut new_filter = filter.clone();
+                new_filter.set_input(LogicalNodeEnum::ScanVertices(marked));
+                return Filter(new_filter);
             }
         }
     }
-
-    // Recursively walk children (decision-only, tree unchanged).
-    let mut closure = |child: &LogicalNodeEnum| {
-        rewrite_index_scans_logical(child, selector, stats_manager, space_hint, notes)
-    };
-    rewrite_children_logical(node, &mut closure)
+    rewritten
 }
 
 /// Decide whether a logical `Filter -> ScanVertices` pair would be rewritten
-/// to an index scan, returning the CBO note when an index wins.
+/// to an index scan, returning the hint, the estimated cardinality and the
+/// CBO note when an index wins.
 fn try_decide_index_scan_logical(
     scan: &LogicalScanVerticesNode,
     filter: &LogicalFilterNode,
     selector: &IndexSelector,
     stats_manager: &Arc<StatisticsManager>,
     space_hint: Option<&str>,
-) -> Option<String> {
+) -> Option<(IndexHint, u64, String)> {
     let tag = scan.tag.clone()?;
     let space: String = if scan.space_name.is_empty() {
         space_hint?.to_string()
@@ -393,7 +414,7 @@ fn try_decide_index_scan_logical(
         return None;
     }
 
-    let (_tag_id, available_indexes) = stats_manager.get_tag_indexes(&space, &tag)?;
+    let (tag_id, available_indexes) = stats_manager.get_tag_indexes(&space, &tag)?;
     if available_indexes.is_empty() {
         return None;
     }
@@ -417,14 +438,33 @@ fn try_decide_index_scan_logical(
         return None;
     }
 
+    let scan_type = if scan_limits.len() == 1 && scan_limits[0].scan_type == ScanType::Unique {
+        ScanType::Unique
+    } else {
+        ScanType::Range
+    };
+    let rows = stats_manager.get_vertex_count(&space, &tag);
+    let estimated = (selectivity * rows as f64).round() as u64;
+    let hint = IndexHint::new(
+        index_name.clone(),
+        tag.clone(),
+        tag_id,
+        index.id,
+        scan_type.as_str().to_string(),
+    );
+
     let full_scan = full_scan_cost(selector, &space, &tag, &available_indexes, &predicates);
-    Some(format!(
-        "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
-        tag,
-        index_name,
-        selectivity,
-        estimated_cost,
-        full_scan.unwrap_or(estimated_cost)
+    Some((
+        hint,
+        estimated,
+        format!(
+            "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
+            tag,
+            index_name,
+            selectivity,
+            estimated_cost,
+            full_scan.unwrap_or(estimated_cost)
+        ),
     ))
 }
 
@@ -601,6 +641,7 @@ mod tests {
     // Logical-plan walker tests
     // ===================================================================
 
+    use crate::planning::plan::logical::logical_nodes::access::IndexHint;
     use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
     use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
     use crate::planning::plan::logical::LogicalNodeEnum;
@@ -653,13 +694,21 @@ mod tests {
         let rewritten =
             rewrite_index_scans_logical(&plan, &selector, &manager, Some("test"), &mut notes);
 
-        // The logical tree stays pure — the ScanVertices input is preserved.
+        // The logical shape stays Filter -> ScanVertices, with the winning
+        // decision stamped onto the scan as an index hint.
         assert!(matches!(&rewritten, LogicalNodeEnum::Filter(_)));
         let filter = match &rewritten {
             LogicalNodeEnum::Filter(f) => f,
             _ => panic!("expected logical filter"),
         };
-        assert!(matches!(filter.input(), LogicalNodeEnum::ScanVertices(_)));
+        let scan = match filter.input() {
+            LogicalNodeEnum::ScanVertices(s) => s,
+            _ => panic!("expected logical scan input"),
+        };
+        let hint = scan.index_hint.clone().expect("index hint marked");
+        assert_eq!(hint.index_name, "idx_name");
+        assert_eq!(hint.schema_name, "person");
+        assert!(scan.estimated_cardinality.is_some());
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("index_scan('idx_name')"));
     }

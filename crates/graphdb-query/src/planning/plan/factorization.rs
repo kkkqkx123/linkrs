@@ -61,6 +61,10 @@ impl FactorizationGroup {
     pub fn set_single_state(&mut self) {
         assert!(!self.single_state, "group already single state");
         self.single_state = true;
+        // A single-state group holds one row by construction and is treated
+        // as flat here. This is stricter than engines that keep an unflat
+        // group under multiplicity one; the at-most-one-unflat invariant
+        // depends on the flat interpretation.
         if !self.flat {
             self.flat = true;
         }
@@ -293,6 +297,21 @@ impl FactorizedSchema {
 
     pub fn get_group_pos_by_name_opt(&self, name: &str) -> Option<FGroupPos> {
         self.expression_name_to_group.get(name).copied()
+    }
+
+    /// Register a bare alias name for a group.
+    ///
+    /// Some aliases (such as unwind element names) have no expression
+    /// identity of their own; downstream variable references resolve them
+    /// by name, so the name mapping must point at the producing group
+    /// explicitly.
+    pub fn insert_name_for_group(&mut self, name: String, group_pos: FGroupPos) {
+        assert!(
+            (group_pos as usize) < self.groups.len(),
+            "group_pos {} out of range",
+            group_pos
+        );
+        self.expression_name_to_group.insert(name, group_pos);
     }
 
     pub fn get_expression_pos(&self, expr_id: &ExpressionId) -> Option<(FGroupPos, usize)> {

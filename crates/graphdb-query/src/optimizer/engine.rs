@@ -447,12 +447,12 @@ impl OptimizerEngine {
         // Mirrors `FactorizationRewriter` at `optimizer.cpp:4`.
         current_plan = self.apply_factorization(current_plan);
 
-        // Physical mapping: LogicalNodeEnum → PlanNodeEnum (introduces
-        // physical choices such as IndexScan). Mirrors PhysicalMapper.
-        // This is a splice implementation to protect CBO's IndexScan choice
-        // (see physical_planner.rs:34 which would discard CBO rewrites if using
-        // full convert_logical_to_physical). Once CBO marks index_hint on
-        // Logical, switch to full PhysicalMapper::map.
+        // Physical mapping: full LogicalNodeEnum → PlanNodeEnum conversion
+        // (introduces physical choices such as IndexScan). The mapped tree
+        // carries factorization operators and cost-based index hints; the
+        // merge below overlays the physical choices the cost-based
+        // rewriters made directly on the physical root (IndexScan limits,
+        // TopN), so neither side is lost.
         current_plan = self.apply_physical_mapping(current_plan);
 
         // Physical heuristic optimization on the physical tree.
@@ -496,771 +496,39 @@ impl OptimizerEngine {
     }
 
     fn apply_physical_mapping(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
-        // Logical → Physical mapping for factorization.
+        // Logical → Physical mapping for factorization and index hints.
         //
-        // The generic Logical→Physical converter would discard CBO rewrites
-        // that currently operate directly on the physical root (IndexScan,
-        // TopN). To avoid that regression we do not overwrite the physical
-        // root wholesale. Instead we splice the LogicalFlatten nodes inserted
-        // by FactorizationRewriter into the physical tree at the corresponding
-        // positions, preserving all other physical choices.
-        //
-        // If the logical plan contains Flatten but the physical does not,
-        // failing to splice would silently drop factorization (wrong row
-        // counts). That fallback is semantically harmful and must be observable.
+        // The mapped tree is built from the logical plan in one pass, so
+        // factorization operators keep their logical positions and hinted
+        // scans become index scans. Merging with the physical root keeps
+        // the cost-based choices that live only there (index scan limits,
+        // TopN wiring). Structural divergences keep the physical subtree
+        // and are recorded in `cbo_notes` instead of failing.
         if let Some(logical) = plan.logical_plan.clone() {
-            let has_logical_flatten =
-                crate::optimizer::factorization::RemoveFactorizationRewriter::has_flatten_public(
-                    &logical.root,
-                );
-            let has_physical_flatten = plan
-                .root
-                .as_ref()
-                .map(|r| Self::physical_has_flatten(r))
-                .unwrap_or(false);
-            if has_logical_flatten && !has_physical_flatten {
-                if let Some(root) = plan.root.clone() {
-                    match Self::splice_flatten_from_logical(&logical.root, &root) {
-                        Ok(new_root) => {
-                            plan.set_root(new_root);
-                            log::debug!(
-                                "PhysicalMapping: spliced LogicalFlatten into physical plan"
-                            );
-                        }
-                        Err(e) => {
-                            let msg = format!("PhysicalMapping: failed to splice Flatten ({}); factorization will be ineffective", e);
-                            log::warn!("{}", msg);
-                            plan.cbo_notes.push(msg.clone());
-                            if plan.parallel_fallback_reason.is_empty() {
-                                plan.parallel_fallback_reason = msg;
-                            } else {
-                                plan.parallel_fallback_reason.push_str("; ");
-                                plan.parallel_fallback_reason.push_str(&msg);
-                            }
-                        }
+            if !crate::planning::physical_mapper::PhysicalMapper::needs_physical_mapping(
+                &logical.root,
+            ) {
+                return plan;
+            }
+            if let Some(root) = plan.root.clone() {
+                let mapped =
+                    crate::planning::physical_mapper::PhysicalMapper::map(logical.root.clone());
+                let (merged, notes) =
+                    crate::planning::physical_mapper::PhysicalMapper::merge_physical_hints(
+                        mapped, root,
+                    );
+                if notes.is_empty() {
+                    log::debug!("PhysicalMapping: merged logical mapping into physical plan");
+                } else {
+                    for note in &notes {
+                        log::warn!("{note}");
                     }
+                    plan.cbo_notes.extend(notes);
                 }
-            } else if has_logical_flatten {
-                log::debug!("PhysicalMapping: physical already contains Flatten, no splice needed");
+                plan.set_root(merged);
             }
         }
         plan
-    }
-
-    fn physical_has_flatten(node: &crate::planning::plan::PlanNodeEnum) -> bool {
-        if matches!(node, crate::planning::plan::PlanNodeEnum::Flatten(_)) {
-            return true;
-        }
-        for child in node.children() {
-            if Self::physical_has_flatten(child) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn splice_flatten_from_logical(
-        logical: &crate::planning::plan::logical::LogicalNodeEnum,
-        physical: &crate::planning::plan::PlanNodeEnum,
-    ) -> Result<crate::planning::plan::PlanNodeEnum, String> {
-        Self::splice_logical_physical(logical, physical)
-    }
-
-    fn splice_logical_physical(
-        logical: &crate::planning::plan::logical::LogicalNodeEnum,
-        physical: &crate::planning::plan::PlanNodeEnum,
-    ) -> Result<crate::planning::plan::PlanNodeEnum, String> {
-        use crate::planning::plan::logical::LogicalNodeEnum;
-        if let LogicalNodeEnum::Flatten(fl) = logical {
-            let child = fl
-                .input
-                .as_ref()
-                .ok_or_else(|| "LogicalFlatten missing input".to_string())?;
-            let spliced = Self::splice_logical_physical(child, physical)?;
-            let flatten_node =
-                crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode::new(
-                    spliced,
-                    fl.group_pos,
-                )
-                .map_err(|e| e.to_string())?;
-            return Ok(crate::planning::plan::PlanNodeEnum::Flatten(flatten_node));
-        }
-        let log_children = Self::logical_children(logical);
-        let phys_children = physical.children();
-        if log_children.len() != phys_children.len() {
-            let mut flattens = Vec::new();
-            Self::collect_logical_flattens(logical, &mut flattens);
-            flattens.sort_unstable();
-            flattens.dedup();
-            if flattens.is_empty() {
-                return Ok(physical.clone());
-            }
-            return Err(format!(
-                "splice LogicalFlatten: structure mismatch logical {} vs physical {} (logical children {}, physical children {}), LogicalFlatten positions {:?} cannot be spliced; CBO rewrites diverged physical tree",
-                logical.type_name(),
-                physical.type_name(),
-                log_children.len(),
-                phys_children.len(),
-                flattens
-            ));
-        }
-        if log_children.is_empty() {
-            return Ok(physical.clone());
-        }
-        let mut new_children = Vec::new();
-        for (lc, pc) in log_children.iter().zip(phys_children.iter()) {
-            new_children.push(Self::splice_logical_physical(lc, pc)?);
-        }
-        Self::rebuild_physical_with_new_children(physical, new_children)
-    }
-
-    fn logical_children<'a>(
-        node: &'a crate::planning::plan::logical::LogicalNodeEnum,
-    ) -> Vec<&'a crate::planning::plan::logical::LogicalNodeEnum> {
-        use crate::planning::plan::logical::LogicalNodeEnum;
-        match node {
-            LogicalNodeEnum::Flatten(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Project(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Filter(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Sort(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Limit(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::TopN(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Sample(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Dedup(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Aggregate(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Assign(n) => {
-                let mut v = Vec::new();
-                if let Some(c) = n.input.as_deref() {
-                    v.push(c);
-                }
-                for d in &n.deps {
-                    v.push(d);
-                }
-                v
-            }
-            LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::DataCollect(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Materialize(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::RollUpApply(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Unwind(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Select(n) => {
-                let mut v = Vec::new();
-                if let Some(b) = n.if_branch() {
-                    v.push(b);
-                }
-                if let Some(b) = n.else_branch() {
-                    v.push(b);
-                }
-                v
-            }
-            LogicalNodeEnum::Loop(n) => n.body().map(|b| vec![b]).unwrap_or_default(),
-            LogicalNodeEnum::InnerJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::LeftJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::RightJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::CrossJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::FullOuterJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::SemiJoin(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::PatternApply(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::CorrelatedApply(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::Apply(n) => vec![n.left_input(), n.right_input()],
-            LogicalNodeEnum::BiExpand(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::BiTraverse(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::MultiShortestPath(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::BFSShortest(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::AllPaths(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::ShortestPath(n) => vec![&n.left, &n.right],
-            LogicalNodeEnum::Expand(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::ExpandAll(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::AppendVertices(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::GetVertices(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::GetNeighbors(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::Union(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::Minus(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::Intersect(n) => n.deps.iter().collect(),
-            LogicalNodeEnum::Start(_)
-            | LogicalNodeEnum::ScanVertices(_)
-            | LogicalNodeEnum::ScanEdges(_)
-            | LogicalNodeEnum::GetEdges(_)
-            | LogicalNodeEnum::Argument(_)
-            | LogicalNodeEnum::PassThrough(_)
-            | LogicalNodeEnum::BeginTransaction(_)
-            | LogicalNodeEnum::Commit(_)
-            | LogicalNodeEnum::Rollback(_)
-            | LogicalNodeEnum::FulltextSearch(_)
-            | LogicalNodeEnum::FulltextLookup(_)
-            | LogicalNodeEnum::MatchFulltext(_) => vec![],
-            #[cfg(feature = "vector")]
-            LogicalNodeEnum::VectorSearch(_)
-            | LogicalNodeEnum::VectorLookup(_)
-            | LogicalNodeEnum::VectorMatch(_) => vec![],
-        }
-    }
-
-    fn rebuild_physical_with_new_children(
-        physical: &crate::planning::plan::PlanNodeEnum,
-        new_children: Vec<crate::planning::plan::PlanNodeEnum>,
-    ) -> Result<crate::planning::plan::PlanNodeEnum, String> {
-        use crate::planning::plan::core::nodes::base::plan_node_traits::{
-            BinaryInputNode, MultipleInputNode, SingleInputNode,
-        };
-        use crate::planning::plan::PlanNodeEnum;
-        match physical {
-            PlanNodeEnum::Project(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Project")?,
-                );
-                Ok(PlanNodeEnum::Project(cloned))
-            }
-            PlanNodeEnum::Filter(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Filter")?,
-                );
-                Ok(PlanNodeEnum::Filter(cloned))
-            }
-            PlanNodeEnum::Sort(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Sort")?,
-                );
-                Ok(PlanNodeEnum::Sort(cloned))
-            }
-            PlanNodeEnum::Limit(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Limit")?,
-                );
-                Ok(PlanNodeEnum::Limit(cloned))
-            }
-            PlanNodeEnum::TopN(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for TopN")?,
-                );
-                Ok(PlanNodeEnum::TopN(cloned))
-            }
-            PlanNodeEnum::Sample(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Sample")?,
-                );
-                Ok(PlanNodeEnum::Sample(cloned))
-            }
-            PlanNodeEnum::Dedup(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Dedup")?,
-                );
-                Ok(PlanNodeEnum::Dedup(cloned))
-            }
-            PlanNodeEnum::Aggregate(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Aggregate")?,
-                );
-                Ok(PlanNodeEnum::Aggregate(cloned))
-            }
-            PlanNodeEnum::Window(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Window")?,
-                );
-                Ok(PlanNodeEnum::Window(cloned))
-            }
-            PlanNodeEnum::Traverse(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Traverse")?,
-                );
-                Ok(PlanNodeEnum::Traverse(cloned))
-            }
-            PlanNodeEnum::Unwind(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Unwind")?,
-                );
-                Ok(PlanNodeEnum::Unwind(cloned))
-            }
-            PlanNodeEnum::Assign(n) => {
-                let mut cloned = n.clone();
-                if new_children.is_empty() {
-                    return Err("missing children for Assign".to_string());
-                }
-                cloned.set_input(new_children[0].clone());
-                if new_children.len() > 1 {
-                    let mut deps = cloned.dependencies().to_vec();
-                    for (i, c) in new_children.iter().skip(1).enumerate() {
-                        if i < deps.len() {
-                            deps[i] = c.clone();
-                        }
-                    }
-                    cloned.set_dependencies(deps);
-                }
-                Ok(PlanNodeEnum::Assign(cloned))
-            }
-            PlanNodeEnum::DataCollect(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for DataCollect")?,
-                );
-                Ok(PlanNodeEnum::DataCollect(cloned))
-            }
-            PlanNodeEnum::Remove(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Remove")?,
-                );
-                Ok(PlanNodeEnum::Remove(cloned))
-            }
-            PlanNodeEnum::Materialize(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for Materialize")?,
-                );
-                Ok(PlanNodeEnum::Materialize(cloned))
-            }
-            PlanNodeEnum::RollUpApply(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for RollUpApply")?,
-                );
-                Ok(PlanNodeEnum::RollUpApply(cloned))
-            }
-            PlanNodeEnum::PatternApply(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for PatternApply")?,
-                );
-                Ok(PlanNodeEnum::PatternApply(cloned))
-            }
-            PlanNodeEnum::CorrelatedApply(n) => {
-                let mut cloned = n.clone();
-                cloned.set_input(
-                    new_children
-                        .into_iter()
-                        .next()
-                        .ok_or("missing child for CorrelatedApply")?,
-                );
-                Ok(PlanNodeEnum::CorrelatedApply(cloned))
-            }
-            PlanNodeEnum::InnerJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("InnerJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::InnerJoin(cloned))
-            }
-            PlanNodeEnum::LeftJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("LeftJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::LeftJoin(cloned))
-            }
-            PlanNodeEnum::RightJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("RightJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::RightJoin(cloned))
-            }
-            PlanNodeEnum::CrossJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("CrossJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::CrossJoin(cloned))
-            }
-            PlanNodeEnum::FullOuterJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("FullOuterJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::FullOuterJoin(cloned))
-            }
-            PlanNodeEnum::SemiJoin(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("SemiJoin requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::SemiJoin(cloned))
-            }
-            PlanNodeEnum::Apply(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("Apply requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::Apply(cloned))
-            }
-            PlanNodeEnum::BiExpand(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("BiExpand requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::BiExpand(cloned))
-            }
-            PlanNodeEnum::BiTraverse(n) => {
-                let mut cloned = n.clone();
-                if new_children.len() != 2 {
-                    return Err("BiTraverse requires 2 children".to_string());
-                }
-                cloned.set_left_input(new_children[0].clone());
-                cloned.set_right_input(new_children[1].clone());
-                Ok(PlanNodeEnum::BiTraverse(cloned))
-            }
-            PlanNodeEnum::Expand(n) => {
-                let mut cloned = n.clone();
-                *cloned.inputs_mut() = new_children;
-                Ok(PlanNodeEnum::Expand(cloned))
-            }
-            PlanNodeEnum::ExpandAll(n) => {
-                let mut cloned = n.clone();
-                *cloned.inputs_mut() = new_children;
-                Ok(PlanNodeEnum::ExpandAll(cloned))
-            }
-            PlanNodeEnum::AppendVertices(n) => {
-                let mut cloned = n.clone();
-                *cloned.inputs_mut() = new_children;
-                Ok(PlanNodeEnum::AppendVertices(cloned))
-            }
-            PlanNodeEnum::Union(n) => {
-                let mut cloned = n.clone();
-                *cloned.dependencies_mut() = new_children.clone();
-                if let Some(first) = new_children.first() {
-                    *cloned.input_mut() = first.clone();
-                }
-                Ok(PlanNodeEnum::Union(cloned))
-            }
-            PlanNodeEnum::Minus(n) => {
-                let mut cloned = n.clone();
-                *cloned.dependencies_mut() = new_children.clone();
-                if let Some(first) = new_children.first() {
-                    *cloned.input_mut() = first.clone();
-                }
-                Ok(PlanNodeEnum::Minus(cloned))
-            }
-            PlanNodeEnum::Intersect(n) => {
-                let mut cloned = n.clone();
-                *cloned.dependencies_mut() = new_children.clone();
-                if let Some(first) = new_children.first() {
-                    *cloned.input_mut() = first.clone();
-                }
-                Ok(PlanNodeEnum::Intersect(cloned))
-            }
-            PlanNodeEnum::Select(n) => {
-                let mut cloned = n.clone();
-                let orig_has_if = n.if_branch().is_some();
-                let orig_has_else = n.else_branch().is_some();
-                let mut idx = 0;
-                if orig_has_if {
-                    if idx < new_children.len() {
-                        cloned.set_if_branch(new_children[idx].clone());
-                        idx += 1;
-                    }
-                }
-                if orig_has_else {
-                    if idx < new_children.len() {
-                        cloned.set_else_branch(new_children[idx].clone());
-                    }
-                }
-                Ok(PlanNodeEnum::Select(cloned))
-            }
-            PlanNodeEnum::Loop(n) => {
-                let mut cloned = n.clone();
-                if let Some(new_body) = new_children.into_iter().next() {
-                    cloned.set_body(new_body);
-                }
-                Ok(PlanNodeEnum::Loop(cloned))
-            }
-            _ => Ok(physical.clone()),
-        }
-    }
-
-    fn collect_logical_flattens(
-        node: &crate::planning::plan::logical::LogicalNodeEnum,
-        out: &mut Vec<u32>,
-    ) {
-        use crate::planning::plan::logical::LogicalNodeEnum;
-        match node {
-            LogicalNodeEnum::Flatten(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-                out.push(n.group_pos);
-            }
-            LogicalNodeEnum::Project(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Filter(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Sort(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Limit(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::TopN(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Dedup(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Aggregate(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Window(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Sample(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Unwind(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Traverse(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Assign(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::Remove(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::DataCollect(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::Materialize(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::RollUpApply(n) => {
-                if let Some(child) = &n.input {
-                    Self::collect_logical_flattens(child, out);
-                }
-            }
-            LogicalNodeEnum::GetVertices(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::GetNeighbors(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::Expand(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::ExpandAll(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::AppendVertices(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::BiExpand(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::BiTraverse(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::InnerJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::LeftJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::RightJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::CrossJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::FullOuterJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::SemiJoin(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::PatternApply(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::CorrelatedApply(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::Apply(n) => {
-                Self::collect_logical_flattens(n.left_input(), out);
-                Self::collect_logical_flattens(n.right_input(), out);
-            }
-            LogicalNodeEnum::Union(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::Minus(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::Intersect(n) => {
-                for d in &n.deps {
-                    Self::collect_logical_flattens(d, out);
-                }
-            }
-            LogicalNodeEnum::Select(n) => {
-                if let Some(b) = n.if_branch() {
-                    Self::collect_logical_flattens(b, out);
-                }
-                if let Some(b) = n.else_branch() {
-                    Self::collect_logical_flattens(b, out);
-                }
-            }
-            LogicalNodeEnum::Loop(n) => {
-                if let Some(b) = n.body() {
-                    Self::collect_logical_flattens(b, out);
-                }
-            }
-            LogicalNodeEnum::MultiShortestPath(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::BFSShortest(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::AllPaths(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            LogicalNodeEnum::ShortestPath(n) => {
-                Self::collect_logical_flattens(&n.left, out);
-                Self::collect_logical_flattens(&n.right, out);
-            }
-            _ => {}
-        }
     }
 
     fn apply_partitioning_selection(
@@ -1541,9 +809,9 @@ impl OptimizerEngine {
             self.selectivity_estimator.clone(),
         );
 
-        // Decision on the logical tree.
+        // Decision on the logical tree, stamped as index hints.
         let mut notes = Vec::new();
-        rewrite_index_scans_logical(
+        let rewritten_logical = rewrite_index_scans_logical(
             logical.root(),
             &selector,
             &self.stats_manager,
@@ -1551,6 +819,12 @@ impl OptimizerEngine {
             &mut notes,
         );
         plan.cbo_notes.extend(notes);
+
+        // Keep the attached logical plan in sync with the hint decision so
+        // the full physical mapping rebuilds the chosen index access.
+        let mut updated_logical = logical.clone();
+        updated_logical.root = rewritten_logical;
+        plan.set_logical_plan(updated_logical);
 
         // Structural rewrite on the physical root (notes recomputed there
         // are discarded — the logical walker is the note source).
@@ -1782,7 +1056,10 @@ impl OptimizerEngine {
             updated.root = root.clone();
             plan.set_logical_plan(updated);
             let mut flattens = Vec::new();
-            Self::collect_logical_flattens(&root, &mut flattens);
+            crate::planning::physical_mapper::PhysicalMapper::collect_flatten_positions(
+                &root,
+                &mut flattens,
+            );
             flattens.sort_unstable();
             flattens.dedup();
             for pos in flattens {
