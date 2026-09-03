@@ -350,7 +350,7 @@ impl PlannerEnum {
             BoundStatement::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
             BoundStatement::Create(c) => match &c.target {
                 crate::binder::bound::BoundCreateTarget::Node { .. }
-                | crate::binder::bound::BoundCreateTarget::Edge { .. }
+                | crate::binder::bound::BoundCreateTarget::Edge(_)
                 | crate::binder::bound::BoundCreateTarget::Path { .. } => {
                     Some(PlannerEnum::CreateData(CreatePlanner::new()))
                 }

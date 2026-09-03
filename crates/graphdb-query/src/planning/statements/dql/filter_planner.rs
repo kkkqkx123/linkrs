@@ -71,7 +71,7 @@ impl Planner for FilterPlanner {
         );
         let condition =
             crate::binder::expr_converter::bound_expr_to_contextual(&filter.condition, &expr_ctx)
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
 
         let start_node = StartNode::new();
         let start_enum = PlanNodeEnum::Start(start_node);

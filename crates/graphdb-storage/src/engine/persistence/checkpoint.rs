@@ -10,7 +10,7 @@ use graphdb_sync::checkpoint_manifest::{
 use graphdb_transaction::wal::Lsn;
 
 use crate::engine::snapshot_manager::SnapshotOptions;
-use crate::persistence::dirty_page::{CheckpointStrategy, IncrementalCheckpointMeta};
+use crate::persistence::dirty_page::IncrementalCheckpointMeta;
 
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 pub const INCREMENTAL_CHECKPOINT_FORMAT_VERSION: u32 = 2;
@@ -50,11 +50,6 @@ pub struct CheckpointData {
     pub data_size: u64,
 }
 
-impl Default for CheckpointStrategy {
-    fn default() -> Self {
-        Self::Full
-    }
-}
 
 impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     pub(crate) fn cleanup_temporary_checkpoints(checkpoint_dir: &Path) -> StorageResult<()> {

@@ -210,7 +210,7 @@ impl Planner for SubgraphPlanner {
                     &where_clause.condition,
                     &expr_ctx,
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            .map_err(PlannerError::PlanGenerationFailed)?;
                 current_node = match FilterNode::new(current_node.clone(), condition) {
                     Ok(node) => PlanNodeEnum::Filter(node),
                     Err(_) => current_node,
@@ -231,7 +231,7 @@ impl Planner for SubgraphPlanner {
             current_node = self.create_expand_node(
                 current_node,
                 &edge_types,
-                &direction_str,
+                direction_str,
                 m_steps as u32,
                 n_steps as u32,
             )?;
@@ -242,7 +242,7 @@ impl Planner for SubgraphPlanner {
                     current_node = self.create_expand_node(
                         current_node,
                         &edge_types,
-                        &direction_str,
+                        direction_str,
                         step as u32,
                         n_steps as u32,
                     )?;
@@ -256,7 +256,7 @@ impl Planner for SubgraphPlanner {
                 &where_clause.condition,
                 &expr_ctx,
             )
-            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            .map_err(PlannerError::PlanGenerationFailed)?;
             current_node = match FilterNode::new(current_node.clone(), condition) {
                 Ok(node) => PlanNodeEnum::Filter(node),
                 Err(_) => current_node,

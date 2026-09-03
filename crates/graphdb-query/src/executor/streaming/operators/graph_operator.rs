@@ -17,7 +17,7 @@ use super::spec::GraphSpec;
 use super::visited_set::VisitedSet;
 
 mod common;
-mod expand;
+pub(crate) mod expand;
 mod subgraph;
 mod traverse;
 

@@ -125,6 +125,28 @@ impl PartitionView {
     }
 }
 
+/// Morsel-parallel reserve decision for the batched flatten path.
+///
+/// Flatten stays on the single-partition row path in this phase: morsel
+/// parallelism over flattened batches is deferred to the columnar parallel
+/// follow-up. Returns a human-readable fallback reason for
+/// `parallel_fallback_reason` observability when the visible row count
+/// exceeds one batch (i.e. parallel execution could have split the work),
+/// otherwise `None` (single batch: no parallelism forgone).
+pub fn flatten_parallel_fallback_reason(
+    visible_rows: usize,
+    batch_size: usize,
+) -> Option<String> {
+    let batch_size = batch_size.max(1);
+    if visible_rows > batch_size {
+        Some(format!(
+            "Flatten: single-partition batch execution (rows={visible_rows} > batch={batch_size}); morsel parallelism deferred"
+        ))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +189,14 @@ mod tests {
         let overlapping = PartitionView::try_new(2, vec![0i64..10, 5i64..20])
             .expect_err("overlapping ranges must fail");
         assert!(overlapping.to_string().contains("non-overlapping"));
+    }
+
+    #[test]
+    fn flatten_parallel_fallback_reason_reports_multi_batch() {
+        assert!(super::flatten_parallel_fallback_reason(10, 2048).is_none());
+        let reason = super::flatten_parallel_fallback_reason(5000, 2048)
+            .expect("multi-batch flatten must report a fallback reason");
+        assert!(reason.contains("single-partition"));
+        assert!(reason.contains("morsel parallelism deferred"));
     }
 }

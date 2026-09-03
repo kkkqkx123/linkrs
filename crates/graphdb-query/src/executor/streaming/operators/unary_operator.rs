@@ -78,6 +78,10 @@ pub enum UnaryOperatorKind {
         size_to_flatten: usize,
         saved_sel_vector: Option<Vec<usize>>,
         buffered_chunk: Option<DataChunk>,
+        /// Rows emitted per output chunk. Defaults to the vectorized morsel
+        /// size so the batched flatten path produces one chunk per input
+        /// morsel; tests may set `1` for the single-row path.
+        batch_size: usize,
     },
 }
 
@@ -167,6 +171,8 @@ impl UnaryOperator {
                 size_to_flatten: 0,
                 saved_sel_vector: None,
                 buffered_chunk: None,
+                batch_size:
+                    crate::executor::streaming::operators::flatten::DEFAULT_FLATTEN_BATCH_SIZE,
             },
         };
         Self::new(kind, output_layout)
@@ -723,13 +729,27 @@ impl UnaryOperator {
                 size_to_flatten,
                 saved_sel_vector,
                 buffered_chunk,
-            } => crate::executor::streaming::operators::flatten::flatten_next_inner(
-                current_idx,
-                size_to_flatten,
-                saved_sel_vector,
-                buffered_chunk,
-                input,
-            ),
+                batch_size,
+            } => {
+                if *batch_size <= 1 {
+                    crate::executor::streaming::operators::flatten::flatten_next_inner(
+                        current_idx,
+                        size_to_flatten,
+                        saved_sel_vector,
+                        buffered_chunk,
+                        input,
+                    )
+                } else {
+                    crate::executor::streaming::operators::flatten::flatten_next_batch(
+                        current_idx,
+                        size_to_flatten,
+                        saved_sel_vector,
+                        buffered_chunk,
+                        input,
+                        *batch_size,
+                    )
+                }
+            }
         }
     }
 
@@ -773,12 +793,15 @@ impl UnaryOperator {
                 size_to_flatten,
                 saved_sel_vector,
                 buffered_chunk,
+                batch_size,
                 ..
             } => {
                 *current_idx = 0;
                 *size_to_flatten = 0;
                 *saved_sel_vector = None;
                 *buffered_chunk = None;
+                *batch_size =
+                    crate::executor::streaming::operators::flatten::DEFAULT_FLATTEN_BATCH_SIZE;
             }
             UnaryOperatorKind::Filter { .. }
             | UnaryOperatorKind::Project { .. }

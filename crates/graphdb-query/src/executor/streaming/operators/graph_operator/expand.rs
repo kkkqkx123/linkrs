@@ -8,6 +8,16 @@ use graphdb_core::Value;
 use super::common;
 use super::{ExpandCtx, GraphOperator, GraphOperatorKind};
 
+/// Execution-path note for `ExpandAll` under factorization.
+///
+/// The columnar batch path for `ExpandAll` is intentionally not rebuilt on
+/// the removed heap row store; until a `DataChunk` columnar rebuild lands,
+/// `ExpandAll` stays on the row path. Optimizer callers record this string
+/// in `cbo_notes` so the degradation is observable rather than silent.
+pub fn expand_all_row_path_note() -> &'static str {
+    "ExpandAll: row path retained (columnar batch pending DataChunk rebuild)"
+}
+
 pub(super) fn handle(
     op: &mut GraphOperator,
     input: &mut StreamingExecutor,

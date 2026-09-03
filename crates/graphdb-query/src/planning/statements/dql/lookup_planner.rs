@@ -106,7 +106,7 @@ impl Planner for LookupPlanner {
                     &wc.condition,
                     validated.expr_context(),
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                .map_err(PlannerError::PlanGenerationFailed)
             })
             .transpose()?;
 
@@ -133,7 +133,6 @@ impl Planner for LookupPlanner {
             qctx,
             validated,
             selected_index.as_ref(),
-            is_edge,
             tag_id,
             where_ctx,
         )
@@ -397,7 +396,6 @@ impl LookupPlanner {
         qctx: Arc<QueryContext>,
         validated: &ValidatedStatement,
         selected_index: Option<&IndexMetadata>,
-        is_edge: bool,
         tag_id: i32,
         where_ctx: Option<ContextualExpression>,
     ) -> Result<SubPlan, PlannerError> {
@@ -414,6 +412,7 @@ impl LookupPlanner {
             crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
             crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
         };
+        let is_edge = matches!(&lookup.target, crate::binder::bound::BoundLookupTarget::Edge(_));
 
         // Extract scan limits from WHERE when an index is available
         let (scan_limits, scan_type) = if let Some(index) = selected_index {
@@ -581,7 +580,7 @@ impl LookupPlanner {
                     &item.expression,
                     validated.expr_context(),
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 columns.push(graphdb_core::YieldColumn {
                     expression: ctx_expr,
                     alias: item.alias.clone().unwrap_or_default(),

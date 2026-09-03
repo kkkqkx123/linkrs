@@ -53,7 +53,18 @@ pub(crate) fn execute_date_part(args: &[Value]) -> Result<Value, ExpressionError
         Value::Date(d) => {
             let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
                 .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
-            extract_date_part(&part, naive.year(), naive.month(), naive.day(), 0, 0, 0, 0)
+            extract_date_part(
+                &part,
+                DateParts {
+                    year: naive.year(),
+                    month: naive.month(),
+                    day: naive.day(),
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    millis: 0,
+                },
+            )
         }
         Value::DateTime(dt) => {
             let naive = chrono::NaiveDateTime::new(
@@ -64,13 +75,15 @@ pub(crate) fn execute_date_part(args: &[Value]) -> Result<Value, ExpressionError
             );
             extract_date_part(
                 &part,
-                naive.year(),
-                naive.month(),
-                naive.day(),
-                naive.hour(),
-                naive.minute(),
-                naive.second(),
-                naive.and_utc().timestamp_subsec_millis(),
+                DateParts {
+                    year: naive.year(),
+                    month: naive.month(),
+                    day: naive.day(),
+                    hour: naive.hour(),
+                    minute: naive.minute(),
+                    second: naive.second(),
+                    millis: naive.and_utc().timestamp_subsec_millis(),
+                },
             )
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -80,8 +93,9 @@ pub(crate) fn execute_date_part(args: &[Value]) -> Result<Value, ExpressionError
     }
 }
 
-fn extract_date_part(
-    part: &str,
+/// Calendar/time components extracted from a date or datetime value, used to
+/// evaluate a single `date_part` without threading eight positional arguments.
+struct DateParts {
     year: i32,
     month: u32,
     day: u32,
@@ -89,26 +103,28 @@ fn extract_date_part(
     minute: u32,
     second: u32,
     millis: u32,
-) -> Result<Value, ExpressionError> {
+}
+
+fn extract_date_part(part: &str, p: DateParts) -> Result<Value, ExpressionError> {
     match part {
-        "year" => Ok(Value::Int(year)),
-        "month" => Ok(Value::Int(month as i32)),
-        "day" => Ok(Value::Int(day as i32)),
-        "hour" => Ok(Value::Int(hour as i32)),
-        "minute" => Ok(Value::Int(minute as i32)),
-        "second" => Ok(Value::Int(second as i32)),
-        "millisecond" => Ok(Value::Int(millis as i32)),
+        "year" => Ok(Value::Int(p.year)),
+        "month" => Ok(Value::Int(p.month as i32)),
+        "day" => Ok(Value::Int(p.day as i32)),
+        "hour" => Ok(Value::Int(p.hour as i32)),
+        "minute" => Ok(Value::Int(p.minute as i32)),
+        "second" => Ok(Value::Int(p.second as i32)),
+        "millisecond" => Ok(Value::Int(p.millis as i32)),
         "dow" => {
-            let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
+            let naive = chrono::NaiveDate::from_ymd_opt(p.year, p.month, p.day)
                 .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
             Ok(Value::Int(naive.weekday().num_days_from_sunday() as i32))
         }
         "doy" => {
-            let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
+            let naive = chrono::NaiveDate::from_ymd_opt(p.year, p.month, p.day)
                 .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
             Ok(Value::Int(naive.ordinal() as i32))
         }
-        "quarter" => Ok(Value::Int(((month - 1) / 3 + 1) as i32)),
+        "quarter" => Ok(Value::Int(((p.month - 1) / 3 + 1) as i32)),
         _ => Err(ExpressionError::type_error(format!(
             "Unknown date part: {}",
             part

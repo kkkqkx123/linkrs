@@ -42,7 +42,7 @@ impl Binder {
             } => {
                 let bound_props = properties
                     .as_ref()
-                    .map(|p| Self::extract_map_properties(p))
+                    .map(Self::extract_map_properties)
                     .transpose()?;
                 Ok(BoundCreateTarget::Node {
                     variable: variable.clone(),
@@ -70,16 +70,18 @@ impl Binder {
                 let bound_dst = Self::convert_ast_expr_to_bound(&dst_expr)?;
                 let bound_props = properties
                     .as_ref()
-                    .map(|p| Self::extract_map_properties(p))
+                    .map(Self::extract_map_properties)
                     .transpose()?;
-                Ok(BoundCreateTarget::Edge {
-                    variable: variable.clone(),
-                    edge_type: edge_type.clone(),
-                    src: bound_src,
-                    dst: bound_dst,
-                    properties: bound_props,
-                    direction: *direction,
-                })
+                Ok(BoundCreateTarget::Edge(Box::new(
+                    crate::binder::bound::BoundEdgeCreateTarget {
+                        variable: variable.clone(),
+                        edge_type: edge_type.clone(),
+                        src: bound_src,
+                        dst: bound_dst,
+                        properties: bound_props,
+                        direction: *direction,
+                    },
+                )))
             }
             crate::parser::ast::CreateTarget::Path { patterns } => {
                 let bound_patterns = patterns
@@ -106,14 +108,14 @@ impl Binder {
                 properties: np
                     .properties
                     .as_ref()
-                    .map(|p| Self::extract_map_properties(p))
+                    .map(Self::extract_map_properties)
                     .transpose()?,
             })),
             Pattern::Edge(ep) => {
                 let properties = ep
                     .properties
                     .as_ref()
-                    .map(|p| Self::extract_map_properties(p))
+                    .map(Self::extract_map_properties)
                     .transpose()?;
                 Ok(BoundPatternElement::Edge(BoundPatternEdge {
                     variable: ep.variable.clone(),
@@ -237,7 +239,7 @@ impl Binder {
                 index_name: stmt.index_name.clone(),
                 schema_name: stmt.schema_name.clone(),
                 fields: stmt.fields.clone(),
-                engine_type: stmt.engine_type.clone(),
+                engine_type: stmt.engine_type,
                 options: stmt.options.clone(),
                 if_not_exists: stmt.if_not_exists,
             },

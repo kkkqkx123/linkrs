@@ -83,7 +83,7 @@ impl Planner for AssignVariablePlanner {
         );
         let ctx_expr =
             crate::binder::expr_converter::bound_expr_to_contextual(&assign.expression, &expr_ctx)
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
 
         let start_node = StartNode::new();
         let current_node = PlanNodeEnum::Start(start_node.clone());

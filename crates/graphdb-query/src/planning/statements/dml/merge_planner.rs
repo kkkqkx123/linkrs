@@ -310,7 +310,7 @@ impl MergePlanner {
                 for (key, bound_expr) in props {
                     names.push(key.clone());
                     let ctx = bound_expr_to_contextual(bound_expr, expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
                     values.push(ctx);
                 }
                 let vid_expr = if let Some(Expression::Literal(Value::Int(i))) =
@@ -349,7 +349,7 @@ impl MergePlanner {
         let mut properties = HashMap::new();
         for assignment in assignments {
             let ctx = bound_expr_to_contextual(&assignment.value, expr_ctx)
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
             properties.insert(assignment.property.clone(), ctx);
         }
         Ok(properties)

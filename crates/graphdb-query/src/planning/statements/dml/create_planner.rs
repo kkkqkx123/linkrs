@@ -175,18 +175,19 @@ impl Planner for CreatePlanner {
                     1,
                 )
             }
-            BoundCreateTarget::Edge {
-                edge_type,
-                src,
-                dst,
-                properties,
-                ..
-            } => {
+            BoundCreateTarget::Edge(edge) => {
+                let crate::binder::bound::BoundEdgeCreateTarget {
+                    edge_type,
+                    src,
+                    dst,
+                    properties,
+                    ..
+                } = &**edge;
                 let props = Self::convert_bound_properties(properties.as_deref(), &expr_ctx)?;
                 let src_vid = bound_expr_to_contextual(src, &expr_ctx)
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                 let dst_vid = bound_expr_to_contextual(dst, &expr_ctx)
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                 let info = self.build_edge_insert_info(
                     space_name,
                     edge_type.clone(),
@@ -506,7 +507,7 @@ impl CreatePlanner {
                 .iter()
                 .map(|(key, bound_expr)| {
                     let ctx = bound_expr_to_contextual(bound_expr, expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
                     Ok((key.clone(), ctx))
                 })
                 .collect(),

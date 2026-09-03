@@ -72,7 +72,7 @@ impl Planner for DeletePlanner {
                     .iter()
                     .map(|id| {
                         crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -81,7 +81,7 @@ impl Planner for DeletePlanner {
                     .as_ref()
                     .map(|wc| {
                         crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
 
@@ -103,17 +103,17 @@ impl Planner for DeletePlanner {
                     .map(|(src, dst, rank)| {
                         let s =
                             crate::binder::expr_converter::bound_expr_to_contextual(src, &expr_ctx)
-                                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                                .map_err(PlannerError::PlanGenerationFailed)?;
                         let d =
                             crate::binder::expr_converter::bound_expr_to_contextual(dst, &expr_ctx)
-                                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                                .map_err(PlannerError::PlanGenerationFailed)?;
                         let r = rank
                             .as_ref()
                             .map(|rk| {
                                 crate::binder::expr_converter::bound_expr_to_contextual(
                                     rk, &expr_ctx,
                                 )
-                                .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                                .map_err(PlannerError::PlanGenerationFailed)
                             })
                             .transpose()?;
                         Ok((s, d, r))
@@ -125,7 +125,7 @@ impl Planner for DeletePlanner {
                     .as_ref()
                     .map(|wc| {
                         crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
 
@@ -146,7 +146,7 @@ impl Planner for DeletePlanner {
                     .iter()
                     .map(|id| {
                         crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 

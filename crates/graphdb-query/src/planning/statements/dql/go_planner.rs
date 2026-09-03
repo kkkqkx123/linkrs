@@ -321,7 +321,7 @@ impl Planner for GoPlanner {
                 &where_clause.condition,
                 validated.expr_context(),
             )
-            .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+            .map_err(PlannerError::PlanGenerationFailed)?;
             logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -437,7 +437,7 @@ impl GoPlanner {
                     &item.expression,
                     expr_context,
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 columns.push(graphdb_core::YieldColumn {
                     expression: ctx_expr,
                     alias: item.alias.clone().unwrap_or_default(),

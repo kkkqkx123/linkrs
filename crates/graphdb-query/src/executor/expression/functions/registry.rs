@@ -53,10 +53,8 @@ impl FunctionRegistry {
     fn canonical_name(&self, upper: &str) -> Option<String> {
         if self.builtin_functions.contains_key(upper) {
             Some(upper.to_string())
-        } else if let Some(canon) = self.aliases.get(upper) {
-            Some(canon.clone())
         } else {
-            None
+            self.aliases.get(upper).cloned()
         }
     }
 

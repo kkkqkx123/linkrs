@@ -71,7 +71,7 @@ impl Planner for RemovePlanner {
                 _ => "property",
             };
             let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(item, &expr_ctx)
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
             remove_items.push((item_type.to_string(), ctx_expr));
         }
 

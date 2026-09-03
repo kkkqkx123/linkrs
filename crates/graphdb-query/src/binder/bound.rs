@@ -536,17 +536,22 @@ pub struct BoundUpdate {
 #[derive(Debug, Clone)]
 pub enum BoundUpdateTarget {
     Vertex(BoundExpression),
-    Edge {
-        src: BoundExpression,
-        dst: BoundExpression,
-        edge_type: Option<String>,
-        rank: Option<BoundExpression>,
-    },
+    Edge(Box<BoundEdgeUpdateTarget>),
     Tag(String),
     TagOnVertex {
         vid: BoundExpression,
         tag_name: String,
     },
+}
+
+/// Edge update target payload. Boxed inside [`BoundUpdateTarget::Edge`] so the
+/// several large `BoundExpression` fields do not inflate every enum variant.
+#[derive(Debug, Clone)]
+pub struct BoundEdgeUpdateTarget {
+    pub src: BoundExpression,
+    pub dst: BoundExpression,
+    pub edge_type: Option<String>,
+    pub rank: Option<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]
@@ -588,17 +593,22 @@ pub enum BoundCreateTarget {
         labels: Vec<String>,
         properties: Option<Vec<(String, BoundExpression)>>,
     },
-    Edge {
-        variable: Option<String>,
-        edge_type: String,
-        src: BoundExpression,
-        dst: BoundExpression,
-        properties: Option<Vec<(String, BoundExpression)>>,
-        direction: EdgeDirection,
-    },
+    Edge(Box<BoundEdgeCreateTarget>),
     Path {
         patterns: Vec<BoundPatternElement>,
     },
+}
+
+/// Edge create target payload. Boxed inside [`BoundCreateTarget::Edge`] to keep
+/// the enum's inline size bounded by its smaller variants.
+#[derive(Debug, Clone)]
+pub struct BoundEdgeCreateTarget {
+    pub variable: Option<String>,
+    pub edge_type: String,
+    pub src: BoundExpression,
+    pub dst: BoundExpression,
+    pub properties: Option<Vec<(String, BoundExpression)>>,
+    pub direction: EdgeDirection,
 }
 
 #[derive(Debug, Clone)]

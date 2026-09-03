@@ -32,7 +32,7 @@ impl QueryStage for ParseStage {
     ) -> Result<Self::Output, QueryPipelineError> {
         let mut parser = crate::parser::Parser::new(&input);
         let result = parser.parse().map_err(|e| QueryPipelineError::Parse {
-            source: e,
+            source: Box::new(e),
             query_text: input.clone(),
         })?;
         if parser.has_errors() {

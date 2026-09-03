@@ -320,7 +320,7 @@ impl GraphStorageContext {
         let meta = dir.join("checkpoint.meta");
         let file = File::open(meta).ok()?;
         let reader = BufReader::new(file);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             if let Some(val) = line.strip_prefix("base_checkpoint_id=") {
                 if let Ok(id) = val.parse::<u64>() {
                     return Some(id);

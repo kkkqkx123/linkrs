@@ -194,7 +194,7 @@ impl Planner for YieldPlanner {
         if let Some(where_clause) = &yield_stmt.where_clause {
             let condition =
                 crate::binder::expr_converter::bound_expr_to_contextual(where_clause, &expr_ctx)
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
             let filter_node = FilterNode::new(current_node.clone(), condition).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
             })?;
@@ -216,7 +216,7 @@ impl Planner for YieldPlanner {
                         &item.expression,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     let raw_expr = ctx_expr
                         .expression()
                         .map(|e| e.inner().clone())
@@ -225,7 +225,7 @@ impl Planner for YieldPlanner {
                         });
                     Ok(crate::planning::plan::core::nodes::SortItem::new(
                         raw_expr,
-                        item.direction.into(),
+                        item.direction,
                     ))
                 })
                 .collect::<Result<Vec<_>, PlannerError>>()?;

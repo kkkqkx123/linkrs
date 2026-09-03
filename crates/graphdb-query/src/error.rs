@@ -92,7 +92,7 @@ impl fmt::Display for PipelinePhase {
 pub enum QueryPipelineError {
     /// Parse-phase failure.
     Parse {
-        source: ParseError,
+        source: Box<ParseError>,
         query_text: String,
     },
     /// Planning-phase failure.
@@ -184,7 +184,7 @@ impl std::error::Error for QueryPipelineError {
 impl From<ParseError> for QueryPipelineError {
     fn from(source: ParseError) -> Self {
         QueryPipelineError::Parse {
-            source,
+            source: Box::new(source),
             query_text: String::new(),
         }
     }

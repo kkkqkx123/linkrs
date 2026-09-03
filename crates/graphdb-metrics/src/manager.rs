@@ -197,6 +197,10 @@ pub enum MetricType {
     CheckpointStrategyFull,
     CheckpointIncrementalDurationUs,
     CheckpointIncrementalBytesFlushed,
+    // Factorization metrics
+    FactorizationFlattenTotal,
+    FactorizationFallbackTotal,
+    FactorizationPhysicalMappingFallbackTotal,
 }
 
 /// Reason a checkpoint was triggered.

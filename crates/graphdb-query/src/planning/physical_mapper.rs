@@ -224,9 +224,9 @@ fn merge_inner(
     physical
 }
 
-pub(crate) fn logical_children<'a>(
-    node: &'a crate::planning::plan::logical::LogicalNodeEnum,
-) -> Vec<&'a crate::planning::plan::logical::LogicalNodeEnum> {
+pub(crate) fn logical_children(
+    node: &crate::planning::plan::logical::LogicalNodeEnum,
+) -> Vec<&crate::planning::plan::logical::LogicalNodeEnum> {
     use crate::planning::plan::logical::LogicalNodeEnum;
     match node {
         LogicalNodeEnum::Flatten(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
@@ -629,17 +629,15 @@ pub(crate) fn rebuild_physical_with_new_children(
             let orig_has_if = n.if_branch().is_some();
             let orig_has_else = n.else_branch().is_some();
             let mut idx = 0;
-            if orig_has_if {
-                if idx < new_children.len() {
+            if orig_has_if
+                && idx < new_children.len() {
                     cloned.set_if_branch(new_children[idx].clone());
                     idx += 1;
                 }
-            }
-            if orig_has_else {
-                if idx < new_children.len() {
+            if orig_has_else
+                && idx < new_children.len() {
                     cloned.set_else_branch(new_children[idx].clone());
                 }
-            }
             Ok(PlanNodeEnum::Select(cloned))
         }
         PlanNodeEnum::Loop(n) => {

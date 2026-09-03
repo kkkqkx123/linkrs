@@ -447,3 +447,91 @@ fn factorization_disabled_vs_enabled_semantics() {
     disabler.rewrite(&mut plan_disabled);
     assert_eq!(plan_enabled.type_name(), plan_disabled.type_name());
 }
+
+fn ctx_var(var: &str) -> (ContextualExpression, ExpressionId) {
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let id = ctx.register_expression(ExpressionMeta::new(Expression::Variable(
+        var.to_string(),
+    )));
+    (ContextualExpression::new(id.clone(), ctx), id)
+}
+
+#[test]
+fn select_branch_keeps_factorization() {
+    use graphdb_query::planning::plan::logical::logical_nodes::control_flow::LogicalSelectNode;
+    let (cond, _) = ctx_var("a");
+    let mut branch = FactorizedSchema::new();
+    let g0 = branch.create_flat_group(false);
+    let g1 = branch.create_group();
+    branch.insert_to_group_and_scope(expr_id(1), g0);
+    branch.insert_to_group_and_scope(expr_id(2), g1);
+    branch.insert_to_group_and_scope_with_name(expr_id(3), Some("a".to_string()), g0);
+    let mut node = LogicalNodeEnum::Select(LogicalSelectNode {
+        id: next_node_id(),
+        condition: cond,
+        if_branch: Some(Box::new(scan())),
+        else_branch: Some(Box::new(scan())),
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    let out = node.compute_factorized_schema(&[branch]);
+    out.validate_at_most_one_unflat();
+    assert_eq!(
+        out.unflat_group_pos(),
+        Some(g1),
+        "Select must not blindly flatten_all when the condition only reads flat groups"
+    );
+}
+
+#[test]
+fn assign_over_expansion_keeps_factorization() {
+    use graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode;
+    use graphdb_query::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
+    // SET c = b over MATCH (a)-[:knows]->(b): the expansion output is
+    // unflat, the assignment only reads it, so no Flatten may appear.
+    // Shared context with distinct ids: the rhs resolves by name.
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let out_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
+    let rhs_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
+    assert_ne!(out_id, rhs_id);
+    let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
+        id: next_node_id(),
+        space_id: 1,
+        src_vids: "1".to_string(),
+        edge_types: vec!["knows".to_string()],
+        direction: "OUT".to_string(),
+        edge_props: vec![],
+        tag_props: vec![],
+        expression: Some(ContextualExpression::new(out_id, ctx.clone())),
+        dedup: false,
+        limit: None,
+        projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
+        output_var: None,
+        col_names: vec!["b".to_string()],
+        column_types: vec![],
+        deps: vec![scan()],
+    });
+    let mut plan = LogicalNodeEnum::Assign(LogicalAssignNode {
+        id: next_node_id(),
+        input: Some(Box::new(nbr)),
+        deps: vec![],
+        assignments: vec![(
+            "c".to_string(),
+            ContextualExpression::new(rhs_id, ctx.clone()),
+        )],
+        output_var: None,
+        col_names: vec!["c".to_string()],
+        column_types: vec![],
+    });
+    FactorizationRewriter::new().rewrite(&mut plan);
+    assert!(
+        !explain_contains_flatten(&plan),
+        "SET over an expansion must keep factorization, got: {}",
+        explain_flatten_str(&plan)
+    );
+}

@@ -11,11 +11,16 @@
 /// `list_extract` takes a list and an index rather than a lambda, but it
 /// has historically received the same per-element treatment; that
 /// treatment is preserved here to avoid changing flattening behavior.
-const LIST_LAMBDA_NAMES: [&str; 4] = [
+/// `list_any`, `list_all` and `list_single` are predicate variants that
+/// evaluate the lambda per element like `list_filter`.
+const LIST_LAMBDA_NAMES: [&str; 7] = [
     "list_filter",
     "list_extract",
     "list_transform",
     "list_reduce",
+    "list_any",
+    "list_all",
+    "list_single",
 ];
 
 /// Report whether a function evaluates an argument per list element.
@@ -46,6 +51,9 @@ mod tests {
         assert!(is_list_lambda("LIST_TRANSFORM"));
         assert!(is_list_lambda("List_Extract"));
         assert!(is_list_lambda("list_reduce"));
+        assert!(is_list_lambda("list_any"));
+        assert!(is_list_lambda("LIST_ALL"));
+        assert!(is_list_lambda("List_Single"));
     }
 
     #[test]

@@ -712,7 +712,7 @@ fn value_to_string(v: &Value) -> String {
 }
 
 fn execute_struct_pack(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return Err(ExpressionError::type_error(
             "struct_pack requires an even number of arguments (key-value pairs)",
         ));
@@ -757,7 +757,7 @@ fn execute_struct_extract(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_map_creation(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return Err(ExpressionError::type_error(
             "map requires an even number of arguments (key-value pairs)",
         ));

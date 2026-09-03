@@ -545,6 +545,28 @@ impl FactorizationRewriter {
                 for dep in &mut n.deps {
                     Self::visit_operator(dep);
                 }
+                // Write-path counterpart of Project: only the groups the
+                // assigned right-hand sides depend on are flattened.
+                let exprs = Self::expr_ids_for_assign(n);
+                let store = Self::build_store_for_assign(n);
+                let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_exprs(
+                    &exprs,
+                    &child_schema,
+                    &store,
+                );
+                if !to_flatten.is_empty() {
+                    if let Some(child) = n.input.as_mut() {
+                        let new_child =
+                            Self::append_flattens((**child).clone(), &to_flatten, &child_schema);
+                        **child = new_child;
+                    }
+                    let mut flattened_child = child_schema.clone();
+                    for pos in &to_flatten {
+                        flattened_child.flatten_group(*pos);
+                    }
+                    let mut tmp = node.clone();
+                    return tmp.compute_factorized_schema(&[flattened_child]);
+                }
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[child_schema])
             }
@@ -594,15 +616,60 @@ impl FactorizationRewriter {
                 tmp.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Select(n) => {
-                let mut child_schemas = Vec::new();
+                // Per-branch refinement: the branch condition drives
+                // FlattenAllButOne on each branch schema separately, so a
+                // branch that does not touch unflat groups keeps its
+                // factorization instead of being flattened wholesale.
+                let cond_id = n.condition.id().clone();
+                let mut store = HashMap::new();
+                if let Some(expr) = n.condition.get_expression() {
+                    store.insert(cond_id.clone(), expr);
+                }
+                let mut branch_schemas = Vec::new();
                 if let Some(branch) = n.if_branch.as_mut() {
-                    child_schemas.push(Self::visit_operator(branch));
+                    let schema = Self::visit_operator(branch);
+                    let to_flatten =
+                        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                            &cond_id,
+                            &schema,
+                            &store,
+                        );
+                    if !to_flatten.is_empty() {
+                        let new_branch =
+                            Self::append_flattens((**branch).clone(), &to_flatten, &schema);
+                        **branch = new_branch;
+                        let mut flattened = schema.clone();
+                        for pos in &to_flatten {
+                            flattened.flatten_group(*pos);
+                        }
+                        branch_schemas.push(flattened);
+                    } else {
+                        branch_schemas.push(schema);
+                    }
                 }
                 if let Some(branch) = n.else_branch.as_mut() {
-                    child_schemas.push(Self::visit_operator(branch));
+                    let schema = Self::visit_operator(branch);
+                    let to_flatten =
+                        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                            &cond_id,
+                            &schema,
+                            &store,
+                        );
+                    if !to_flatten.is_empty() {
+                        let new_branch =
+                            Self::append_flattens((**branch).clone(), &to_flatten, &schema);
+                        **branch = new_branch;
+                        let mut flattened = schema.clone();
+                        for pos in &to_flatten {
+                            flattened.flatten_group(*pos);
+                        }
+                        branch_schemas.push(flattened);
+                    } else {
+                        branch_schemas.push(schema);
+                    }
                 }
-                let effective = child_schemas.first().cloned().unwrap_or_default();
-                if child_schemas.is_empty() {
+                let effective = branch_schemas.first().cloned().unwrap_or_default();
+                if branch_schemas.is_empty() {
                     let mut tmp = node.clone();
                     tmp.compute_factorized_schema(&[])
                 } else {
@@ -611,8 +678,32 @@ impl FactorizationRewriter {
                 }
             }
             LogicalNodeEnum::Loop(n) => {
+                // Body refinement mirrors Select: the loop condition drives
+                // FlattenAllButOne on the body schema.
+                let cond_id = n.condition.id().clone();
+                let mut store = HashMap::new();
+                if let Some(expr) = n.condition.get_expression() {
+                    store.insert(cond_id.clone(), expr);
+                }
                 let child_schema = if let Some(body) = n.body.as_mut() {
-                    Self::visit_operator(body)
+                    let schema = Self::visit_operator(body);
+                    let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                        &cond_id,
+                        &schema,
+                        &store,
+                    );
+                    if !to_flatten.is_empty() {
+                        let new_body =
+                            Self::append_flattens((**body).clone(), &to_flatten, &schema);
+                        **body = new_body;
+                        let mut flattened = schema.clone();
+                        for pos in &to_flatten {
+                            flattened.flatten_group(*pos);
+                        }
+                        flattened
+                    } else {
+                        schema
+                    }
                 } else {
                     FactorizedSchema::new()
                 };
@@ -682,6 +773,27 @@ impl FactorizationRewriter {
         node.columns
             .iter()
             .map(|c| c.expression.id().clone())
+            .collect()
+    }
+
+    fn build_store_for_assign(
+        node: &crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode,
+    ) -> HashMap<ExpressionId, graphdb_core::Expression> {
+        let mut store = HashMap::new();
+        for (_, expr) in &node.assignments {
+            if let Some(rhs) = expr.get_expression() {
+                store.insert(expr.id().clone(), rhs);
+            }
+        }
+        store
+    }
+
+    fn expr_ids_for_assign(
+        node: &crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode,
+    ) -> Vec<graphdb_core::types::expr::ExpressionId> {
+        node.assignments
+            .iter()
+            .map(|(_, expr)| expr.id().clone())
             .collect()
     }
 
@@ -958,5 +1070,183 @@ mod tests {
         let rewriter = FactorizationRewriter::new();
         rewriter.rewrite(&mut window);
         assert_eq!(window.type_name(), "Window");
+    }
+
+    fn ctx_var(var: &str) -> (
+        graphdb_core::types::expr::contextual::ContextualExpression,
+        graphdb_core::types::expr::ExpressionId,
+    ) {
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use std::sync::Arc;
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable(var.to_string()),
+        ));
+        (ContextualExpression::new(id.clone(), ctx), id)
+    }
+
+    fn get_neighbors_with_output(
+        out_expr: graphdb_core::types::expr::contextual::ContextualExpression,
+    ) -> LogicalNodeEnum {
+        use crate::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode;
+        LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
+            id: next_node_id(),
+            space_id: 1,
+            src_vids: "1".to_string(),
+            edge_types: vec!["knows".to_string()],
+            direction: "OUT".to_string(),
+            edge_props: vec![],
+            tag_props: vec![],
+            expression: Some(out_expr),
+            dedup: false,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: None,
+            col_names: vec!["b".to_string()],
+            column_types: vec![],
+            deps: vec![scan()],
+        })
+    }
+
+    #[test]
+    fn select_rewriter_keeps_branch_factorization() {
+        use crate::planning::plan::logical::logical_nodes::control_flow::LogicalSelectNode;
+        use crate::optimizer::factorization::RemoveFactorizationRewriter;
+        // Branch output "b" is unflat; the condition only reads "b", so a
+        // single unflat group survives FlattenAllButOne and no Flatten is
+        // inserted: refined per-branch handling, not a blind flatten-all.
+        let (out_expr, _) = ctx_var("b");
+        let (cond, _) = ctx_var("b");
+        let nbr = get_neighbors_with_output(out_expr);
+        let mut select = LogicalNodeEnum::Select(LogicalSelectNode {
+            id: next_node_id(),
+            condition: cond,
+            if_branch: Some(Box::new(nbr)),
+            else_branch: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        FactorizationRewriter::new().rewrite(&mut select);
+        assert!(
+            !RemoveFactorizationRewriter::has_flatten_public(&select),
+            "condition on a single unflat branch group must not insert Flatten"
+        );
+    }
+
+    #[test]
+    fn assign_rewriter_no_flatten_for_single_unflat_dependent() {
+        use crate::optimizer::factorization::RemoveFactorizationRewriter;
+        use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
+        // Neighbor output "b" is unflat; the assignment only reads "b", so
+        // the single unflat group survives FlattenAllButOne and no Flatten
+        // is inserted: write-path counterpart of the Project rule.
+        // NOTE: one shared context with distinct ids: the rhs must resolve
+        // by variable *name*, not by accidental id collision.
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let out_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let rhs_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        assert_ne!(out_id, rhs_id);
+        let out_expr =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(out_id, ctx.clone());
+        let rhs =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(rhs_id, ctx.clone());
+        let nbr = get_neighbors_with_output(out_expr);
+        let mut assign = LogicalNodeEnum::Assign(LogicalAssignNode {
+            id: next_node_id(),
+            input: Some(Box::new(nbr)),
+            deps: vec![],
+            assignments: vec![("c".to_string(), rhs)],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        FactorizationRewriter::new().rewrite(&mut assign);
+        assert!(
+            !RemoveFactorizationRewriter::has_flatten_public(&assign),
+            "assignment on a single unflat group must not insert Flatten"
+        );
+    }
+
+    #[test]
+    fn assign_rewriter_flattens_for_unresolvable_rhs() {
+        use crate::optimizer::factorization::RemoveFactorizationRewriter;
+        use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
+        // Unresolvable right-hand side conservatively flattens the unflat
+        // neighbor group, mirroring the Project fallback.
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let out_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let rhs_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("ghost".to_string()),
+        ));
+        assert_ne!(out_id, rhs_id);
+        let out_expr =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(out_id, ctx.clone());
+        let rhs =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(rhs_id, ctx.clone());
+        let nbr = get_neighbors_with_output(out_expr);
+        let mut assign = LogicalNodeEnum::Assign(LogicalAssignNode {
+            id: next_node_id(),
+            input: Some(Box::new(nbr)),
+            deps: vec![],
+            assignments: vec![("c".to_string(), rhs)],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        FactorizationRewriter::new().rewrite(&mut assign);
+        assert!(
+            RemoveFactorizationRewriter::has_flatten_public(&assign),
+            "unresolvable assignment rhs must flatten the unflat group"
+        );
+    }
+
+    #[test]
+    fn semi_join_rewriter_flattens_unflat_probe_keys() {
+        use crate::planning::plan::logical::logical_nodes::join::LogicalSemiJoinNode;
+        // Guard for keeping the generic join arm as is: probe-side key
+        // groups are flattened by the rewriter before compute, so the
+        // keep-first rule never sees unflat keys on real plans and a
+        // key-aware compute arm would be unobservable.
+        // NOTE: the hash key intentionally shares the output expression
+        // (same id), matching production id-threading from exists_planner.
+        let (out_expr, _) = ctx_var("b");
+        let nbr = get_neighbors_with_output(out_expr.clone());
+        let mut join = LogicalNodeEnum::SemiJoin(LogicalSemiJoinNode {
+            id: next_node_id(),
+            left: Box::new(nbr),
+            right: Box::new(scan()),
+            hash_keys: vec![out_expr],
+            probe_keys: vec![],
+            deps: vec![],
+            join_condition: None,
+            anti: false,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        FactorizationRewriter::new().rewrite(&mut join);
+        if let LogicalNodeEnum::SemiJoin(n) = &join {
+            assert!(
+                matches!(n.left.as_ref(), LogicalNodeEnum::Flatten(_)),
+                "unflat probe key must be flattened before the membership test"
+            );
+        } else {
+            panic!("expected semi join");
+        }
     }
 }

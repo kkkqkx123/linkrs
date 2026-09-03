@@ -122,12 +122,12 @@ impl Binder {
                 let src_b = self.bind_expr(src)?;
                 let dst_b = self.bind_expr(dst)?;
                 let rank_b = rank.as_ref().map(|r| self.bind_expr(r)).transpose()?;
-                BoundUpdateTarget::Edge {
+                BoundUpdateTarget::Edge(Box::new(crate::binder::bound::BoundEdgeUpdateTarget {
                     src: src_b,
                     dst: dst_b,
                     edge_type: edge_type.clone(),
                     rank: rank_b,
-                }
+                }))
             }
             UpdateTarget::Tag(tag) => BoundUpdateTarget::Tag(tag.clone()),
             UpdateTarget::TagOnVertex { vid, tag_name } => {
@@ -314,7 +314,7 @@ impl Binder {
         let properties = np
             .properties
             .as_ref()
-            .map(|p| Self::extract_map_properties(p))
+            .map(Self::extract_map_properties)
             .transpose()?;
         Ok(BoundPatternVertex {
             variable: np.variable.clone(),
@@ -330,7 +330,7 @@ impl Binder {
         let properties = ep
             .properties
             .as_ref()
-            .map(|p| Self::extract_map_properties(p))
+            .map(Self::extract_map_properties)
             .transpose()?;
         Ok(BoundPatternEdge {
             variable: ep.variable.clone(),
@@ -375,7 +375,7 @@ impl Binder {
             Expression::Function { name, args } => {
                 let bound_args = args
                     .iter()
-                    .map(|a| Self::convert_ast_expr_to_bound(a))
+                    .map(Self::convert_ast_expr_to_bound)
                     .collect::<DBResult<Vec<_>>>()?;
                 Ok(BoundExpression::Function(BoundFunctionCall {
                     name: name.clone(),

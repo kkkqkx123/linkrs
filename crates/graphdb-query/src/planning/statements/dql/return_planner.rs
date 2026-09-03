@@ -223,7 +223,7 @@ impl Planner for ReturnPlanner {
                     &item.expression,
                     &expr_ctx,
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 let alias = item
                     .alias
                     .clone()
@@ -267,7 +267,7 @@ impl Planner for ReturnPlanner {
                         &item.expression,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     let expression = ctx_expr
                         .expression()
                         .map(|e| e.inner().clone())

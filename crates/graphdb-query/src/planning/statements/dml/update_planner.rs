@@ -121,7 +121,7 @@ impl Planner for UpdatePlanner {
             crate::binder::bound::BoundUpdateTarget::Vertex(vid) => {
                 let vertex_id =
                     crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
 
                 let mut properties = HashMap::new();
                 for assignment in &update.assignments {
@@ -129,7 +129,7 @@ impl Planner for UpdatePlanner {
                         &assignment.value,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 
@@ -138,7 +138,7 @@ impl Planner for UpdatePlanner {
                     .as_ref()
                     .map(|wc| {
                         crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
 
@@ -152,23 +152,24 @@ impl Planner for UpdatePlanner {
                 };
                 UpdateTargetType::Vertex(vertex_info)
             }
-            crate::binder::bound::BoundUpdateTarget::Edge {
-                src,
-                dst,
-                edge_type,
-                rank,
-            } => {
+            crate::binder::bound::BoundUpdateTarget::Edge(edge) => {
+                let crate::binder::bound::BoundEdgeUpdateTarget {
+                    src,
+                    dst,
+                    edge_type,
+                    rank,
+                } = &**edge;
                 let src_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(src, &expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
                 let dst_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(dst, &expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
                 let rank_ctx = rank
                     .as_ref()
                     .map(|r| {
                         crate::binder::expr_converter::bound_expr_to_contextual(r, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
 
@@ -178,7 +179,7 @@ impl Planner for UpdatePlanner {
                         &assignment.value,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 
@@ -187,7 +188,7 @@ impl Planner for UpdatePlanner {
                     .as_ref()
                     .map(|wc| {
                         crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(|e| PlannerError::PlanGenerationFailed(e))
+                            .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
 
@@ -210,7 +211,7 @@ impl Planner for UpdatePlanner {
                         &assignment.value,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 
@@ -244,7 +245,7 @@ impl Planner for UpdatePlanner {
             crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
                 let vid_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
 
                 let mut properties = HashMap::new();
                 for assignment in &update.assignments {
@@ -252,7 +253,7 @@ impl Planner for UpdatePlanner {
                         &assignment.value,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 

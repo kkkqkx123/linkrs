@@ -641,7 +641,6 @@ mod tests {
     // Logical-plan walker tests
     // ===================================================================
 
-    use crate::planning::plan::logical::logical_nodes::access::IndexHint;
     use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
     use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
     use crate::planning::plan::logical::LogicalNodeEnum;

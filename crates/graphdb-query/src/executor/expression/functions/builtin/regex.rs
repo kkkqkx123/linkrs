@@ -119,7 +119,7 @@ impl RegexFunction {
                         )
                     })?;
                     Ok(Value::Bool(
-                        regex.is_match(s) && regex.find(s).map_or(false, |m| m.as_str() == s),
+                        regex.is_match(s) && regex.find(s).is_some_and(|m| m.as_str() == s),
                     ))
                 }
                 (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),

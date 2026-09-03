@@ -243,10 +243,11 @@ impl PageData {
 // Checkpoint strategy
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CheckpointStrategy {
     Incremental,
     Hybrid,
+    #[default]
     Full,
 }
 

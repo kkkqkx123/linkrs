@@ -275,7 +275,7 @@ impl Planner for WithPlanner {
                     &item.expression,
                     &expr_ctx,
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 let alias = item
                     .alias
                     .clone()
@@ -299,7 +299,7 @@ impl Planner for WithPlanner {
         if let Some(ref condition) = with_stmt.condition {
             let ctx_expr =
                 crate::binder::expr_converter::bound_expr_to_contextual(condition, &expr_ctx)
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
             let filter_node = FilterNode::new(current_node.clone(), ctx_expr).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
             })?;

@@ -215,7 +215,7 @@ impl SequenceManager {
     pub fn flush(&self) -> Result<(), StorageError> {
         if let Some(ref storage) = self.storage {
             let map = self.sequences.read();
-            for (_name, def) in map.iter() {
+            for def in map.values() {
                 storage.save(def)?;
             }
         }

@@ -1065,6 +1065,16 @@ impl OptimizerEngine {
             for pos in flattens {
                 plan.cbo_notes.push(format!("Flatten(group={})", pos));
             }
+            // ExpandAll stays on the row path until its columnar batch path
+            // is rebuilt on DataChunk (the removed heap row store is not
+            // reused); record the retention so the degradation is visible
+            // in EXPLAIN rather than silent.
+            if Self::logical_contains_expand_all(&root) {
+                plan.cbo_notes.push(
+                    crate::executor::streaming::operators::graph_operator::expand::expand_all_row_path_note()
+                        .to_string(),
+                );
+            }
             if plan
                 .cbo_notes
                 .iter()
@@ -1075,6 +1085,22 @@ impl OptimizerEngine {
             }
         }
         plan
+    }
+
+    /// Whether the logical tree contains an `ExpandAll` node.
+    ///
+    /// Used to record the row-path retention note for `ExpandAll` in
+    /// `cbo_notes` (see `expand_all_row_path_note`).
+    fn logical_contains_expand_all(node: &crate::planning::plan::logical::LogicalNodeEnum) -> bool {
+        if matches!(
+            node,
+            crate::planning::plan::logical::LogicalNodeEnum::ExpandAll(_)
+        ) {
+            return true;
+        }
+        crate::planning::physical_mapper::logical_children(node)
+            .iter()
+            .any(|child| Self::logical_contains_expand_all(child))
     }
 
     /// Get the heuristic batch optimizer

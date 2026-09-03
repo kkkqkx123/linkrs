@@ -29,8 +29,7 @@ impl RemoveFactorizationRewriter {
 
     /// Bottom-up traversal returning a new tree without Flatten nodes.
     fn visit_operator(node: LogicalNodeEnum) -> LogicalNodeEnum {
-        let without_flatten = Self::visit_operator_replace(node);
-        without_flatten
+        Self::visit_operator_replace(node)
     }
 
     fn visit_operator_replace(node: LogicalNodeEnum) -> LogicalNodeEnum {
@@ -353,20 +352,16 @@ impl RemoveFactorizationRewriter {
             return true;
         }
         match node {
-            LogicalNodeEnum::Project(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Filter(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Sort(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Limit(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::TopN(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Sample(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Dedup(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Aggregate(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
-            }
-            LogicalNodeEnum::Window(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::Traverse(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
-            }
+            LogicalNodeEnum::Project(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Filter(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Sort(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Limit(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::TopN(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Sample(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Dedup(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Aggregate(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Window(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Traverse(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Expand(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::ExpandAll(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::AppendVertices(n) => n.deps.iter().any(Self::has_flatten),
@@ -379,19 +374,13 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::GetVertices(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::GetNeighbors(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::Assign(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
+                n.input.as_deref().is_some_and(Self::has_flatten)
                     || n.deps.iter().any(Self::has_flatten)
             }
-            LogicalNodeEnum::Remove(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
-            LogicalNodeEnum::DataCollect(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
-            }
-            LogicalNodeEnum::Materialize(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
-            }
-            LogicalNodeEnum::RollUpApply(n) => {
-                n.input.as_ref().map_or(false, |c| Self::has_flatten(c))
-            }
+            LogicalNodeEnum::Remove(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::DataCollect(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Materialize(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::RollUpApply(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Union(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::Minus(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::Intersect(n) => n.deps.iter().any(Self::has_flatten),
@@ -434,12 +423,12 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::ShortestPath(n) => {
                 Self::has_flatten(&n.left) || Self::has_flatten(&n.right)
             }
-            LogicalNodeEnum::Unwind(n) => n.input.as_ref().map_or(false, |c| Self::has_flatten(c)),
+            LogicalNodeEnum::Unwind(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Select(n) => {
-                n.if_branch().map_or(false, |c| Self::has_flatten(c))
-                    || n.else_branch().map_or(false, |c| Self::has_flatten(c))
+                n.if_branch().is_some_and(Self::has_flatten)
+                    || n.else_branch().is_some_and(Self::has_flatten)
             }
-            LogicalNodeEnum::Loop(n) => n.body().map_or(false, |c| Self::has_flatten(c)),
+            LogicalNodeEnum::Loop(n) => n.body().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Flatten(_) => true,
             _ => false,
         }

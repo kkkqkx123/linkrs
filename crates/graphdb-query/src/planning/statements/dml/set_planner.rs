@@ -117,13 +117,13 @@ impl Planner for SetPlanner {
                         let vertex_id = crate::binder::expr_converter::bound_expr_to_contextual(
                             object, &expr_ctx,
                         )
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
 
                         let value = crate::binder::expr_converter::bound_expr_to_contextual(
                             &assignment.value,
                             &expr_ctx,
                         )
-                        .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                        .map_err(PlannerError::PlanGenerationFailed)?;
 
                         let mut properties = HashMap::new();
                         properties.insert(assignment.property.clone(), value);
@@ -143,7 +143,7 @@ impl Planner for SetPlanner {
                         &assignment.value,
                         &expr_ctx,
                     )
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                     variable_assignments.push((assignment.property.clone(), value));
                 }
             } else {
@@ -151,7 +151,7 @@ impl Planner for SetPlanner {
                     &assignment.value,
                     &expr_ctx,
                 )
-                .map_err(|e| PlannerError::PlanGenerationFailed(e))?;
+                .map_err(PlannerError::PlanGenerationFailed)?;
                 variable_assignments.push((assignment.property.clone(), value));
             }
         }

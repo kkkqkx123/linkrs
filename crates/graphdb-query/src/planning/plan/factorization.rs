@@ -296,6 +296,11 @@ impl FactorizedSchema {
     }
 
     pub fn get_group_pos_by_name_opt(&self, name: &str) -> Option<FGroupPos> {
+        // Production fallback only for `Expression::Variable`, which carries
+        // no `ExpressionId`. All `ExpressionId` resolution uses
+        // `get_group_pos` / `is_expression_in_scope` as the single source;
+        // unresolved names fall back to flatten-all via
+        // `GroupDependencyAnalyzer::mark_unresolved` instead of silent miss.
         self.expression_name_to_group.get(name).copied()
     }
 

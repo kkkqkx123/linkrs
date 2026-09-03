@@ -452,4 +452,40 @@ mod tests {
         assert!(analyzer.dependent_groups().contains(&g1));
         assert!(!analyzer.has_unresolved());
     }
+
+    #[test]
+    fn list_any_all_single_lambda_body_requires_flat() {
+        for name in ["list_any", "list_all", "list_single"] {
+            let mut schema = FactorizedSchema::new();
+            let g0 = schema.create_flat_group(false);
+            let g1 = schema.create_group();
+            schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
+            schema.insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1);
+
+            let body = graphdb_core::Expression::Binary {
+                left: Box::new(graphdb_core::Expression::Property {
+                    object: Box::new(graphdb_core::Expression::Variable("items".to_string())),
+                    property: "age".to_string(),
+                }),
+                op: graphdb_core::types::operators::BinaryOperator::GreaterThan,
+                right: Box::new(graphdb_core::Expression::Literal(
+                    graphdb_core::value::Value::Int(30),
+                )),
+            };
+            let the_expr = graphdb_core::Expression::Function {
+                name: name.to_string(),
+                args: vec![graphdb_core::Expression::Variable("a".to_string()), body],
+            };
+            let mut store = HashMap::new();
+            let fake_id = expr(999);
+            store.insert(fake_id.clone(), the_expr);
+            let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+            analyzer.visit(&fake_id);
+            assert!(
+                analyzer.required_flat_groups().contains(&g1),
+                "{name} lambda body must require flat"
+            );
+            assert!(!analyzer.has_unresolved());
+        }
+    }
 }

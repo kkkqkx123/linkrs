@@ -782,7 +782,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     left_input_var: None,
                     right_input_var: None,
                     correlated_cols: n.correlated_cols().to_vec(),
-                    apply_kind: n.apply_kind().clone(),
+                    apply_kind: n.apply_kind(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: vec![],

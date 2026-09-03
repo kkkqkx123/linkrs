@@ -113,7 +113,7 @@ impl Planner for FetchEdgesPlanner {
 
         let src_ctx =
             crate::binder::expr_converter::bound_expr_to_contextual(&fetch.src, &expr_ctx)
-                .map_err(|e| PlannerError::InvalidOperation(e))?;
+                .map_err(PlannerError::InvalidOperation)?;
         let src_str = src_ctx
             .expression()
             .map(|m| m.inner().to_string())
@@ -121,7 +121,7 @@ impl Planner for FetchEdgesPlanner {
 
         let dst_ctx =
             crate::binder::expr_converter::bound_expr_to_contextual(&fetch.dst, &expr_ctx)
-                .map_err(|e| PlannerError::InvalidOperation(e))?;
+                .map_err(PlannerError::InvalidOperation)?;
         let dst_str = dst_ctx
             .expression()
             .map(|m| m.inner().to_string())
@@ -131,7 +131,7 @@ impl Planner for FetchEdgesPlanner {
             Some(rank_expr) => {
                 let rank_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(rank_expr, &expr_ctx)
-                        .map_err(|e| PlannerError::InvalidOperation(e))?;
+                        .map_err(PlannerError::InvalidOperation)?;
                 rank_ctx
                     .expression()
                     .map(|m| m.inner().to_string())
