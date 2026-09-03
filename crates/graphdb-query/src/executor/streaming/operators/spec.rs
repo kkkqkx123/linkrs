@@ -923,6 +923,126 @@ pub enum DdlSpec {
     },
 }
 
+impl SpaceManageCommand {
+    /// Whether the command mutates stored state.
+    ///
+    /// Describe/show variants only read schema metadata; switch only flips
+    /// session-level space routing.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Drop { .. } | Self::Alter { .. } | Self::Clear { .. } => {
+                true
+            }
+            Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } | Self::Switch { .. } => false,
+        }
+    }
+}
+
+impl TagManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+            Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
+        }
+    }
+}
+
+impl EdgeManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+            Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
+        }
+    }
+}
+
+impl SequenceManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+        }
+    }
+}
+
+impl IndexManageCommand {
+    /// Whether the command mutates stored state.
+    ///
+    /// Describe/show variants only read index metadata.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::CreateTagIndex { .. }
+            | Self::DropTagIndex { .. }
+            | Self::RebuildTagIndex { .. }
+            | Self::CreateEdgeIndex { .. }
+            | Self::DropEdgeIndex { .. }
+            | Self::RebuildEdgeIndex { .. } => true,
+            Self::DescTagIndex { .. }
+            | Self::ShowTagIndexes
+            | Self::DescEdgeIndex { .. }
+            | Self::ShowEdgeIndexes
+            | Self::ShowIndexes
+            | Self::ShowCreateIndex { .. } => false,
+        }
+    }
+}
+
+impl UserManageCommand {
+    /// Whether the command mutates the user/privilege store.
+    ///
+    /// Show/describe variants only read through the auth reader.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. }
+            | Self::Alter { .. }
+            | Self::Drop { .. }
+            | Self::ChangePassword { .. }
+            | Self::GrantRole { .. }
+            | Self::RevokeRole { .. } => true,
+            Self::ShowUsers | Self::ShowRoles | Self::DescribeUser { .. } => false,
+        }
+    }
+}
+
+impl FulltextManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Drop { .. } | Self::Alter { .. } => true,
+            Self::Show { .. } | Self::Describe { .. } => false,
+        }
+    }
+}
+
+impl DdlSpec {
+    /// Whether the spec mutates stored state.
+    ///
+    /// Read-only variants (describe/show) run on the statement-level read
+    /// snapshot and must not require a write transaction scope.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::SpaceManage { command } => command.is_write(),
+            Self::TagManage { command, .. } => command.is_write(),
+            Self::EdgeManage { command, .. } => command.is_write(),
+            Self::IndexManage { command, .. } => command.is_write(),
+            Self::DeleteIndex { .. } => true,
+            Self::UserManage { command } => command.is_write(),
+            Self::ShowStats { .. }
+            | Self::ShowConfigs { .. }
+            | Self::ShowQueries { .. }
+            | Self::ShowSessions { .. }
+            | Self::Analyze { .. } => false,
+            Self::Migrate { .. }
+            | Self::MigratePlan { .. }
+            | Self::MigrateRun { .. }
+            | Self::MigrateRollback { .. } => true,
+            Self::SequenceManage { command } => command.is_write(),
+        }
+    }
+}
+
 // ── Fulltext spec ────────────────────────────────────────────────────────────
 
 /// Immutable config for fulltext search operators.
