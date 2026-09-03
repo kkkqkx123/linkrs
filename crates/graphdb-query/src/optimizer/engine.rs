@@ -449,6 +449,10 @@ impl OptimizerEngine {
 
         // Physical mapping: LogicalNodeEnum → PlanNodeEnum (introduces
         // physical choices such as IndexScan). Mirrors PhysicalMapper.
+        // This is a splice implementation to protect CBO's IndexScan choice
+        // (see physical_planner.rs:34 which would discard CBO rewrites if using
+        // full convert_logical_to_physical). Once CBO marks index_hint on
+        // Logical, switch to full PhysicalMapper::map.
         current_plan = self.apply_physical_mapping(current_plan);
 
         // Physical heuristic optimization on the physical tree.
@@ -507,6 +511,9 @@ impl OptimizerEngine {
         // root wholesale. Instead we splice the LogicalFlatten nodes inserted
         // by FactorizationRewriter into the physical tree at the corresponding
         // positions, preserving all other physical choices.
+        // Current implementation is splice rather than full PhysicalMapper::map
+        // to retain CBO IndexScan selection. Switch to full mapping once CBO
+        // marks index_hint on Logical (see physical_planner.rs:34).
         //
         // If the logical plan contains Flatten but the physical does not,
         // failing to splice would silently drop factorization (wrong row
@@ -611,36 +618,18 @@ impl OptimizerEngine {
         use crate::planning::plan::logical::LogicalNodeEnum;
         match node {
             LogicalNodeEnum::Flatten(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-            LogicalNodeEnum::Project(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Filter(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Sort(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Limit(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::TopN(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Sample(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Dedup(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
+            LogicalNodeEnum::Project(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Filter(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Sort(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Limit(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::TopN(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Sample(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Dedup(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::Aggregate(n) => {
                 n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
             }
-            LogicalNodeEnum::Window(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
-            LogicalNodeEnum::Traverse(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
+            LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::Assign(n) => {
                 let mut v = Vec::new();
                 if let Some(c) = n.input.as_deref() {
@@ -651,9 +640,7 @@ impl OptimizerEngine {
                 }
                 v
             }
-            LogicalNodeEnum::Remove(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
+            LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::DataCollect(n) => {
                 n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
             }
@@ -663,9 +650,7 @@ impl OptimizerEngine {
             LogicalNodeEnum::RollUpApply(n) => {
                 n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
             }
-            LogicalNodeEnum::Unwind(n) => {
-                n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-            }
+            LogicalNodeEnum::Unwind(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::Select(n) => {
                 let mut v = Vec::new();
                 if let Some(b) = n.if_branch() {
@@ -723,64 +708,119 @@ impl OptimizerEngine {
         physical: &crate::planning::plan::PlanNodeEnum,
         new_children: Vec<crate::planning::plan::PlanNodeEnum>,
     ) -> Result<crate::planning::plan::PlanNodeEnum, String> {
-        use crate::planning::plan::PlanNodeEnum;
         use crate::planning::plan::core::nodes::base::plan_node_traits::{
             BinaryInputNode, MultipleInputNode, SingleInputNode,
         };
+        use crate::planning::plan::PlanNodeEnum;
         match physical {
             PlanNodeEnum::Project(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Project")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Project")?,
+                );
                 Ok(PlanNodeEnum::Project(cloned))
             }
             PlanNodeEnum::Filter(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Filter")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Filter")?,
+                );
                 Ok(PlanNodeEnum::Filter(cloned))
             }
             PlanNodeEnum::Sort(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Sort")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Sort")?,
+                );
                 Ok(PlanNodeEnum::Sort(cloned))
             }
             PlanNodeEnum::Limit(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Limit")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Limit")?,
+                );
                 Ok(PlanNodeEnum::Limit(cloned))
             }
             PlanNodeEnum::TopN(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for TopN")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for TopN")?,
+                );
                 Ok(PlanNodeEnum::TopN(cloned))
             }
             PlanNodeEnum::Sample(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Sample")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Sample")?,
+                );
                 Ok(PlanNodeEnum::Sample(cloned))
             }
             PlanNodeEnum::Dedup(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Dedup")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Dedup")?,
+                );
                 Ok(PlanNodeEnum::Dedup(cloned))
             }
             PlanNodeEnum::Aggregate(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Aggregate")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Aggregate")?,
+                );
                 Ok(PlanNodeEnum::Aggregate(cloned))
             }
             PlanNodeEnum::Window(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Window")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Window")?,
+                );
                 Ok(PlanNodeEnum::Window(cloned))
             }
             PlanNodeEnum::Traverse(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Traverse")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Traverse")?,
+                );
                 Ok(PlanNodeEnum::Traverse(cloned))
             }
             PlanNodeEnum::Unwind(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Unwind")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Unwind")?,
+                );
                 Ok(PlanNodeEnum::Unwind(cloned))
             }
             PlanNodeEnum::Assign(n) => {
@@ -802,32 +842,62 @@ impl OptimizerEngine {
             }
             PlanNodeEnum::DataCollect(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for DataCollect")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for DataCollect")?,
+                );
                 Ok(PlanNodeEnum::DataCollect(cloned))
             }
             PlanNodeEnum::Remove(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Remove")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Remove")?,
+                );
                 Ok(PlanNodeEnum::Remove(cloned))
             }
             PlanNodeEnum::Materialize(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for Materialize")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for Materialize")?,
+                );
                 Ok(PlanNodeEnum::Materialize(cloned))
             }
             PlanNodeEnum::RollUpApply(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for RollUpApply")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for RollUpApply")?,
+                );
                 Ok(PlanNodeEnum::RollUpApply(cloned))
             }
             PlanNodeEnum::PatternApply(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for PatternApply")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for PatternApply")?,
+                );
                 Ok(PlanNodeEnum::PatternApply(cloned))
             }
             PlanNodeEnum::CorrelatedApply(n) => {
                 let mut cloned = n.clone();
-                cloned.set_input(new_children.into_iter().next().ok_or("missing child for CorrelatedApply")?);
+                cloned.set_input(
+                    new_children
+                        .into_iter()
+                        .next()
+                        .ok_or("missing child for CorrelatedApply")?,
+                );
                 Ok(PlanNodeEnum::CorrelatedApply(cloned))
             }
             PlanNodeEnum::InnerJoin(n) => {

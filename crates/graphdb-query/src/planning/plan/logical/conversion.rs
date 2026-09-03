@@ -833,6 +833,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         // Physical join nodes → logical equivalents
 
         // === Fallback for unsupported nodes ===
+        // Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
+        // and Fulltext/Vector search remain NotYetImplemented. They are not
+        // on the factorization partition chain, so reverse mapping is optional
+        // (see factorization_model.md).
         _ => Err(ConversionError::NotYetImplemented(
             node.type_name().to_string(),
         )),

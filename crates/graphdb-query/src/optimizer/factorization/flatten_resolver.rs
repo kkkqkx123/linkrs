@@ -172,7 +172,21 @@ impl FlattenAll {
         let mut analyzer =
             GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store.clone());
         analyzer.visit(expr_id);
-        Self::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), schema)
+        let mut result =
+            Self::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), schema);
+        result.extend(
+            analyzer
+                .required_flat_groups()
+                .iter()
+                .copied()
+                .filter(|pos| {
+                    schema
+                        .get_group(*pos)
+                        .map(|g| !g.is_flat())
+                        .unwrap_or(false)
+                }),
+        );
+        result
     }
 
     pub fn get_groups_pos_to_flatten_for_groups(
@@ -282,5 +296,34 @@ mod tests {
         assert_eq!(to_flatten.len(), 1);
         let all = FlattenResolver::flatten_all(&[g0, g1], &schema);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn flatten_all_required_flat() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
+        schema.insert_to_group_and_scope_with_name(expr(20), Some("x".to_string()), g1);
+        // Simulate list_extract(lambda) where lambda body depends on x (unflat)
+        // The analyzer should mark g1 as required_flat
+        let the_expr = graphdb_core::Expression::Function {
+            name: "list_extract".to_string(),
+            args: vec![
+                graphdb_core::Expression::List(vec![graphdb_core::Expression::Literal(
+                    graphdb_core::Value::BigInt(1),
+                )]),
+                graphdb_core::Expression::Variable("x".to_string()),
+            ],
+        };
+        let mut store = HashMap::new();
+        let fake_id = expr(999);
+        store.insert(fake_id.clone(), the_expr);
+        let res = FlattenAll::get_groups_pos_to_flatten_for_expr(&fake_id, &schema, &store);
+        assert!(
+            res.contains(&g1),
+            "required_flat group g1 should be flattened for list lambda, got {:?}",
+            res
+        );
     }
 }

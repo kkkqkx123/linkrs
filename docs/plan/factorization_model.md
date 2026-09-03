@@ -55,7 +55,7 @@ Executor 层  crates/graphdb-query/src/executor/streaming/
 | Schema 计算 | `crates/graphdb-query/src/planning/plan/factorization_compute.rs` | planning/plan | `impl FactorizedSchemaCompute for LogicalNodeEnum` 各算子规则，`compute_flat_schema = compute_factorized_schema(flat_children).flatten_all()` | 只读 `child_schemas`，不二次 `clone.compute(&[])` |
 | 逻辑 Flatten | `crates/graphdb-query/src/planning/plan/logical/logical_nodes/flatten.rs` | planning/logical | `LogicalFlattenNode{ id, group_pos, input, deps }` `LogicalSingleInputNode` | 纯数据 |
 | 物理 Flatten | `crates/graphdb-query/src/planning/plan/core/nodes/operation/flatten_node.rs` | planning/core | `FlattenNode{ group_pos }` `define_plan_node_with_deps!` | 纯数据 |
-| 物理映射 | `crates/graphdb-query/src/planning/physical_planner.rs` | planning | `convert_logical_to_physical:56臂` 1:1 映射，含 `LogicalFlatten→FlattenNode` | 不做代价决策 |
+| 物理映射 | `crates/graphdb-query/src/planning/physical_planner.rs` | planning | `convert_logical_to_physical:56臂` 1:1 映射，含 `LogicalFlatten→FlattenNode` （当前为 splice 实现，见 engine.rs:501） | 不做代价决策 |
 | 反向映射 | `crates/graphdb-query/src/planning/plan/logical/conversion.rs` | planning | `convert_plan: PlanNodeEnum→LogicalNodeEnum` 兜底，仅 `logical_plan.is_none()` legacy 路径 | 与正向对称 |
 | 去因子化 | `crates/graphdb-query/src/optimizer/factorization/remove_factorization_rewriter.rs` | optimizer | `RemoveFactorizationRewriter{ rewrite/has_flatten/visit_operator_replace }` | 只改逻辑树 |
 | 重因子化 | `crates/graphdb-query/src/optimizer/factorization/factorization_rewriter.rs` | optimizer | `FactorizationRewriter::visit_operator→FactorizedSchema` 自底上传递，`append_flattens` | 不碰物理树 |
@@ -231,7 +231,7 @@ Row1: a2.name=flat  b=overflow[b3]     → flat_rows 展开 (a2,b3)
 
 | 集成点 | 文件:行 | 目标 |
 |---|---|---|
-| ID 单源透传 | `planning/plan/factorization_compute.rs:11` `planning/statements/*` `plan/logical/conversion.rs:249` | 复用 `BoundStatement` 的 `ExpressionAnalysisContext` 透传 `ContextualExpression`，禁止 `DefaultHasher` 与现场 `Arc::new(Context)` |
+| ID 单源透传 | `planning/plan/factorization_compute.rs:11` `planning/statements/*` `plan/logical/conversion.rs:249` | 复用 `BoundStatement` 的 `ExpressionAnalysisContext` 透传 `ContextualExpression`，禁止 `DefaultHasher` 与现场 `Arc::new(Context)`；`transform` 遗留路径例外需 `// TODO(plan_bound)` 标记，`plan_bound` 路径必须透传 |
 | Schema 全覆盖 | `factorization_compute.rs:335` | 叶搜索类按 `Scan` 建组，`Unwind/Union` 显式规则 |
 | 反向映射 | `plan/logical/conversion.rs:412` | 补 `Flatten(group_pos)` 及遍历/控制流臂，与 `physical_planner:34` 对称 |
 | 流水线顺序 | `optimizer/engine.rs:943,956,487,520,450` | 按 `logical_plan_boundary.md:406` 五段重排，`Remove→LogicalHeuristic→CBO→Factorization→PhysicalMapping→PhysicalHeuristic→Partitioning` |

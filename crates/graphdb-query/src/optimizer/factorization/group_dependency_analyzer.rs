@@ -98,8 +98,10 @@ impl<'a> GroupDependencyAnalyzer<'a> {
     pub fn visit_expression(&mut self, expr: &graphdb_core::Expression) {
         use graphdb_core::Expression;
         match expr {
-            Expression::Variable(_) => {
-                // Variables not in scope are not tracked.
+            Expression::Variable(name) => {
+                if let Some(pos) = self.schema.get_group_pos_by_name_opt(name) {
+                    self.dependent_groups.insert(pos);
+                }
             }
             Expression::Property { object, .. } => {
                 self.visit_expression(object);
@@ -297,6 +299,29 @@ mod tests {
         // So we test that visit by id works, and expression walk for property.
         analyzer.visit(&id_a);
         analyzer.visit(&id_b);
+        assert_eq!(analyzer.dependent_groups().len(), 2);
+    }
+
+    #[test]
+    fn variable_name_fallback() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
+        schema.insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1);
+
+        let the_expr = graphdb_core::Expression::Binary {
+            left: Box::new(graphdb_core::Expression::Variable("a".to_string())),
+            op: graphdb_core::types::operators::BinaryOperator::Add,
+            right: Box::new(graphdb_core::Expression::Variable("b".to_string())),
+        };
+        let mut store = HashMap::new();
+        let fake_id = expr(999);
+        store.insert(fake_id.clone(), the_expr);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+        analyzer.visit(&fake_id);
+        assert!(analyzer.dependent_groups().contains(&g0));
+        assert!(analyzer.dependent_groups().contains(&g1));
         assert_eq!(analyzer.dependent_groups().len(), 2);
     }
 }

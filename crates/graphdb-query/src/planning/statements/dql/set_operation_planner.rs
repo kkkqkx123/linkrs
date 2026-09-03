@@ -68,6 +68,8 @@ impl SetOperationPlanner {
                     )));
                 };
 
+                // TODO(plan_bound): replace with BoundStatement.expr_context()
+                #[allow(clippy::arc_with_non_send_sync)]
                 let expr_context = Arc::new(ExpressionAnalysisContext::new());
                 let validation_info = crate::binder::validation::ValidationInfo::new();
                 let ast = Arc::new(crate::parser::ast::Ast::new(stmt.clone(), expr_context));

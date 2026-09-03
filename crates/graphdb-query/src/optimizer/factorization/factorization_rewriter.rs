@@ -408,9 +408,170 @@ impl FactorizationRewriter {
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[child_schema])
             }
-            _ => {
+            LogicalNodeEnum::GetVertices(n) => {
+                let mut child_schemas = Vec::new();
+                for dep in &mut n.deps {
+                    child_schemas.push(Self::visit_operator(dep));
+                }
+                let child_schema = child_schemas.first().cloned().unwrap_or_default();
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::GetNeighbors(n) => {
+                let mut child_schemas = Vec::new();
+                for dep in &mut n.deps {
+                    child_schemas.push(Self::visit_operator(dep));
+                }
+                let child_schema = child_schemas.first().cloned().unwrap_or_default();
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::GetEdges(_)
+            | LogicalNodeEnum::ScanVertices(_)
+            | LogicalNodeEnum::ScanEdges(_)
+            | LogicalNodeEnum::Start(_)
+            | LogicalNodeEnum::Argument(_)
+            | LogicalNodeEnum::PassThrough(_)
+            | LogicalNodeEnum::BeginTransaction(_)
+            | LogicalNodeEnum::Commit(_)
+            | LogicalNodeEnum::Rollback(_)
+            | LogicalNodeEnum::FulltextSearch(_)
+            | LogicalNodeEnum::FulltextLookup(_)
+            | LogicalNodeEnum::MatchFulltext(_) => {
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[])
+            }
+            #[cfg(feature = "vector")]
+            LogicalNodeEnum::VectorSearch(_)
+            | LogicalNodeEnum::VectorLookup(_)
+            | LogicalNodeEnum::VectorMatch(_) => {
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[])
+            }
+            LogicalNodeEnum::Assign(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                for dep in &mut n.deps {
+                    Self::visit_operator(dep);
+                }
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::Remove(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::DataCollect(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::Materialize(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::RollUpApply(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::Sample(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::Select(n) => {
+                let mut child_schemas = Vec::new();
+                if let Some(branch) = n.if_branch.as_mut() {
+                    child_schemas.push(Self::visit_operator(branch));
+                }
+                if let Some(branch) = n.else_branch.as_mut() {
+                    child_schemas.push(Self::visit_operator(branch));
+                }
+                let effective = child_schemas.first().cloned().unwrap_or_default();
+                if child_schemas.is_empty() {
+                    let mut tmp = node.clone();
+                    tmp.compute_factorized_schema(&[])
+                } else {
+                    let mut tmp = node.clone();
+                    tmp.compute_factorized_schema(&[effective])
+                }
+            }
+            LogicalNodeEnum::Loop(n) => {
+                let child_schema = if let Some(body) = n.body.as_mut() {
+                    Self::visit_operator(body)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::PatternApply(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::CorrelatedApply(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::Apply(n) => {
+                let left_schema = Self::visit_operator(n.left_input_mut());
+                let right_schema = Self::visit_operator(n.right_input_mut());
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::MultiShortestPath(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::BFSShortest(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::AllPaths(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
+            }
+            LogicalNodeEnum::ShortestPath(n) => {
+                let left_schema = Self::visit_operator(&mut n.left);
+                let right_schema = Self::visit_operator(&mut n.right);
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[left_schema, right_schema])
             }
         }
     }
@@ -645,7 +806,8 @@ mod tests {
         use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
         use graphdb_core::types::expr::ExpressionMeta;
         use std::sync::Arc;
-        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let raw_ctx = ExpressionAnalysisContext::new();
+        let ctx = Arc::new(raw_ctx);
         let expr = graphdb_core::Expression::Variable("a".to_string());
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);

@@ -94,6 +94,11 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
                         }
                     }
                 }
+                if schema.has_unflat_group() {
+                    if let Some(pos) = schema.unflat_group_pos() {
+                        schema.flatten_group(pos);
+                    }
+                }
                 let g1 = schema.create_group();
                 // New unflat group for neighbors is created empty without
                 // hash-synthesized col_names. String col_names are aliases
@@ -410,13 +415,41 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
                     child_schemas.first().cloned().unwrap_or_default()
                 }
             }
-            LogicalNodeEnum::Unwind(_)
-            | LogicalNodeEnum::Assign(_)
+            LogicalNodeEnum::FulltextSearch(_)
+            | LogicalNodeEnum::FulltextLookup(_)
+            | LogicalNodeEnum::MatchFulltext(_) => {
+                let mut schema = FactorizedSchema::new();
+                schema.create_flat_group(false);
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            #[cfg(feature = "vector")]
+            LogicalNodeEnum::VectorSearch(_)
+            | LogicalNodeEnum::VectorLookup(_)
+            | LogicalNodeEnum::VectorMatch(_) => {
+                let mut schema = FactorizedSchema::new();
+                schema.create_flat_group(false);
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            LogicalNodeEnum::Unwind(_) => {
+                let schema = child_schemas.first().cloned().unwrap_or_default();
+                schema
+            }
+            LogicalNodeEnum::BeginTransaction(_)
+            | LogicalNodeEnum::Commit(_)
+            | LogicalNodeEnum::Rollback(_)
+            | LogicalNodeEnum::PassThrough(_)
+            | LogicalNodeEnum::Argument(_) => {
+                let mut schema = FactorizedSchema::new();
+                schema.create_flat_group(false);
+                schema.validate_at_most_one_unflat();
+                schema
+            }
+            LogicalNodeEnum::Assign(_)
             | LogicalNodeEnum::Remove(_)
             | LogicalNodeEnum::DataCollect(_)
             | LogicalNodeEnum::Materialize(_)
-            | LogicalNodeEnum::PassThrough(_)
-            | LogicalNodeEnum::Argument(_)
             | LogicalNodeEnum::Select(_)
             | LogicalNodeEnum::Loop(_) => {
                 let mut schema = child_schemas.first().cloned().unwrap_or_default();
@@ -475,7 +508,8 @@ mod tests {
     }
 
     fn scan_with_expr() -> (LogicalNodeEnum, Arc<ExpressionAnalysisContext>) {
-        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let raw_ctx = ExpressionAnalysisContext::new();
+        let ctx = Arc::new(raw_ctx);
         let expr = graphdb_core::Expression::Variable("a".to_string());
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);
@@ -515,7 +549,8 @@ mod tests {
 
     #[test]
     fn project_dependency() {
-        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let raw_ctx = ExpressionAnalysisContext::new();
+        let ctx = Arc::new(raw_ctx);
         let expr = graphdb_core::Expression::Variable("a".to_string());
         let meta = ExpressionMeta::new(expr);
         let id_a = ctx.register_expression(meta);
@@ -552,7 +587,8 @@ mod tests {
 
     #[test]
     fn filter_flatten() {
-        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let raw_ctx = ExpressionAnalysisContext::new();
+        let ctx = Arc::new(raw_ctx);
         let expr = graphdb_core::Expression::Variable("b".to_string());
         let meta = ExpressionMeta::new(expr);
         let id_b = ctx.register_expression(meta);
@@ -580,7 +616,8 @@ mod tests {
 
     #[test]
     fn aggregate_keys() {
-        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let raw_ctx = ExpressionAnalysisContext::new();
+        let ctx = Arc::new(raw_ctx);
         let expr = graphdb_core::Expression::Variable("a".to_string());
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);
@@ -644,5 +681,96 @@ mod tests {
         );
         let out = join.compute_factorized_schema(&[ls, rs]);
         out.validate_at_most_one_unflat();
+    }
+
+    #[test]
+    fn fulltext_leaf_is_flat_single_group() {
+        use crate::parser::ast::fulltext::FulltextQueryExpr;
+        use crate::planning::plan::logical::logical_nodes::search::LogicalFulltextSearchNode;
+        let mut node = LogicalNodeEnum::FulltextSearch(LogicalFulltextSearchNode {
+            id: next_node_id(),
+            index_name: "idx".to_string(),
+            query: FulltextQueryExpr::Simple("test".to_string()),
+            yield_clause: None,
+            where_clause: None,
+            order_clause: None,
+            limit: None,
+            offset: None,
+            space_id: 1,
+            tag_name: "person".to_string(),
+            field_name: "name".to_string(),
+            output_var: None,
+            col_names: vec!["a".to_string()],
+            column_types: vec![],
+        });
+        let schema = node.compute_factorized_schema(&[]);
+        assert_eq!(schema.num_groups(), 1);
+        assert!(schema.is_flat_schema());
+    }
+
+    #[test]
+    fn unwind_passthrough() {
+        let mut child_schema = FactorizedSchema::new();
+        let g0 = child_schema.create_flat_group(false);
+        let g1 = child_schema.create_group();
+        child_schema.insert_to_group_and_scope(test_id(1), g0);
+        child_schema.insert_to_group_and_scope(test_id(2), g1);
+        let mut unwind = LogicalNodeEnum::Unwind(
+            crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
+                id: next_node_id(),
+                input: Some(Box::new(scan())),
+                deps: vec![scan()],
+                alias: "x".to_string(),
+                list_expression: {
+                    let raw_ctx = ExpressionAnalysisContext::new();
+                    let ctx = Arc::new(raw_ctx);
+                    let meta =
+                        ExpressionMeta::new(graphdb_core::Expression::Variable("list".to_string()));
+                    let id = ctx.register_expression(meta);
+                    ContextualExpression::new(id, ctx)
+                },
+                output_var: None,
+                col_names: vec!["x".to_string()],
+                column_types: vec![],
+            },
+        );
+        let out = unwind.compute_factorized_schema(&[child_schema.clone()]);
+        assert_eq!(out.num_groups(), child_schema.num_groups());
+        assert_eq!(out.has_unflat_group(), child_schema.has_unflat_group());
+        assert_eq!(out.unflat_group_pos(), child_schema.unflat_group_pos());
+    }
+
+    #[test]
+    fn get_neighbors_chain_keeps_one_unflat() {
+        let mut base = FactorizedSchema::new();
+        let g0 = base.create_flat_group(false);
+        base.insert_to_group_and_scope(test_id(1), g0);
+        let mut prev = base;
+        for _ in 0..3 {
+            let mut node = LogicalNodeEnum::GetNeighbors(
+                crate::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
+                    id: next_node_id(),
+                    space_id: 1,
+                    src_vids: "1".to_string(),
+                    edge_types: vec!["knows".to_string()],
+                    direction: "OUT".to_string(),
+                    edge_props: vec![],
+                    tag_props: vec![],
+                    expression: None,
+                    dedup: false,
+                    limit: None,
+                    projected_properties: vec![],
+                    output_var: None,
+                    col_names: vec!["b".to_string()],
+                    column_types: vec![],
+                    deps: vec![scan()],
+                },
+            );
+            let next = node.compute_factorized_schema(&[prev.clone()]);
+            next.validate_at_most_one_unflat();
+            prev = next;
+        }
+        prev.validate_at_most_one_unflat();
+        assert_eq!(prev.groups().iter().filter(|g| !g.is_flat()).count(), 1);
     }
 }

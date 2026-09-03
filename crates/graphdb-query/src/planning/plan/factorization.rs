@@ -288,6 +288,10 @@ impl FactorizedSchema {
 
     #[cfg(test)]
     pub fn get_group_pos_by_name(&self, name: &str) -> Option<FGroupPos> {
+        self.get_group_pos_by_name_opt(name)
+    }
+
+    pub fn get_group_pos_by_name_opt(&self, name: &str) -> Option<FGroupPos> {
         self.expression_name_to_group.get(name).copied()
     }
 
@@ -418,8 +422,7 @@ impl FactorizedSchema {
         }
         for (name, pos) in &other.expression_name_to_group {
             if let Some(new_pos) = mapping.get(pos) {
-                self.expression_name_to_group
-                    .insert(name.clone(), *new_pos);
+                self.expression_name_to_group.insert(name.clone(), *new_pos);
             }
         }
         mapping
@@ -429,9 +432,7 @@ impl FactorizedSchema {
         self.expression_to_group.iter()
     }
 
-    pub fn expression_name_to_group_iter(
-        &self,
-    ) -> impl Iterator<Item = (&String, &FGroupPos)> {
+    pub fn expression_name_to_group_iter(&self) -> impl Iterator<Item = (&String, &FGroupPos)> {
         self.expression_name_to_group.iter()
     }
 }
