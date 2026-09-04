@@ -40,23 +40,35 @@ impl Planner for AssignmentPlanner {
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
         let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
-        match bound {
-            crate::binder::BoundStatement::Other(stmt) => {
-                let ast = crate::parser::ast::stmt::Ast::new(
-                    (**stmt).clone(),
-                    std::sync::Arc::new(
-                        graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                );
-                let fallback_validated = ValidatedStatement::new(
-                    std::sync::Arc::new(ast),
-                    validated.validation_info.clone(),
-                );
-                self.transform(&fallback_validated, qctx)
-            }
-            _ => self.transform(validated, qctx),
-        }
+        let assignment = match bound {
+            crate::binder::BoundStatement::Assignment(a) => a,
+            // Legacy AST-only statements still use the AST path.
+            _ => return self.transform(validated, qctx),
+        };
+
+        let mut inner_planner = PlannerEnum::from_bound_statement(&assignment.statement)
+            .ok_or_else(|| {
+                PlannerError::NoSuitablePlanner(format!(
+                    "assignment inner statement: {}",
+                    assignment.statement.kind()
+                ))
+            })?;
+
+        let inner_validated = ctx.derive_validated(&assignment.statement);
+        let inner_ctx = crate::planning::context::PlanContext {
+            bound: &assignment.statement,
+            qctx: qctx.clone(),
+            metadata,
+            validated: inner_validated.as_ref().unwrap_or(validated),
+        };
+        let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
+
+        log::debug!(
+            "AssignmentPlanner: variable '{}' bound to inner plan",
+            assignment.variable
+        );
+
+        Ok(inner_plan)
     }
 
     fn transform(

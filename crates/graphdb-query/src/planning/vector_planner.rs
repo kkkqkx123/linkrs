@@ -54,10 +54,46 @@ impl Planner for VectorSearchPlanner {
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
-        let validated = ctx.validated;
+        let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let _ = validated;
-        self.transform(validated, qctx)
+        let create = match bound {
+            crate::binder::BoundStatement::CreateVectorIndex(c) => c,
+            // DROP/SEARCH/LOOKUP/MATCH variants have no bound representation
+            // yet and still use the AST path.
+            _ => return self.transform(ctx.validated, qctx),
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let space_id = qctx.space_id().unwrap_or(0);
+        let schema_name = if create.schema_name.is_empty() {
+            space_name
+        } else {
+            create.schema_name.clone()
+        };
+
+        let mut params = CreateVectorIndexParams::new(
+            create.index_name.clone(),
+            schema_name,
+            create.schema_name.clone(),
+            create.field_name.clone(),
+            create.config.vector_size,
+            create.config.distance,
+            space_id,
+        )
+        .with_hnsw_m(create.config.hnsw_m)
+        .with_hnsw_ef_construct(create.config.hnsw_ef_construct)
+        .with_quantization(
+            create.config.quantization,
+            create.config.quantile,
+            create.config.compression,
+            create.config.always_ram,
+        );
+        if create.if_not_exists {
+            params = params.with_if_not_exists();
+        }
+        let node = CreateVectorIndexNode::new(params);
+
+        Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
     fn transform(

@@ -1,6 +1,7 @@
 //! Maintenance Operation Planner
 //! Handling query planning related to maintenance tasks (such as SUBMIT JOB, etc.)
 
+use crate::binder::BoundStatement;
 use crate::parser::ast::{AlterTarget, CreateTarget, IndexType, ShowTarget, Stmt};
 use crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo;
 use crate::planning::plan::core::nodes::management::index_nodes::IndexManageInfo;
@@ -46,24 +47,18 @@ impl MaintainPlanner {
             .unwrap_or_default()
     }
 
-    fn plan_show(
-        &self,
-        show_stmt: &crate::parser::ast::ShowStmt,
-        validated: &ValidatedStatement,
-    ) -> PlanNodeEnum {
-        match show_stmt.target {
+    fn plan_show(&self, target: &ShowTarget, current_space: &str) -> PlanNodeEnum {
+        match target {
             ShowTarget::Stats => {
                 let stats_node = ShowStatsNode::new(next_node_id(), ShowStatsType::Storage);
                 PlanNodeEnum::ShowStats(stats_node)
             }
             ShowTarget::Tags => {
-                let show_tags_node =
-                    ShowTagsNode::new(next_node_id(), self.current_space(validated));
+                let show_tags_node = ShowTagsNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::TagManage(TagManageNode::Show(show_tags_node))
             }
             ShowTarget::Edges => {
-                let show_edges_node =
-                    ShowEdgesNode::new(next_node_id(), self.current_space(validated));
+                let show_edges_node = ShowEdgesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Show(show_edges_node))
             }
             ShowTarget::Spaces => {
@@ -77,28 +72,26 @@ impl MaintainPlanner {
             ShowTarget::Roles => {
                 let show_roles_node = crate::planning::plan::core::nodes::ShowRolesNode::new(
                     next_node_id(),
-                    self.current_space(validated),
+                    current_space.to_string(),
                 );
                 PlanNodeEnum::UserManage(crate::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::ShowRoles(show_roles_node))
             }
             ShowTarget::Indexes => {
                 let show_indexes_node =
-                    ShowIndexesNode::new(next_node_id(), self.current_space(validated));
+                    ShowIndexesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::IndexManage(IndexManageNode::ShowIndexes(show_indexes_node))
             }
             ShowTarget::Tag(_) => {
-                let show_tags_node =
-                    ShowTagsNode::new(next_node_id(), self.current_space(validated));
+                let show_tags_node = ShowTagsNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::TagManage(TagManageNode::Show(show_tags_node))
             }
             ShowTarget::Edge(_) => {
-                let show_edges_node =
-                    ShowEdgesNode::new(next_node_id(), self.current_space(validated));
+                let show_edges_node = ShowEdgesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Show(show_edges_node))
             }
             ShowTarget::Index(_) => {
                 let show_indexes_node =
-                    ShowIndexesNode::new(next_node_id(), self.current_space(validated));
+                    ShowIndexesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::IndexManage(IndexManageNode::ShowIndexes(show_indexes_node))
             }
         }
@@ -106,13 +99,16 @@ impl MaintainPlanner {
 
     fn plan_show_create(
         &self,
-        show_create_stmt: &crate::parser::ast::stmt::ShowCreateStmt,
-        validated: &ValidatedStatement,
+        target: &crate::parser::ast::stmt::ShowCreateTarget,
+        current_space: &str,
     ) -> PlanNodeEnum {
-        let current_space = self.current_space(validated);
-        match &show_create_stmt.target {
+        match target {
             crate::parser::ast::stmt::ShowCreateTarget::Tag(tag_name) => {
-                let node = ShowCreateTagNode::new(next_node_id(), current_space, tag_name.clone());
+                let node = ShowCreateTagNode::new(
+                    next_node_id(),
+                    current_space.to_string(),
+                    tag_name.clone(),
+                );
                 PlanNodeEnum::TagManage(TagManageNode::ShowCreate(node))
             }
             crate::parser::ast::stmt::ShowCreateTarget::Space(space_name) => {
@@ -120,13 +116,19 @@ impl MaintainPlanner {
                 PlanNodeEnum::SpaceManage(SpaceManageNode::ShowCreate(node))
             }
             crate::parser::ast::stmt::ShowCreateTarget::Edge(edge_name) => {
-                let node =
-                    ShowCreateEdgeNode::new(next_node_id(), current_space, edge_name.clone());
+                let node = ShowCreateEdgeNode::new(
+                    next_node_id(),
+                    current_space.to_string(),
+                    edge_name.clone(),
+                );
                 PlanNodeEnum::EdgeManage(EdgeManageNode::ShowCreate(node))
             }
             crate::parser::ast::stmt::ShowCreateTarget::Index(index_name) => {
-                let node =
-                    ShowCreateIndexNode::new(next_node_id(), current_space, index_name.clone());
+                let node = ShowCreateIndexNode::new(
+                    next_node_id(),
+                    current_space.to_string(),
+                    index_name.clone(),
+                );
                 PlanNodeEnum::IndexManage(IndexManageNode::ShowCreateIndex(node))
             }
         }
@@ -134,17 +136,18 @@ impl MaintainPlanner {
 
     fn plan_create(
         &self,
-        create_stmt: &crate::parser::ast::CreateStmt,
-        validated: &ValidatedStatement,
+        target: &CreateTarget,
+        if_not_exists: bool,
+        current_space: &str,
     ) -> Result<Option<PlanNodeEnum>, PlannerError> {
-        match &create_stmt.target {
+        match target {
             CreateTarget::Index {
                 index_type,
                 name,
                 on,
                 properties,
             } => {
-                let space_name = self.current_space(validated);
+                let space_name = current_space.to_string();
                 let index_info = IndexManageInfo::new(
                     space_name,
                     name.clone(),
@@ -184,10 +187,10 @@ impl MaintainPlanner {
             CreateTarget::Tag {
                 name, properties, ..
             } => {
-                let space_name = self.current_space(validated);
+                let space_name = current_space.to_string();
                 let tag_info = TagManageInfo::new(space_name, name.clone())
                     .with_properties(properties.clone())
-                    .with_if_not_exists(create_stmt.if_not_exists);
+                    .with_if_not_exists(if_not_exists);
                 let node = CreateTagNode::new(next_node_id(), tag_info);
                 Ok(Some(PlanNodeEnum::TagManage(TagManageNode::Create(node))))
             }
@@ -198,10 +201,10 @@ impl MaintainPlanner {
                 dst_tag,
                 ..
             } => {
-                let space_name = self.current_space(validated);
+                let space_name = current_space.to_string();
                 let mut edge_info = EdgeManageInfo::new(space_name, name.clone())
                     .with_properties(properties.clone())
-                    .with_if_not_exists(create_stmt.if_not_exists);
+                    .with_if_not_exists(if_not_exists);
                 if let (Some(src), Some(dst)) = (src_tag, dst_tag) {
                     edge_info = edge_info.with_src_dst_tags(src.clone(), dst.clone());
                 }
@@ -218,12 +221,8 @@ impl MaintainPlanner {
         }
     }
 
-    fn plan_alter(
-        &self,
-        alter_stmt: &crate::parser::ast::AlterStmt,
-        validated: &ValidatedStatement,
-    ) -> PlanNodeEnum {
-        match &alter_stmt.target {
+    fn plan_alter(&self, target: &AlterTarget, current_space: &str) -> PlanNodeEnum {
+        match target {
             AlterTarget::Space {
                 space_name,
                 comment,
@@ -247,8 +246,7 @@ impl MaintainPlanner {
                 deletions,
                 changes,
             } => {
-                let current_space = self.current_space(validated);
-                let alter_info = TagAlterInfo::new(current_space, tag_name.clone())
+                let alter_info = TagAlterInfo::new(current_space.to_string(), tag_name.clone())
                     .with_additions(additions.clone())
                     .with_deletions(deletions.clone())
                     .with_changes(changes.clone());
@@ -262,10 +260,10 @@ impl MaintainPlanner {
                 deletions,
                 changes,
             } => {
-                let current_space = self.current_space(validated);
-                let mut alter_info = EdgeAlterInfo::new(current_space, edge_name.clone())
-                    .with_additions(additions.clone())
-                    .with_deletions(deletions.clone());
+                let mut alter_info =
+                    EdgeAlterInfo::new(current_space.to_string(), edge_name.clone())
+                        .with_additions(additions.clone())
+                        .with_deletions(deletions.clone());
 
                 for change in changes {
                     let prop = PropertyDef::new(change.new_name.clone(), change.data_type.clone());
@@ -286,18 +284,16 @@ impl MaintainPlanner {
 
     fn plan_desc(
         &self,
-        desc_stmt: &crate::parser::ast::stmt::DescStmt,
-        validated: &ValidatedStatement,
+        target: &crate::parser::ast::stmt::DescTarget,
+        current_space: &str,
     ) -> PlanNodeEnum {
-        let current_space = self.current_space(validated);
-
-        match &desc_stmt.target {
+        match target {
             crate::parser::ast::stmt::DescTarget::Tag {
                 space_name,
                 tag_name,
             } => {
                 let effective_space = if space_name.is_empty() {
-                    current_space
+                    current_space.to_string()
                 } else {
                     space_name.clone()
                 };
@@ -313,7 +309,7 @@ impl MaintainPlanner {
                 edge_name,
             } => {
                 let effective_space = if space_name.is_empty() {
-                    current_space
+                    current_space.to_string()
                 } else {
                     space_name.clone()
                 };
@@ -336,29 +332,29 @@ impl MaintainPlanner {
 
     fn plan_drop(
         &self,
-        drop_stmt: &crate::parser::ast::DropStmt,
-        validated: &ValidatedStatement,
+        target: &crate::parser::ast::stmt::DropTarget,
+        if_exists: bool,
+        current_space: &str,
     ) -> PlanNodeEnum {
         use crate::parser::ast::stmt::DropTarget;
-        let current_space = self.current_space(validated);
 
-        match &drop_stmt.target {
+        match target {
             DropTarget::Tags(tag_names) if !tag_names.is_empty() => {
                 let node = crate::planning::plan::core::nodes::DropTagNode::new(
                     next_node_id(),
-                    current_space,
+                    current_space.to_string(),
                     tag_names[0].clone(),
                 )
-                .with_if_exists(drop_stmt.if_exists);
+                .with_if_exists(if_exists);
                 PlanNodeEnum::TagManage(TagManageNode::Drop(node))
             }
             DropTarget::Edges(edge_names) if !edge_names.is_empty() => {
                 let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
                     next_node_id(),
-                    current_space,
+                    current_space.to_string(),
                     edge_names[0].clone(),
                 )
-                .with_if_exists(drop_stmt.if_exists);
+                .with_if_exists(if_exists);
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node))
             }
             DropTarget::Space(space_name) => {
@@ -373,7 +369,7 @@ impl MaintainPlanner {
                 index_name,
             } => {
                 let resolved_space = if space_name.is_empty() {
-                    current_space
+                    current_space.to_string()
                 } else {
                     space_name.clone()
                 };
@@ -389,7 +385,7 @@ impl MaintainPlanner {
                 index_name,
             } => {
                 let resolved_space = if space_name.is_empty() {
-                    current_space
+                    current_space.to_string()
                 } else {
                     space_name.clone()
                 };
@@ -403,19 +399,19 @@ impl MaintainPlanner {
             DropTarget::Tags(_) => {
                 let node = crate::planning::plan::core::nodes::DropTagNode::new(
                     next_node_id(),
-                    current_space,
+                    current_space.to_string(),
                     String::new(),
                 )
-                .with_if_exists(drop_stmt.if_exists);
+                .with_if_exists(if_exists);
                 PlanNodeEnum::TagManage(TagManageNode::Drop(node))
             }
             DropTarget::Edges(_) => {
                 let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
                     next_node_id(),
-                    current_space,
+                    current_space.to_string(),
                     String::new(),
                 )
-                .with_if_exists(drop_stmt.if_exists);
+                .with_if_exists(if_exists);
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node))
             }
             DropTarget::Sequence(_) => {
@@ -472,10 +468,51 @@ impl Planner for MaintainPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
-        self.transform(validated, qctx)
+        let space = qctx
+            .space_name()
+            .or_else(|| qctx.request_context().space_name.clone())
+            .unwrap_or_default();
+
+        let final_node = match bound {
+            BoundStatement::Show(s) => self.plan_show(&s.target, &space),
+            BoundStatement::ShowCreate(s) => self.plan_show_create(&s.target, &space),
+            BoundStatement::Drop(s) => self.plan_drop(&s.target, s.if_exists, &space),
+            BoundStatement::Alter(s) => self.plan_alter(&s.target, &space),
+            BoundStatement::Desc(s) => self.plan_desc(&s.target, &space),
+            BoundStatement::ClearSpace(s) => {
+                let node = ClearSpaceNode::new(next_node_id(), s.space_name.clone());
+                PlanNodeEnum::SpaceManage(SpaceManageNode::Clear(node))
+            }
+            BoundStatement::BeginTransaction(_) => {
+                let node = BeginTransactionNode::new(next_node_id());
+                PlanNodeEnum::BeginTransaction(node)
+            }
+            BoundStatement::Commit(_) => {
+                let node = CommitNode::new(next_node_id());
+                PlanNodeEnum::Commit(node)
+            }
+            BoundStatement::Rollback(r) => {
+                let mut node = RollbackNode::new(next_node_id());
+                if let Some(savepoint) = &r.savepoint_name {
+                    node = node.with_savepoint(savepoint.clone());
+                }
+                PlanNodeEnum::Rollback(node)
+            }
+            BoundStatement::Savepoint(s) => {
+                let node = SavepointNode::new(next_node_id(), s.name.clone());
+                PlanNodeEnum::Savepoint(node)
+            }
+            BoundStatement::ReleaseSavepoint(s) => {
+                let node = ReleaseSavepointNode::new(next_node_id(), s.name.clone());
+                PlanNodeEnum::ReleaseSavepoint(node)
+            }
+            // Schema-level CREATE, Migrate, session/management statements and
+            // any other legacy AST-only statement still use the AST path.
+            _ => return self.transform(validated, qctx),
+        };
+
+        Ok(SubPlan::from_single_node(final_node))
     }
 
     fn transform(
@@ -484,16 +521,21 @@ impl Planner for MaintainPlanner {
         _qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let stmt = validated.stmt();
+        let current_space = self.current_space(validated);
 
         let final_node = match stmt {
-            Stmt::Show(show_stmt) => self.plan_show(show_stmt, validated),
+            Stmt::Show(show_stmt) => self.plan_show(&show_stmt.target, &current_space),
 
             Stmt::ShowCreate(show_create_stmt) => {
-                self.plan_show_create(show_create_stmt, validated)
+                self.plan_show_create(&show_create_stmt.target, &current_space)
             }
 
             Stmt::Create(create_stmt) => {
-                if let Some(node) = self.plan_create(create_stmt, validated)? {
+                if let Some(node) = self.plan_create(
+                    &create_stmt.target,
+                    create_stmt.if_not_exists,
+                    &current_space,
+                )? {
                     return Ok(SubPlan::from_single_node(node));
                 }
                 return Err(PlannerError::UnsupportedOperation(
@@ -501,14 +543,14 @@ impl Planner for MaintainPlanner {
                 ));
             }
 
-            Stmt::Alter(alter_stmt) => self.plan_alter(alter_stmt, validated),
+            Stmt::Alter(alter_stmt) => self.plan_alter(&alter_stmt.target, &current_space),
 
             Stmt::ClearSpace(clear_stmt) => {
                 let node = ClearSpaceNode::new(next_node_id(), clear_stmt.space_name.clone());
                 PlanNodeEnum::SpaceManage(SpaceManageNode::Clear(node))
             }
 
-            Stmt::Desc(desc_stmt) => self.plan_desc(desc_stmt, validated),
+            Stmt::Desc(desc_stmt) => self.plan_desc(&desc_stmt.target, &current_space),
 
             Stmt::ShowConfigs(show_configs_stmt) => {
                 let node = crate::planning::plan::core::nodes::ShowConfigsNode::new(
@@ -557,7 +599,9 @@ impl Planner for MaintainPlanner {
                 PlanNodeEnum::ReleaseSavepoint(node)
             }
 
-            Stmt::Drop(drop_stmt) => self.plan_drop(drop_stmt, validated),
+            Stmt::Drop(drop_stmt) => {
+                self.plan_drop(&drop_stmt.target, drop_stmt.if_exists, &current_space)
+            }
 
             Stmt::Migrate(m) => match m {
                 crate::parser::ast::MigrateStmt::Plan(p) => self.plan_migrate_plan(p, validated),

@@ -311,18 +311,29 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::SavepointStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::Savepoint(stmt.clone()),
-        )))
+        Ok(BoundStatement::Savepoint(BoundSavepoint {
+            name: stmt.name.clone(),
+        }))
     }
 
     pub(crate) fn bind_release_savepoint(
         &mut self,
         stmt: &crate::parser::ast::ReleaseSavepointStmt,
     ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Other(Box::new(
-            crate::parser::ast::Stmt::ReleaseSavepoint(stmt.clone()),
-        )))
+        Ok(BoundStatement::ReleaseSavepoint(BoundReleaseSavepoint {
+            name: stmt.name.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_assignment_statement(
+        &mut self,
+        stmt: &crate::parser::ast::AssignmentStmt,
+    ) -> DBResult<BoundStatement> {
+        let inner = self.bind_stmt(&stmt.statement)?;
+        Ok(BoundStatement::Assignment(BoundAssignmentStatement {
+            variable: stmt.variable.clone(),
+            statement: Box::new(inner),
+        }))
     }
 
     pub(crate) fn bind_assign_variable(

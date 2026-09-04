@@ -12,8 +12,9 @@
 //! execution-time binding.
 //!
 //! Scope: the direct write statements (INSERT / DELETE / UPDATE / MERGE /
-//! SET / REMOVE) — see `crate::pipeline::prepared::is_direct_dml`
-//! for the authoritative set.
+//! SET / REMOVE) — see `crate::pipeline::prepared::is_direct_dml_statement`
+//! for the authoritative candidate set (`normalize_shape` below accepts a
+//! subset of it: no COPY).
 //! Read queries are deliberately excluded: their plans depend on constant
 //! values (constant folding, index selection) and users already have
 //! explicit `$param` binding for parameterized read reuse.

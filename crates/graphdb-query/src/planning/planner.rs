@@ -383,7 +383,14 @@ impl PlannerEnum {
             BoundStatement::Profile(_) => Some(PlannerEnum::Explain(ExplainPlanner::new_profile())),
             BoundStatement::BeginTransaction(_)
             | BoundStatement::Commit(_)
-            | BoundStatement::Rollback(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            | BoundStatement::Rollback(_)
+            | BoundStatement::Savepoint(_)
+            | BoundStatement::ReleaseSavepoint(_) => {
+                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
+            }
+            BoundStatement::Assignment(_) => {
+                Some(PlannerEnum::Assignment(AssignmentPlanner::new()))
+            }
             BoundStatement::Other(stmt) => Self::from_stmt(&Arc::new(*stmt.clone())),
         }
     }

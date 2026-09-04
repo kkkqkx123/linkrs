@@ -570,6 +570,10 @@ where
     pub fn dml_template_ast_parse_count(&self) -> u64 {
         self.pipeline_manager.dml_template_ast_parse_count()
     }
+
+    pub fn dml_template_ast_hit_count(&self) -> u64 {
+        self.pipeline_manager.dml_template_ast_hit_count()
+    }
 }
 
 impl<S> QueryApi<S>

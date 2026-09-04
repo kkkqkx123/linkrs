@@ -146,24 +146,44 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        let dml_param_sig = if dml_shape_cacheable {
-            Some(Self::dml_param_signature(&request.parameters))
+        let planning_config = self.dml_planning_config();
+        // Memo key. This is the second layer of the DML fast path (the
+        // first layer is the prepare-time check that skips binding); both
+        // layers must construct the key identically. Dimensions mirror the
+        // plan-cache key except the post-planning partition fingerprint,
+        // which is not computable before binding — memo hits are therefore
+        // validated with `check_compatibility` before being served.
+        let dml_memo_key = if dml_shape_cacheable {
+            Some(super::DmlPlanMemoKey {
+                normalized_text: query_text.to_string(),
+                space_name: space_name.clone(),
+                schema_version,
+                index_version,
+                param_sig: Self::dml_param_signature(&request.parameters),
+                optimizer_version: planning_config.optimizer_version,
+                planning_config_hash: planning_config.config_hash,
+            })
         } else {
             None
         };
 
-        if let Some(sig) = dml_param_sig {
-            if let Some(entry) = &*self.last_dml_plan.lock() {
-                if entry.normalized_text == query_text
-                    && entry.space_name == space_name
-                    && entry.schema_version == schema_version
-                    && entry.param_sig == sig
+        if let Some(key) = dml_memo_key.as_ref() {
+            if let Some(plan) = self.find_dml_plan(key) {
+                if crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
+                    &plan,
+                    schema_version,
+                )
+                .is_ok()
                 {
                     self.last_dml_plan_hits
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     self.plan_cache.record_memo_hit();
-                    return Ok(entry.plan.clone());
+                    return Ok(plan);
                 }
+                log::debug!(
+                    "DML memo plan failed compatibility check, falling through to replan: {}",
+                    query_text
+                );
             }
         }
 
@@ -180,17 +200,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &param_positions,
             );
 
-        let planning_config = crate::executor::streaming::plan::context::PlanningConfig {
-            max_partitions: self
-                .optimizer_engine
-                .partitioning_config()
-                .max_workers
-                .max(1),
-            config_hash: Self::partitioning_config_hash(
-                self.optimizer_engine.partitioning_config(),
-            ),
-            ..Default::default()
-        };
+        let planning_config = self.dml_planning_config();
         let cache_context = crate::cache::PlanCacheContext {
             space_name: space_name.clone(),
             schema_version,
@@ -208,14 +218,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 schema_version,
             )
             .map_err(DBError::from)?;
-            if let Some(sig) = dml_param_sig {
-                *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
-                    normalized_text: query_text.to_string(),
-                    space_name: space_name.clone(),
-                    schema_version,
-                    param_sig: sig,
-                    plan: cached.plan.clone(),
-                });
+            if let Some(key) = dml_memo_key.clone() {
+                self.store_dml_plan(key, cached.plan.clone());
             }
             return Ok(cached.plan.clone());
         }
@@ -243,14 +247,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     schema_version,
                 )
                 .map_err(DBError::from)?;
-                if let Some(sig) = dml_param_sig {
-                    *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
-                        normalized_text: query_text.to_string(),
-                        space_name: space_name.clone(),
-                        schema_version,
-                        param_sig: sig,
-                        plan: cached.plan.clone(),
-                    });
+                if let Some(key) = dml_memo_key.clone() {
+                    self.store_dml_plan(key, cached.plan.clone());
                 }
                 return Ok(cached.plan.clone());
             }
@@ -259,14 +257,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
         if cacheable {
-            if let Some(sig) = dml_param_sig {
-                *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
-                    normalized_text: query_text.to_string(),
-                    space_name: space_name.clone(),
-                    schema_version,
-                    param_sig: sig,
-                    plan: plan.clone(),
-                });
+            if let Some(key) = dml_memo_key.clone() {
+                self.store_dml_plan(key, plan.clone());
             }
             if let Some(spec) = plan.partition_spec() {
                 let dependent_tables = collect_dependent_tables(bound);
@@ -313,7 +305,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// worker count, thresholds, or the trusted vertex-id range produces a
     /// different hash so cached single-tree plans cannot be reused under a
     /// different layout policy.
-    fn partitioning_config_hash(config: &PartitioningConfig) -> u64 {
+    pub(crate) fn partitioning_config_hash(config: &PartitioningConfig) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         config.enabled.hash(&mut hasher);
@@ -799,6 +791,7 @@ fn referenced_schema_objects(
             );
             (tags, edges, full)
         }
+        BoundStatement::Assignment(assignment) => referenced_schema_objects(&assignment.statement),
         BoundStatement::Return(_)
         | BoundStatement::With(_)
         | BoundStatement::Unwind(_)
@@ -831,7 +824,9 @@ fn referenced_schema_objects(
         | BoundStatement::Use(_)
         | BoundStatement::BeginTransaction(_)
         | BoundStatement::Commit(_)
-        | BoundStatement::Rollback(_) => (tags, edges, true),
+        | BoundStatement::Rollback(_)
+        | BoundStatement::Savepoint(_)
+        | BoundStatement::ReleaseSavepoint(_) => (tags, edges, true),
         BoundStatement::Other(_) => (tags, edges, true),
     }
 }

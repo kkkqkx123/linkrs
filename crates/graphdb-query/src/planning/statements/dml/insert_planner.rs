@@ -126,12 +126,127 @@ impl Planner for InsertPlanner {
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
+        use crate::binder::bound::{BoundExpression, BoundInsertTarget};
+
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
-        self.transform(validated, qctx)
+        let insert = match bound {
+            crate::binder::BoundStatement::Insert(i) => i,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "statement is not an INSERT statement".to_string(),
+                ));
+            }
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        // Bound expressions are converted back into contextual expressions so
+        // downstream plan nodes keep the same shape as the AST path. The
+        // validated expression context is still required as the id registry.
+        let expr_ctx = validated.expr_context().clone();
+        let convert = |bound_expr: &BoundExpression| {
+            crate::binder::expr_converter::bound_expr_to_contextual(bound_expr, &expr_ctx)
+                .map_err(PlannerError::PlanGenerationFailed)
+        };
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let reject_subquery = |expr: &ContextualExpression| -> Result<(), PlannerError> {
+            if let Some(expr_meta) = expr.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+            Ok(())
+        };
+
+        let arg_node = ArgumentNode::new(next_node_id(), "insert_args");
+
+        let (insert_node, _inserted_count) = match &insert.target {
+            BoundInsertTarget::Vertices { tags, values } => {
+                if tags.is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "INSERT VERTEX must specify at least one tag".to_string(),
+                    ));
+                }
+                let mut rows = Vec::with_capacity(values.len());
+                for row in values {
+                    let vid = convert(&row.vid)?;
+                    reject_subquery(&vid)?;
+                    let mut tag_values = Vec::with_capacity(row.tag_values.len());
+                    for vals in &row.tag_values {
+                        let mut converted = Vec::with_capacity(vals.len());
+                        for value in vals {
+                            let expr = convert(value)?;
+                            reject_subquery(&expr)?;
+                            converted.push(expr);
+                        }
+                        tag_values.push(converted);
+                    }
+                    rows.push(VertexRow { vid, tag_values });
+                }
+                let count = rows.len();
+                let info = self.build_vertex_insert_info(
+                    space_name,
+                    tags.clone(),
+                    rows,
+                    insert.if_not_exists,
+                )?;
+                (
+                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    count,
+                )
+            }
+            BoundInsertTarget::Edge {
+                edge_name,
+                prop_names,
+                edges,
+            } => {
+                let mut converted_edges = Vec::with_capacity(edges.len());
+                for (src_b, dst_b, rank_b, props_b) in edges {
+                    let src = convert(src_b)?;
+                    reject_subquery(&src)?;
+                    let dst = convert(dst_b)?;
+                    reject_subquery(&dst)?;
+                    let rank = rank_b
+                        .as_ref()
+                        .map(|rank| -> Result<ContextualExpression, PlannerError> {
+                            let expr = convert(rank)?;
+                            reject_subquery(&expr)?;
+                            Ok(expr)
+                        })
+                        .transpose()?;
+                    let mut props = Vec::with_capacity(props_b.len());
+                    for prop in props_b {
+                        let expr = convert(prop)?;
+                        reject_subquery(&expr)?;
+                        props.push(expr);
+                    }
+                    converted_edges.push((src, dst, rank, props));
+                }
+                let count = converted_edges.len();
+                let info = self.build_edge_insert_info(
+                    space_name,
+                    edge_name.clone(),
+                    prop_names.clone(),
+                    converted_edges,
+                    insert.if_not_exists,
+                );
+                (
+                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    count,
+                )
+            }
+        };
+
+        let sub_plan = SubPlan::new(Some(insert_node), Some(PlanNodeEnum::Argument(arg_node)));
+
+        Ok(sub_plan)
     }
 
     fn transform(

@@ -1,8 +1,5 @@
-#![allow(clippy::arc_with_non_send_sync)]
-
 mod compiler;
 mod diagnostics;
-pub mod dml_cache;
 mod execution;
 mod frontend;
 mod prepared;
@@ -24,8 +21,14 @@ use graphdb_fulltext::manager::FulltextIndexManager;
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
 use graphdb_sync::SyncManager;
 use parking_lot::RwLock;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// Capacity of the DML shape caches below. Single-entry caching thrashed on
+/// alternating shapes (A,B,A,B re-parsed and re-bound every time); a small
+/// bounded map keeps the common bulk-load shapes resident while bounding
+/// memory. Lookup is a linear scan, which is cheap at this size.
+pub(crate) const DML_SHAPE_CACHE_CAP: usize = 16;
 
 pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) stats_manager: Arc<StatsManager>,
@@ -51,19 +54,43 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
     pub(crate) statistics_sample_limit: usize,
     pub(crate) dml_shape_cache_enabled: bool,
-    pub(crate) last_dml_plan: parking_lot::Mutex<Option<LastDmlPlan>>,
+    /// Fast path for repeated same-shape DML: skips bind and serves the last
+    /// compiled physical plans directly. Bounded multi-entry map keyed by
+    /// [`DmlPlanMemoKey`]; see that struct for the key dimensions.
+    pub(crate) dml_plan_memo: parking_lot::Mutex<Vec<DmlPlanMemoEntry>>,
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
+    /// Parsed ASTs of normalized DML templates (`INSERT ... VALUES
+    /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
+    /// multi-entry map keyed by exact normalized text.
     pub(crate) dml_template_ast:
-        parking_lot::Mutex<Option<(String, Arc<crate::parser::ast::stmt::Ast>)>>,
+        parking_lot::Mutex<Vec<(String, Arc<crate::parser::ast::stmt::Ast>)>>,
     pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
+    pub(crate) dml_template_ast_hit_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_bind_skipped_count: std::sync::atomic::AtomicU64,
 }
 
-pub(crate) struct LastDmlPlan {
+/// Lookup key for one [`DmlPlanMemoEntry`].
+///
+/// Mirrors the [`crate::cache::PlanCacheKey`] dimensions that are computable
+/// *before* binding (the whole point of the memo is to skip bind): query
+/// shape, space, schema/index generations, parameter type signature, and the
+/// optimizer/planning configuration. The post-planning partition fingerprint
+/// used by the plan cache cannot be part of this key; instead memo hits are
+/// validated with [`crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility`]
+/// before being served.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DmlPlanMemoKey {
     pub normalized_text: String,
     pub space_name: Option<String>,
     pub schema_version: Option<u64>,
+    pub index_version: Option<u64>,
     pub param_sig: u64,
+    pub optimizer_version: u64,
+    pub planning_config_hash: u64,
+}
+
+pub(crate) struct DmlPlanMemoEntry {
+    pub key: DmlPlanMemoKey,
     pub plan: Arc<PhysicalPlan>,
 }
 
@@ -102,10 +129,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,
             dml_shape_cache_enabled: true,
-            last_dml_plan: parking_lot::Mutex::new(None),
+            dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_template_ast: parking_lot::Mutex::new(None),
+            dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
+            dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -239,10 +267,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,
             dml_shape_cache_enabled: true,
-            last_dml_plan: parking_lot::Mutex::new(None),
+            dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_template_ast: parking_lot::Mutex::new(None),
+            dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
+            dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -286,6 +315,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     pub fn clear_plan_cache(&self) {
         self.plan_cache.clear();
+        // The DML shape caches feed plan construction, so a full clear must
+        // cover them too; otherwise `clear_plan_cache` would leave the bind
+        // fast path serving plans the plan cache itself just dropped.
+        self.dml_plan_memo.lock().clear();
+        self.dml_template_ast.lock().clear();
         log::info!("Query plan cache cleared");
     }
 
@@ -310,6 +344,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn dml_template_ast_hit_count(&self) -> u64 {
+        self.dml_template_ast_hit_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn dml_bind_skipped_count(&self) -> u64 {
         self.dml_bind_skipped_count
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -318,5 +357,81 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// The underlying storage binding, if any.
     pub fn storage(&self) -> Option<Arc<RwLock<S>>> {
         self.storage.clone()
+    }
+
+    /// Planning configuration snapshot used for DML memo keys. Must stay
+    /// identical to the config built in `compile_or_get_cached`; both sides
+    /// of the memo (prepare-time lookup, compile-time store) derive their
+    /// `optimizer_version` / `planning_config_hash` from here so the keys
+    /// stay comparable.
+    pub(crate) fn dml_planning_config(
+        &self,
+    ) -> crate::executor::streaming::plan::context::PlanningConfig {
+        crate::executor::streaming::plan::context::PlanningConfig {
+            max_partitions: self
+                .optimizer_engine
+                .partitioning_config()
+                .max_workers
+                .max(1),
+            config_hash: Self::partitioning_config_hash(
+                self.optimizer_engine.partitioning_config(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// Look up a parsed normalized-DML template AST. Hits are moved to the
+    /// front (cheap LRU approximation for the linear-scan map).
+    pub(crate) fn lookup_dml_template(
+        &self,
+        normalized_text: &str,
+    ) -> Option<Arc<crate::parser::ast::stmt::Ast>> {
+        let mut guard = self.dml_template_ast.lock();
+        let pos = guard.iter().position(|(text, _)| text == normalized_text)?;
+        if pos > 0 {
+            let entry = guard.remove(pos);
+            guard.insert(0, entry);
+        }
+        self.dml_template_ast_hit_count
+            .fetch_add(1, Ordering::Relaxed);
+        Some(guard[0].1.clone())
+    }
+
+    /// Store a parsed normalized-DML template AST, evicting the least
+    /// recently used entry beyond [`DML_SHAPE_CACHE_CAP`].
+    pub(crate) fn store_dml_template(
+        &self,
+        normalized_text: String,
+        ast: Arc<crate::parser::ast::stmt::Ast>,
+    ) {
+        let mut guard = self.dml_template_ast.lock();
+        guard.retain(|(text, _)| text != &normalized_text);
+        guard.insert(0, (normalized_text, ast));
+        guard.truncate(DML_SHAPE_CACHE_CAP);
+    }
+
+    /// Look up a memoized DML physical plan by full key. Serves only as a
+    /// candidate: callers must still validate the plan with
+    /// `PhysicalPlanValidator::check_compatibility` before serving it, since
+    /// the memo key cannot capture post-planning layout changes.
+    pub(crate) fn find_dml_plan(&self, key: &DmlPlanMemoKey) -> Option<Arc<PhysicalPlan>> {
+        let mut guard = self.dml_plan_memo.lock();
+        let pos = guard.iter().position(|entry| entry.key == *key)?;
+        if pos > 0 {
+            let entry = guard.remove(pos);
+            guard.insert(0, entry);
+        }
+        Some(guard[0].plan.clone())
+    }
+
+    /// Store a memoized DML physical plan, replacing any same-key entry and
+    /// evicting the least recently used entry beyond [`DML_SHAPE_CACHE_CAP`].
+    /// Stale keys (e.g. from before a schema-generation bump) never match
+    /// new lookups and age out through this cap.
+    pub(crate) fn store_dml_plan(&self, key: DmlPlanMemoKey, plan: Arc<PhysicalPlan>) {
+        let mut guard = self.dml_plan_memo.lock();
+        guard.retain(|entry| entry.key != key);
+        guard.insert(0, DmlPlanMemoEntry { key, plan });
+        guard.truncate(DML_SHAPE_CACHE_CAP);
     }
 }

@@ -768,6 +768,27 @@ pub struct BoundRollback {
 }
 
 #[derive(Debug, Clone)]
+pub struct BoundSavepoint {
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundReleaseSavepoint {
+    pub name: String,
+}
+
+/// Statement-level variable assignment (`$var = <query>`).
+///
+/// Unlike [`BoundAssignVariable`], which binds a single `LET` expression,
+/// this carries a recursively bound inner statement for the planner to
+/// plan via [`PlannerEnum::from_bound_statement`](crate::planning::planner::PlannerEnum::from_bound_statement).
+#[derive(Debug, Clone)]
+pub struct BoundAssignmentStatement {
+    pub variable: String,
+    pub statement: Box<BoundStatement>,
+}
+
+#[derive(Debug, Clone)]
 pub struct BoundCopy {
     pub target: crate::parser::ast::CopyTarget,
     pub direction: crate::parser::ast::CopyDirection,
@@ -837,6 +858,11 @@ pub enum BoundStatement {
     BeginTransaction(BoundBeginTransaction),
     Commit(BoundCommit),
     Rollback(BoundRollback),
+    Savepoint(BoundSavepoint),
+    ReleaseSavepoint(BoundReleaseSavepoint),
+
+    // ── Statement-level variable assignment (`$var = <query>`) ─────────────
+    Assignment(BoundAssignmentStatement),
 
     // ── Placeholder for management/DDL/DML ─────────────────────────────────
     Other(Box<crate::parser::ast::Stmt>),
@@ -897,6 +923,9 @@ impl BoundStatement {
                     "Rollback"
                 }
             }
+            Self::Savepoint(_) => "Savepoint",
+            Self::ReleaseSavepoint(_) => "ReleaseSavepoint",
+            Self::Assignment(_) => "Assignment",
             Self::Other(stmt) => stmt.kind(),
         }
     }

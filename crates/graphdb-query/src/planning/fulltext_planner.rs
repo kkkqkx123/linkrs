@@ -54,10 +54,50 @@ impl Planner for FulltextSearchPlanner {
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
-        let validated = ctx.validated;
+        let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let _ = validated;
-        self.transform(validated, qctx)
+        let create = match bound {
+            crate::binder::BoundStatement::CreateFulltextIndex(c) => c,
+            // DROP/ALTER/SHOW/DESCRIBE/SEARCH variants have no bound
+            // representation yet and still use the AST path.
+            _ => return self.transform(ctx.validated, qctx),
+        };
+
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let space_id = qctx.space_id().unwrap_or(0);
+        let schema_name = if create.schema_name.is_empty() {
+            space_name
+        } else {
+            create.schema_name.clone()
+        };
+
+        // Mirror the metadata-validated transform: reject unknown schemas
+        // and duplicate index names when metadata is available.
+        let planner_metadata = self.metadata_context.clone();
+        let metadata = ctx.metadata.or(planner_metadata.as_deref());
+        if let Some(metadata) = metadata {
+            if !create.schema_name.is_empty() && !metadata.has_tag_metadata(&create.schema_name) {
+                return Err(PlannerError::TagNotFound(create.schema_name.clone()));
+            }
+            if !create.if_not_exists && metadata.has_index_metadata(&create.index_name) {
+                return Err(PlannerError::InvalidOperation(format!(
+                    "Index '{}' already exists",
+                    create.index_name
+                )));
+            }
+        }
+
+        let node = CreateFulltextIndexNode::new(
+            create.index_name.clone(),
+            schema_name,
+            create.fields.clone(),
+            create.engine_type,
+            create.options.clone(),
+            create.if_not_exists,
+            space_id,
+        );
+
+        Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
     fn transform(

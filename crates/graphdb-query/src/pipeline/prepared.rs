@@ -137,20 +137,28 @@ pub fn requires_auto_commit(stmt: &Stmt) -> bool {
         Stmt::SetOperation(set_op) => {
             requires_auto_commit(&set_op.left) || requires_auto_commit(&set_op.right)
         }
-        _ => is_direct_dml(stmt),
+        _ => is_direct_write_statement(stmt),
     }
 }
 
-/// Whether the statement is one of the direct DML forms eligible for shape
-/// normalization. Shared with the shape-cache candidate check in
-/// [`prepare_request`] so the set of write statements stays in one place.
-fn is_direct_dml(stmt: &Stmt) -> bool {
+/// Direct write statements (DML plus DCL) that must run on the auto-commit
+/// write path, not the read-only snapshot path. Shared with
+/// [`requires_auto_commit`] so the write-routing set stays in one place.
+///
+/// This is deliberately broader than [`is_direct_dml_statement`]: DCL
+/// statements write the user/privilege store but are *not* DML and are
+/// never shape-normalized.
+fn is_direct_write_statement(stmt: &Stmt) -> bool {
     is_direct_dml_statement(stmt) || is_direct_dcl(stmt)
 }
 
 /// Whether the statement is one of the direct DML forms eligible for shape
 /// normalization. Shared with the shape-cache candidate check in
-/// [`prepare_request`] so the set of write statements stays in one place.
+/// [`prepare_request`] so the candidate set stays in one place.
+///
+/// Note: `normalize_shape` accepts a subset of this set (INSERT / DELETE /
+/// UPDATE / MERGE / SET / REMOVE — no COPY); anything else falls through to
+/// the non-cached path there.
 fn is_direct_dml_statement(stmt: &Stmt) -> bool {
     matches!(
         stmt,
@@ -290,7 +298,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
         // literal values as parameters at execution time.
         let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled
-            && is_direct_dml(parser_result.ast.stmt())
+            && is_direct_dml_statement(parser_result.ast.stmt())
             && !rctx
                 .parameters
                 .iter()
@@ -299,25 +307,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(shape) =
                 crate::planning::dml_shape::normalize_shape(parser_result.ast.stmt())
             {
-                let cached_ast = self
-                    .dml_template_ast
-                    .lock()
-                    .as_ref()
-                    .and_then(|(text, ast)| {
-                        if text == &shape.normalized_text {
-                            Some(ast.clone())
-                        } else {
-                            None
-                        }
-                    });
+                let cached_ast = self.lookup_dml_template(&shape.normalized_text);
                 let normalized = match cached_ast {
                     Some(ast) => Some(crate::parser::parsing::ParserResult { ast }),
                     None => match self.parse_into_context(&shape.normalized_text) {
                         Ok(parsed) => {
                             self.dml_template_ast_parse_count
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            *self.dml_template_ast.lock() =
-                                Some((shape.normalized_text.clone(), parsed.ast.clone()));
+                            self.store_dml_template(
+                                shape.normalized_text.clone(),
+                                parsed.ast.clone(),
+                            );
                             Some(parsed)
                         }
                         Err(_) => {
@@ -397,22 +397,30 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
+        // First layer of the DML fast path: if a plan for this exact shape is
+        // memoized, skip binding entirely (`bound = None`) and let
+        // `compile_or_get_cached` serve (and re-validate) the memoized plan.
+        // The key must be constructed identically on both layers.
         let memo_hit = if dml_shape_cacheable {
-            let sig = Self::dml_param_signature(&query_context.request_context().parameters);
-            let schema_version = self
-                .schema_generation
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let space_name = query_context
-                .space_name()
-                .or_else(|| query_context.request_context().space_name.clone());
-            matches!(
-                &*self.last_dml_plan.lock(),
-                Some(e)
-                    if e.normalized_text == effective_query
-                        && e.space_name == space_name
-                        && e.schema_version == Some(schema_version)
-                        && e.param_sig == sig
-            )
+            let planning_config = self.dml_planning_config();
+            let key = super::DmlPlanMemoKey {
+                normalized_text: effective_query.clone(),
+                space_name: query_context
+                    .space_name()
+                    .or_else(|| query_context.request_context().space_name.clone()),
+                schema_version: Some(
+                    self.schema_generation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                index_version: Some(
+                    self.index_generation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                param_sig: Self::dml_param_signature(&query_context.request_context().parameters),
+                optimizer_version: planning_config.optimizer_version,
+                planning_config_hash: planning_config.config_hash,
+            };
+            self.find_dml_plan(&key).is_some()
         } else {
             false
         };
@@ -713,6 +721,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(space) = space_info {
             query_context.set_space_info(space.clone());
         }
+        // `QueryContext` is `Send` but not `Sync` (it owns a bump arena),
+        // yet it must be shared across planner/executor threads, so the
+        // `Arc` here is intentional. Scoped to this site instead of the
+        // module level so no future `Arc` misuse is silently allowed.
+        #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(query_context)
     }
 
@@ -803,7 +816,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     // ── Cache helpers ──────────────────────────────────────────────────────
 
     pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
-        // Versions are locked to 1.
+        // Bump the schema generation so every version-keyed cache (plan
+        // cache, DML plan memo) misses on entries planned before this DDL.
+        // Stale memo entries never match new lookups and age out through the
+        // memo capacity cap, so no explicit eviction is needed here.
+        self.schema_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.optimizer_engine
             .stats_manager()
             .invalidate_space(space_name);
@@ -977,7 +995,10 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(is_direct_dml(&stmt), "direct DML: {query}");
+            assert!(is_direct_dml_statement(&stmt), "direct DML: {query}");
+            // Every direct DML statement is also a direct write statement
+            // (auto-commit write routing is a superset of shape candidates).
+            assert!(is_direct_write_statement(&stmt), "direct write: {query}");
         }
     }
 
@@ -991,8 +1012,20 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(!is_direct_dml(&stmt), "not direct DML: {query}");
+            assert!(!is_direct_dml_statement(&stmt), "not direct DML: {query}");
         }
+    }
+
+    #[test]
+    fn direct_write_covers_dcl_but_not_shape_candidates() {
+        // DCL writes the user/privilege store, so it takes the auto-commit
+        // write path — but it is not DML and must never enter shape
+        // normalization.
+        let stmt = parse("CREATE USER alice WITH PASSWORD 'secret'");
+        assert!(is_direct_dcl(&stmt));
+        assert!(is_direct_write_statement(&stmt));
+        assert!(!is_direct_dml_statement(&stmt));
+        assert!(crate::planning::dml_shape::normalize_shape(&stmt).is_none());
     }
 
     #[test]

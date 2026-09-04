@@ -127,6 +127,9 @@ fn find_aligned_stmt<'s>(
             find_aligned_stmt(&set_op.left, &bound_set_op.left, child)
                 .or_else(|| find_aligned_stmt(&set_op.right, &bound_set_op.right, child))
         }
+        (Stmt::Assignment(assign_stmt), BoundStatement::Assignment(bound_assign)) => {
+            find_aligned_stmt(&assign_stmt.statement, &bound_assign.statement, child)
+        }
         (Stmt::Explain(explain), BoundStatement::Explain(bound_explain)) => {
             find_aligned_stmt(&explain.statement, &bound_explain.statement, child)
         }
