@@ -15,6 +15,7 @@ pub struct OptimizerEngineBuilder {
     expression_context: Option<Arc<ExpressionAnalysisContext>>,
     stats_manager: Option<Arc<StatisticsManager>>,
     cte_cache_manager: Option<Arc<CteCacheManager>>,
+    metrics_stats: Option<Arc<graphdb_core::stats::StatsManager>>,
 }
 
 impl Default for OptimizerEngineBuilder {
@@ -31,6 +32,7 @@ impl OptimizerEngineBuilder {
             expression_context: None,
             stats_manager: None,
             cte_cache_manager: None,
+            metrics_stats: None,
         }
     }
 
@@ -58,6 +60,12 @@ impl OptimizerEngineBuilder {
         self
     }
 
+    /// Set the observability sink for factorization fallback counters.
+    pub fn with_metrics_stats(mut self, stats: Arc<graphdb_core::stats::StatsManager>) -> Self {
+        self.metrics_stats = Some(stats);
+        self
+    }
+
     /// Build the OptimizerEngine with the configured settings.
     pub fn build(self) -> OptimizerEngine {
         let cost_config = self.cost_config.unwrap_or_default();
@@ -76,6 +84,7 @@ impl OptimizerEngineBuilder {
             stats_manager,
             cte_cache_manager,
             cost_config,
+            self.metrics_stats,
         )
     }
 }

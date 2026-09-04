@@ -36,6 +36,7 @@ use crate::planning::plan::core::nodes::join::join_node::{
 };
 use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortNode, TopNNode};
@@ -199,6 +200,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
     // Single-input nodes
     impl_single_input_rewrite!(
         visit_filter => FilterNode, Filter,
+        visit_flatten => FlattenNode, Flatten,
         visit_project => ProjectNode, Project,
         visit_aggregate => AggregateNode, Aggregate,
         visit_sort => SortNode, Sort,

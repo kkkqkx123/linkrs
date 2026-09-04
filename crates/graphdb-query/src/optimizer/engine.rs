@@ -62,6 +62,7 @@ mod feedback;
 #[cfg(test)]
 mod tests;
 
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::logical_plan::LogicalPlan;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::PlanNodeEnum;
@@ -134,6 +135,12 @@ pub struct OptimizerEngine {
     /// hit/miss counts back into this policy at completion, so the typed
     /// columnar path is gated by learned hit rate instead of a static switch.
     columnar_policy: Arc<crate::executor::streaming::chunk::ColumnarPolicy>,
+    /// Optional observability sink for factorization fallback counters.
+    ///
+    /// When set, the factorization steps increment the corresponding
+    /// `MetricType` counters; when `None` (the default) no metrics work is
+    /// performed and existing constructors behave unchanged.
+    metrics_stats: Option<Arc<graphdb_core::stats::StatsManager>>,
 }
 
 impl OptimizerEngine {
@@ -165,6 +172,7 @@ impl OptimizerEngine {
             stats_manager,
             cte_cache_manager,
             cost_config,
+            None,
         )
     }
 
@@ -177,6 +185,7 @@ impl OptimizerEngine {
         stats_manager: Arc<StatisticsManager>,
         cte_cache_manager: Arc<CteCacheManager>,
         cost_config: CostModelConfig,
+        metrics_stats: Option<Arc<graphdb_core::stats::StatsManager>>,
     ) -> Self {
         // Create a cost calculator and a selective estimator.
         let cost_calculator = Arc::new(CostCalculator::with_config(
@@ -221,6 +230,7 @@ impl OptimizerEngine {
             feedback_trigger: AutoFeedbackTrigger::default(),
             enable_feedback: true,
             columnar_policy: Arc::new(crate::executor::streaming::chunk::ColumnarPolicy::default()),
+            metrics_stats,
         }
     }
 
@@ -303,6 +313,16 @@ impl OptimizerEngine {
     /// columnar hit/miss counts are merged back at query completion.
     pub fn columnar_policy(&self) -> Arc<crate::executor::streaming::chunk::ColumnarPolicy> {
         Arc::clone(&self.columnar_policy)
+    }
+
+    /// Attach the observability sink for factorization fallback counters.
+    pub fn set_metrics_stats(&mut self, stats: Arc<graphdb_core::stats::StatsManager>) {
+        self.metrics_stats = Some(stats);
+    }
+
+    /// Access the observability sink for factorization fallback counters.
+    pub fn metrics_stats(&self) -> Option<Arc<graphdb_core::stats::StatsManager>> {
+        self.metrics_stats.clone()
     }
 
     /// Fold recorded execution feedback into the selectivity corrections.
@@ -421,8 +441,12 @@ impl OptimizerEngine {
         self.maybe_apply_feedback();
 
         // Ensure a logical plan is available for the optimization pipeline.
-        // Legacy paths that still emit physical trees are bridged via the
-        // reverse conversion instead of being silently skipped.
+        // Planners that natively emit a logical tree need no work here. The
+        // reverse conversion below is the single compatibility bridge for
+        // statements that are physical-only by design (data modifications,
+        // administrative statements, search operators): when it fails the
+        // plan keeps its physical shape and runs flat, with the decision
+        // recorded in `cbo_notes` and the fallback counter.
         current_plan = self.ensure_logical_plan(current_plan);
 
         // Factorization: remove factorization before heuristic passes so they
@@ -446,6 +470,10 @@ impl OptimizerEngine {
         // Factorization: re-insert flatten operators after all optimizations.
         // Mirrors `FactorizationRewriter` at `optimizer.cpp:4`.
         current_plan = self.apply_factorization(current_plan);
+
+        // Cost-based fallback: rewrite WCO intersect to hash join when the
+        // hash join is cheaper, and record the decision in `cbo_notes`.
+        current_plan = self.apply_intersect_to_join_rewrite(current_plan, space);
 
         // Physical mapping: full LogicalNodeEnum → PlanNodeEnum conversion
         // (introduces physical choices such as IndexScan). The mapped tree
@@ -471,6 +499,7 @@ impl OptimizerEngine {
     fn ensure_logical_plan(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
         if plan.logical_plan.is_none() {
             if let Some(root) = plan.root.clone() {
+                let node_type = root.type_name().to_string();
                 match crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(&root) {
                     Ok(logical) => {
                         plan.set_logical_plan(logical);
@@ -482,6 +511,13 @@ impl OptimizerEngine {
                         );
                         log::warn!("LogicalPlan::from_plan_node fallback failed: {}", e);
                         plan.cbo_notes.push(msg.clone());
+                        plan.cbo_notes.push(format!(
+                            "factorization: logical_plan_fallback_total=1 (node={})",
+                            node_type
+                        ));
+                        if let Some(ref ms) = self.metrics_stats {
+                            ms.add_value(graphdb_core::MetricType::FactorizationFallbackTotal);
+                        }
                         if plan.parallel_fallback_reason.is_empty() {
                             plan.parallel_fallback_reason = msg;
                         } else {
@@ -520,10 +556,21 @@ impl OptimizerEngine {
                 if notes.is_empty() {
                     log::debug!("PhysicalMapping: merged logical mapping into physical plan");
                 } else {
+                    let fallback_count = notes.len();
                     for note in &notes {
                         log::warn!("{note}");
                     }
                     plan.cbo_notes.extend(notes);
+                    plan.cbo_notes.push(format!(
+                        "factorization: physical_mapping_fallback_total={}",
+                        fallback_count
+                    ));
+                    if let Some(ref ms) = self.metrics_stats {
+                        ms.add_value_with_amount(
+                            graphdb_core::MetricType::FactorizationPhysicalMappingFallbackTotal,
+                            fallback_count as u64,
+                        );
+                    }
                 }
                 plan.set_root(merged);
             }
@@ -1062,8 +1109,21 @@ impl OptimizerEngine {
             );
             flattens.sort_unstable();
             flattens.dedup();
-            for pos in flattens {
+            for pos in &flattens {
                 plan.cbo_notes.push(format!("Flatten(group={})", pos));
+            }
+            // Record total flatten count for metrics observability.
+            if !flattens.is_empty() {
+                plan.cbo_notes.push(format!(
+                    "factorization: flatten_total={}",
+                    flattens.len()
+                ));
+                if let Some(ref ms) = self.metrics_stats {
+                    ms.add_value_with_amount(
+                        graphdb_core::MetricType::FactorizationFlattenTotal,
+                        flattens.len() as u64,
+                    );
+                }
             }
             // ExpandAll stays on the row path until its columnar batch path
             // is rebuilt on DataChunk (the removed heap row store is not
@@ -1085,6 +1145,297 @@ impl OptimizerEngine {
             }
         }
         plan
+    }
+
+    /// Rewrite WCO intersect to hash join when the hash join is cheaper.
+    ///
+    /// Walks the logical tree to find `WcoIntersect` nodes, estimates both
+    /// cost models, and replaces the node with a nested binary `InnerJoin`
+    /// chain when the hash join wins. The replacement is validated against
+    /// the factorized `at most one unflat group` invariant and reverted when
+    /// the invariant is violated. Every rewrite and every retained WCO node
+    /// is recorded in `cbo_notes`.
+    fn apply_intersect_to_join_rewrite(
+        &self,
+        mut plan: ExecutionPlan,
+        space: Option<&str>,
+    ) -> ExecutionPlan {
+        let stats = StatsView::new(&self.stats_manager, space);
+        if let Some(ref logical) = plan.logical_plan.clone() {
+            let mut root = logical.root.clone();
+            let mut notes = Vec::new();
+            let mut rewrite_count = 0u64;
+            Self::rewrite_intersect_to_join(
+                &mut root,
+                &stats,
+                &self.selectivity_estimator,
+                &mut notes,
+                &mut rewrite_count,
+            );
+            if rewrite_count > 0 {
+                if Self::validate_factorized_invariant(&root) {
+                    let mut updated = logical.clone();
+                    updated.root = root;
+                    plan.set_logical_plan(updated);
+                    plan.cbo_notes.extend(notes);
+                    plan.cbo_notes.push(format!(
+                        "factorization: intersect_to_join_rewrite_total={}",
+                        rewrite_count
+                    ));
+                    if let Some(ref ms) = self.metrics_stats {
+                        ms.add_value_with_amount(
+                            graphdb_core::MetricType::FactorizationFallbackTotal,
+                            rewrite_count,
+                        );
+                    }
+                } else {
+                    plan.cbo_notes.extend(notes);
+                    plan.cbo_notes.push(
+                        "factorization: intersect_to_join_rewrite_total=0 \
+                         (reverted, schema invariant violated)"
+                            .to_string(),
+                    );
+                }
+            } else if !notes.is_empty() {
+                plan.cbo_notes.extend(notes);
+            }
+        }
+        plan
+    }
+
+    /// Maximum build sides rewritten from one `WcoIntersect` into a nested
+    /// binary join chain. Wider intersects keep the WCO operator so the plan
+    /// depth stays bounded.
+    const MAX_INTERSECT_REWRITE_BUILDS: usize = 8;
+
+    fn rewrite_intersect_to_join(
+        node: &mut LogicalNodeEnum,
+        stats: &StatsView,
+        selectivity: &crate::optimizer::SelectivityEstimator,
+        notes: &mut Vec<String>,
+        rewrite_count: &mut u64,
+    ) {
+        for child in Self::logical_children_mut(node) {
+            Self::rewrite_intersect_to_join(child, stats, selectivity, notes, rewrite_count);
+        }
+
+        let snapshot = node.clone();
+        let LogicalNodeEnum::WcoIntersect(wco) = &snapshot else {
+            return;
+        };
+        use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
+        use crate::planning::join_order::cost_model::CostModel;
+
+        let probe_rows = estimate_node_output_rows_logical(wco.probe_side(), stats, selectivity);
+        let mut build_costs = Vec::with_capacity(wco.num_builds());
+        let mut total_build_cost = 0u64;
+        for build in wco.build_sides() {
+            let rows = estimate_node_output_rows_logical(build, stats, selectivity);
+            total_build_cost = total_build_cost.saturating_add(rows);
+            build_costs.push(rows);
+        }
+        let output_rows = probe_rows.min(total_build_cost).max(1);
+        let intersect_cost =
+            CostModel::compute_intersect_cost(0, probe_rows, &build_costs, output_rows);
+        let join_key_cardinality = probe_rows;
+        let hash_cost = CostModel::compute_hash_join_cost(
+            0,
+            probe_rows,
+            total_build_cost,
+            join_key_cardinality,
+        );
+        if hash_cost >= intersect_cost {
+            return;
+        }
+        if wco.num_builds() > Self::MAX_INTERSECT_REWRITE_BUILDS {
+            notes.push(format!(
+                "factorization: WcoIntersect kept (intersect_cost={}, hash_cost={}, \
+                 reason: {} build sides exceed rewrite limit {})",
+                intersect_cost,
+                hash_cost,
+                wco.num_builds(),
+                Self::MAX_INTERSECT_REWRITE_BUILDS,
+            ));
+            return;
+        }
+        *node = Self::build_join_chain_from_intersect(wco);
+        *rewrite_count += 1;
+        notes.push(format!(
+            "factorization: WcoIntersect fallback to HashJoin \
+             (intersect_cost={}, hash_cost={}, reason: hash join cheaper)",
+            intersect_cost, hash_cost,
+        ));
+    }
+
+    /// Build a left-deep nested binary `InnerJoin` chain from one N-way
+    /// `WcoIntersect`: the probe side becomes the leftmost input and every
+    /// build side folds in on the shared intersect key.
+    fn build_join_chain_from_intersect(
+        wco: &crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode,
+    ) -> LogicalNodeEnum {
+        use crate::planning::plan::core::node_id_generator::next_node_id;
+        use crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode;
+
+        let intersect_key = wco.intersect_key().clone();
+        let mut acc = wco.probe_side().clone();
+        for build in wco.build_sides() {
+            let mut col_names = acc.col_names().to_vec();
+            if let Some(name) = intersect_key.as_variable() {
+                if !col_names.iter().any(|c| c == &name) {
+                    col_names.push(name);
+                }
+            }
+            for col in build.col_names() {
+                if !col_names.contains(col) {
+                    col_names.push(col.clone());
+                }
+            }
+            let left = acc.clone();
+            let right = build.clone();
+            let join = LogicalInnerJoinNode {
+                id: next_node_id(),
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                hash_keys: vec![intersect_key.clone()],
+                probe_keys: vec![intersect_key.clone()],
+                deps: vec![left, right],
+                output_var: wco.output_var().map(|s| s.to_string()),
+                col_names,
+                column_types: vec![],
+            };
+            acc = LogicalNodeEnum::InnerJoin(join);
+        }
+        acc
+    }
+
+    /// Check the factorized `at most one unflat group` invariant over the
+    /// whole logical tree by bottom-up schema computation.
+    fn validate_factorized_invariant(root: &LogicalNodeEnum) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::compute_schema_tree(root);
+        }))
+        .is_ok()
+    }
+
+    fn compute_schema_tree(
+        node: &LogicalNodeEnum,
+    ) -> crate::planning::plan::factorization::FactorizedSchema {
+        use crate::planning::plan::factorization::FactorizedSchemaCompute;
+        let child_schemas: Vec<_> = crate::planning::physical_mapper::logical_children(node)
+            .iter()
+            .map(|child| Self::compute_schema_tree(child))
+            .collect();
+        let mut owned = node.clone();
+        owned.compute_factorized_schema(&child_schemas)
+    }
+
+    /// Mutable children of a logical node for in-place rewrites.
+    fn logical_children_mut(node: &mut LogicalNodeEnum) -> Vec<&mut LogicalNodeEnum> {
+        match node {
+            LogicalNodeEnum::Flatten(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Project(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Filter(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Sort(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Limit(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::TopN(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            LogicalNodeEnum::Sample(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Dedup(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Aggregate(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Window(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Traverse(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Unwind(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Remove(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::DataCollect(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Materialize(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::RollUpApply(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::Assign(n) => {
+                let mut out = Vec::new();
+                if let Some(c) = n.input.as_deref_mut() {
+                    out.push(c);
+                }
+                out.extend(n.deps.iter_mut());
+                out
+            }
+            LogicalNodeEnum::Select(n) => {
+                let mut out = Vec::new();
+                if let Some(b) = n.if_branch.as_deref_mut() {
+                    out.push(b);
+                }
+                if let Some(b) = n.else_branch.as_deref_mut() {
+                    out.push(b);
+                }
+                out
+            }
+            LogicalNodeEnum::Loop(n) => n.body.as_deref_mut().map(|b| vec![b]).unwrap_or_default(),
+            LogicalNodeEnum::InnerJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::LeftJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::RightJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::CrossJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::FullOuterJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::SemiJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::PatternApply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::CorrelatedApply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::Apply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::BiExpand(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::BiTraverse(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::MultiShortestPath(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::BFSShortest(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::AllPaths(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::ShortestPath(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            LogicalNodeEnum::Expand(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::ExpandAll(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::AppendVertices(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::GetVertices(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::GetNeighbors(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::Union(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::Minus(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::Intersect(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::WcoIntersect(n) => n.deps.iter_mut().collect(),
+            LogicalNodeEnum::Start(_)
+            | LogicalNodeEnum::ScanVertices(_)
+            | LogicalNodeEnum::ScanEdges(_)
+            | LogicalNodeEnum::GetEdges(_)
+            | LogicalNodeEnum::Argument(_)
+            | LogicalNodeEnum::PassThrough(_)
+            | LogicalNodeEnum::BeginTransaction(_)
+            | LogicalNodeEnum::Commit(_)
+            | LogicalNodeEnum::Rollback(_)
+            | LogicalNodeEnum::FulltextSearch(_)
+            | LogicalNodeEnum::FulltextLookup(_)
+            | LogicalNodeEnum::MatchFulltext(_) => vec![],
+            #[cfg(feature = "vector")]
+            LogicalNodeEnum::VectorSearch(_)
+            | LogicalNodeEnum::VectorLookup(_)
+            | LogicalNodeEnum::VectorMatch(_) => vec![],
+        }
     }
 
     /// Whether the logical tree contains an `ExpandAll` node.

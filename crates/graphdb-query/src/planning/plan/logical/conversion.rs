@@ -847,6 +847,45 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         }
 
         // Physical join nodes → logical equivalents
+        PlanNodeEnum::WcoIntersect(n) => {
+            let probe = convert_plan(n.probe_input())?;
+            let mut builds = Vec::with_capacity(n.num_builds());
+            for build_input in n.build_inputs() {
+                builds.push(convert_plan(build_input)?);
+            }
+            let mut logical =
+                crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode::new(
+                    probe,
+                    builds,
+                    n.intersect_key().clone(),
+                    n.bound_keys().to_vec(),
+                    n.col_names().to_vec(),
+                );
+            if let Some(var) = n.output_var() {
+                logical.set_output_var(var.to_string());
+            }
+            logical.set_column_types(n.column_types().to_vec());
+            Ok(LogicalNodeEnum::WcoIntersect(logical))
+        }
+
+        PlanNodeEnum::GetEdges(n) => Ok(LogicalNodeEnum::GetEdges(
+            crate::planning::plan::logical::logical_nodes::access::LogicalGetEdgesNode {
+                id: n.id(),
+                space_id: n.space_id(),
+                edge_ref: n.edge_ref().clone(),
+                src: n.src().to_string(),
+                edge_type: n.edge_type().to_string(),
+                rank: n.rank().to_string(),
+                dst: n.dst().to_string(),
+                edge_props: n.edge_props().to_vec(),
+                expression: n.filter().cloned(),
+                dedup: n.dedup(),
+                limit: n.limit(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
 
         // === Fallback for unsupported nodes ===
         // Intentionally not mapped: Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)

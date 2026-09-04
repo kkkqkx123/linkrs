@@ -952,6 +952,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 );
             node.set_start_vertex_ids(n.start_vertex_ids);
             node.set_end_vertex_ids(n.end_vertex_ids);
+            node.set_direction(n.direction);
             if n.limit != 0 {
                 node.set_limit(n.limit);
             }

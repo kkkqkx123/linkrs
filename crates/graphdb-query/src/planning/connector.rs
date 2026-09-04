@@ -2,6 +2,8 @@
 //!
 //! Provide the functionality to connect the planned nodes, including inner joins, left joins, and cross joins.
 
+use crate::planning::plan::core::next_node_id;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::PlannerError;
 use crate::QueryContext;
@@ -44,11 +46,17 @@ impl SegmentsConnector {
                 PlannerError::JoinFailed(format!("Inner join node creation failed: {}", e))
             })?,
         );
+        let logical_root = join_logical_roots(
+            &left.logical_root,
+            &right.logical_root,
+            join_node.col_names().to_vec(),
+            LogicalJoinKind::Inner,
+        );
 
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
-            logical_root: None,
+            logical_root,
         })
     }
 
@@ -82,11 +90,17 @@ impl SegmentsConnector {
                 PlannerError::JoinFailed(format!("Left join node creation failed: {}", e))
             })?,
         );
+        let logical_root = join_logical_roots(
+            &left.logical_root,
+            &right.logical_root,
+            join_node.col_names().to_vec(),
+            LogicalJoinKind::Left,
+        );
 
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
-            logical_root: None,
+            logical_root,
         })
     }
 
@@ -113,12 +127,76 @@ impl SegmentsConnector {
                 PlannerError::JoinFailed(format!("Cross join node creation failed: {}", e))
             })?,
         );
+        let logical_root = join_logical_roots(
+            &left.logical_root,
+            &right.logical_root,
+            join_node.col_names().to_vec(),
+            LogicalJoinKind::Cross,
+        );
 
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
-            logical_root: None,
+            logical_root,
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogicalJoinKind {
+    Inner,
+    Left,
+    Cross,
+}
+
+fn join_logical_roots(
+    left: &Option<LogicalNodeEnum>,
+    right: &Option<LogicalNodeEnum>,
+    col_names: Vec<String>,
+    kind: LogicalJoinKind,
+) -> Option<LogicalNodeEnum> {
+    let left_logical = left.clone()?;
+    let right_logical = right.clone()?;
+    match kind {
+        LogicalJoinKind::Inner => Some(LogicalNodeEnum::InnerJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
+                id: next_node_id(),
+                left: Box::new(left_logical.clone()),
+                right: Box::new(right_logical.clone()),
+                hash_keys: vec![],
+                probe_keys: vec![],
+                deps: vec![left_logical, right_logical],
+                output_var: None,
+                col_names,
+                column_types: vec![],
+            },
+        )),
+        LogicalJoinKind::Left => Some(LogicalNodeEnum::LeftJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalLeftJoinNode {
+                id: next_node_id(),
+                left: Box::new(left_logical.clone()),
+                right: Box::new(right_logical.clone()),
+                hash_keys: vec![],
+                probe_keys: vec![],
+                deps: vec![left_logical, right_logical],
+                output_var: None,
+                col_names,
+                column_types: vec![],
+            },
+        )),
+        LogicalJoinKind::Cross => Some(LogicalNodeEnum::CrossJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode {
+                id: next_node_id(),
+                left: Box::new(left_logical.clone()),
+                right: Box::new(right_logical.clone()),
+                hash_keys: vec![],
+                probe_keys: vec![],
+                deps: vec![left_logical, right_logical],
+                output_var: None,
+                col_names,
+                column_types: vec![],
+            },
+        )),
     }
 }
 

@@ -147,12 +147,10 @@ impl CompositeValidator {
                     )));
                 }
             }
-            Expression::Property { property, .. } => {
-                if property.is_empty() {
-                    return Err(DBError::from(QueryError::invalid_query(
-                        "Attribute name cannot be null".to_string(),
-                    )));
-                }
+            Expression::Property { property, .. } if property.is_empty() => {
+                return Err(DBError::from(QueryError::invalid_query(
+                    "Attribute name cannot be null".to_string(),
+                )));
             }
             _ => {}
         }
@@ -228,12 +226,10 @@ impl CompositeValidator {
                     )));
                 }
             }
-            Expression::Map(pairs) => {
-                if pairs.len() > MAX_COLLECTION_ELEMENTS {
-                    return Err(DBError::from(QueryError::invalid_query(
-                        "Mapping expressions with too many key-value pairs".to_string(),
-                    )));
-                }
+            Expression::Map(pairs) if pairs.len() > MAX_COLLECTION_ELEMENTS => {
+                return Err(DBError::from(QueryError::invalid_query(
+                    "Mapping expressions with too many key-value pairs".to_string(),
+                )));
             }
             _ => {}
         }

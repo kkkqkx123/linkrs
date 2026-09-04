@@ -253,6 +253,22 @@ impl GetEdgesNode {
         &self.dst
     }
 
+    pub fn edge_ref(&self) -> &ContextualExpression {
+        &self.edge_ref
+    }
+
+    pub fn set_edge_ref(&mut self, edge_ref: ContextualExpression) {
+        self.edge_ref = edge_ref;
+    }
+
+    pub fn dedup(&self) -> bool {
+        self.dedup
+    }
+
+    pub fn set_dedup(&mut self, dedup: bool) {
+        self.dedup = dedup;
+    }
+
     pub fn filter(&self) -> Option<&ContextualExpression> {
         self.filter.as_ref()
     }

@@ -5,10 +5,16 @@
 
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
+use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSampleNode,
+};
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
 use graphdb_core::YieldColumn;
@@ -55,13 +61,43 @@ impl YieldClausePlanner {
         // 1. Build the projection node (if there is a specific YIELD column).
         if !yield_columns.is_empty() {
             let project_node = self.create_project_node(&current_plan, yield_columns)?;
-            current_plan = SubPlan::new(Some(project_node), current_plan.tail.clone());
+            let logical_root = wrap_logical(&current_plan, |input| {
+                LogicalNodeEnum::Project(LogicalProjectNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    columns: yield_columns.to_vec(),
+                    output_var: None,
+                    col_names: project_node.col_names().to_vec(),
+                    column_types: vec![],
+                })
+            });
+            current_plan = SubPlan {
+                root: Some(project_node),
+                tail: current_plan.tail.clone(),
+                logical_root,
+            };
         }
 
         // 2. If there are WHERE conditions, add a Filter node.
         if let Some(ref filter_condition) = filter_condition {
             let filter_node = self.create_filter_node(&current_plan, filter_condition.clone())?;
-            current_plan = SubPlan::new(Some(filter_node), current_plan.tail.clone());
+            let logical_root = wrap_logical(&current_plan, |input| {
+                LogicalNodeEnum::Filter(LogicalFilterNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    condition: filter_condition.clone(),
+                    output_var: None,
+                    col_names: filter_node.col_names().to_vec(),
+                    column_types: vec![],
+                })
+            });
+            current_plan = SubPlan {
+                root: Some(filter_node),
+                tail: current_plan.tail.clone(),
+                logical_root,
+            };
         }
 
         // 3. Apply SAMPLE clause if present (before pagination)
@@ -76,10 +112,22 @@ impl YieldClausePlanner {
                         e
                     ))
                 })?;
-            current_plan = SubPlan::new(
-                Some(PlanNodeEnum::Sample(sample_node)),
-                current_plan.tail.clone(),
-            );
+            let logical_root = wrap_logical(&current_plan, |input| {
+                LogicalNodeEnum::Sample(LogicalSampleNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    count: sample_count as i64,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
+            current_plan = SubPlan {
+                root: Some(PlanNodeEnum::Sample(sample_node)),
+                tail: current_plan.tail.clone(),
+                logical_root,
+            };
         }
 
         // 4. Handling pagination (LIMIT/SKIP)
@@ -144,11 +192,24 @@ impl YieldClausePlanner {
         let limit_node = LimitNode::new(input_node.clone(), offset, count).map_err(|e| {
             PlannerError::PlanGenerationFailed(format!("Failed to create paging node: {}", e))
         })?;
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Limit(LogicalLimitNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                offset,
+                count,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
 
-        Ok(SubPlan::new(
-            Some(PlanNodeEnum::Limit(limit_node)),
-            input_plan.tail.clone(),
-        ))
+        Ok(SubPlan {
+            root: Some(PlanNodeEnum::Limit(limit_node)),
+            tail: input_plan.tail.clone(),
+            logical_root,
+        })
     }
 }
 

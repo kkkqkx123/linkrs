@@ -100,13 +100,13 @@ impl QueryGraphBuilder {
         if elements.is_empty() {
             return false;
         }
-        let mut iter = elements.iter().peekable();
+        let iter = elements.iter().peekable();
         let mut prev_node: Option<String> = None;
         let mut expect_node = true;
         // Pending edge between two nodes: (var, types, direction).
         let mut pending: Option<(String, Vec<String>, ExtendDirection)> = None;
 
-        while let Some(element) = iter.next() {
+        for element in iter {
             match element {
                 PathElement::Node(node) => {
                     if !expect_node {

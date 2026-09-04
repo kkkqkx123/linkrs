@@ -41,6 +41,7 @@ define_logical_binary_input_node! {
         min_hop: usize,
         max_hop: usize,
         acyclic: bool,
+        direction: EdgeDirection,
         has_step_limit: bool,
         limit: i64,
         offset: i64,

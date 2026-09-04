@@ -85,7 +85,16 @@ pub(super) fn project(
         out.insert_to_scope_with_name(alias_id.clone(), alias_name.clone(), target);
         if let Some(g) = out.get_group_mut(target) {
             if !g.contains(&alias_id) {
-                g.insert_expression_with_name(alias_id.clone(), Some(alias_name.clone()));
+                if !g.contains_name(&alias_name) {
+                    g.insert_expression_with_name(alias_id.clone(), Some(alias_name.clone()));
+                } else {
+                    // The alias shadows a name already present in the group
+                    // (e.g. an aggregate argument re-projected over a child
+                    // column with the same output name). Keep the first name
+                    // mapping and register only the id so scope lookups stay
+                    // consistent with the runtime shadowing.
+                    g.insert_expression(alias_id.clone());
+                }
             }
         }
     }

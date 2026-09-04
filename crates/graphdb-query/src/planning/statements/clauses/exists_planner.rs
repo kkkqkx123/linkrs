@@ -36,6 +36,9 @@ use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternAppl
 use crate::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode;
 use crate::planning::plan::logical::logical_nodes::join::LogicalSemiJoinNode;
 use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalAggregateNode, LogicalProjectNode,
+};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
@@ -657,17 +660,49 @@ fn build_group_join_right_subtree(
         })
         .collect();
     let project = crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(
-        input_node, columns,
+        input_node,
+        columns.clone(),
     )?;
+    let project_col_names = project.col_names().to_vec();
 
     let mut aggregate = AggregateNode::new(project.into_enum(), key_names.clone(), vec![agg_func])?;
     aggregate.set_aggregation_args(vec![vec![agg_arg.clone()]]);
     aggregate.set_aggregation_distinct(vec![distinct]);
+    let group_key_exprs: Vec<ContextualExpression> = key_names
+        .iter()
+        .map(|name| to_contextual(Expression::Variable(name.clone()), context))
+        .collect();
+    aggregate.set_group_key_exprs(group_key_exprs.clone());
+
+    let logical_root = sub_plan.logical_root().cloned().map(|input| {
+        let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            columns: columns.clone(),
+            output_var: None,
+            col_names: project_col_names.clone(),
+            column_types: vec![],
+        });
+        LogicalNodeEnum::Aggregate(LogicalAggregateNode {
+            id: next_node_id(),
+            input: Some(Box::new(logical_project.clone())),
+            deps: vec![logical_project],
+            group_key_exprs: group_key_exprs.clone(),
+            aggregation_functions: vec![agg_func],
+            aggregation_distinct: vec![distinct],
+            aggregation_filters: vec![None],
+            grouping_sets: vec![],
+            output_var: None,
+            col_names: aggregate.col_names().to_vec(),
+            column_types: vec![],
+        })
+    });
 
     Ok(SubPlan {
         root: Some(aggregate.into_enum()),
         tail: sub_plan.tail,
-        logical_root: None,
+        logical_root,
     })
 }
 
@@ -744,6 +779,60 @@ mod tests {
 
     fn eq(left: Expression, right: Expression) -> Expression {
         Expression::binary(left, BinaryOperator::Equal, right)
+    }
+
+    fn logical_start_subplan() -> SubPlan {
+        use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
+        SubPlan {
+            root: Some(PlanNodeEnum::Start(StartNode::new())),
+            tail: None,
+            logical_root: Some(LogicalNodeEnum::Start(LogicalStartNode::new())),
+        }
+    }
+
+    #[test]
+    fn group_join_subtree_mirrors_logical_aggregate() {
+        use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let sub_plan = logical_start_subplan();
+        let out = build_group_join_right_subtree(
+            sub_plan,
+            &[Expression::variable("a")],
+            AggregateFunction::Count,
+            &Expression::variable("a"),
+            false,
+            &context,
+        )
+        .expect("group-join subtree should build");
+        assert!(matches!(out.root, Some(PlanNodeEnum::Aggregate(_))));
+        let Some(LogicalNodeEnum::Aggregate(agg)) = out.logical_root else {
+            panic!("expected logical Aggregate mirror");
+        };
+        assert_eq!(agg.aggregation_functions, vec![AggregateFunction::Count]);
+        assert!(!agg.group_key_exprs.is_empty());
+    }
+
+    #[test]
+    fn group_join_subtree_stays_physical_without_upstream_logical() {
+        use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let sub_plan = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+        let out = build_group_join_right_subtree(
+            sub_plan,
+            &[Expression::variable("a")],
+            AggregateFunction::Count,
+            &Expression::variable("a"),
+            false,
+            &context,
+        )
+        .expect("group-join subtree should build");
+        assert!(matches!(out.root, Some(PlanNodeEnum::Aggregate(_))));
+        assert!(out.logical_root.is_none());
     }
 
     #[test]

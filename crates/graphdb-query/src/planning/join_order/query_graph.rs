@@ -6,6 +6,7 @@
 //! and WCO detection share one structural view.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Traversal direction of a query rel.
@@ -28,12 +29,17 @@ impl ExtendDirection {
             ExtendDirection::Both => "BOTH",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
+impl FromStr for ExtendDirection {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
-            "IN" => ExtendDirection::In,
-            "BOTH" | "BIDIRECT" | "UNDIRECTED" => ExtendDirection::Both,
-            _ => ExtendDirection::Out,
+            "OUT" => Ok(ExtendDirection::Out),
+            "IN" => Ok(ExtendDirection::In),
+            "BOTH" | "BIDIRECT" | "UNDIRECTED" => Ok(ExtendDirection::Both),
+            other => Err(format!("Unknown direction: {}", other)),
         }
     }
 }
@@ -260,8 +266,11 @@ mod tests {
 
     #[test]
     fn direction_roundtrip() {
-        assert_eq!(ExtendDirection::from_str("in"), ExtendDirection::In);
-        assert_eq!(ExtendDirection::from_str("both"), ExtendDirection::Both);
+        assert_eq!("in".parse::<ExtendDirection>().unwrap(), ExtendDirection::In);
+        assert_eq!(
+            "both".parse::<ExtendDirection>().unwrap(),
+            ExtendDirection::Both
+        );
         assert_eq!(ExtendDirection::Out.as_str(), "OUT");
     }
 }

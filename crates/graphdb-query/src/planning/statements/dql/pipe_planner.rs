@@ -118,7 +118,20 @@ impl Planner for PipePlanner {
 
         let mut combined_plan: Option<SubPlan> = None;
 
+        // The shared `validated` describes the whole composite query, but
+        // each stage planner expects the AST fragment aligned with its own
+        // bound sub-statement. Derive one per stage up front (owned here so
+        // the sub-contexts below can borrow them).
+        let mut stage_validated: Vec<ValidatedStatement> =
+            Vec::with_capacity(pipe.statements.len());
         for stmt in &pipe.statements {
+            stage_validated.push(
+                ctx.derive_validated(stmt)
+                    .unwrap_or_else(|| ctx.validated.clone()),
+            );
+        }
+
+        for (stmt, validated) in pipe.statements.iter().zip(stage_validated.iter()) {
             let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
                 PlannerError::NoSuitablePlanner(format!(
                     "No suitable planner for pipe sub-statement: {}",
@@ -126,7 +139,12 @@ impl Planner for PipePlanner {
                 ))
             })?;
 
-            let sub_ctx = ctx.with_bound(stmt);
+            let sub_ctx = crate::planning::context::PlanContext {
+                bound: stmt,
+                qctx: ctx.qctx.clone(),
+                metadata: ctx.metadata,
+                validated,
+            };
             let sub_plan = planner.plan_bound(&sub_ctx)?;
 
             combined_plan = match combined_plan {

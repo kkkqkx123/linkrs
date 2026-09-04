@@ -178,8 +178,8 @@ impl CardinalityEstimator {
         for domain in join_key_domains {
             denominator = denominator.saturating_mul((*domain).max(1) as u128);
         }
-        if denominator > 0 {
-            numerator /= denominator;
+        if let Some(div) = numerator.checked_div(denominator) {
+            numerator = div;
         }
         numerator.max(1).min(u64::MAX as u128) as u64
     }
@@ -210,11 +210,10 @@ impl CardinalityEstimator {
         for domain in join_key_domains {
             denominator = denominator.saturating_mul((*domain).max(1) as u128);
         }
-        let independent = if denominator > 0 {
-            (numerator / denominator).min(u64::MAX as u128) as u64
-        } else {
-            u64::MAX
-        };
+        let independent = numerator
+            .checked_div(denominator)
+            .map(|v| v.min(u64::MAX as u128) as u64)
+            .unwrap_or(u64::MAX);
         conservative.min(independent).max(1)
     }
 }

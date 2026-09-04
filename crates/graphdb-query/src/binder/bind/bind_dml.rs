@@ -24,7 +24,8 @@ impl Binder {
         let left = Box::new(self.bind_stmt(&stmt.left)?);
         let right = Box::new(self.bind_stmt(&stmt.right)?);
         let operation = match stmt.op_type {
-            SetOperationType::Union | SetOperationType::UnionAll => SetOperationKind::Union,
+            SetOperationType::Union => SetOperationKind::Union,
+            SetOperationType::UnionAll => SetOperationKind::UnionAll,
             SetOperationType::Intersect => SetOperationKind::Intersect,
             SetOperationType::Minus => SetOperationKind::Minus,
         };

@@ -33,6 +33,25 @@ impl SetOperationPlanner {
         Self { max_depth }
     }
 
+    /// Build the sub-context for one side of a set operation, aligning the
+    /// shared whole-query `validated` down to the AST fragment matching the
+    /// side's bound statement. The derived statement is stored in `store` so
+    /// the returned context can borrow it.
+    fn side_context<'b>(
+        ctx: &'b crate::planning::context::PlanContext<'b>,
+        side: &'b BoundStatement,
+        store: &'b mut Option<ValidatedStatement>,
+    ) -> crate::planning::context::PlanContext<'b> {
+        *store = ctx.derive_validated(side);
+        let validated = store.as_ref().unwrap_or(ctx.validated);
+        crate::planning::context::PlanContext {
+            bound: side,
+            qctx: ctx.qctx.clone(),
+            metadata: ctx.metadata,
+            validated,
+        }
+    }
+
     fn validate_column_compatibility(
         &self,
         left_plan: &SubPlan,
@@ -88,8 +107,10 @@ impl Planner for SetOperationPlanner {
             }
         };
 
-        let left_ctx = ctx.with_bound(&set_op.left);
-        let right_ctx = ctx.with_bound(&set_op.right);
+        let mut left_store = None;
+        let mut right_store = None;
+        let left_ctx = Self::side_context(ctx, &set_op.left, &mut left_store);
+        let right_ctx = Self::side_context(ctx, &set_op.right, &mut right_store);
         let left_plan = self.plan_bound_subquery(&left_ctx, 1)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, 1)?;
 
@@ -105,6 +126,12 @@ impl Planner for SetOperationPlanner {
         let final_node = match set_op.operation {
             crate::binder::bound::SetOperationKind::Union => {
                 let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::UnionAll => {
+                let union_node = UnionNode::new(left_root, right_root, false).map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
                 })?;
                 PlanNodeEnum::Union(union_node)
@@ -170,8 +197,10 @@ impl SetOperationPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
         depth: usize,
     ) -> Result<SubPlan, PlannerError> {
-        let left_ctx = ctx.with_bound(&set_op.left);
-        let right_ctx = ctx.with_bound(&set_op.right);
+        let mut left_store = None;
+        let mut right_store = None;
+        let left_ctx = Self::side_context(ctx, &set_op.left, &mut left_store);
+        let right_ctx = Self::side_context(ctx, &set_op.right, &mut right_store);
         let left_plan = self.plan_bound_subquery(&left_ctx, depth)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, depth)?;
 
@@ -187,6 +216,12 @@ impl SetOperationPlanner {
         let final_node = match set_op.operation {
             crate::binder::bound::SetOperationKind::Union => {
                 let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::UnionAll => {
+                let union_node = UnionNode::new(left_root, right_root, false).map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
                 })?;
                 PlanNodeEnum::Union(union_node)

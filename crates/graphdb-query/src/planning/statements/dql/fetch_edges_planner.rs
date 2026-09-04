@@ -114,28 +114,24 @@ impl Planner for FetchEdgesPlanner {
         let src_ctx =
             crate::binder::expr_converter::bound_expr_to_contextual(&fetch.src, &expr_ctx)
                 .map_err(PlannerError::InvalidOperation)?;
-        let src_str = src_ctx
-            .expression()
-            .map(|m| m.inner().to_string())
-            .unwrap_or_default();
+        let src_str =
+            graphdb_core::types::expr::expression_utils::extract_string_from_expr(&src_ctx)
+                .map_err(PlannerError::InvalidOperation)?;
 
         let dst_ctx =
             crate::binder::expr_converter::bound_expr_to_contextual(&fetch.dst, &expr_ctx)
                 .map_err(PlannerError::InvalidOperation)?;
-        let dst_str = dst_ctx
-            .expression()
-            .map(|m| m.inner().to_string())
-            .unwrap_or_default();
+        let dst_str =
+            graphdb_core::types::expr::expression_utils::extract_string_from_expr(&dst_ctx)
+                .map_err(PlannerError::InvalidOperation)?;
 
         let rank_str = match &fetch.rank {
             Some(rank_expr) => {
                 let rank_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(rank_expr, &expr_ctx)
                         .map_err(PlannerError::InvalidOperation)?;
-                rank_ctx
-                    .expression()
-                    .map(|m| m.inner().to_string())
-                    .unwrap_or_else(|| "0".to_string())
+                graphdb_core::types::expr::expression_utils::extract_string_from_expr(&rank_ctx)
+                    .unwrap_or_else(|_| "0".to_string())
             }
             None => "0".to_string(),
         };

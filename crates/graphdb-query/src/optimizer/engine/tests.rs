@@ -295,6 +295,463 @@ fn contains_variant(node: &PlanNodeEnum, predicate: &dyn Fn(&PlanNodeEnum) -> bo
         .any(|child| contains_variant(child, predicate))
 }
 
+mod factorization_fallback_tests {
+    use super::*;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::GetEdgesNode;
+    use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::planning::plan::core::nodes::join::wco_intersect_node::WcoIntersectNode;
+    use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+    use crate::planning::plan::logical::logical_nodes::operation::LogicalLimitNode;
+    use crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
+    use crate::planning::plan::logical::LogicalNodeEnum;
+    use crate::planning::plan::logical_plan::LogicalPlan;
+    use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+
+    fn var_key(ctx: &Arc<ExpressionAnalysisContext>, name: &str) -> ContextualExpression {
+        let id =
+            ctx.register_expression(ExpressionMeta::new(Expression::Variable(name.to_string())));
+        ContextualExpression::new(id, Arc::clone(ctx))
+    }
+
+    fn scan_logical(var: &str) -> LogicalNodeEnum {
+        LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: crate::planning::plan::core::node_id_generator::next_node_id(),
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: None,
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: Some(var.to_string()),
+            col_names: vec![var.to_string()],
+            column_types: vec![],
+        })
+    }
+
+    fn limit_logical(input: LogicalNodeEnum, count: i64) -> LogicalNodeEnum {
+        LogicalNodeEnum::Limit(LogicalLimitNode {
+            id: crate::planning::plan::core::node_id_generator::next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            offset: 0,
+            count,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    }
+
+    fn wco_logical(
+        ctx: &Arc<ExpressionAnalysisContext>,
+        probe: LogicalNodeEnum,
+        builds: Vec<LogicalNodeEnum>,
+    ) -> LogicalNodeEnum {
+        LogicalNodeEnum::WcoIntersect(LogicalWcoIntersectNode::new(
+            probe,
+            builds,
+            var_key(ctx, "c"),
+            vec![var_key(ctx, "a")],
+            vec!["a".to_string(), "c".to_string()],
+        ))
+    }
+
+    fn physical_wco() -> PlanNodeEnum {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let probe = PlanNodeEnum::Start(StartNode::new());
+        let build = PlanNodeEnum::Start(StartNode::new());
+        PlanNodeEnum::WcoIntersect(
+            WcoIntersectNode::new(
+                probe,
+                vec![build],
+                var_key(&ctx, "c"),
+                vec![var_key(&ctx, "a")],
+            )
+            .expect("wco node should build"),
+        )
+    }
+
+    #[test]
+    fn reverse_conversion_covers_wco_intersect() {
+        let physical = physical_wco();
+        let logical = crate::planning::plan::logical::conversion::convert_plan(&physical)
+            .expect("WcoIntersect should reverse-convert");
+        let LogicalNodeEnum::WcoIntersect(wco) = &logical else {
+            panic!("expected logical WcoIntersect, got {}", logical.type_name());
+        };
+        assert_eq!(wco.num_builds(), 1);
+        assert_eq!(wco.intersect_key().as_variable().as_deref(), Some("c"));
+        assert_eq!(wco.col_names(), &["c".to_string()]);
+    }
+
+    #[test]
+    fn reverse_conversion_covers_get_edges() {
+        let physical = PlanNodeEnum::GetEdges(GetEdgesNode::new(1, "src", "edge", "rank", "dst"));
+        let logical = crate::planning::plan::logical::conversion::convert_plan(&physical)
+            .expect("GetEdges should reverse-convert");
+        let LogicalNodeEnum::GetEdges(get) = &logical else {
+            panic!("expected logical GetEdges, got {}", logical.type_name());
+        };
+        assert_eq!(get.space_id, 1);
+        assert_eq!(get.src, "src");
+        assert_eq!(get.edge_type, "edge");
+        assert_eq!(get.rank, "rank");
+        assert_eq!(get.dst, "dst");
+    }
+
+    #[test]
+    fn physical_only_wco_plan_gains_logical_without_fallback_notes() {
+        let engine = OptimizerEngine::default();
+        let plan = ExecutionPlan::new(Some(physical_wco()));
+        assert!(plan.logical_plan().is_none());
+        let optimized = engine
+            .optimize(plan, None)
+            .expect("optimization should succeed");
+        assert!(
+            optimized.logical_plan().is_some(),
+            "WcoIntersect plan must carry a logical plan after bridging"
+        );
+        assert!(
+            !optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n.contains("logical_plan fallback failed")),
+            "no fallback note expected, got: {:?}",
+            optimized.cbo_notes
+        );
+    }
+
+    #[test]
+    fn unsupported_node_records_counted_fallback_notes() {
+        use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
+        use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
+
+        let mut engine = OptimizerEngine::default();
+        engine.set_enable_heuristic(false);
+        let info = VertexDeleteInfo {
+            space_name: "test".to_string(),
+            vertex_ids: vec![],
+            with_edge: false,
+            condition: None,
+        };
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(
+            1, info,
+        ))));
+        let optimized = engine
+            .optimize(plan, Some("test"))
+            .expect("optimization should succeed");
+        assert!(optimized.logical_plan().is_none());
+        assert!(
+            optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n.starts_with("factorization: logical_plan_fallback_total=1 (node=")),
+            "expected node-labelled fallback note, got: {:?}",
+            optimized.cbo_notes
+        );
+    }
+
+    #[test]
+    fn rewrite_replaces_wco_with_join_when_hash_cheaper() {
+        let engine = OptimizerEngine::default();
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        // Limit(0) drives the probe estimate to zero rows, where the hash
+        // join cost model wins over the intersect cost model.
+        let probe = limit_logical(scan_logical("a"), 0);
+        let root = wco_logical(&ctx, probe, vec![scan_logical("e1")]);
+        let mut plan = ExecutionPlan::new(None);
+        plan.set_logical_plan(LogicalPlan::new(root));
+        let optimized = engine.apply_intersect_to_join_rewrite(plan, None);
+        let logical = optimized
+            .logical_plan()
+            .expect("logical plan must survive the rewrite");
+        assert!(
+            matches!(logical.root, LogicalNodeEnum::InnerJoin(_)),
+            "expected InnerJoin after rewrite, got {}",
+            logical.root.type_name()
+        );
+        assert!(
+            optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n.contains("WcoIntersect fallback to HashJoin")),
+            "expected fallback note, got: {:?}",
+            optimized.cbo_notes
+        );
+        assert!(
+            optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n == "factorization: intersect_to_join_rewrite_total=1"),
+            "expected rewrite total note, got: {:?}",
+            optimized.cbo_notes
+        );
+        assert!(
+            OptimizerEngine::validate_factorized_invariant(&logical.root),
+            "rewritten tree must hold at most one unflat group"
+        );
+    }
+
+    #[test]
+    fn rewrite_keeps_wco_when_intersect_cheaper() {
+        let engine = OptimizerEngine::default();
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let root = wco_logical(&ctx, scan_logical("a"), vec![scan_logical("e1")]);
+        let mut plan = ExecutionPlan::new(None);
+        plan.set_logical_plan(LogicalPlan::new(root));
+        let optimized = engine.apply_intersect_to_join_rewrite(plan, None);
+        let logical = optimized.logical_plan().expect("logical plan must survive");
+        assert!(
+            matches!(logical.root, LogicalNodeEnum::WcoIntersect(_)),
+            "expected WcoIntersect to be kept, got {}",
+            logical.root.type_name()
+        );
+        assert!(
+            !optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n.contains("intersect_to_join_rewrite_total")),
+            "no rewrite total expected, got: {:?}",
+            optimized.cbo_notes
+        );
+    }
+
+    #[test]
+    fn metrics_stats_collects_flatten_and_fallback_counts() {
+        use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
+
+        let metrics = Arc::new(graphdb_core::stats::StatsManager::new());
+        let mut engine = OptimizerEngine::default();
+        engine.set_metrics_stats(Arc::clone(&metrics));
+
+        // Flatten path: a logical Flatten node reports its position count.
+        let mut flatten_plan = ExecutionPlan::new(None);
+        flatten_plan.set_logical_plan(LogicalPlan::new(LogicalNodeEnum::Flatten(
+            LogicalFlattenNode::new(0, scan_logical("a")),
+        )));
+        let out = engine.apply_factorization(flatten_plan);
+        assert!(
+            out.cbo_notes
+                .iter()
+                .any(|n| n == "factorization: flatten_total=1"),
+            "expected flatten total note, got: {:?}",
+            out.cbo_notes
+        );
+        assert_eq!(
+            metrics.get_value(graphdb_core::MetricType::FactorizationFlattenTotal),
+            Some(1)
+        );
+
+        // Fallback path: an unsupported physical-only plan increments the
+        // fallback counter through the full optimize pipeline.
+        use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
+        use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
+        let info = VertexDeleteInfo {
+            space_name: "test".to_string(),
+            vertex_ids: vec![],
+            with_edge: false,
+            condition: None,
+        };
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(
+            1, info,
+        ))));
+        engine
+            .optimize(plan, Some("test"))
+            .expect("optimization should succeed");
+        assert_eq!(
+            metrics.get_value(graphdb_core::MetricType::FactorizationFallbackTotal),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn builder_with_metrics_stats_wires_sink() {
+        use crate::optimizer::builder::OptimizerEngineBuilder;
+
+        let metrics = Arc::new(graphdb_core::stats::StatsManager::new());
+        let engine = OptimizerEngineBuilder::new()
+            .with_metrics_stats(Arc::clone(&metrics))
+            .build();
+        assert!(engine.metrics_stats().is_some());
+        assert!(OptimizerEngine::default().metrics_stats().is_none());
+    }
+
+    #[test]
+    fn connector_propagates_logical_joins() {
+        use crate::planning::connector::SegmentsConnector;
+        use crate::planning::plan::SubPlan;
+        use std::collections::HashSet;
+
+        let left = SubPlan::from_logical_root(scan_logical("a"));
+        let right = SubPlan::from_logical_root(scan_logical("b"));
+        let qctx = Arc::new(crate::QueryContext::new(Arc::new(
+            crate::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )));
+        let joined = SegmentsConnector::inner_join(&qctx, left, right, HashSet::new())
+            .expect("join should build");
+        assert!(matches!(joined.root, Some(PlanNodeEnum::InnerJoin(_))));
+        assert!(
+            matches!(joined.logical_root, Some(LogicalNodeEnum::InnerJoin(_))),
+            "connector must propagate the logical join"
+        );
+    }
+
+    fn all_paths_logical() -> LogicalNodeEnum {
+        use crate::planning::plan::core::node_id_generator::next_node_id;
+        use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
+        use crate::planning::plan::logical::logical_nodes::algorithm::LogicalAllPathsNode;
+
+        let left = LogicalNodeEnum::Start(LogicalStartNode::new());
+        let right = LogicalNodeEnum::Start(LogicalStartNode::new());
+        LogicalNodeEnum::AllPaths(LogicalAllPathsNode {
+            id: next_node_id(),
+            left: Box::new(left.clone()),
+            right: Box::new(right.clone()),
+            deps: vec![left, right],
+            space_id: 1,
+            steps: 3,
+            edge_types: vec!["knows".to_string()],
+            min_hop: 1,
+            max_hop: 3,
+            acyclic: true,
+            direction: graphdb_core::EdgeDirection::Out,
+            has_step_limit: true,
+            limit: -1,
+            offset: 0,
+            filter: None,
+            start_vertex_ids: vec![],
+            end_vertex_ids: vec![],
+            output_var: None,
+            col_names: vec!["path".to_string()],
+            column_types: vec![],
+        })
+    }
+
+    #[test]
+    fn native_all_paths_plan_optimizes_without_fallback() {
+        use crate::planning::plan::SubPlan;
+
+        let mut engine = OptimizerEngine::default();
+        engine.set_enable_heuristic(false);
+        let logical = all_paths_logical();
+        let physical =
+            crate::planning::physical_planner::convert_logical_to_physical(logical.clone());
+        assert!(
+            matches!(physical, PlanNodeEnum::AllPaths(_)),
+            "forward conversion must preserve the algorithm node"
+        );
+        let mut plan = ExecutionPlan::new(Some(physical));
+        plan.set_logical_plan(LogicalPlan::new(logical));
+        let optimized = engine
+            .optimize(plan, None)
+            .expect("optimization should succeed");
+        assert!(
+            matches!(optimized.root, Some(PlanNodeEnum::AllPaths(_))),
+            "algorithm root must survive physical mapping"
+        );
+        assert!(
+            optimized.logical_plan().is_some(),
+            "native logical plan must survive optimization"
+        );
+        assert!(
+            !optimized
+                .cbo_notes
+                .iter()
+                .any(|n| n.contains("logical_plan fallback failed")),
+            "no fallback note expected, got: {:?}",
+            optimized.cbo_notes
+        );
+    }
+
+    #[test]
+    fn algorithm_direction_survives_logical_to_physical() {
+        let logical = all_paths_logical();
+        let physical = crate::planning::physical_planner::convert_logical_to_physical(logical);
+        let PlanNodeEnum::AllPaths(node) = &physical else {
+            panic!("expected physical AllPaths");
+        };
+        assert_eq!(node.direction(), graphdb_core::EdgeDirection::Out);
+    }
+
+    #[test]
+    fn yield_clause_preserves_logical_mirror() {
+        use crate::planning::plan::SubPlan;
+        use crate::planning::statements::clauses::yield_planner::YieldClausePlanner;
+
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let column = graphdb_core::YieldColumn {
+            expression: var_key(&ctx, "a"),
+            alias: "a".to_string(),
+            is_matched: false,
+        };
+        let input = SubPlan::from_logical_root(scan_logical("a"));
+        let out = YieldClausePlanner::new()
+            .plan_yield_clause(&[column], None, None, None, None, &input)
+            .expect("yield planning should succeed");
+        assert!(matches!(out.root, Some(PlanNodeEnum::Project(_))));
+        assert!(
+            matches!(out.logical_root, Some(LogicalNodeEnum::Project(_))),
+            "yield must wrap the upstream logical tree"
+        );
+    }
+
+    #[test]
+    fn with_clause_preserves_logical_mirror() {
+        use crate::binder::validation::{WithClauseContext, YieldClauseContext};
+        use crate::planning::plan::SubPlan;
+        use crate::planning::statements::clauses::with_clause_planner::WithClausePlanner;
+        use std::collections::HashMap;
+
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let column = graphdb_core::YieldColumn {
+            expression: var_key(&ctx, "a"),
+            alias: "a".to_string(),
+            is_matched: false,
+        };
+        let with_ctx = WithClauseContext {
+            yield_clause: YieldClauseContext {
+                yield_columns: vec![column],
+                aliases_available: HashMap::new(),
+                aliases_generated: HashMap::new(),
+                distinct: false,
+                has_agg: false,
+                group_keys: vec![],
+                group_items: vec![],
+                need_gen_project: false,
+                agg_output_column_names: vec![],
+                proj_output_column_names: vec![],
+                filter_condition: None,
+                skip: None,
+                limit: None,
+            },
+            aliases_available: HashMap::new(),
+            aliases_generated: HashMap::new(),
+            where_clause: None,
+            pagination: None,
+            order_by: None,
+            distinct: false,
+        };
+        let input = SubPlan::from_logical_root(scan_logical("a"));
+        let out = WithClausePlanner::new()
+            .plan_with_clause(&with_ctx, &input)
+            .expect("with planning should succeed");
+        assert!(matches!(out.root, Some(PlanNodeEnum::Project(_))));
+        assert!(
+            matches!(out.logical_root, Some(LogicalNodeEnum::Project(_))),
+            "with must wrap the upstream logical tree"
+        );
+    }
+}
+
 #[test]
 fn precompute_notes_emitted_for_reused_expressions() {
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;

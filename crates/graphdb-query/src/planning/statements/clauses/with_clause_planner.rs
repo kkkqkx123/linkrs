@@ -13,9 +13,15 @@ use crate::binder::validation::{
     CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
 };
 use crate::parser::ast::Stmt;
+use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSortNode,
+};
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
 use graphdb_core::types::expr::expression_utils::extract_group_info;
@@ -54,14 +60,44 @@ impl WithClausePlanner {
         if !with_ctx.yield_clause.yield_columns.is_empty() {
             let project_node =
                 self.create_project_node(&current_plan, &with_ctx.yield_clause.yield_columns)?;
-            current_plan = SubPlan::new(Some(project_node), current_plan.tail.clone());
+            let logical_root = wrap_logical(&current_plan, |input| {
+                LogicalNodeEnum::Project(LogicalProjectNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    columns: with_ctx.yield_clause.yield_columns.clone(),
+                    output_var: None,
+                    col_names: project_node.col_names().to_vec(),
+                    column_types: vec![],
+                })
+            });
+            current_plan = SubPlan {
+                root: Some(project_node),
+                tail: current_plan.tail.clone(),
+                logical_root,
+            };
         }
 
         // 2. Processing the WHERE clause for filtering data
         if let Some(ref where_ctx) = with_ctx.where_clause {
             if let Some(ref filter) = where_ctx.filter {
                 let filter_node = self.create_filter_node(&current_plan, filter)?;
-                current_plan = SubPlan::new(Some(filter_node), current_plan.tail.clone());
+                let logical_root = wrap_logical(&current_plan, |input| {
+                    LogicalNodeEnum::Filter(LogicalFilterNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        condition: filter.clone(),
+                        output_var: None,
+                        col_names: filter_node.col_names().to_vec(),
+                        column_types: vec![],
+                    })
+                });
+                current_plan = SubPlan {
+                    root: Some(filter_node),
+                    tail: current_plan.tail.clone(),
+                    logical_root,
+                };
             }
         }
 
@@ -156,16 +192,31 @@ impl WithClausePlanner {
         }
 
         // Create a sorting node.
-        let sort_node =
-            crate::planning::plan::core::nodes::SortNode::new(input_node.clone(), sort_items)
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create sort node: {}", e))
-                })?;
+        let sort_node = crate::planning::plan::core::nodes::SortNode::new(
+            input_node.clone(),
+            sort_items.clone(),
+        )
+        .map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create sort node: {}", e))
+        })?;
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Sort(LogicalSortNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                sort_items,
+                limit: None,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
 
-        Ok(SubPlan::new(
-            Some(PlanNodeEnum::Sort(sort_node)),
-            input_plan.tail.clone(),
-        ))
+        Ok(SubPlan {
+            root: Some(PlanNodeEnum::Sort(sort_node)),
+            tail: input_plan.tail.clone(),
+            logical_root,
+        })
     }
 
     /// Application pagination
@@ -182,11 +233,24 @@ impl WithClausePlanner {
             .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create paging node: {}", e))
             })?;
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Limit(LogicalLimitNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                offset: pagination.skip,
+                count: pagination.limit,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
 
-        Ok(SubPlan::new(
-            Some(PlanNodeEnum::Limit(limit_node)),
-            input_plan.tail.clone(),
-        ))
+        Ok(SubPlan {
+            root: Some(PlanNodeEnum::Limit(limit_node)),
+            tail: input_plan.tail.clone(),
+            logical_root,
+        })
     }
 
     /// Using the DISTINCT keyword (to remove duplicates)
@@ -203,11 +267,22 @@ impl WithClausePlanner {
                     e
                 ))
             })?;
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Dedup(LogicalDedupNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
 
-        Ok(SubPlan::new(
-            Some(PlanNodeEnum::Dedup(dedup_node)),
-            input_plan.tail.clone(),
-        ))
+        Ok(SubPlan {
+            root: Some(PlanNodeEnum::Dedup(dedup_node)),
+            tail: input_plan.tail.clone(),
+            logical_root,
+        })
     }
 }
 

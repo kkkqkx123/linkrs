@@ -132,7 +132,7 @@ pub trait Planner: std::fmt::Debug {
 /// Eliminate dynamic distribution completely and use compile-time polymorphism instead.
 #[derive(Debug, Clone)]
 pub enum PlannerEnum {
-    Match(MatchStatementPlanner),
+    Match(Box<MatchStatementPlanner>),
     Go(GoPlanner),
     Lookup(LookupPlanner),
     Path(PathPlanner),
@@ -172,7 +172,7 @@ impl PlannerEnum {
     /// Use the enumeration pattern for matching to completely eliminate the need for string matching.
     pub fn from_stmt(stmt: &Arc<Stmt>) -> Option<Self> {
         match stmt.as_ref() {
-            Stmt::Match(_) => Some(PlannerEnum::Match(MatchStatementPlanner::new())),
+            Stmt::Match(_) => Some(PlannerEnum::Match(Box::default())),
             Stmt::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
             Stmt::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
             Stmt::FindPath(_) => Some(PlannerEnum::Path(PathPlanner::new())),
@@ -315,7 +315,7 @@ impl PlannerEnum {
     /// Create a planner from a BoundStatement.
     pub fn from_bound_statement(bound: &BoundStatement) -> Option<Self> {
         match bound {
-            BoundStatement::Match(_) => Some(PlannerEnum::Match(MatchStatementPlanner::new())),
+            BoundStatement::Match(_) => Some(PlannerEnum::Match(Box::default())),
             BoundStatement::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
             BoundStatement::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
             BoundStatement::FetchVertices(_) => {
@@ -627,7 +627,7 @@ mod tests {
             delete_clause: None,
         });
 
-        let planner = PlannerEnum::Match(MatchStatementPlanner::new());
+        let planner = PlannerEnum::Match(Box::new(MatchStatementPlanner::new()));
         assert!(planner.matches(&match_stmt));
     }
 }

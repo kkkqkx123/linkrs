@@ -300,17 +300,23 @@ fn test_match_multiple_edge_types() {
 
 #[test]
 fn test_match_deep_traversal() {
-    TestScenario::new()
-        .expect("Failed to create test scenario")
-        .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
-        .exec_ddl("CREATE EDGE KNOWS(since DATE)")
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie'), 4:('David'), 5:('Eve')")
-        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 2 -> 3:('2020-02-01'), 3 -> 4:('2020-03-01'), 4 -> 5:('2020-04-01')")
-        .assert_success()
-        .query("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(d:Person)-[:KNOWS]->(e:Person) WHERE a.name == 'Alice' RETURN e.name")
-        .assert_success()
-        .assert_result_count(1);
+    let child = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            TestScenario::new()
+                .expect("Failed to create test scenario")
+                .setup_space("test_space")
+                .exec_ddl("CREATE TAG Person(name STRING)")
+                .exec_ddl("CREATE EDGE KNOWS(since DATE)")
+                .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie'), 4:('David'), 5:('Eve')")
+                .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 2 -> 3:('2020-02-01'), 3 -> 4:('2020-03-01'), 4 -> 5:('2020-04-01')")
+                .assert_success()
+                .query("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(d:Person)-[:KNOWS]->(e:Person) WHERE a.name == 'Alice' RETURN e.name")
+                .assert_success()
+                .assert_result_count(1);
+        })
+        .expect("Failed to spawn thread");
+    child.join().expect("Thread panicked");
 }
 
 // ==================== MATCH Error Handling Tests ====================

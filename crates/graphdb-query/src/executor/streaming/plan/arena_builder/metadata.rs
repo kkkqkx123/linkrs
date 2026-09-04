@@ -149,7 +149,7 @@ pub(super) fn populate_input_contracts(
                     }
                 }
                 OperatorKindSpec::Wco(wco) => {
-                    if inputs.len() >= 1 + wco.bound_names.len() {
+                    if inputs.len() > wco.bound_names.len() {
                         InputContract::WcoInputs {
                             probe: inputs[0].clone(),
                             builds: inputs[1..]

@@ -591,6 +591,9 @@ impl PlanNodeVisitor for DescribeVisitor {
         }
         desc.set_dependencies(deps);
         desc.add_description("group", node.group_pos().to_string());
+        if let Some(snapshot) = node.schema_snapshot() {
+            desc.add_description("schema", snapshot.to_string());
+        }
 
         self.descriptions.push(desc);
         self.visited_ids.insert(node.id());

@@ -487,6 +487,7 @@ pub struct BoundSetOperationStatement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetOperationKind {
     Union,
+    UnionAll,
     Intersect,
     Minus,
 }

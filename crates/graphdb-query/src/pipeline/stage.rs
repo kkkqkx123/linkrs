@@ -129,12 +129,6 @@ impl QueryStage for PlanStage {
             execution_plan.set_logical_plan(crate::planning::plan::logical_plan::LogicalPlan::new(
                 logical_root,
             ));
-        } else if let Some(ref root_node) = execution_plan.root {
-            if let Ok(logical_plan) =
-                crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(root_node)
-            {
-                execution_plan.set_logical_plan(logical_plan);
-            }
         }
 
         Ok(execution_plan)

@@ -31,6 +31,7 @@ use graphdb_core::types::expr::expression_utils::generate_default_alias_from_con
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::Expression;
 use graphdb_core::YieldColumn;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub use crate::planning::plan::core::PlanNodeEnum;
@@ -236,8 +237,11 @@ impl ClausePlanner for ReturnClausePlanner {
                 .collect();
 
             // Also project the argument expressions from aggregate functions
-            // so they are available as input columns for the AggregateExecutor
-            let existing_aliases: Vec<String> =
+            // so they are available as input columns for the AggregateExecutor.
+            // The guard set is updated on every append: several aggregates
+            // often share one argument (e.g. avg(x), max(x)), and appending
+            // it twice would emit duplicate output aliases.
+            let mut projected_aliases: HashSet<String> =
                 project_columns.iter().map(|pc| pc.alias.clone()).collect();
             for col in &yield_columns {
                 if let Some(expr_meta) = col.expression.expression() {
@@ -246,7 +250,7 @@ impl ClausePlanner for ReturnClausePlanner {
                         for arg in args {
                             let arg_expr_str = arg.to_expression_string();
                             // Only add if not already projected (avoid duplicates)
-                            if !existing_aliases.contains(&arg_expr_str) {
+                            if projected_aliases.insert(arg_expr_str.clone()) {
                                 let ctx = col.expression.context();
                                 let meta = ExpressionMeta::new(arg.clone());
                                 let id = ctx.register_expression(meta);
@@ -403,7 +407,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 .cloned()
                 .collect();
 
-            let existing_aliases: Vec<String> =
+            let mut projected_aliases: HashSet<String> =
                 project_columns.iter().map(|pc| pc.alias.clone()).collect();
             for col in &yield_columns {
                 if let Some(expr_meta) = col.expression.expression() {
@@ -411,7 +415,7 @@ impl ClausePlanner for ReturnClausePlanner {
                     if let Expression::WindowFunction { args, .. } = inner {
                         for arg in args {
                             let arg_expr_str = arg.to_expression_string();
-                            if !existing_aliases.contains(&arg_expr_str) {
+                            if projected_aliases.insert(arg_expr_str.clone()) {
                                 let ctx = col.expression.context();
                                 let meta = ExpressionMeta::new(arg.clone());
                                 let id = ctx.register_expression(meta);

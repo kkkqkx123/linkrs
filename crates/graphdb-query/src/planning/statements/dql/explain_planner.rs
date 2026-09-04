@@ -108,7 +108,13 @@ impl Planner for ExplainPlanner {
                 ))
             })?;
 
-        let inner_ctx = ctx.with_bound(inner_bound);
+        let inner_validated = ctx.derive_validated(inner_bound);
+        let inner_ctx = crate::planning::context::PlanContext {
+            bound: inner_bound,
+            qctx: qctx.clone(),
+            metadata,
+            validated: inner_validated.as_ref().unwrap_or(validated),
+        };
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
         let mode = if is_profile { "PROFILE" } else { "EXPLAIN" };

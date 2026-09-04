@@ -289,8 +289,9 @@ impl MatchStatementPlanner {
     ///
     /// Returns `None` (caller falls back to the legacy `ExpandAll` chain)
     /// when the patterns are ineligible: optional matches, deletes,
-    /// patterns the graph converter rejects, or graphs without rels
-    /// (single-node lookups plan better as direct scans).
+    /// patterns the graph converter rejected, graphs without rels
+    /// (single-node lookups plan better as direct scans), or single
+    /// pattern queries (extend joins do not correlate node-rel pairs).
     fn try_join_order_plan(
         &self,
         match_stmt: &crate::parser::ast::MatchStmt,
@@ -298,6 +299,18 @@ impl MatchStatementPlanner {
         space_name: &str,
     ) -> Option<SubPlan> {
         if match_stmt.optional || match_stmt.delete_clause.is_some() {
+            return None;
+        }
+        // Single-pattern queries use the legacy ExpandAll chain because
+        // the join-order enumerator's extend joins cannot correlate
+        // node-rel pairs (rel-only base scans don't include endpoint
+        // nodes, leading to cross products).
+        if match_stmt.patterns.len() <= 1 {
+            return None;
+        }
+        let graph =
+            crate::planning::join_order::query_graph_from_match_patterns(&match_stmt.patterns)?;
+        if graph.num_rels() == 0 {
             return None;
         }
         let graph =
@@ -443,5 +456,16 @@ mod tests {
         };
         let plan = planner.try_join_order_plan(&stmt(two_hop(), Some(hint), false), 1, "default");
         assert!(plan.is_none(), "bad hint falls back instead of failing");
+    }
+
+    #[test]
+    fn single_pattern_falls_back() {
+        let planner = MatchStatementPlanner::new();
+        let patterns = vec![path(vec![node("a"), edge("e1"), node("b")])];
+        let plan = planner.try_join_order_plan(&stmt(patterns, None, false), 1, "default");
+        assert!(
+            plan.is_none(),
+            "single-pattern MATCH uses the legacy ExpandAll path"
+        );
     }
 }

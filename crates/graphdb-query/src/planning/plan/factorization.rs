@@ -126,6 +126,11 @@ impl FactorizationGroup {
     pub fn contains(&self, expr_id: &ExpressionId) -> bool {
         self.expression_id_to_pos.contains_key(expr_id)
     }
+
+    /// Whether the group already maps this output name to a position.
+    pub fn contains_name(&self, name: &str) -> bool {
+        self.expression_name_to_pos.contains_key(name)
+    }
 }
 
 impl Default for FactorizationGroup {

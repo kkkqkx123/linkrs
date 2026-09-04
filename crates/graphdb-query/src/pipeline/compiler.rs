@@ -113,19 +113,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let root = sub_plan.root().clone();
         let mut execution_plan = crate::planning::plan::ExecutionPlan::new(root);
 
-        // Migrated planners produce the native logical tree directly; the
-        // reverse stripping (`LogicalPlan::from_plan_node`) remains only as
-        // a fallback for planners that still emit physical trees.
+        // Attach the natively produced logical tree when the planner emitted
+        // one. Physical-only plans are left as-is here; the optimizer owns
+        // the single reverse-conversion bridge and records its decision.
         if let Some(logical_root) = sub_plan.logical_root().cloned() {
             execution_plan.set_logical_plan(crate::planning::plan::logical_plan::LogicalPlan::new(
                 logical_root,
             ));
-        } else if let Some(ref root_node) = execution_plan.root {
-            if let Ok(logical_plan) =
-                crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(root_node)
-            {
-                execution_plan.set_logical_plan(logical_plan);
-            }
         }
 
         Ok(execution_plan)
