@@ -59,6 +59,7 @@ pub fn rewrite_children_logical(
         Filter(n) => Filter(rewrite_single!(n)),
         Sort(n) => Sort(rewrite_single!(n)),
         Limit(n) => Limit(rewrite_single!(n)),
+        Skip(n) => Skip(rewrite_single!(n)),
         TopN(n) => TopN(rewrite_single!(n)),
         Sample(n) => Sample(rewrite_single!(n)),
         Dedup(n) => Dedup(rewrite_single!(n)),

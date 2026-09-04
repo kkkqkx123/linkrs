@@ -240,6 +240,23 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             PlanNodeEnum::Limit(node)
         }
 
+        LogicalNodeEnum::Skip(n) => {
+            let input = convert_logical_to_physical(*n.input.expect("SkipNode missing input"));
+            let mut node =
+                crate::planning::plan::core::nodes::operation::sort_node::LimitNode::new(
+                    input,
+                    n.offset,
+                    i64::MAX,
+                )
+                .expect("Failed to construct LimitNode");
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            node.set_col_names(n.col_names);
+            node.set_column_types(n.column_types);
+            PlanNodeEnum::Limit(node)
+        }
+
         LogicalNodeEnum::TopN(n) => {
             let input = convert_logical_to_physical(*n.input.expect("TopNNode missing input"));
             let mut node = crate::planning::plan::core::nodes::operation::sort_node::TopNNode::new(
@@ -1103,6 +1120,56 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::WcoIntersect(n) => lower_wco_intersect(n),
+
+        LogicalNodeEnum::InsertVertices(n) => {
+            let mut node =
+                crate::planning::plan::core::nodes::data_modification::InsertVerticesNode::new(
+                    n.id, n.info,
+                );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::InsertVertices(node)
+        }
+
+        LogicalNodeEnum::InsertEdges(n) => {
+            let mut node =
+                crate::planning::plan::core::nodes::data_modification::InsertEdgesNode::new(
+                    n.id, n.info,
+                );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::InsertEdges(node)
+        }
+
+        LogicalNodeEnum::Update(n) => {
+            let mut node = crate::planning::plan::core::nodes::data_modification::UpdateNode::new(
+                n.id, n.info,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::Update(node)
+        }
     }
 }
 

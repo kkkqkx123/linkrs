@@ -84,3 +84,11 @@ define_logical_plan_node_with_deps! {
     enum: Window
     input: SingleInputNode
 }
+
+define_logical_plan_node_with_deps! {
+    pub struct LogicalSkipNode {
+        offset: i64,
+    }
+    enum: Skip
+    input: SingleInputNode
+}

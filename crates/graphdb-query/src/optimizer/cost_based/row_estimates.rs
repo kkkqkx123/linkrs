@@ -448,6 +448,10 @@ pub fn estimate_node_output_rows_logical(
             let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);
             input_rows.min((n.offset + n.count) as u64)
         }
+        Skip(n) => {
+            let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);
+            input_rows.saturating_sub(n.offset.max(0) as u64)
+        }
         Dedup(n) => {
             let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);
             (input_rows as f64 * DEDUP_SELECTIVITY).max(1.0) as u64
@@ -550,6 +554,7 @@ fn logical_first_child(node: &LogicalNodeEnum) -> Option<&LogicalNodeEnum> {
         LogicalNodeEnum::Filter(n) => Some(n.input()),
         LogicalNodeEnum::Sort(n) => Some(n.input()),
         LogicalNodeEnum::Limit(n) => Some(n.input()),
+        LogicalNodeEnum::Skip(n) => Some(n.input()),
         LogicalNodeEnum::TopN(n) => Some(n.input()),
         LogicalNodeEnum::Sample(n) => Some(n.input()),
         LogicalNodeEnum::Dedup(n) => Some(n.input()),

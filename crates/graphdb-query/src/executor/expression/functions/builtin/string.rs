@@ -8,13 +8,6 @@ use graphdb_core::Value;
 define_function_enum! {
     /// String function enumeration
     pub enum StringFunction {
-        Length => {
-            name: "length",
-            arity: 1,
-            variadic: false,
-            description: "Calculate string length",
-            handler: execute_length
-        },
         Upper => {
             name: "upper",
             arity: 1,
@@ -197,16 +190,6 @@ define_function_enum! {
             description: "Reverse a string",
             handler: execute_reverse
         },
-    }
-}
-
-fn execute_length(args: &[Value]) -> Result<Value, ExpressionError> {
-    match &args[0] {
-        Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
-        Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "The length function requires a string type",
-        )),
     }
 }
 
@@ -732,12 +715,13 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::expression::functions::FunctionRegistry;
 
     #[test]
     fn test_length() {
-        let func = StringFunction::Length;
-        let result = func
-            .execute(&[Value::string("hello")])
+        let registry = FunctionRegistry::new();
+        let result = registry
+            .execute("length", &[Value::string("hello")])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Int(5));
     }
@@ -820,9 +804,9 @@ mod tests {
 
     #[test]
     fn test_null_handling() {
-        let func = StringFunction::Length;
-        let result = func
-            .execute(&[Value::Null(NullType::Null)])
+        let registry = FunctionRegistry::new();
+        let result = registry
+            .execute("length", &[Value::Null(NullType::Null)])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Null(NullType::Null));
     }

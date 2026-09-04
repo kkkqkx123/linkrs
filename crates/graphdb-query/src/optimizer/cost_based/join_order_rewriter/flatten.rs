@@ -323,6 +323,7 @@ pub(super) fn leaf_id_logical(node: &LogicalNodeEnum) -> String {
             LogicalNodeEnum::Filter(n) => n.input(),
             LogicalNodeEnum::Sort(n) => n.input(),
             LogicalNodeEnum::Limit(n) => n.input(),
+            LogicalNodeEnum::Skip(n) => n.input(),
             LogicalNodeEnum::TopN(n) => n.input(),
             LogicalNodeEnum::Sample(n) => n.input(),
             LogicalNodeEnum::Dedup(n) => n.input(),

@@ -70,6 +70,13 @@ impl RemoveFactorizationRewriter {
                 }
                 LogicalNodeEnum::Limit(n)
             }
+            LogicalNodeEnum::Skip(mut n) => {
+                if let Some(input) = n.input.take() {
+                    let new_input = Self::visit_operator(*input);
+                    n.set_input(new_input);
+                }
+                LogicalNodeEnum::Skip(n)
+            }
             LogicalNodeEnum::TopN(mut n) => {
                 if let Some(input) = n.input.take() {
                     let new_input = Self::visit_operator(*input);
@@ -335,6 +342,9 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::BeginTransaction(n) => LogicalNodeEnum::BeginTransaction(n),
             LogicalNodeEnum::Commit(n) => LogicalNodeEnum::Commit(n),
             LogicalNodeEnum::Rollback(n) => LogicalNodeEnum::Rollback(n),
+            LogicalNodeEnum::InsertVertices(n) => LogicalNodeEnum::InsertVertices(n),
+            LogicalNodeEnum::InsertEdges(n) => LogicalNodeEnum::InsertEdges(n),
+            LogicalNodeEnum::Update(n) => LogicalNodeEnum::Update(n),
             LogicalNodeEnum::FulltextSearch(n) => LogicalNodeEnum::FulltextSearch(n),
             LogicalNodeEnum::FulltextLookup(n) => LogicalNodeEnum::FulltextLookup(n),
             LogicalNodeEnum::MatchFulltext(n) => LogicalNodeEnum::MatchFulltext(n),
@@ -360,6 +370,7 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::Filter(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Sort(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Limit(n) => n.input.as_deref().is_some_and(Self::has_flatten),
+            LogicalNodeEnum::Skip(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::TopN(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Sample(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Dedup(n) => n.input.as_deref().is_some_and(Self::has_flatten),

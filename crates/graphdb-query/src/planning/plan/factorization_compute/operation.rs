@@ -8,7 +8,8 @@ use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema, SchemaUt
 use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
 use crate::planning::plan::logical::logical_nodes::operation::{
     LogicalAggregateNode, LogicalDedupNode, LogicalFilterNode, LogicalLimitNode,
-    LogicalProjectNode, LogicalSampleNode, LogicalSortNode, LogicalTopNNode, LogicalWindowNode,
+    LogicalProjectNode, LogicalSampleNode, LogicalSkipNode, LogicalSortNode, LogicalTopNNode,
+    LogicalWindowNode,
 };
 
 pub(super) fn project(
@@ -212,6 +213,10 @@ pub(super) fn dedup(_n: &LogicalDedupNode, child_schemas: &[FactorizedSchema]) -
 }
 
 pub(super) fn limit(_n: &LogicalLimitNode, child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
+    child_schemas.first().cloned().unwrap_or_default()
+}
+
+pub(super) fn skip(_n: &LogicalSkipNode, child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
     child_schemas.first().cloned().unwrap_or_default()
 }
 

@@ -49,7 +49,7 @@ impl PathFunction {
             Self::Properties => "Get all properties from vertices and edges in the path",
             Self::IsTrail => "Check if path is a trail (no repeated edges)",
             Self::IsAcyclic => "Check if path is acyclic (no repeated vertices)",
-            Self::PathLength => "Get the number of edges in the path",
+            Self::PathLength => "Get the length of a string, path, or list",
         }
     }
 
@@ -60,7 +60,7 @@ impl PathFunction {
             Self::Properties => execute_properties(args),
             Self::IsTrail => execute_is_trail(args),
             Self::IsAcyclic => execute_is_acyclic(args),
-            Self::PathLength => execute_path_length(args),
+            Self::PathLength => execute_length(args),
         }
     }
 }
@@ -204,14 +204,18 @@ fn execute_is_acyclic(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
-fn execute_path_length(args: &[Value]) -> Result<Value, ExpressionError> {
+fn execute_length(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 1 {
         return Err(ExpressionError::type_error("length requires 1 argument"));
     }
     match &args[0] {
         Value::Path(path) => Ok(Value::BigInt(path.steps.len() as i64)),
+        Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
+        Value::List(list) => Ok(Value::BigInt(list.values.len() as i64)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error("length requires a path type")),
+        _ => Err(ExpressionError::type_error(
+            "length requires a string, path, or list type",
+        )),
     }
 }
 
@@ -387,5 +391,24 @@ mod tests {
             .execute(&[Value::Path(Box::new(path))])
             .expect("length should succeed");
         assert_eq!(result, Value::BigInt(2));
+    }
+
+    #[test]
+    fn test_path_length_string() {
+        let result = PathFunction::PathLength
+            .execute(&[Value::string("hello")])
+            .expect("length should succeed");
+        assert_eq!(result, Value::BigInt(5));
+    }
+
+    #[test]
+    fn test_path_length_list() {
+        let list = Value::list(List {
+            values: vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        });
+        let result = PathFunction::PathLength
+            .execute(&[list])
+            .expect("length should succeed");
+        assert_eq!(result, Value::BigInt(3));
     }
 }

@@ -209,6 +209,19 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
 
         PlanNodeEnum::Limit(n) => {
             let logical_input = convert_plan(n.input())?;
+            if n.count() == i64::MAX {
+                return Ok(LogicalNodeEnum::Skip(
+                    crate::planning::plan::logical::logical_nodes::operation::LogicalSkipNode {
+                        id: n.id(),
+                        input: Some(Box::new(logical_input.clone())),
+                        deps: vec![logical_input],
+                        offset: n.offset(),
+                        output_var: n.output_var().map(|s| s.to_string()),
+                        col_names: n.col_names().to_vec(),
+                        column_types: n.column_types().to_vec(),
+                    },
+                ));
+            }
             Ok(LogicalNodeEnum::Limit(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalLimitNode {
                     id: n.id(),
@@ -320,6 +333,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
                     deps: vec![logical_left, logical_right],
+                    recommended_algorithm: None,
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -884,6 +898,36 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 expression: n.filter().cloned(),
                 dedup: n.dedup(),
                 limit: n.limit(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::InsertVertices(n) => Ok(LogicalNodeEnum::InsertVertices(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalInsertVerticesNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::InsertEdges(n) => Ok(LogicalNodeEnum::InsertEdges(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalInsertEdgesNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::Update(n) => Ok(LogicalNodeEnum::Update(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode {
+                id: n.id(),
+                info: n.info().clone(),
                 output_var: n.output_var().map(|s| s.to_string()),
                 col_names: n.col_names().to_vec(),
                 column_types: n.column_types().to_vec(),

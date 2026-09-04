@@ -234,6 +234,7 @@ pub(crate) fn logical_children(
         LogicalNodeEnum::Filter(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Sort(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Limit(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+        LogicalNodeEnum::Skip(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::TopN(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Sample(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Dedup(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
@@ -299,6 +300,9 @@ pub(crate) fn logical_children(
         | LogicalNodeEnum::BeginTransaction(_)
         | LogicalNodeEnum::Commit(_)
         | LogicalNodeEnum::Rollback(_)
+        | LogicalNodeEnum::InsertVertices(_)
+        | LogicalNodeEnum::InsertEdges(_)
+        | LogicalNodeEnum::Update(_)
         | LogicalNodeEnum::FulltextSearch(_)
         | LogicalNodeEnum::FulltextLookup(_)
         | LogicalNodeEnum::MatchFulltext(_) => vec![],

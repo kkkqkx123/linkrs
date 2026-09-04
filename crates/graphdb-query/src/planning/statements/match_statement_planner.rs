@@ -313,11 +313,6 @@ impl MatchStatementPlanner {
         if graph.num_rels() == 0 {
             return None;
         }
-        let graph =
-            crate::planning::join_order::query_graph_from_match_patterns(&match_stmt.patterns)?;
-        if graph.num_rels() == 0 {
-            return None;
-        }
         let graph = std::sync::Arc::new(graph);
         let mut enumerator = crate::planning::join_order::JoinOrderEnumerator::new()
             .with_space(space_id, space_name);

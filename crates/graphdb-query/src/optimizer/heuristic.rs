@@ -84,6 +84,11 @@ pub mod rule_enum;
 
 // Batch optimizer (phased rule application with diagnostics)
 pub mod batch;
+// Logical heuristic optimizer (operates on LogicalNodeEnum)
+pub mod logical_batch;
+pub mod logical_rule;
+// Physical heuristic optimizer (operates on PlanNodeEnum, post-mapping)
+pub mod physical_heuristic;
 
 // Specific Rules Module
 pub mod aggregate;
@@ -116,6 +121,11 @@ pub use visitor::ChildRewriteVisitor;
 pub use rewrite_rule::{HeuristicRule, HeuristicRuleAdapter, IntoOptRule};
 
 pub use plan_rewriter::NodeRewriter;
+
+// Export the logical heuristic optimizer.
+pub use logical_batch::{LogicalBatchOptimizer, LogicalOptimizationResult};
+pub use logical_rule::{LogicalRule, LogicalRuleContext};
+pub use physical_heuristic::PhysicalHeuristicOptimizer;
 
 // Export the enumeration of static distribution rules.
 pub use rule_enum::{RewriteRule as RewriteRuleEnum, RuleRegistry};

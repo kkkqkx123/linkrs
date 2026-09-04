@@ -20,6 +20,9 @@ use super::logical_nodes::control_flow::{
     LogicalArgumentNode, LogicalBeginTransactionNode, LogicalCommitNode, LogicalLoopNode,
     LogicalPassThroughNode, LogicalRollbackNode, LogicalSelectNode,
 };
+use super::logical_nodes::dml::{
+    LogicalInsertEdgesNode, LogicalInsertVerticesNode, LogicalUpdateNode,
+};
 use super::logical_nodes::flatten::LogicalFlattenNode;
 use super::logical_nodes::graph_ops::{
     LogicalApplyNode, LogicalAssignNode, LogicalCorrelatedApplyNode, LogicalDataCollectNode,
@@ -32,7 +35,8 @@ use super::logical_nodes::join::{
 };
 use super::logical_nodes::operation::{
     LogicalAggregateNode, LogicalDedupNode, LogicalFilterNode, LogicalLimitNode,
-    LogicalProjectNode, LogicalSampleNode, LogicalSortNode, LogicalTopNNode, LogicalWindowNode,
+    LogicalProjectNode, LogicalSampleNode, LogicalSkipNode, LogicalSortNode, LogicalTopNNode,
+    LogicalWindowNode,
 };
 use super::logical_nodes::search::{
     LogicalFulltextLookupNode, LogicalFulltextSearchNode, LogicalMatchFulltextNode,
@@ -62,6 +66,7 @@ pub enum LogicalNodeEnum {
     Filter(LogicalFilterNode),
     Sort(LogicalSortNode),
     Limit(LogicalLimitNode),
+    Skip(LogicalSkipNode),
     TopN(LogicalTopNNode),
     Sample(LogicalSampleNode),
     Dedup(LogicalDedupNode),
@@ -107,6 +112,11 @@ pub enum LogicalNodeEnum {
     Assign(LogicalAssignNode),
     Apply(LogicalApplyNode),
 
+    // Data modification nodes
+    InsertVertices(LogicalInsertVerticesNode),
+    InsertEdges(LogicalInsertEdgesNode),
+    Update(LogicalUpdateNode),
+
     // Algorithm nodes
     MultiShortestPath(LogicalMultiShortestPathNode),
     BFSShortest(LogicalBFSShortestNode),
@@ -146,6 +156,7 @@ impl LogicalNodeEnum {
             Self::Filter(n) => n.id(),
             Self::Sort(n) => n.id(),
             Self::Limit(n) => n.id(),
+            Self::Skip(n) => n.id(),
             Self::TopN(n) => n.id(),
             Self::Sample(n) => n.id(),
             Self::Dedup(n) => n.id(),
@@ -182,6 +193,9 @@ impl LogicalNodeEnum {
             Self::Materialize(n) => n.id(),
             Self::Assign(n) => n.id(),
             Self::Apply(n) => n.id(),
+            Self::InsertVertices(n) => n.id(),
+            Self::InsertEdges(n) => n.id(),
+            Self::Update(n) => n.id(),
             Self::MultiShortestPath(n) => n.id(),
             Self::BFSShortest(n) => n.id(),
             Self::AllPaths(n) => n.id(),
@@ -212,6 +226,7 @@ impl LogicalNodeEnum {
             Self::Filter(_) => "Filter",
             Self::Sort(_) => "Sort",
             Self::Limit(_) => "Limit",
+            Self::Skip(_) => "Skip",
             Self::TopN(_) => "TopN",
             Self::Sample(_) => "Sample",
             Self::Dedup(_) => "Dedup",
@@ -248,6 +263,9 @@ impl LogicalNodeEnum {
             Self::Materialize(_) => "Materialize",
             Self::Assign(_) => "Assign",
             Self::Apply(_) => "Apply",
+            Self::InsertVertices(_) => "InsertVertices",
+            Self::InsertEdges(_) => "InsertEdges",
+            Self::Update(_) => "Update",
             Self::MultiShortestPath(_) => "MultiShortestPath",
             Self::BFSShortest(_) => "BFSShortest",
             Self::AllPaths(_) => "AllPaths",
@@ -278,6 +296,7 @@ impl LogicalNodeEnum {
             Self::Filter(n) => n.col_names(),
             Self::Sort(n) => n.col_names(),
             Self::Limit(n) => n.col_names(),
+            Self::Skip(n) => n.col_names(),
             Self::TopN(n) => n.col_names(),
             Self::Sample(n) => n.col_names(),
             Self::Dedup(n) => n.col_names(),
@@ -314,6 +333,9 @@ impl LogicalNodeEnum {
             Self::Materialize(n) => n.col_names(),
             Self::Assign(n) => n.col_names(),
             Self::Apply(n) => n.col_names(),
+            Self::InsertVertices(n) => n.col_names(),
+            Self::InsertEdges(n) => n.col_names(),
+            Self::Update(n) => n.col_names(),
             Self::MultiShortestPath(n) => n.col_names(),
             Self::BFSShortest(n) => n.col_names(),
             Self::AllPaths(n) => n.col_names(),

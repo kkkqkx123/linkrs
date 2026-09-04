@@ -102,6 +102,7 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             LogicalNodeEnum::Window(n) => operation::window(n, child_schemas),
             LogicalNodeEnum::Dedup(n) => operation::dedup(n, child_schemas),
             LogicalNodeEnum::Limit(n) => operation::limit(n, child_schemas),
+            LogicalNodeEnum::Skip(n) => operation::skip(n, child_schemas),
             LogicalNodeEnum::Sample(n) => operation::sample(n, child_schemas),
 
             LogicalNodeEnum::InnerJoin(_)
@@ -147,6 +148,10 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             LogicalNodeEnum::Remove(_)
             | LogicalNodeEnum::DataCollect(_)
             | LogicalNodeEnum::Materialize(_) => flat_leaf::flatten_all_from_child(child_schemas),
+
+            LogicalNodeEnum::InsertVertices(_)
+            | LogicalNodeEnum::InsertEdges(_)
+            | LogicalNodeEnum::Update(_) => flat_leaf::flat_leaf(),
 
             _ => flat_leaf::flatten_all_from_child(child_schemas),
         }
@@ -369,6 +374,7 @@ mod tests {
                 hash_keys: vec![],
                 probe_keys: vec![],
                 deps: vec![scan(), scan()],
+                recommended_algorithm: None,
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],

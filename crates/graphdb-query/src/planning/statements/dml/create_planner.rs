@@ -10,11 +10,14 @@ use crate::binder::expr_converter::bound_expr_to_contextual;
 use crate::parser::ast::{CreateStmt, CreateTarget, Stmt};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
-    nodes::{
-        ArgumentNode, EdgeInsertInfo, InsertEdgesNode, InsertVerticesNode, PassThroughNode,
-        ProjectNode, TagInsertSpec, VertexInsertInfo,
-    },
+    nodes::{ArgumentNode, EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
 };
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalPassThroughNode;
+use crate::planning::plan::logical::logical_nodes::dml::{
+    LogicalInsertEdgesNode, LogicalInsertVerticesNode,
+};
+use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -171,7 +174,13 @@ impl Planner for CreatePlanner {
                 let props = Self::convert_bound_properties(properties.as_deref(), &expr_ctx)?;
                 let info = self.build_vertex_insert_info(space_name, labels, &props, &expr_ctx)?;
                 (
-                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     1,
                 )
             }
@@ -196,7 +205,13 @@ impl Planner for CreatePlanner {
                     &props,
                 );
                 (
-                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     1,
                 )
             }
@@ -275,16 +290,22 @@ impl Planner for CreatePlanner {
 
                 let mut insert_nodes = Vec::new();
                 for info in vertex_infos {
-                    insert_nodes.push(PlanNodeEnum::InsertVertices(InsertVerticesNode::new(
-                        next_node_id(),
+                    insert_nodes.push(LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
                         info,
-                    )));
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }));
                 }
                 for info in edge_infos {
-                    insert_nodes.push(PlanNodeEnum::InsertEdges(InsertEdgesNode::new(
-                        next_node_id(),
+                    insert_nodes.push(LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
                         info,
-                    )));
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }));
                 }
 
                 if insert_nodes.len() == 1 {
@@ -297,17 +318,23 @@ impl Planner for CreatePlanner {
                     )
                 } else {
                     let combined = self.combine_insert_nodes(insert_nodes)?;
-                    (PlanNodeEnum::PassThrough(combined), created_count)
+                    (LogicalNodeEnum::PassThrough(combined), created_count)
                 }
             }
         };
 
         let yield_columns = self.create_yield_columns(created_count, &expr_ctx);
-        let project_node = ProjectNode::new(insert_node, yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
-        let final_node = PlanNodeEnum::Project(project_node);
-        let sub_plan = SubPlan::new(Some(final_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(insert_node.clone())),
+            deps: vec![insert_node],
+            columns: yield_columns,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 
@@ -365,7 +392,13 @@ impl Planner for CreatePlanner {
                 )?;
 
                 (
-                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     1,
                 )
             }
@@ -393,7 +426,13 @@ impl Planner for CreatePlanner {
                 );
 
                 (
-                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     1,
                 )
             }
@@ -440,17 +479,23 @@ impl Planner for CreatePlanner {
                 let mut insert_nodes = Vec::new();
 
                 for info in vertex_infos {
-                    insert_nodes.push(PlanNodeEnum::InsertVertices(InsertVerticesNode::new(
-                        next_node_id(),
+                    insert_nodes.push(LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
                         info,
-                    )));
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }));
                 }
 
                 for info in edge_infos {
-                    insert_nodes.push(PlanNodeEnum::InsertEdges(InsertEdgesNode::new(
-                        next_node_id(),
+                    insert_nodes.push(LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
                         info,
-                    )));
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }));
                 }
 
                 if insert_nodes.len() == 1 {
@@ -463,7 +508,7 @@ impl Planner for CreatePlanner {
                     )
                 } else {
                     let combined = self.combine_insert_nodes(insert_nodes)?;
-                    (PlanNodeEnum::PassThrough(combined), created_count)
+                    (LogicalNodeEnum::PassThrough(combined), created_count)
                 }
             }
             _ => {
@@ -476,14 +521,19 @@ impl Planner for CreatePlanner {
         // Create a projection node to return the creation results.
         let yield_columns = self.create_yield_columns(created_count, validated.expr_context());
 
-        let project_node = ProjectNode::new(insert_node, yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
-
-        let final_node = PlanNodeEnum::Project(project_node);
+        let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(insert_node.clone())),
+            deps: vec![insert_node],
+            columns: yield_columns,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(final_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
 
         Ok(sub_plan)
     }
@@ -647,15 +697,20 @@ impl CreatePlanner {
     /// Combining multiple insertion nodes
     fn combine_insert_nodes(
         &self,
-        nodes: Vec<PlanNodeEnum>,
-    ) -> Result<PassThroughNode, PlannerError> {
+        nodes: Vec<LogicalNodeEnum>,
+    ) -> Result<LogicalPassThroughNode, PlannerError> {
         if nodes.is_empty() {
             return Err(PlannerError::PlanGenerationFailed(
                 "Unable to combine empty node lists".to_string(),
             ));
         }
 
-        Ok(PassThroughNode::new(next_node_id()))
+        Ok(LogicalPassThroughNode {
+            id: next_node_id(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
     }
 }
 

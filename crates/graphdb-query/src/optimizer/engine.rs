@@ -43,6 +43,7 @@ use crate::optimizer::cost_based::{
 };
 use crate::optimizer::heuristic::batch::{BatchOptimizer, BatchStatistics, OptimizationBatch};
 use crate::optimizer::heuristic::rule_enum::RuleRegistry;
+use crate::optimizer::heuristic::{LogicalBatchOptimizer, PhysicalHeuristicOptimizer};
 use crate::optimizer::partitioning::{
     PartitioningConfig, PartitioningLayoutInfo, PartitioningPlanner,
 };
@@ -63,7 +64,6 @@ mod feedback;
 mod tests;
 
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::logical_plan::LogicalPlan;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::PlanNodeEnum;
 
@@ -89,8 +89,10 @@ pub struct OptimizerEngine {
     subquery_unnesting_optimizer: SubqueryUnnestingOptimizer,
     /// Cost model configuration
     cost_config: CostModelConfig,
-    /// Heuristic batch optimizer (production heuristic main chain)
-    heuristic_batch: BatchOptimizer,
+    /// Logical heuristic optimizer (operates on LogicalNodeEnum, pre-CBO)
+    logical_heuristic: LogicalBatchOptimizer,
+    /// Physical heuristic optimizer (operates on PlanNodeEnum, post-mapping)
+    physical_heuristic: PhysicalHeuristicOptimizer,
     /// Last batch optimization statistics (exposed for EXPLAIN diagnostics)
     last_batch_statistics: Mutex<Vec<(OptimizationBatch, BatchStatistics)>>,
     /// Conservative selector for physical streaming partitions.
@@ -206,8 +208,11 @@ impl OptimizerEngine {
         // Create a subquery to de-associate the optimizer.
         let subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new();
 
-        // Create the heuristic batch optimizer (production heuristic main chain)
-        let heuristic_batch = BatchOptimizer::from_registry(RuleRegistry::default());
+        // Create the logical heuristic optimizer (logical tree, pre-CBO)
+        let logical_heuristic = LogicalBatchOptimizer::new();
+
+        // Create the physical heuristic optimizer (physical tree, post-mapping)
+        let physical_heuristic = PhysicalHeuristicOptimizer::from_registry(RuleRegistry::default());
 
         Self {
             expression_context,
@@ -218,7 +223,8 @@ impl OptimizerEngine {
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
             cost_config,
-            heuristic_batch,
+            logical_heuristic,
+            physical_heuristic,
             last_batch_statistics: Mutex::new(Vec::new()),
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
@@ -443,10 +449,10 @@ impl OptimizerEngine {
         // Ensure a logical plan is available for the optimization pipeline.
         // Planners that natively emit a logical tree need no work here. The
         // reverse conversion below is the single compatibility bridge for
-        // statements that are physical-only by design (data modifications,
-        // administrative statements, search operators): when it fails the
-        // plan keeps its physical shape and runs flat, with the decision
-        // recorded in `cbo_notes` and the fallback counter.
+        // statements that are physical-only by design (remaining legacy
+        // planners, administrative statements, search operators): when it
+        // fails the plan keeps its physical shape and runs flat, with the
+        // decision recorded in `cbo_notes` and the fallback counter.
         current_plan = self.ensure_logical_plan(current_plan);
 
         // Factorization: remove factorization before heuristic passes so they
@@ -454,15 +460,15 @@ impl OptimizerEngine {
         // `optimizer.cpp:1`.
         current_plan = self.apply_remove_factorization(current_plan);
 
-        // Logical heuristic optimization on the logical tree.
+        // Phase 1: Logical Heuristic (operates on LogicalNodeEnum).
         if self.enable_heuristic {
             log::debug!("Starting logical heuristic optimization");
-            current_plan = self
-                .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
+            current_plan = self.apply_logical_heuristic(current_plan)?;
             log::debug!("Logical heuristic optimization completed successfully");
         }
 
-        // Cost-based optimization (always active — conservative rules)
+        // Phase 2: CBO (decisions and rewrites on LogicalNodeEnum,
+        // mirrored on the physical root; always active — conservative rules)
         log::debug!("Starting cost-based optimization");
         current_plan = self.apply_cost_based(current_plan, space)?;
         log::debug!("Cost-based optimization completed successfully");
@@ -475,22 +481,23 @@ impl OptimizerEngine {
         // hash join is cheaper, and record the decision in `cbo_notes`.
         current_plan = self.apply_intersect_to_join_rewrite(current_plan, space);
 
-        // Physical mapping: full LogicalNodeEnum → PlanNodeEnum conversion
-        // (introduces physical choices such as IndexScan). The mapped tree
-        // carries factorization operators and cost-based index hints; the
-        // merge below overlays the physical choices the cost-based
-        // rewriters made directly on the physical root (IndexScan limits,
-        // TopN), so neither side is lost.
+        // Phase 3: Physical Mapping (LogicalNodeEnum → PlanNodeEnum).
+        // Full logical-to-physical conversion (introduces physical choices
+        // such as IndexScan). The mapped tree carries factorization
+        // operators and cost-based index hints; the merge below overlays the
+        // physical choices the cost-based rewriters made directly on the
+        // physical root (IndexScan limits, TopN), so neither side is lost.
         current_plan = self.apply_physical_mapping(current_plan);
 
-        // Physical heuristic optimization on the physical tree.
+        // Phase 4: Physical Heuristic (operates on PlanNodeEnum).
         if self.enable_heuristic {
             log::debug!("Starting physical heuristic optimization");
-            current_plan = self
-                .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
+            current_plan =
+                self.apply_physical_heuristic(current_plan, self.max_heuristic_iterations)?;
             log::debug!("Physical heuristic optimization completed successfully");
         }
 
+        // Phase 5: Partitioning.
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
         Ok(current_plan)
@@ -620,21 +627,32 @@ impl OptimizerEngine {
         self.partitioning_planner.config()
     }
 
-    /// Apply heuristic optimization rules with caller-supplied iteration limit.
-    fn apply_heuristic_with_max_iterations(
+    /// Apply logical heuristic rules on the attached logical tree.
+    fn apply_logical_heuristic(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+        self.logical_heuristic
+            .set_max_iterations(self.max_heuristic_iterations);
+        if let Some(mut logical) = plan.logical_plan.clone() {
+            self.logical_heuristic.optimize(&mut logical.root)?;
+            plan.set_logical_plan(logical);
+        }
+        Ok(plan)
+    }
+
+    /// Apply physical heuristic rules on the physical root.
+    fn apply_physical_heuristic(
         &self,
         plan: ExecutionPlan,
         max_iterations: usize,
     ) -> OptimizeResult<ExecutionPlan> {
         // Interior mutability via AtomicUsize: set_max_iterations does not need &mut self.
-        self.heuristic_batch.set_max_iterations(max_iterations);
+        self.physical_heuristic.set_max_iterations(max_iterations);
 
         let root = match plan.root.clone() {
             Some(root) => root,
             None => return Ok(plan),
         };
         let result = self
-            .heuristic_batch
+            .physical_heuristic
             .optimize(root)
             .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
         if let Ok(mut guard) = self.last_batch_statistics.lock() {
@@ -650,9 +668,10 @@ impl OptimizerEngine {
     /// The decision phases (join order, index selection, aggregate strategy)
     /// consume the pure logical plan when one is attached to the execution
     /// plan (`optimize_logical`); otherwise the physical root is optimized
-    /// directly (`optimize_plan_nodes`). Structural rewrites always operate
-    /// on the physical root because the physical plan is the artifact
-    /// consumed by the physical planner.
+    /// directly (`optimize_plan_nodes`). Structural rewrites are applied to
+    /// the logical tree first so decision and rewrite share one fact source,
+    /// and mirrored on the physical root, which is the artifact consumed by
+    /// the physical planner.
     fn apply_cost_based(
         &self,
         plan: ExecutionPlan,
@@ -663,7 +682,7 @@ impl OptimizerEngine {
 
         let logical = plan.logical_plan().cloned();
         match logical {
-            Some(logical) => self.optimize_logical(&logical, &stats, space, &mut plan)?,
+            Some(_) => self.optimize_logical(&stats, space, &mut plan)?,
             None => self.optimize_plan_nodes(&stats, space, &mut plan)?,
         }
         Ok(plan)
@@ -671,41 +690,43 @@ impl OptimizerEngine {
 
     /// Cost-based decisions driven by the logical plan tree.
     ///
-    /// The logical tree (attached during planning, before heuristic
-    /// rewrites) is the decision fact source for join order, index
-    /// selection, and aggregate strategy. Decision notes are recorded from
-    /// the logical walkers; the structural rewrites (join reorder →
-    /// InnerJoin, ScanVertices → IndexScan, Sort+Limit → TopN) are
-    /// applied to the physical root, which is what the physical planner
-    /// executes.
+    /// Decisions (join order, index selection, aggregate strategy) are taken
+    /// on the pure logical tree attached during planning, and the structural
+    /// rewrites are applied to the logical tree first so decision and rewrite
+    /// share one fact source. The physical root receives the corresponding
+    /// rewrite as well, because it is the artifact consumed by the physical
+    /// planner; the post-mapping merge reconciles both sides.
     fn optimize_logical(
         &self,
-        logical: &LogicalPlan,
         stats: &StatsView,
         space: Option<&str>,
         plan: &mut ExecutionPlan,
     ) -> OptimizeResult<()> {
-        // Subquery unnesting (structural rewrite on the physical
-        // root; the logical tree cannot represent PatternApply, so plans
-        // containing one fall back to `optimize_plan_nodes` — defensive).
+        // Subquery unnesting (structural rewrite on the physical root).
         self.apply_unnesting(plan, stats);
 
-        // Join order — decision on the logical tree, rewrite on
-        // the physical root.
-        self.apply_join_order_logical(logical, stats, plan);
+        // Subquery unnesting on the logical tree (PatternApply → SemiJoin
+        // for provably-safe simple shapes).
+        self.apply_unnesting_logical(plan);
 
-        // Cost-based index selection — decision on the logical
-        // tree, rewrite on the physical root.
-        self.apply_index_selection_logical(logical, space, plan);
+        // Join order — decision and rewrite on the logical tree, rewrite
+        // mirrored on the physical root.
+        self.apply_join_order_logical(stats, plan);
 
-        // Sort + Limit → TopN conversion (residual patterns,
-        // cost-based; physical structural rewrite).
+        // Cost-based index selection — decision stamped as hints on the
+        // logical tree, structural rewrite on the physical root.
+        self.apply_index_selection_logical(space, plan);
+
+        // Sort + Limit → TopN conversion (residual patterns, cost-based).
         self.apply_topn_wiring(plan, stats);
+
+        // Sort + Limit → TopN conversion on the logical tree.
+        self.apply_topn_wiring_logical(stats, plan);
 
         // Aggregate strategy selection — decision on the logical
         // tree (the strategy is consumed by the physical planner via the
         // notes).
-        self.apply_aggregate_strategy_logical(logical, stats, plan);
+        self.apply_aggregate_strategy_logical(stats, plan);
 
         // Collect per-node row estimates for estimated_rows writeback.
         self.apply_row_estimates(plan, stats);
@@ -787,7 +808,7 @@ impl OptimizerEngine {
         Ok(())
     }
 
-    /// Subquery unnesting: PatternApply → InnerJoin when cost-beneficial.
+    /// Subquery unnesting: PatternApply → SemiJoin when cost-beneficial.
     fn apply_unnesting(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
         if let Some(ref root) = plan.root.clone() {
             let mut notes = Vec::new();
@@ -797,15 +818,30 @@ impl OptimizerEngine {
         }
     }
 
+    /// Subquery unnesting on the logical tree (PatternApply → SemiJoin for
+    /// provably-safe simple shapes).
+    fn apply_unnesting_logical(&self, plan: &mut ExecutionPlan) {
+        use crate::optimizer::cost_based::subquery_unnesting::unnest_pattern_applies_logical;
+
+        let Some(logical) = plan.logical_plan().cloned() else {
+            return;
+        };
+        let mut notes = Vec::new();
+        let rewritten = unnest_pattern_applies_logical(logical.root(), &mut notes);
+        plan.cbo_notes.extend(notes);
+        let mut updated_logical = logical;
+        updated_logical.root = rewritten;
+        plan.set_logical_plan(updated_logical);
+    }
+
     /// Join order decision on the logical tree; structural rewrite applied
     /// to the physical root.
-    fn apply_join_order_logical(
-        &self,
-        logical: &LogicalPlan,
-        stats: &StatsView,
-        plan: &mut ExecutionPlan,
-    ) {
+    fn apply_join_order_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
         use crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins_logical;
+
+        let Some(logical) = plan.logical_plan().cloned() else {
+            return;
+        };
 
         // Decision on the logical tree.
         let mut notes = Vec::new();
@@ -818,7 +854,7 @@ impl OptimizerEngine {
         plan.cbo_notes.extend(notes);
 
         // Keep the attached logical plan in sync with the join order decision.
-        let mut updated_logical = logical.clone();
+        let mut updated_logical = logical;
         updated_logical.root = rewritten_logical;
         plan.set_logical_plan(updated_logical);
 
@@ -843,13 +879,12 @@ impl OptimizerEngine {
 
     /// Index selection decision on the logical tree; structural rewrite
     /// applied to the physical root.
-    fn apply_index_selection_logical(
-        &self,
-        logical: &LogicalPlan,
-        space: Option<&str>,
-        plan: &mut ExecutionPlan,
-    ) {
+    fn apply_index_selection_logical(&self, space: Option<&str>, plan: &mut ExecutionPlan) {
         use crate::optimizer::cost_based::index_selection::rewrite_index_scans_logical;
+
+        let Some(logical) = plan.logical_plan().cloned() else {
+            return;
+        };
 
         let selector = IndexSelector::new(
             self.cost_calculator.clone(),
@@ -869,7 +904,7 @@ impl OptimizerEngine {
 
         // Keep the attached logical plan in sync with the hint decision so
         // the full physical mapping rebuilds the chosen index access.
-        let mut updated_logical = logical.clone();
+        let mut updated_logical = logical;
         updated_logical.root = rewritten_logical;
         plan.set_logical_plan(updated_logical);
 
@@ -889,14 +924,12 @@ impl OptimizerEngine {
     }
 
     /// Aggregate strategy decision on the logical tree (note-only).
-    fn apply_aggregate_strategy_logical(
-        &self,
-        logical: &LogicalPlan,
-        stats: &StatsView,
-        plan: &mut ExecutionPlan,
-    ) {
+    fn apply_aggregate_strategy_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
         use crate::optimizer::cost_based::aggregate_strategy::walk_aggregate_strategies_logical;
 
+        let Some(logical) = plan.logical_plan().cloned() else {
+            return;
+        };
         let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
         let mut notes = Vec::new();
         walk_aggregate_strategies_logical(
@@ -907,6 +940,29 @@ impl OptimizerEngine {
             &mut notes,
         );
         plan.cbo_notes.extend(notes);
+    }
+
+    /// Sort + Limit → TopN conversion on the logical tree (residual
+    /// patterns, cost-based).
+    fn apply_topn_wiring_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
+        use crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits_logical;
+
+        let Some(logical) = plan.logical_plan().cloned() else {
+            return;
+        };
+        let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
+        let mut notes = Vec::new();
+        let rewritten = rewrite_sort_with_limits_logical(
+            logical.root(),
+            &optimizer,
+            stats,
+            &self.selectivity_estimator,
+            &mut notes,
+        );
+        plan.cbo_notes.extend(notes);
+        let mut updated_logical = logical;
+        updated_logical.root = rewritten;
+        plan.set_logical_plan(updated_logical);
     }
 
     /// Sort + Limit → TopN conversion (residual patterns, cost-based).
@@ -1297,6 +1353,7 @@ impl OptimizerEngine {
                 hash_keys: vec![intersect_key.clone()],
                 probe_keys: vec![intersect_key.clone()],
                 deps: vec![left, right],
+                recommended_algorithm: None,
                 output_var: wco.output_var().map(|s| s.to_string()),
                 col_names,
                 column_types: vec![],
@@ -1343,6 +1400,7 @@ impl OptimizerEngine {
             LogicalNodeEnum::Limit(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
+            LogicalNodeEnum::Skip(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::TopN(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
             LogicalNodeEnum::Sample(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
@@ -1426,6 +1484,9 @@ impl OptimizerEngine {
             | LogicalNodeEnum::BeginTransaction(_)
             | LogicalNodeEnum::Commit(_)
             | LogicalNodeEnum::Rollback(_)
+            | LogicalNodeEnum::InsertVertices(_)
+            | LogicalNodeEnum::InsertEdges(_)
+            | LogicalNodeEnum::Update(_)
             | LogicalNodeEnum::FulltextSearch(_)
             | LogicalNodeEnum::FulltextLookup(_)
             | LogicalNodeEnum::MatchFulltext(_) => vec![],
@@ -1452,9 +1513,19 @@ impl OptimizerEngine {
             .any(|child| Self::logical_contains_expand_all(child))
     }
 
-    /// Get the heuristic batch optimizer
+    /// Get the physical heuristic batch optimizer
     pub fn heuristic_batch(&self) -> &BatchOptimizer {
-        &self.heuristic_batch
+        self.physical_heuristic.batch()
+    }
+
+    /// Get the logical heuristic optimizer
+    pub fn logical_heuristic(&self) -> &LogicalBatchOptimizer {
+        &self.logical_heuristic
+    }
+
+    /// Get the physical heuristic optimizer
+    pub fn physical_heuristic(&self) -> &PhysicalHeuristicOptimizer {
+        &self.physical_heuristic
     }
 
     /// Get the batch statistics of the last heuristic optimization (for EXPLAIN diagnostics)

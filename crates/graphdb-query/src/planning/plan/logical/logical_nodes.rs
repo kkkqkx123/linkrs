@@ -6,6 +6,7 @@
 pub mod access;
 pub mod algorithm;
 pub mod control_flow;
+pub mod dml;
 pub mod flatten;
 pub mod graph_ops;
 pub mod join;

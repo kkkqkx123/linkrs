@@ -228,7 +228,6 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Math(MathFunction::BitShiftRight));
 
         // Register string function
-        self.register_builtin(BuiltinFunction::String(StringFunction::Length));
         self.register_builtin(BuiltinFunction::String(StringFunction::Upper));
         self.register_builtin(BuiltinFunction::String(StringFunction::Lower));
         self.register_builtin(BuiltinFunction::String(StringFunction::Trim));
@@ -504,6 +503,8 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Path(PathFunction::Properties));
         self.register_builtin(BuiltinFunction::Path(PathFunction::IsTrail));
         self.register_builtin(BuiltinFunction::Path(PathFunction::IsAcyclic));
+        // Polymorphic `length` (string, path, list): the single definition
+        // of this name, so dispatch can never silently shadow another one.
         self.register_builtin(BuiltinFunction::Path(PathFunction::PathLength));
 
         // Register vector functions
@@ -588,7 +589,6 @@ fn builtin_return_type(func: &BuiltinFunction) -> DataType {
             MathFunction::BitShiftRight => DataType::Int,
         },
         BuiltinFunction::String(s) => match s {
-            StringFunction::Length => DataType::BigInt,
             StringFunction::Upper => DataType::String,
             StringFunction::Lower => DataType::String,
             StringFunction::Trim => DataType::String,

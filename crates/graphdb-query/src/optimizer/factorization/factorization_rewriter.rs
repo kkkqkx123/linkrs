@@ -194,6 +194,15 @@ impl FactorizationRewriter {
                 let mut tmp = node.clone();
                 tmp.compute_factorized_schema(&[child_schema])
             }
+            LogicalNodeEnum::Skip(n) => {
+                let child_schema = if let Some(child) = n.input.as_mut() {
+                    Self::visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
+                let mut tmp = node.clone();
+                tmp.compute_factorized_schema(&[child_schema])
+            }
             LogicalNodeEnum::TopN(n) => {
                 let child_schema = if let Some(child) = n.input.as_mut() {
                     Self::visit_operator(child)
@@ -563,6 +572,9 @@ impl FactorizationRewriter {
             | LogicalNodeEnum::BeginTransaction(_)
             | LogicalNodeEnum::Commit(_)
             | LogicalNodeEnum::Rollback(_)
+            | LogicalNodeEnum::InsertVertices(_)
+            | LogicalNodeEnum::InsertEdges(_)
+            | LogicalNodeEnum::Update(_)
             | LogicalNodeEnum::FulltextSearch(_)
             | LogicalNodeEnum::FulltextLookup(_)
             | LogicalNodeEnum::MatchFulltext(_) => {

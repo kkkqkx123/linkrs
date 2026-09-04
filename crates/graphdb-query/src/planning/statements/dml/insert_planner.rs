@@ -5,11 +5,12 @@
 use crate::parser::ast::{InsertStmt, InsertTarget, Stmt, VertexRow};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
-    nodes::{
-        ArgumentNode, EdgeInsertInfo, InsertEdgesNode, InsertVerticesNode, TagInsertSpec,
-        VertexInsertInfo,
-    },
+    nodes::{ArgumentNode, EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
 };
+use crate::planning::plan::logical::logical_nodes::dml::{
+    LogicalInsertEdgesNode, LogicalInsertVerticesNode,
+};
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
@@ -198,7 +199,13 @@ impl Planner for InsertPlanner {
                     insert.if_not_exists,
                 )?;
                 (
-                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     count,
                 )
             }
@@ -238,13 +245,20 @@ impl Planner for InsertPlanner {
                     insert.if_not_exists,
                 );
                 (
-                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     count,
                 )
             }
         };
 
-        let sub_plan = SubPlan::new(Some(insert_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let mut sub_plan = SubPlan::from_logical_root(insert_node);
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
 
         Ok(sub_plan)
     }
@@ -337,7 +351,13 @@ impl Planner for InsertPlanner {
                     insert_stmt.if_not_exists,
                 )?;
                 (
-                    PlanNodeEnum::InsertVertices(InsertVerticesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     count,
                 )
             }
@@ -355,7 +375,13 @@ impl Planner for InsertPlanner {
                     insert_stmt.if_not_exists,
                 );
                 (
-                    PlanNodeEnum::InsertEdges(InsertEdgesNode::new(next_node_id(), info)),
+                    LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                        id: next_node_id(),
+                        info,
+                        output_var: None,
+                        col_names: vec!["inserted".to_string()],
+                        column_types: vec![],
+                    }),
                     count,
                 )
             }
@@ -363,7 +389,8 @@ impl Planner for InsertPlanner {
 
         // Create a SubPlan with InsertVertices/InsertEdges as the root node
         // Note: ProjectNode is not needed here as the executor returns Count result directly
-        let sub_plan = SubPlan::new(Some(insert_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let mut sub_plan = SubPlan::from_logical_root(insert_node);
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
 
         Ok(sub_plan)
     }

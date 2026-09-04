@@ -166,6 +166,7 @@ fn join_logical_roots(
                 hash_keys: vec![],
                 probe_keys: vec![],
                 deps: vec![left_logical, right_logical],
+                recommended_algorithm: None,
                 output_var: None,
                 col_names,
                 column_types: vec![],

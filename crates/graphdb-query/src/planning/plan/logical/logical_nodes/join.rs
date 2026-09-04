@@ -5,7 +5,9 @@ use graphdb_core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_join_node;
 
 define_logical_join_node! {
-    pub struct LogicalInnerJoinNode {}
+    pub struct LogicalInnerJoinNode {
+        recommended_algorithm: Option<crate::optimizer::JoinAlgorithm>,
+    }
     enum: InnerJoin
 }
 

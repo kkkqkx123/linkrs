@@ -607,6 +607,12 @@ pub fn reconstruct_join_tree_logical(
         .map(|l| (l.id.as_str(), &l.logical_node))
         .collect();
 
+    let leaf_rows: HashMap<&str, u64> = chain
+        .leaves
+        .iter()
+        .map(|l| (l.id.as_str(), l.estimated_rows))
+        .collect();
+
     let mut pred_map: PredMap = HashMap::new();
     for p in &chain.predicates {
         let (a, b) = if p.left_table <= p.right_table {
@@ -621,6 +627,8 @@ pub fn reconstruct_join_tree_logical(
     }
 
     let mut current: Option<LogicalNodeEnum> = None;
+    let mut accumulated_rows: u64 = 0;
+    let mut step: usize = 0;
 
     for table_id in &result.order {
         let right_node = match leaf_map.get(table_id.as_str()) {
@@ -630,6 +638,7 @@ pub fn reconstruct_join_tree_logical(
                 continue;
             }
         };
+        let right_rows = leaf_rows.get(table_id.as_str()).copied().unwrap_or(0);
 
         current = match current.take() {
             Some(left) => {
@@ -638,19 +647,83 @@ pub fn reconstruct_join_tree_logical(
                 let pair_key = if lid <= rid {
                     (lid.clone(), rid.clone())
                 } else {
-                    (rid, lid)
+                    (rid.clone(), lid.clone())
                 };
                 let (hash_keys, probe_keys) =
                     resolve_keys_for_pair_logical(&pair_key, &pred_map, &left, &right_node);
-                Some(build_logical_inner_join(
-                    left, right_node, hash_keys, probe_keys,
-                ))
+                let has_hash_keys = !hash_keys.is_empty();
+                let recommended_algorithm = normalize_join_algorithm(
+                    result.algorithms.get(step),
+                    has_hash_keys,
+                    accumulated_rows,
+                    right_rows,
+                );
+                step += 1;
+                let joined = build_logical_inner_join(
+                    left,
+                    right_node,
+                    hash_keys,
+                    probe_keys,
+                    recommended_algorithm,
+                );
+                // Output estimate mirrors the join-order cost model's
+                // `calculate_join_cost` (default selectivity 0.3).
+                let selectivity = chain
+                    .predicates
+                    .iter()
+                    .find(|p| {
+                        let a = p.left_table.as_str();
+                        let b = p.right_table.as_str();
+                        (a == lid && b == rid) || (a == rid && b == lid)
+                    })
+                    .map(|p| p.selectivity)
+                    .unwrap_or(0.3);
+                accumulated_rows =
+                    ((accumulated_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);
+                Some(joined)
             }
-            None => Some(right_node),
+            None => {
+                accumulated_rows = right_rows;
+                Some(right_node)
+            }
         };
     }
 
     current.unwrap_or_else(|| original_root.clone())
+}
+
+/// Normalize a cost-based join algorithm decision for the logical tree.
+///
+/// Mirrors the safety gates of the physical `record_join_algorithm`:
+/// `HashJoin` requires valid equi keys, `NestedLoopJoin` requires trusted
+/// row estimates, and `IndexJoin` has no executor yet so no algorithm is
+/// recommended. Returns the algorithm to stamp on
+/// `LogicalInnerJoinNode.recommended_algorithm`, or `None` to keep the
+/// default heuristic.
+fn normalize_join_algorithm(
+    algorithm: Option<&JoinAlgorithm>,
+    has_hash_keys: bool,
+    left_rows: u64,
+    right_rows: u64,
+) -> Option<JoinAlgorithm> {
+    let algorithm = algorithm?;
+    match algorithm {
+        JoinAlgorithm::NestedLoopJoin { .. } => {
+            if left_rows > 0 && right_rows > 0 {
+                Some(algorithm.clone())
+            } else {
+                None
+            }
+        }
+        JoinAlgorithm::HashJoin { .. } => {
+            if has_hash_keys {
+                Some(algorithm.clone())
+            } else {
+                None
+            }
+        }
+        JoinAlgorithm::IndexJoin { .. } => None,
+    }
 }
 
 fn resolve_keys_for_pair_logical(
@@ -688,6 +761,7 @@ fn build_logical_inner_join(
     right: LogicalNodeEnum,
     hash_keys: Vec<ContextualExpression>,
     probe_keys: Vec<ContextualExpression>,
+    recommended_algorithm: Option<JoinAlgorithm>,
 ) -> LogicalNodeEnum {
     use crate::planning::plan::core::node_id_generator::next_node_id;
     use crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode;
@@ -718,6 +792,7 @@ fn build_logical_inner_join(
         hash_keys,
         probe_keys,
         deps: vec![left, right],
+        recommended_algorithm,
         output_var: None,
         col_names,
         column_types,
@@ -801,6 +876,13 @@ pub fn walk_and_optimize_joins_logical(
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             LogicalNodeEnum::Limit(cloned)
+        }
+        LogicalNodeEnum::Skip(n) => {
+            let new_input =
+                walk_and_optimize_joins_logical(n.input(), stats, cost_calculator, notes);
+            let mut cloned = n.clone();
+            cloned.set_input(new_input);
+            LogicalNodeEnum::Skip(cloned)
         }
         LogicalNodeEnum::TopN(n) => {
             let new_input =
@@ -1197,6 +1279,7 @@ mod tests {
             hash_keys,
             probe_keys,
             deps: vec![left, right],
+            recommended_algorithm: None,
             output_var: None,
             col_names: vec![],
             column_types: vec![],
