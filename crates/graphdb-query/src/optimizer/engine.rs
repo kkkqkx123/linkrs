@@ -1114,10 +1114,8 @@ impl OptimizerEngine {
             }
             // Record total flatten count for metrics observability.
             if !flattens.is_empty() {
-                plan.cbo_notes.push(format!(
-                    "factorization: flatten_total={}",
-                    flattens.len()
-                ));
+                plan.cbo_notes
+                    .push(format!("factorization: flatten_total={}", flattens.len()));
                 if let Some(ref ms) = self.metrics_stats {
                     ms.add_value_with_amount(
                         graphdb_core::MetricType::FactorizationFlattenTotal,

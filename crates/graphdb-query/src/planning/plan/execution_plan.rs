@@ -194,7 +194,13 @@ pub struct SubPlan {
 }
 
 impl SubPlan {
-    /// Create a new SubPlan.
+    /// Create a new SubPlan without a logical mirror.
+    ///
+    /// Reserved for planners whose operators stay physical-only by design
+    /// (data modifications, administrative statements, search operators)
+    /// where no `LogicalNodeEnum` counterpart exists. DQL planners build a
+    /// native logical tree instead and attach it via the `SubPlan` struct
+    /// literal or the `plan_combiner` mirror helpers.
     pub fn new(root: Option<PlanNodeEnum>, tail: Option<PlanNodeEnum>) -> Self {
         Self {
             root,
@@ -226,6 +232,10 @@ impl SubPlan {
     }
 
     /// Create a SubPlan that contains only the root node.
+    ///
+    /// Like [`SubPlan::new`], the plan carries no logical mirror and is
+    /// reserved for physical-only operators and transient physical wiring
+    /// seeds.
     pub fn from_root(root: PlanNodeEnum) -> Self {
         Self {
             root: Some(root.clone()),
@@ -235,6 +245,10 @@ impl SubPlan {
     }
 
     /// Create a SubPlan that contains only a single node.
+    ///
+    /// Like [`SubPlan::new`], the plan carries no logical mirror and is
+    /// reserved for physical-only operators and transient physical wiring
+    /// seeds.
     pub fn from_single_node(node: PlanNodeEnum) -> Self {
         Self {
             root: Some(node.clone()),
@@ -281,14 +295,6 @@ impl SubPlan {
         }
 
         nodes
-    }
-
-    /// Merge the two SubPlans
-    pub fn merge(&self, other: &SubPlan) -> SubPlan {
-        let root = self.root.clone();
-        let tail = other.tail.clone();
-
-        SubPlan::new(root, tail)
     }
 
     /// Connect `upstream` as the input of `downstream`, returning a

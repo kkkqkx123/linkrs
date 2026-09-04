@@ -1,6 +1,9 @@
 //! Conversion from `PlanNodeEnum` to `LogicalNodeEnum`.
 //!
-//! This module implements the physical-to-logical stripping pass:
+//! This module implements the physical-to-logical compatibility bridge used
+//! only when a planner did not emit a native logical tree. Factorized
+//! planners attach the logical tree directly, so this reverse pass runs
+//! solely for statements that stay physical-only by design.
 //! - Physical operators (IndexScan, InnerJoin, LeftJoin)
 //!   are mapped to their logical equivalents.
 //! - All other operators are recursively converted.
@@ -39,8 +42,8 @@ impl std::error::Error for ConversionError {}
 /// - All other logical operators are preserved with recursive child conversion.
 ///
 /// # Limitations
-/// This is an initial implementation covering the most common operators.
-/// Some specialized operators return `NotYetImplemented`.
+/// Statements that remain physical-only by design return `NotYetImplemented`
+/// and keep flat execution without factorization.
 pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionError> {
     match node {
         // === Access nodes ===

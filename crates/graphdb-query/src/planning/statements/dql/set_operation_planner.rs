@@ -11,7 +11,12 @@ use std::sync::Arc;
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
+use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
+use crate::planning::plan::logical::logical_nodes::graph_ops::{
+    LogicalIntersectNode, LogicalMinusNode, LogicalUnionNode,
+};
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -78,6 +83,116 @@ impl SetOperationPlanner {
 
         Ok(())
     }
+
+    /// Join two planned sides under one set operator, mirroring the physical
+    /// join on the native logical trees when both sides carry one.
+    fn combine(
+        &self,
+        left_plan: SubPlan,
+        right_plan: SubPlan,
+        operation: crate::binder::bound::SetOperationKind,
+    ) -> Result<SubPlan, PlannerError> {
+        self.validate_column_compatibility(&left_plan, &right_plan)?;
+
+        let left_root = left_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
+        })?;
+        let right_root = right_plan.root().clone().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
+        })?;
+
+        let final_node = match operation {
+            crate::binder::bound::SetOperationKind::Union => {
+                let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::UnionAll => {
+                let union_node = UnionNode::new(left_root, right_root, false).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
+                })?;
+                PlanNodeEnum::Union(union_node)
+            }
+            crate::binder::bound::SetOperationKind::Intersect => {
+                let intersect_node = IntersectNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create IntersectNode: {}",
+                        e
+                    ))
+                })?;
+                PlanNodeEnum::Intersect(intersect_node)
+            }
+            crate::binder::bound::SetOperationKind::Minus => {
+                let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create MinusNode: {}", e))
+                })?;
+                PlanNodeEnum::Minus(minus_node)
+            }
+        };
+
+        let logical_root = match (
+            left_plan.logical_root().cloned(),
+            right_plan.logical_root().cloned(),
+        ) {
+            (Some(left), Some(right)) => {
+                let col_names = final_node.col_names().to_vec();
+                let mirror = match operation {
+                    crate::binder::bound::SetOperationKind::Union => {
+                        LogicalNodeEnum::Union(LogicalUnionNode {
+                            id: next_node_id(),
+                            input: Some(Box::new(left.clone())),
+                            deps: vec![left, right],
+                            distinct: true,
+                            output_var: None,
+                            col_names,
+                            column_types: vec![],
+                        })
+                    }
+                    crate::binder::bound::SetOperationKind::UnionAll => {
+                        LogicalNodeEnum::Union(LogicalUnionNode {
+                            id: next_node_id(),
+                            input: Some(Box::new(left.clone())),
+                            deps: vec![left, right],
+                            distinct: false,
+                            output_var: None,
+                            col_names,
+                            column_types: vec![],
+                        })
+                    }
+                    crate::binder::bound::SetOperationKind::Intersect => {
+                        LogicalNodeEnum::Intersect(LogicalIntersectNode {
+                            id: next_node_id(),
+                            input: Some(Box::new(left.clone())),
+                            deps: vec![left, right],
+                            output_var: None,
+                            col_names,
+                            column_types: vec![],
+                        })
+                    }
+                    crate::binder::bound::SetOperationKind::Minus => {
+                        LogicalNodeEnum::Minus(LogicalMinusNode {
+                            id: next_node_id(),
+                            input: Some(Box::new(left.clone())),
+                            deps: vec![left, right],
+                            output_var: None,
+                            col_names,
+                            column_types: vec![],
+                        })
+                    }
+                };
+                Some(mirror)
+            }
+            _ => None,
+        };
+
+        let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
+        Ok(SubPlan {
+            root: Some(final_node),
+            tail: Some(tail),
+            logical_root,
+        })
+    }
 }
 
 impl Planner for SetOperationPlanner {
@@ -114,47 +229,7 @@ impl Planner for SetOperationPlanner {
         let left_plan = self.plan_bound_subquery(&left_ctx, 1)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, 1)?;
 
-        self.validate_column_compatibility(&left_plan, &right_plan)?;
-
-        let left_root = left_plan.root().clone().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
-        })?;
-        let right_root = right_plan.root().clone().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
-        })?;
-
-        let final_node = match set_op.operation {
-            crate::binder::bound::SetOperationKind::Union => {
-                let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
-                })?;
-                PlanNodeEnum::Union(union_node)
-            }
-            crate::binder::bound::SetOperationKind::UnionAll => {
-                let union_node = UnionNode::new(left_root, right_root, false).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
-                })?;
-                PlanNodeEnum::Union(union_node)
-            }
-            crate::binder::bound::SetOperationKind::Intersect => {
-                let intersect_node = IntersectNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create IntersectNode: {}",
-                        e
-                    ))
-                })?;
-                PlanNodeEnum::Intersect(intersect_node)
-            }
-            crate::binder::bound::SetOperationKind::Minus => {
-                let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create MinusNode: {}", e))
-                })?;
-                PlanNodeEnum::Minus(minus_node)
-            }
-        };
-
-        let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
-        Ok(SubPlan::new(Some(final_node), Some(tail)))
+        self.combine(left_plan, right_plan, set_op.operation)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
@@ -204,47 +279,7 @@ impl SetOperationPlanner {
         let left_plan = self.plan_bound_subquery(&left_ctx, depth)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, depth)?;
 
-        self.validate_column_compatibility(&left_plan, &right_plan)?;
-
-        let left_root = left_plan.root().clone().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
-        })?;
-        let right_root = right_plan.root().clone().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
-        })?;
-
-        let final_node = match set_op.operation {
-            crate::binder::bound::SetOperationKind::Union => {
-                let union_node = UnionNode::new(left_root, right_root, true).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
-                })?;
-                PlanNodeEnum::Union(union_node)
-            }
-            crate::binder::bound::SetOperationKind::UnionAll => {
-                let union_node = UnionNode::new(left_root, right_root, false).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create UnionNode: {}", e))
-                })?;
-                PlanNodeEnum::Union(union_node)
-            }
-            crate::binder::bound::SetOperationKind::Intersect => {
-                let intersect_node = IntersectNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create IntersectNode: {}",
-                        e
-                    ))
-                })?;
-                PlanNodeEnum::Intersect(intersect_node)
-            }
-            crate::binder::bound::SetOperationKind::Minus => {
-                let minus_node = MinusNode::new(left_root, right_root).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create MinusNode: {}", e))
-                })?;
-                PlanNodeEnum::Minus(minus_node)
-            }
-        };
-
-        let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
-        Ok(SubPlan::new(Some(final_node), Some(tail)))
+        self.combine(left_plan, right_plan, set_op.operation)
     }
 }
 

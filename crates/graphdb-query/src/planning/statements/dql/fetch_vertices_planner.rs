@@ -8,8 +8,12 @@ use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
     ArgumentNode, GetVerticesNode, PlanNodeEnum, ProjectNode,
 };
+use crate::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode;
+use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::plan_combiner::logical_argument_root;
 use crate::QueryContext;
 use std::sync::Arc;
 
@@ -109,6 +113,8 @@ impl Planner for FetchVerticesPlanner {
         };
         get_vertices_node.set_tag_props(tag_props);
 
+        let mut current_logical = get_vertices_mirror(&get_vertices_node, logical_argument());
+
         let get_vertices_node_enum = PlanNodeEnum::GetVertices(get_vertices_node);
 
         // 3. Apply the YIELD clause as a projection when present; without one
@@ -122,13 +128,28 @@ impl Planner for FetchVerticesPlanner {
                     is_matched: false,
                 });
             }
-            PlanNodeEnum::Project(ProjectNode::new(get_vertices_node_enum.clone(), columns)?)
+            let project_node = ProjectNode::new(get_vertices_node_enum.clone(), columns.clone())?;
+            let root = PlanNodeEnum::Project(project_node);
+            current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(current_logical.clone())),
+                deps: vec![current_logical],
+                columns,
+                output_var: None,
+                col_names: root.col_names().to_vec(),
+                column_types: vec![],
+            });
+            root
         } else {
             get_vertices_node_enum.clone()
         };
 
         // 4. Create a SubPlan
-        let sub_plan = SubPlan::new(Some(root), Some(arg_node_enum));
+        let sub_plan = SubPlan {
+            root: Some(root),
+            tail: Some(arg_node_enum),
+            logical_root: Some(current_logical),
+        };
 
         Ok(sub_plan)
     }
@@ -203,9 +224,15 @@ impl Planner for FetchVerticesPlanner {
         };
         get_vertices_node.set_tag_props(tag_props);
 
+        let current_logical = get_vertices_mirror(&get_vertices_node, logical_argument());
+
         let root = PlanNodeEnum::GetVertices(get_vertices_node);
 
-        let sub_plan = SubPlan::new(Some(root), Some(arg_node_enum));
+        let sub_plan = SubPlan {
+            root: Some(root),
+            tail: Some(arg_node_enum),
+            logical_root: Some(current_logical),
+        };
         Ok(sub_plan)
     }
 
@@ -223,4 +250,32 @@ impl Default for FetchVerticesPlanner {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Seed logical argument matching the physical `v` argument node.
+fn logical_argument() -> LogicalNodeEnum {
+    logical_argument_root("v", vec!["vid".to_string()], Some("vertex_ids".to_string()))
+}
+
+/// Mirror a physical fetch-vertices lookup over the logical argument seed.
+fn get_vertices_mirror(
+    get_vertices_node: &GetVerticesNode,
+    arg_logical: LogicalNodeEnum,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::GetVertices(LogicalGetVerticesNode {
+        id: next_node_id(),
+        deps: vec![arg_logical],
+        space_id: get_vertices_node.space_id(),
+        space_name: get_vertices_node.space_name().to_string(),
+        src_ref: get_vertices_node.src_ref().clone(),
+        src_vids: get_vertices_node.src_vids().to_string(),
+        tag_props: get_vertices_node.tag_props().to_vec(),
+        expression: get_vertices_node.filter().cloned(),
+        dedup: get_vertices_node.dedup(),
+        limit: get_vertices_node.limit(),
+        projected_properties: get_vertices_node.projected_properties().to_vec(),
+        output_var: get_vertices_node.output_var().map(|s| s.to_string()),
+        col_names: get_vertices_node.col_names().to_vec(),
+        column_types: vec![],
+    })
 }

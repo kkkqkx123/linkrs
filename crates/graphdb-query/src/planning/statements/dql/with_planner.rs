@@ -8,9 +8,15 @@ use crate::planning::plan::core::{
     next_node_id,
     nodes::{DedupNode, FilterNode, LimitNode, LoopNode, ProjectNode, SortNode, StartNode},
 };
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalLoopNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
+use crate::planning::statements::plan_combiner::{
+    logical_start_root, wrap_logical_dedup, wrap_logical_filter, wrap_logical_limit,
+    wrap_logical_project, wrap_logical_sort,
+};
 use crate::QueryContext;
 use graphdb_core::YieldColumn;
 use std::sync::Arc;
@@ -141,14 +147,20 @@ impl Planner for WithPlanner {
         // A single empty row seeds a standalone WITH statement.
         let start_node = StartNode::new();
         let mut current_node = PlanNodeEnum::Start(start_node.clone());
+        let mut current_logical: LogicalNodeEnum = logical_start_root();
 
         // Create a projection node.
-        let project_node = ProjectNode::new(current_node.clone(), yield_columns)
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns.clone())
             .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?
             .with_subqueries(yield_subqueries);
         current_node = PlanNodeEnum::Project(project_node);
+        current_logical = wrap_logical_project(
+            current_logical,
+            yield_columns,
+            current_node.col_names().to_vec(),
+        );
 
         // If there is a WHERE clause, create a filtering node.
         if let Some(where_clause) = where_clause {
@@ -161,6 +173,11 @@ impl Planner for WithPlanner {
                 })?
                 .with_subqueries(where_subqueries);
             current_node = PlanNodeEnum::Filter(filter_node);
+            current_logical = wrap_logical_filter(
+                current_logical,
+                where_clause,
+                current_node.col_names().to_vec(),
+            );
         }
 
         // Handle recursive CTE
@@ -177,8 +194,16 @@ impl Planner for WithPlanner {
                 expr_id,
                 std::sync::Arc::new(expr_ctx),
             );
-            let loop_node = LoopNode::new(next_node_id(), condition_expr);
+            let loop_node = LoopNode::new(next_node_id(), condition_expr.clone());
             current_node = PlanNodeEnum::Loop(loop_node);
+            current_logical = LogicalNodeEnum::Loop(LogicalLoopNode {
+                id: next_node_id(),
+                condition: condition_expr,
+                body: None,
+                output_var: None,
+                col_names: current_node.col_names().to_vec(),
+                column_types: vec![],
+            });
         }
 
         // If deduplication is required, create a deduplication node.
@@ -187,6 +212,8 @@ impl Planner for WithPlanner {
                 PlannerError::PlanGenerationFailed(format!("Failed to create DedupNode: {}", e))
             })?;
             current_node = PlanNodeEnum::Dedup(dedup_node);
+            current_logical =
+                wrap_logical_dedup(current_logical, current_node.col_names().to_vec());
         }
 
         // If there is an ORDER BY clause, create a sorting node.
@@ -215,10 +242,16 @@ impl Planner for WithPlanner {
                     crate::planning::plan::core::nodes::SortItem::new(expression, direction)
                 })
                 .collect();
-            let sort_node = SortNode::new(current_node.clone(), sort_items).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create SortNode: {}", e))
-            })?;
+            let sort_node =
+                SortNode::new(current_node.clone(), sort_items.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create SortNode: {}", e))
+                })?;
             current_node = PlanNodeEnum::Sort(sort_node);
+            current_logical = wrap_logical_sort(
+                current_logical,
+                sort_items,
+                current_node.col_names().to_vec(),
+            );
         }
 
         // If there is a SKIP clause, create a restriction node.
@@ -228,6 +261,12 @@ impl Planner for WithPlanner {
                     PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
                 })?;
             current_node = PlanNodeEnum::Limit(limit_node);
+            current_logical = wrap_logical_limit(
+                current_logical,
+                skip.count as i64,
+                0,
+                current_node.col_names().to_vec(),
+            );
         }
 
         // If there is a LIMIT clause, create a limit node.
@@ -237,10 +276,20 @@ impl Planner for WithPlanner {
                     PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
                 })?;
             current_node = PlanNodeEnum::Limit(limit_node);
+            current_logical = wrap_logical_limit(
+                current_logical,
+                0,
+                limit.count as i64,
+                current_node.col_names().to_vec(),
+            );
         }
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
+        let sub_plan = SubPlan {
+            root: Some(current_node),
+            tail: Some(PlanNodeEnum::Start(start_node)),
+            logical_root: Some(current_logical),
+        };
 
         Ok(sub_plan)
     }
@@ -290,23 +339,40 @@ impl Planner for WithPlanner {
 
         let start_node = StartNode::new();
         let mut current_node = PlanNodeEnum::Start(start_node.clone());
+        let mut current_logical: LogicalNodeEnum = logical_start_root();
 
-        let project_node = ProjectNode::new(current_node.clone(), yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
+        let project_node =
+            ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+            })?;
         current_node = PlanNodeEnum::Project(project_node);
+        current_logical = wrap_logical_project(
+            current_logical,
+            yield_columns,
+            current_node.col_names().to_vec(),
+        );
 
         if let Some(ref condition) = with_stmt.condition {
             let ctx_expr =
                 crate::binder::expr_converter::bound_expr_to_contextual(condition, &expr_ctx)
                     .map_err(PlannerError::PlanGenerationFailed)?;
-            let filter_node = FilterNode::new(current_node.clone(), ctx_expr).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
-            })?;
+            let filter_node =
+                FilterNode::new(current_node.clone(), ctx_expr.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create FilterNode: {}",
+                        e
+                    ))
+                })?;
             current_node = PlanNodeEnum::Filter(filter_node);
+            current_logical =
+                wrap_logical_filter(current_logical, ctx_expr, current_node.col_names().to_vec());
         }
 
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
+        let sub_plan = SubPlan {
+            root: Some(current_node),
+            tail: Some(PlanNodeEnum::Start(start_node)),
+            logical_root: Some(current_logical),
+        };
         Ok(sub_plan)
     }
 

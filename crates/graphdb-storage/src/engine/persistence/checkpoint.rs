@@ -50,7 +50,6 @@ pub struct CheckpointData {
     pub data_size: u64,
 }
 
-
 impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     pub(crate) fn cleanup_temporary_checkpoints(checkpoint_dir: &Path) -> StorageResult<()> {
         for entry in std::fs::read_dir(checkpoint_dir)? {

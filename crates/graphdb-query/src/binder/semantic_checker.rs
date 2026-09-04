@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use graphdb_core::error::{DBError, DBResult, QueryError};
 use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::{walk_expr, ExprValidator, MAX_EXPR_DEPTH};
 use graphdb_core::types::expr::Expression;
+use graphdb_core::types::expr::{walk_expr, ExprValidator, MAX_EXPR_DEPTH};
 use graphdb_core::types::DataType;
 
 const MAX_FUNCTION_ARGS: usize = 100;

@@ -11,6 +11,7 @@ use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::nodes::{ProjectNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::plan_combiner::{logical_start_root, wrap_logical_project};
 use crate::QueryContext;
 use graphdb_core::YieldColumn;
 use std::sync::Arc;
@@ -50,13 +51,22 @@ impl Planner for AssignVariablePlanner {
             alias: assign.name.clone(),
             is_matched: false,
         };
-        let project_node =
-            ProjectNode::new(current_node.clone(), vec![yield_column]).map_err(|e| {
+        let project_node = ProjectNode::new(current_node.clone(), vec![yield_column.clone()])
+            .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?;
         let current_node = PlanNodeEnum::Project(project_node);
+        let logical_root = wrap_logical_project(
+            logical_start_root(),
+            vec![yield_column],
+            current_node.col_names().to_vec(),
+        );
 
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
+        let sub_plan = SubPlan {
+            root: Some(current_node),
+            tail: Some(PlanNodeEnum::Start(start_node)),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 
@@ -93,13 +103,22 @@ impl Planner for AssignVariablePlanner {
             alias: assign.name.clone(),
             is_matched: false,
         };
-        let project_node =
-            ProjectNode::new(current_node.clone(), vec![yield_column]).map_err(|e| {
+        let project_node = ProjectNode::new(current_node.clone(), vec![yield_column.clone()])
+            .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?;
         let current_node = PlanNodeEnum::Project(project_node);
+        let logical_root = wrap_logical_project(
+            logical_start_root(),
+            vec![yield_column],
+            current_node.col_names().to_vec(),
+        );
 
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
+        let sub_plan = SubPlan {
+            root: Some(current_node),
+            tail: Some(PlanNodeEnum::Start(start_node)),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 

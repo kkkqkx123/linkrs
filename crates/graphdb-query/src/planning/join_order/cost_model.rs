@@ -72,7 +72,10 @@ mod tests {
 
     #[test]
     fn intersect_sums_probe_and_builds() {
-        assert_eq!(CostModel::compute_intersect_cost(10, 100, &[20, 30], 50), 210);
+        assert_eq!(
+            CostModel::compute_intersect_cost(10, 100, &[20, 30], 50),
+            210
+        );
         assert_eq!(CostModel::compute_intersect_cost(10, 100, &[], 0), 110);
     }
 

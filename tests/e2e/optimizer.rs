@@ -146,24 +146,36 @@ mod wco {
         let r = db
             .execute_query("MATCH (a:person) RETURN a.name ORDER BY a.name")
             .expect("vertex scan should succeed");
-        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
-            row.iter().map(|v| match v {
-                graphdb::core::Value::String(s) => s.to_string(),
-                other => format!("{:?}", other),
-            }).collect()
-        }).collect();
+        let rows: Vec<Vec<String>> = r
+            .rows()
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|v| match v {
+                        graphdb::core::Value::String(s) => s.to_string(),
+                        other => format!("{:?}", other),
+                    })
+                    .collect()
+            })
+            .collect();
         eprintln!("Vertex scan: {} rows: {:?}", rows.len(), rows);
 
         // 2. Edges only (two vertices + edge)
         let r = db
             .execute_query("MATCH (a)-[e:knows]->(b) RETURN a.name, b.name ORDER BY a.name")
             .expect("edge scan should succeed");
-        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
-            row.iter().map(|v| match v {
-                graphdb::core::Value::String(s) => s.to_string(),
-                other => format!("{:?}", other),
-            }).collect()
-        }).collect();
+        let rows: Vec<Vec<String>> = r
+            .rows()
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|v| match v {
+                        graphdb::core::Value::String(s) => s.to_string(),
+                        other => format!("{:?}", other),
+                    })
+                    .collect()
+            })
+            .collect();
         eprintln!("Edge scan: {} rows: {:?}", rows.len(), rows);
 
         // 3. EXPLAIN to see the plan
@@ -176,16 +188,28 @@ mod wco {
         let r = db
             .execute_query("PROFILE MATCH (a)-[e:knows]->(b) RETURN a.name, b.name")
             .expect("profile should succeed");
-        let rows: Vec<Vec<String>> = r.rows().iter().map(|row| {
-            row.iter().map(|v| match v {
-                graphdb::core::Value::String(s) => s.to_string(),
-                other => format!("{:?}", other),
-            }).collect()
-        }).collect();
+        let rows: Vec<Vec<String>> = r
+            .rows()
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|v| match v {
+                        graphdb::core::Value::String(s) => s.to_string(),
+                        other => format!("{:?}", other),
+                    })
+                    .collect()
+            })
+            .collect();
         eprintln!("Profile: {} rows: {:?}", rows.len(), rows);
 
         // Expect 1 edge row (a->b)
-        assert_eq!(rows.len(), 1, "expected 1 edge row, got {}: {:?}", rows.len(), rows);
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected 1 edge row, got {}: {:?}",
+            rows.len(),
+            rows
+        );
     }
 
     /// EXPLAIN should list WcoIntersect when a triangle query uses WCO.

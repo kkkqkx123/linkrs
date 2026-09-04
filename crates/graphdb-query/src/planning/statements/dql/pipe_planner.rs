@@ -7,8 +7,11 @@ use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::{PipeStmt, Stmt};
 use crate::planning::plan::core::nodes::{PipeDeleteEdgesNode, PipeDeleteVerticesNode};
 use crate::planning::plan::core::{
-    node_id_generator::next_node_id, nodes::base::plan_node_traits::SingleInputNode,
+    node_id_generator::next_node_id,
+    nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode},
 };
+use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -67,9 +70,11 @@ impl Planner for PipePlanner {
 
         let right_plan = right_planner.transform(&right_validated, qctx)?;
 
+        let left_logical = left_plan.logical_root().cloned();
         let left_root = left_plan.root.ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
         })?;
+        let right_logical = right_plan.logical_root().cloned();
         let right_root = right_plan.root.ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
         })?;
@@ -89,7 +94,23 @@ impl Planner for PipePlanner {
 
         let combined_root = replace_argument_node(right_root, left_root);
 
-        Ok(SubPlan::new(Some(combined_root), None))
+        let combined_logical = match (left_logical, right_logical) {
+            (Some(left_logical), Some(right_logical)) => {
+                let left_logical = if matches!(*pipe_stmt.left, Stmt::Go(_)) {
+                    elide_go_default_adapter_logical(left_logical)
+                } else {
+                    left_logical
+                };
+                Some(replace_logical_argument(right_logical, left_logical))
+            }
+            _ => None,
+        };
+
+        Ok(SubPlan {
+            root: Some(combined_root),
+            tail: None,
+            logical_root: combined_logical,
+        })
     }
 
     fn plan_bound(
@@ -150,12 +171,14 @@ impl Planner for PipePlanner {
             combined_plan = match combined_plan {
                 None => Some(sub_plan),
                 Some(prev_plan) => {
+                    let prev_logical = prev_plan.logical_root().cloned();
                     let prev_root = prev_plan.root.ok_or_else(|| {
                         PlannerError::PlanGenerationFailed(
                             "Previous pipe stage has no root node".to_string(),
                         )
                     })?;
 
+                    let new_logical = sub_plan.logical_root().cloned();
                     let new_root = sub_plan.root.ok_or_else(|| {
                         PlannerError::PlanGenerationFailed(
                             "Current pipe stage has no root node".to_string(),
@@ -163,7 +186,17 @@ impl Planner for PipePlanner {
                     })?;
 
                     let combined_root = replace_argument_node(new_root, prev_root);
-                    Some(SubPlan::new(Some(combined_root), None))
+                    let combined_logical = match (prev_logical, new_logical) {
+                        (Some(left_logical), Some(right_logical)) => {
+                            Some(replace_logical_argument(right_logical, left_logical))
+                        }
+                        _ => None,
+                    };
+                    Some(SubPlan {
+                        root: Some(combined_root),
+                        tail: None,
+                        logical_root: combined_logical,
+                    })
                 }
             };
         }
@@ -218,6 +251,147 @@ fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
         filter.input().clone()
     } else {
         PlanNodeEnum::Project(project)
+    }
+}
+
+/// Mirror of [`replace_argument_node`] on the native logical tree: swap the
+/// standalone seed (argument/start) of a downstream stage with the upstream
+/// logical tree so piped stages keep one chained logical plan.
+fn replace_logical_argument(
+    plan: LogicalNodeEnum,
+    replacement: LogicalNodeEnum,
+) -> LogicalNodeEnum {
+    match plan {
+        LogicalNodeEnum::Argument(_) | LogicalNodeEnum::Start(_) => replacement,
+        LogicalNodeEnum::Project(mut project) => {
+            if let Some(input) = project.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                project.set_input(new_input);
+            }
+            LogicalNodeEnum::Project(project)
+        }
+        LogicalNodeEnum::Aggregate(mut aggregate) => {
+            // Mirror the standalone GROUP BY adapter elision: an aggregate
+            // over Project -> ScanVertices consumes the piped rows directly.
+            let new_input = match aggregate.input.take() {
+                Some(boxed) => match *boxed {
+                    LogicalNodeEnum::Project(mut project) => {
+                        let is_adapter = matches!(
+                            project.input.as_deref(),
+                            Some(LogicalNodeEnum::ScanVertices(_))
+                        );
+                        if is_adapter {
+                            replacement
+                        } else {
+                            if let Some(inner) = project.input.take() {
+                                let new_inner = replace_logical_argument(*inner, replacement);
+                                project.set_input(new_inner);
+                            }
+                            LogicalNodeEnum::Project(project)
+                        }
+                    }
+                    other => replace_logical_argument(other, replacement),
+                },
+                None => replacement,
+            };
+            aggregate.set_input(new_input);
+            LogicalNodeEnum::Aggregate(aggregate)
+        }
+        LogicalNodeEnum::Filter(mut filter) => {
+            if let Some(input) = filter.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                filter.set_input(new_input);
+            }
+            LogicalNodeEnum::Filter(filter)
+        }
+        LogicalNodeEnum::Sort(mut sort) => {
+            if let Some(input) = sort.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                sort.set_input(new_input);
+            }
+            LogicalNodeEnum::Sort(sort)
+        }
+        LogicalNodeEnum::Limit(mut limit) => {
+            if let Some(input) = limit.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                limit.set_input(new_input);
+            }
+            LogicalNodeEnum::Limit(limit)
+        }
+        LogicalNodeEnum::Dedup(mut dedup) => {
+            if let Some(input) = dedup.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                dedup.set_input(new_input);
+            }
+            LogicalNodeEnum::Dedup(dedup)
+        }
+        LogicalNodeEnum::Unwind(mut unwind) => {
+            let replacement_cols = replacement.col_names().to_vec();
+            if let Some(input) = unwind.input.take() {
+                let new_input = replace_logical_argument(*input, replacement);
+                unwind.set_input(new_input);
+            }
+            let mut new_col_names = replacement_cols;
+            new_col_names.push(unwind.alias.clone());
+            unwind.col_names = new_col_names;
+            LogicalNodeEnum::Unwind(unwind)
+        }
+        LogicalNodeEnum::ExpandAll(mut expand) => {
+            expand.deps = expand
+                .deps
+                .into_iter()
+                .map(|d| replace_logical_argument(d, replacement.clone()))
+                .collect();
+            LogicalNodeEnum::ExpandAll(expand)
+        }
+        LogicalNodeEnum::GetVertices(mut gv) => {
+            gv.deps = gv
+                .deps
+                .into_iter()
+                .map(|d| replace_logical_argument(d, replacement.clone()))
+                .collect();
+            LogicalNodeEnum::GetVertices(gv)
+        }
+        other => other,
+    }
+}
+
+/// Mirror of [`elide_go_default_adapter`] on the native logical tree: strip
+/// the default projection and trivial filter of a standalone GO plan when it
+/// feeds a pipe, so downstream stages resolve against the expand output.
+fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
+    let LogicalNodeEnum::Project(project) = plan else {
+        return plan;
+    };
+
+    let columns = &project.columns;
+    let is_default_project = columns.len() == 2
+        && columns[0].alias == "dst"
+        && columns[1].alias == "edge"
+        && columns[0].expression.as_variable().as_deref() == Some("dst")
+        && columns[1].expression.as_variable().as_deref() == Some("edge");
+    if !is_default_project {
+        return LogicalNodeEnum::Project(project);
+    }
+
+    let Some(input) = project.input.clone() else {
+        return LogicalNodeEnum::Project(project);
+    };
+    let LogicalNodeEnum::Filter(filter) = *input else {
+        return LogicalNodeEnum::Project(project);
+    };
+
+    let is_true_filter = filter
+        .condition
+        .as_literal()
+        .is_some_and(|value| matches!(value, graphdb_core::Value::Bool(true)));
+    if !is_true_filter {
+        return LogicalNodeEnum::Project(project);
+    }
+
+    match filter.input.clone() {
+        Some(boxed) if matches!(*boxed, LogicalNodeEnum::ExpandAll(_)) => *boxed,
+        _ => LogicalNodeEnum::Project(project),
     }
 }
 
@@ -311,6 +485,32 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
             let new_input = replace_argument_node(input, replacement);
             pipe_delete_edges.set_input(new_input);
             PlanNodeEnum::PipeDeleteEdges(pipe_delete_edges)
+        }
+        PlanNodeEnum::ExpandAll(mut expand) => {
+            let new_inputs: Vec<_> = expand
+                .inputs()
+                .iter()
+                .cloned()
+                .map(|i| replace_argument_node(i, replacement.clone()))
+                .collect();
+            expand.inputs_mut().clear();
+            for inp in new_inputs {
+                expand.add_input(inp);
+            }
+            PlanNodeEnum::ExpandAll(expand)
+        }
+        PlanNodeEnum::GetVertices(mut gv) => {
+            let new_inputs: Vec<_> = gv
+                .inputs()
+                .iter()
+                .cloned()
+                .map(|i| replace_argument_node(i, replacement.clone()))
+                .collect();
+            gv.inputs_mut().clear();
+            for inp in new_inputs {
+                gv.add_input(inp);
+            }
+            PlanNodeEnum::GetVertices(gv)
         }
         other => other,
     }

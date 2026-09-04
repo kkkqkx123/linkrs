@@ -120,16 +120,14 @@ impl<'a> ExpressionBinder<'a> {
                     .unwrap_or(DataType::Unknown)
             }
 
-            Expression::Subscript { collection, .. } => {
-                match self.resolve_type(collection) {
-                    DataType::List(element) => element.as_ref().clone(),
-                    DataType::Map(value) => value.as_ref().clone(),
-                    DataType::Set(element) => element.as_ref().clone(),
-                    DataType::Array(info) => info.element.as_ref().clone(),
-                    DataType::Path => DataType::Vertex,
-                    _ => DataType::Unknown,
-                }
-            }
+            Expression::Subscript { collection, .. } => match self.resolve_type(collection) {
+                DataType::List(element) => element.as_ref().clone(),
+                DataType::Map(value) => value.as_ref().clone(),
+                DataType::Set(element) => element.as_ref().clone(),
+                DataType::Array(info) => info.element.as_ref().clone(),
+                DataType::Path => DataType::Vertex,
+                _ => DataType::Unknown,
+            },
 
             Expression::TypeCast { target_type, .. } => target_type.clone(),
 

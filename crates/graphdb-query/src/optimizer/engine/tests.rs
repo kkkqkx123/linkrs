@@ -638,8 +638,6 @@ mod factorization_fallback_tests {
 
     #[test]
     fn native_all_paths_plan_optimizes_without_fallback() {
-        use crate::planning::plan::SubPlan;
-
         let mut engine = OptimizerEngine::default();
         engine.set_enable_heuristic(false);
         let logical = all_paths_logical();

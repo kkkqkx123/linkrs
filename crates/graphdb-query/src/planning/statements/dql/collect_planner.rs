@@ -6,9 +6,13 @@
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::Stmt;
+use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{AggregateNode, StartNode};
+use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::plan_combiner::logical_start_root;
 use crate::QueryContext;
 use graphdb_core::types::operators::AggregateFunction;
 use std::sync::Arc;
@@ -40,6 +44,28 @@ impl CollectPlanner {
             BoundExpression::ColumnRef(cr) => format!("{}.{}", cr.variable, cr.property),
             _ => "_".to_string(),
         }
+    }
+
+    /// Mirror a standalone COLLECT aggregate over the logical start seed.
+    ///
+    /// COLLECT aggregates every input row without group keys, so the mirror
+    /// carries empty grouping inputs alongside the physical functions.
+    fn aggregate_mirror(aggregate_node: &AggregateNode) -> LogicalNodeEnum {
+        let input = logical_start_root();
+        let width = aggregate_node.aggregation_functions().len();
+        LogicalNodeEnum::Aggregate(LogicalAggregateNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            group_key_exprs: vec![],
+            aggregation_functions: aggregate_node.aggregation_functions().to_vec(),
+            aggregation_distinct: vec![false; width],
+            aggregation_filters: vec![None; width],
+            grouping_sets: vec![],
+            output_var: None,
+            col_names: aggregate_node.col_names().to_vec(),
+            column_types: vec![],
+        })
     }
 }
 
@@ -102,10 +128,12 @@ impl Planner for CollectPlanner {
         })?;
         aggregate_node.set_aggregation_args(aggregation_args);
 
-        let sub_plan = SubPlan::new(
-            Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            Some(start_enum),
-        );
+        let logical_root = Self::aggregate_mirror(&aggregate_node);
+        let sub_plan = SubPlan {
+            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            tail: Some(start_enum),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 
@@ -155,10 +183,12 @@ impl Planner for CollectPlanner {
         })?;
         aggregate_node.set_aggregation_args(aggregation_args);
 
-        let sub_plan = SubPlan::new(
-            Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            Some(start_enum),
-        );
+        let logical_root = Self::aggregate_mirror(&aggregate_node);
+        let sub_plan = SubPlan {
+            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            tail: Some(start_enum),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 

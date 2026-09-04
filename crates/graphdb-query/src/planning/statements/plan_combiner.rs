@@ -1,13 +1,21 @@
 use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::planning::plan::core::nodes::operation::sort_node::SortItem;
 use crate::planning::plan::core::nodes::{CrossJoinNode, LeftJoinNode, UnionNode};
+use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
 use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode;
 use crate::planning::plan::logical::logical_nodes::join::{
     LogicalCrossJoinNode, LogicalLeftJoinNode,
 };
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSortNode,
+};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::YieldColumn;
 
 /// Wrap the attached logical mirror (if any) of `input` with `wrap`.
 ///
@@ -19,6 +27,112 @@ pub(crate) fn wrap_logical(
     wrap: impl FnOnce(LogicalNodeEnum) -> LogicalNodeEnum,
 ) -> Option<LogicalNodeEnum> {
     input.logical_root().cloned().map(wrap)
+}
+
+/// Seed a native logical tree for a standalone plan over a single empty row.
+pub(crate) fn logical_start_root() -> LogicalNodeEnum {
+    LogicalNodeEnum::Start(LogicalStartNode::new())
+}
+
+/// Seed a native logical tree for a standalone plan fed by an argument.
+pub(crate) fn logical_argument_root(
+    var: &str,
+    col_names: Vec<String>,
+    output_var: Option<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Argument(LogicalArgumentNode {
+        id: next_node_id(),
+        var: var.to_string(),
+        output_var,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+/// Stack a projection mirror on top of a standalone logical tree.
+pub(crate) fn wrap_logical_project(
+    input: LogicalNodeEnum,
+    columns: Vec<YieldColumn>,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Project(LogicalProjectNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        columns,
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+/// Stack a filter mirror on top of a standalone logical tree.
+pub(crate) fn wrap_logical_filter(
+    input: LogicalNodeEnum,
+    condition: ContextualExpression,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Filter(LogicalFilterNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        condition,
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+/// Stack a dedup mirror on top of a standalone logical tree.
+pub(crate) fn wrap_logical_dedup(
+    input: LogicalNodeEnum,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Dedup(LogicalDedupNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+/// Stack a sort mirror on top of a standalone logical tree.
+pub(crate) fn wrap_logical_sort(
+    input: LogicalNodeEnum,
+    sort_items: Vec<SortItem>,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Sort(LogicalSortNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        sort_items,
+        limit: None,
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+/// Stack a limit/offset mirror on top of a standalone logical tree.
+pub(crate) fn wrap_logical_limit(
+    input: LogicalNodeEnum,
+    offset: i64,
+    count: i64,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Limit(LogicalLimitNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        offset,
+        count,
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
 }
 
 pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerError> {

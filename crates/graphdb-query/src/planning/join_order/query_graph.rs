@@ -266,7 +266,10 @@ mod tests {
 
     #[test]
     fn direction_roundtrip() {
-        assert_eq!("in".parse::<ExtendDirection>().unwrap(), ExtendDirection::In);
+        assert_eq!(
+            "in".parse::<ExtendDirection>().unwrap(),
+            ExtendDirection::In
+        );
         assert_eq!(
             "both".parse::<ExtendDirection>().unwrap(),
             ExtendDirection::Both

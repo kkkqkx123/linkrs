@@ -8,6 +8,7 @@ use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::nodes::{FilterNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::plan_combiner::{logical_start_root, wrap_logical_filter};
 use crate::QueryContext;
 use std::sync::Arc;
 
@@ -44,7 +45,16 @@ impl Planner for FilterPlanner {
                 PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
             })?;
 
-        let sub_plan = SubPlan::new(Some(PlanNodeEnum::Filter(filter_node)), Some(start_enum));
+        let logical_root = wrap_logical_filter(
+            logical_start_root(),
+            filter_stmt.expression.clone(),
+            filter_node.col_names().to_vec(),
+        );
+        let sub_plan = SubPlan {
+            root: Some(PlanNodeEnum::Filter(filter_node)),
+            tail: Some(start_enum),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 
@@ -80,7 +90,16 @@ impl Planner for FilterPlanner {
             PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
         })?;
 
-        let sub_plan = SubPlan::new(Some(PlanNodeEnum::Filter(filter_node)), Some(start_enum));
+        let logical_root = wrap_logical_filter(
+            logical_start_root(),
+            filter_node.condition().clone(),
+            filter_node.col_names().to_vec(),
+        );
+        let sub_plan = SubPlan {
+            root: Some(PlanNodeEnum::Filter(filter_node)),
+            tail: Some(start_enum),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 

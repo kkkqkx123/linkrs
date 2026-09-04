@@ -54,10 +54,7 @@ impl Binder {
     }
 
     /// Bind an AST into a fully resolved BoundStatement.
-    pub fn bind(
-        mut self,
-        ast: Arc<Ast>,
-    ) -> DBResult<BoundStatement> {
+    pub fn bind(mut self, ast: Arc<Ast>) -> DBResult<BoundStatement> {
         let bound = self.bind_stmt(&ast.stmt)?;
         Ok(bound)
     }
@@ -142,9 +139,7 @@ mod tests {
         let result = parser
             .parse()
             .map_err(|e| DBError::from(graphdb_core::error::QueryError::pipeline_parse_error(e)))?;
-        Binder::new()
-            .with_space(None, 0)
-            .bind(result.ast)
+        Binder::new().with_space(None, 0).bind(result.ast)
     }
 
     #[test]

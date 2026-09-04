@@ -4,12 +4,20 @@
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::{GroupingType, Stmt};
+use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
     AggregateNode, FilterNode, ProjectNode, ScanVerticesNode,
 };
+use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
+use crate::planning::statements::clauses::exists_planner::to_contextual;
+use crate::planning::statements::plan_combiner::{
+    logical_start_root, wrap_logical_filter, wrap_logical_project,
+};
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression;
@@ -269,7 +277,7 @@ impl Planner for GroupByPlanner {
         // Build the input plan. A standalone GROUP BY aggregates over every
         // vertex of the current space; when the GROUP BY is the right side of
         // a pipe, PipePlanner replaces this adapter with the piped rows.
-        let (input_enum, input_tail) = self.build_standalone_input(
+        let (input_enum, input_tail, mut current_logical) = self.build_standalone_input(
             validated,
             &group_keys,
             &aggregation_functions,
@@ -337,7 +345,7 @@ impl Planner for GroupByPlanner {
         // Create an aggregate node.
         let mut aggregate_node = AggregateNode::new(
             input_enum.clone(),
-            group_keys,
+            group_keys.clone(),
             aggregation_functions,
         )
         .map_err(|e| {
@@ -349,6 +357,18 @@ impl Planner for GroupByPlanner {
         aggregate_node.set_grouping_sets(grouping_sets);
 
         let mut final_node = PlanNodeEnum::Aggregate(aggregate_node);
+        if let PlanNodeEnum::Aggregate(ref aggregate) = final_node {
+            current_logical = aggregate_mirror(
+                aggregate,
+                current_logical,
+                group_keys
+                    .iter()
+                    .map(|key| {
+                        to_contextual(Expression::Variable(key.clone()), validated.expr_context())
+                    })
+                    .collect(),
+            );
+        }
 
         // If there is a HAVING clause, add a FilterNode.
         if let Some(having_expr) = having_clause {
@@ -361,10 +381,19 @@ impl Planner for GroupByPlanner {
                 })?
                 .with_subqueries(having_subqueries);
             final_node = PlanNodeEnum::Filter(filter_node);
+            current_logical = wrap_logical_filter(
+                current_logical,
+                having_expr,
+                final_node.col_names().to_vec(),
+            );
         }
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(final_node), Some(input_tail));
+        let sub_plan = SubPlan {
+            root: Some(final_node),
+            tail: Some(input_tail),
+            logical_root: Some(current_logical),
+        };
 
         Ok(sub_plan)
     }
@@ -450,7 +479,7 @@ impl Planner for GroupByPlanner {
 
         let mut aggregate_node = AggregateNode::with_agg_aliases(
             input_enum.clone(),
-            group_keys,
+            group_keys.clone(),
             aggregation_functions,
             agg_aliases,
         )
@@ -459,10 +488,21 @@ impl Planner for GroupByPlanner {
         })?;
         aggregate_node.set_aggregation_args(aggregation_args);
 
-        let sub_plan = SubPlan::new(
-            Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            Some(input_enum),
-        );
+        let logical_root = {
+            let expr_ctx = Arc::new(
+                graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            );
+            let group_key_exprs = group_keys
+                .iter()
+                .map(|key| to_contextual(Expression::Variable(key.clone()), &expr_ctx))
+                .collect();
+            aggregate_mirror(&aggregate_node, logical_start_root(), group_key_exprs)
+        };
+        let sub_plan = SubPlan {
+            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            tail: Some(input_enum),
+            logical_root: Some(logical_root),
+        };
         Ok(sub_plan)
     }
 
@@ -478,6 +518,9 @@ impl GroupByPlanner {
     /// so the aggregate evaluates its group keys and aggregate function fields
     /// against flat property columns. When the GROUP BY appears on the right
     /// side of a pipe, PipePlanner replaces this adapter with the piped rows.
+    ///
+    /// Returns the physical input root, the physical tail, and the native
+    /// logical mirror of the adapter.
     fn build_standalone_input(
         &self,
         validated: &ValidatedStatement,
@@ -485,7 +528,7 @@ impl GroupByPlanner {
         aggregation_functions: &[AggregateFunction],
         aggregation_args: &[Vec<Expression>],
         qctx: Arc<QueryContext>,
-    ) -> Result<(PlanNodeEnum, PlanNodeEnum), PlannerError> {
+    ) -> Result<(PlanNodeEnum, PlanNodeEnum, LogicalNodeEnum), PlannerError> {
         let space_name = qctx
             .space_name()
             .or_else(|| validated.validation_info.semantic_info.space_name.clone())
@@ -527,11 +570,33 @@ impl GroupByPlanner {
             });
         }
 
-        let project_node = ProjectNode::new(scan_enum.clone(), yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
+        let project_node =
+            ProjectNode::new(scan_enum.clone(), yield_columns.clone()).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+            })?;
+        let project_enum = PlanNodeEnum::Project(project_node);
 
-        Ok((PlanNodeEnum::Project(project_node), scan_enum))
+        let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: next_node_id(),
+            space_id: 0,
+            space_name: space_name.clone(),
+            tag: None,
+            expression: None,
+            limit: None,
+            projected_properties: properties,
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: None,
+            col_names: vec!["v".to_string()],
+            column_types: vec![],
+        });
+        let logical_project = wrap_logical_project(
+            logical_scan,
+            yield_columns,
+            project_enum.col_names().to_vec(),
+        );
+
+        Ok((project_enum, scan_enum, logical_project))
     }
 
     /// Return the input field name referenced by an aggregate function, if any.
@@ -681,4 +746,29 @@ impl Default for GroupByPlanner {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Mirror a physical aggregate over the standalone logical input.
+///
+/// The caller supplies lossless group key identities; the remaining aggregate
+/// payload is read back from the physical node so both trees describe the
+/// same operator.
+fn aggregate_mirror(
+    aggregate_node: &AggregateNode,
+    input: LogicalNodeEnum,
+    group_key_exprs: Vec<ContextualExpression>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::Aggregate(LogicalAggregateNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        group_key_exprs,
+        aggregation_functions: aggregate_node.aggregation_functions().to_vec(),
+        aggregation_distinct: aggregate_node.aggregation_distinct().to_vec(),
+        aggregation_filters: aggregate_node.aggregation_filters().to_vec(),
+        grouping_sets: aggregate_node.grouping_sets().to_vec(),
+        output_var: None,
+        col_names: aggregate_node.col_names().to_vec(),
+        column_types: vec![],
+    })
 }

@@ -15,10 +15,12 @@ use crate::planning::plan::core::nodes::{ArgumentNode, ProjectNode};
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
 use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode;
+use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::planning::plan::PlanNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
+use crate::planning::statements::plan_combiner::logical_argument_root;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::YieldColumn;
@@ -120,8 +122,13 @@ impl Planner for UnwindPlanner {
             column_types: vec![],
         };
 
-        let physical_root = convert_logical_to_physical(LogicalNodeEnum::Unwind(unwind_node));
-        Ok(SubPlan::new(Some(physical_root), None))
+        let logical_root = LogicalNodeEnum::Unwind(unwind_node);
+        let physical_root = convert_logical_to_physical(logical_root.clone());
+        Ok(SubPlan {
+            root: Some(physical_root),
+            tail: None,
+            logical_root: Some(logical_root),
+        })
     }
 
     fn transform(
@@ -162,18 +169,47 @@ impl Planner for UnwindPlanner {
 
         let arg_node = ArgumentNode::new(next_node_id(), "unwind_input");
 
-        let unwind_node = UnwindNode::new(arg_node.clone().into_enum(), &variable, expression)?;
+        let unwind_node =
+            UnwindNode::new(arg_node.clone().into_enum(), &variable, expression.clone())?;
 
         let mut current_node: PlanNodeEnum = unwind_node.into_enum();
+        let mut current_logical = logical_argument_root("unwind_input", vec![], None);
+        current_logical = LogicalNodeEnum::Unwind(LogicalUnwindNode {
+            id: next_node_id(),
+            input: Some(Box::new(current_logical.clone())),
+            deps: vec![current_logical.clone()],
+            alias: variable.clone(),
+            list_expression: expression,
+            output_var: None,
+            col_names: current_node.col_names().to_vec(),
+            column_types: vec![],
+        });
 
         if let Some(columns) = return_columns {
-            let project_node = ProjectNode::new(current_node.clone(), columns).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+            let project_node =
+                ProjectNode::new(current_node.clone(), columns.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create ProjectNode: {}",
+                        e
+                    ))
+                })?;
             current_node = PlanNodeEnum::Project(project_node);
+            current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(current_logical.clone())),
+                deps: vec![current_logical.clone()],
+                columns,
+                output_var: None,
+                col_names: current_node.col_names().to_vec(),
+                column_types: vec![],
+            });
         }
 
-        Ok(SubPlan::new(Some(current_node), None))
+        Ok(SubPlan {
+            root: Some(current_node),
+            tail: None,
+            logical_root: Some(current_logical),
+        })
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

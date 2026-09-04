@@ -68,8 +68,10 @@ fn exec_match_return_keeps_one_unflat() {
         let g0 = child.create_flat_group(false);
         let g1 = child.create_group();
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let id_a = ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
-        let id_b = ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
+        let id_a =
+            ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
+        let id_b =
+            ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
         child.insert_to_group_and_scope(id_a, g0);
         child.insert_to_group_and_scope(id_b, g1);
         child
@@ -171,7 +173,8 @@ fn exec_wco_intersect_schema() {
     use graphdb_query::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
 
     let ctx = Arc::new(ExpressionAnalysisContext::new());
-    let intersect_id = ctx.register_expression(ExpressionMeta::new(Expression::Variable("c".to_string())));
+    let intersect_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("c".to_string())));
     let bound_a = ContextualExpression::new(
         ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string()))),
         ctx.clone(),
@@ -215,7 +218,10 @@ fn exec_factorization_disabled_flat() {
     child_schema.insert_to_group_and_scope(id_b.clone(), g1);
 
     let flat = child_schema.flat_copy();
-    assert!(flat.is_flat_schema(), "flat_copy should produce flat schema");
+    assert!(
+        flat.is_flat_schema(),
+        "flat_copy should produce flat schema"
+    );
     assert_eq!(
         flat.groups().iter().filter(|g| !g.is_flat()).count(),
         0,

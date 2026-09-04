@@ -352,10 +352,11 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression).map(|be| BoundProjectionItem {
-                    expression: be,
-                    alias: item.alias.clone(),
-                })
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundProjectionItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
             })
             .collect::<DBResult<Vec<_>>>()?;
 
@@ -399,10 +400,11 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression).map(|be| BoundProjectionItem {
-                    expression: be,
-                    alias: item.alias.clone(),
-                })
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundProjectionItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
             })
             .collect::<DBResult<Vec<_>>>()?;
         Ok(BoundStatement::Collect(BoundCollect { items }))
