@@ -42,7 +42,7 @@ impl Binder {
             } => {
                 let bound_props = properties
                     .as_ref()
-                    .map(Self::extract_map_properties)
+                    .map(|p| self.extract_map_properties(p))
                     .transpose()?;
                 Ok(BoundCreateTarget::Node {
                     variable: variable.clone(),
@@ -66,11 +66,11 @@ impl Binder {
                     .expression()
                     .map(|e| e.inner().clone())
                     .unwrap_or_else(|| graphdb_core::types::Expression::Variable("_".to_string()));
-                let bound_src = Self::convert_ast_expr_to_bound(&src_expr)?;
-                let bound_dst = Self::convert_ast_expr_to_bound(&dst_expr)?;
+                let bound_src = self.convert_ast_expr_to_bound(&src_expr)?;
+                let bound_dst = self.convert_ast_expr_to_bound(&dst_expr)?;
                 let bound_props = properties
                     .as_ref()
-                    .map(Self::extract_map_properties)
+                    .map(|p| self.extract_map_properties(p))
                     .transpose()?;
                 Ok(BoundCreateTarget::Edge(Box::new(
                     crate::binder::bound::BoundEdgeCreateTarget {
@@ -108,14 +108,14 @@ impl Binder {
                 properties: np
                     .properties
                     .as_ref()
-                    .map(Self::extract_map_properties)
+                    .map(|p| self.extract_map_properties(p))
                     .transpose()?,
             })),
             Pattern::Edge(ep) => {
                 let properties = ep
                     .properties
                     .as_ref()
-                    .map(Self::extract_map_properties)
+                    .map(|p| self.extract_map_properties(p))
                     .transpose()?;
                 Ok(BoundPatternElement::Edge(BoundPatternEdge {
                     variable: ep.variable.clone(),
@@ -352,7 +352,7 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                self.bind_expr(&item.expression).map(|be| BoundProjectionItem {
                     expression: be,
                     alias: item.alias.clone(),
                 })
@@ -399,7 +399,7 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                self.bind_expr(&item.expression).map(|be| BoundProjectionItem {
                     expression: be,
                     alias: item.alias.clone(),
                 })

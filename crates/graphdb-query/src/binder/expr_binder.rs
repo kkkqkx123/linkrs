@@ -31,13 +31,13 @@ impl<'a> ExpressionBinder<'a> {
                 .scope
                 .lookup(name)
                 .and_then(|v| v.properties.values().next().map(|vt| vt.to_data_type()))
-                .unwrap_or(DataType::String),
+                .unwrap_or(DataType::Unknown),
 
             Expression::Property { object, property } => {
                 if let Expression::Variable(var_name) = object.as_ref() {
                     self.resolve_property_type(var_name, property)
                 } else {
-                    DataType::String
+                    DataType::Unknown
                 }
             }
 
@@ -47,8 +47,8 @@ impl<'a> ExpressionBinder<'a> {
                     .iter()
                     .find(|(name, _)| name == field)
                     .map(|(_, field_type)| field_type.clone())
-                    .unwrap_or(DataType::String),
-                _ => DataType::String,
+                    .unwrap_or(DataType::Unknown),
+                _ => DataType::Unknown,
             },
 
             Expression::Binary { op, left, right } => {
@@ -76,10 +76,10 @@ impl<'a> ExpressionBinder<'a> {
                 }
             }
 
-            Expression::Unary { op, .. } => match op {
+            Expression::Unary { op, operand } => match op {
                 UnaryOperator::Not => DataType::Bool,
                 UnaryOperator::IsNull | UnaryOperator::IsNotNull => DataType::Bool,
-                UnaryOperator::Plus | UnaryOperator::Minus => DataType::Float,
+                UnaryOperator::Plus | UnaryOperator::Minus => self.resolve_type(operand),
                 UnaryOperator::IsEmpty | UnaryOperator::IsNotEmpty => DataType::Bool,
             },
 
@@ -117,17 +117,27 @@ impl<'a> ExpressionBinder<'a> {
                 default
                     .as_ref()
                     .map(|d| self.resolve_type(d))
-                    .unwrap_or(DataType::String)
+                    .unwrap_or(DataType::Unknown)
             }
 
             Expression::Subscript { collection, .. } => {
-                let _ = collection;
-                DataType::String
+                match self.resolve_type(collection) {
+                    DataType::List(element) => element.as_ref().clone(),
+                    DataType::Map(value) => value.as_ref().clone(),
+                    DataType::Set(element) => element.as_ref().clone(),
+                    DataType::Array(info) => info.element.as_ref().clone(),
+                    DataType::Path => DataType::Vertex,
+                    _ => DataType::Unknown,
+                }
             }
 
             Expression::TypeCast { target_type, .. } => target_type.clone(),
 
-            Expression::ListComprehension { .. } => DataType::List(Box::new(DataType::Unknown)),
+            Expression::ListComprehension { map, .. } => DataType::List(Box::new(
+                map.as_ref()
+                    .map(|m| self.resolve_type(m))
+                    .unwrap_or(DataType::Unknown),
+            )),
             // The REDUCE result type is the accumulator type, determined by
             // the initial value and the mapping expression.
             Expression::Reduce {
@@ -150,16 +160,16 @@ impl<'a> ExpressionBinder<'a> {
                 self.deduce_function_return_type(name, &arg_types)
             }
 
-            Expression::Parameter(_) => DataType::String,
+            Expression::Parameter(_) => DataType::Unknown,
             Expression::SessionVariable(_) => DataType::Unknown,
             Expression::Vector(v) => DataType::VectorDense(v.len()),
 
-            Expression::Path(_) => DataType::List(Box::new(DataType::Unknown)),
-            Expression::PathBuild(_) => DataType::List(Box::new(DataType::Unknown)),
+            Expression::Path(_) => DataType::Path,
+            Expression::PathBuild(_) => DataType::Path,
             Expression::Label(_) => DataType::String,
-            Expression::TagProperty { .. } => DataType::String,
-            Expression::EdgeProperty { .. } => DataType::String,
-            Expression::LabelTagProperty { .. } => DataType::String,
+            Expression::TagProperty { .. } => DataType::Unknown,
+            Expression::EdgeProperty { .. } => DataType::Unknown,
+            Expression::LabelTagProperty { .. } => DataType::Unknown,
             Expression::Predicate { .. } => DataType::Bool,
             Expression::Range { collection, .. } => match self.resolve_type(collection) {
                 DataType::List(element) => DataType::List(element),
@@ -171,14 +181,14 @@ impl<'a> ExpressionBinder<'a> {
         }
     }
 
-    /// Resolve property type from scope, falling back to String.
+    /// Resolve property type from scope, falling back to Unknown.
     pub fn resolve_property_type(&self, var_name: &str, property: &str) -> DataType {
         if let Some(var_info) = self.scope.lookup(var_name) {
             if let Some(vt) = var_info.properties.get(property) {
                 return vt.to_data_type();
             }
         }
-        DataType::String
+        DataType::Unknown
     }
 
     /// Common element type of an `Expression::List` literal (falls back to
@@ -257,7 +267,7 @@ impl<'a> ExpressionBinder<'a> {
             "head" | "last" | "coalesce" | "greatest" | "least" | "nullif" | "ifnull"
             | "first_value" | "last_value" | "nth_value" | "lead" | "lag" | "element_at"
             | "list_extract" | "struct_extract" | "map_extract" => {
-                return arg_types.first().cloned().unwrap_or(DataType::String);
+                return arg_types.first().cloned().unwrap_or(DataType::Unknown);
             }
             "date_add" | "date_sub" | "date_trunc" | "last_day" => {
                 return arg_types.first().cloned().unwrap_or(DataType::DateTime);
@@ -282,10 +292,10 @@ impl<'a> ExpressionBinder<'a> {
         }
 
         match lower.as_str() {
-            "head" => arg_types.first().cloned().unwrap_or(DataType::String),
-            "last" => arg_types.first().cloned().unwrap_or(DataType::String),
-            "coalesce" => arg_types.first().cloned().unwrap_or(DataType::String),
-            _ => DataType::String,
+            "head" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
+            "last" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
+            "coalesce" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
+            _ => DataType::Unknown,
         }
     }
 

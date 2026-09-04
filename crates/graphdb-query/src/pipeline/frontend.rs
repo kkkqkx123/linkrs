@@ -64,6 +64,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             binder = binder.with_schema_manager(schema_manager.clone());
         }
 
-        binder.bind(ast, qctx).map(Some)
+        binder.bind(ast).map(Some)
     }
 }

@@ -161,7 +161,7 @@ impl Binder {
                 Ok(BoundExpression::Literal(v.clone(), dt))
             }
             Expression::Variable(v) => {
-                let dt = type_hint.cloned().unwrap_or(DataType::String);
+                let dt = type_hint.cloned().unwrap_or(DataType::Unknown);
                 let _col_type = if let Some(var_info) = self.scope.lookup(v) {
                     var_info.properties.get(v).cloned()
                 } else {
@@ -178,7 +178,7 @@ impl Binder {
                 let prop_type = if let Some(ref var_name) = var_name {
                     self.resolve_property_type(var_name, property)
                 } else {
-                    DataType::String
+                    DataType::Unknown
                 };
                 Ok(BoundExpression::Property {
                     object: Box::new(obj),
@@ -189,14 +189,14 @@ impl Binder {
             Expression::StructField { base, field } => {
                 let obj = self.bind_inner_expr(base, None)?;
                 let field_type = self.resolve_struct_field_type(&obj, field);
-                // Binding bug guard: a resolved Struct base must not yield
-                // Empty; schema-resolved field types must flow downstream.
-                debug_assert!(
-                    !matches!(&obj.return_type(), DataType::Struct(_))
-                        || field_type != DataType::Empty,
-                    "StructField '{}' could not be resolved against its Struct base",
-                    field
-                );
+                if matches!(&obj.return_type(), DataType::Struct(_))
+                    && field_type == DataType::Empty
+                {
+                    return Err(super::super::error::undefined_struct_field(
+                        field,
+                        &obj.return_type(),
+                    ));
+                }
                 Ok(BoundExpression::StructField {
                     base: Box::new(obj),
                     field: field.clone(),
@@ -337,7 +337,7 @@ impl Binder {
                     .first()
                     .map(|(_, v)| v.return_type())
                     .or_else(|| def.as_ref().map(|d| d.return_type()))
-                    .unwrap_or(DataType::String);
+                    .unwrap_or(DataType::Unknown);
                 Ok(BoundExpression::Case {
                     expr: test.map(Box::new),
                     when_then: conds,
@@ -361,7 +361,7 @@ impl Binder {
                 Ok(BoundExpression::Subscript {
                     collection: Box::new(col),
                     index: Box::new(idx),
-                    return_type: DataType::String,
+                    return_type: DataType::Unknown,
                 })
             }
             Expression::Range {
@@ -435,13 +435,13 @@ impl Binder {
                 Ok(BoundExpression::TagProperty {
                     tag_name,
                     property: property.clone(),
-                    value_type: DataType::String,
+                    value_type: DataType::Unknown,
                 })
             }
             Expression::TagProperty { tag_name, property } => Ok(BoundExpression::TagProperty {
                 tag_name: tag_name.clone(),
                 property: property.clone(),
-                value_type: DataType::String,
+                value_type: DataType::Unknown,
             }),
             Expression::EdgeProperty {
                 edge_name,
@@ -449,7 +449,7 @@ impl Binder {
             } => Ok(BoundExpression::EdgeProperty {
                 edge_name: edge_name.clone(),
                 property: property.clone(),
-                value_type: DataType::String,
+                value_type: DataType::Unknown,
             }),
             Expression::Predicate { func, args } => {
                 let args = args
@@ -474,10 +474,9 @@ impl Binder {
                 let map = self.bind_inner_expr(mapping, None)?;
                 // The REDUCE result type is the accumulator type: prefer the
                 // initial value type, fall back to the mapping result type.
-                let expr_binder = ExpressionBinder::new(&self.scope);
                 let mut return_type = init.return_type();
                 if return_type == DataType::Unknown {
-                    return_type = expr_binder.resolve_type(mapping);
+                    return_type = map.return_type();
                 }
                 Ok(BoundExpression::Reduce {
                     accumulator: accumulator.clone(),
@@ -499,7 +498,7 @@ impl Binder {
                 ))
             }
             Expression::Parameter(p) => {
-                Ok(BoundExpression::ParameterRef(p.clone(), DataType::String))
+                Ok(BoundExpression::ParameterRef(p.clone(), DataType::Unknown))
             }
             Expression::SessionVariable(name) => Ok(BoundExpression::SessionVariable(
                 name.clone(),
@@ -582,14 +581,14 @@ impl Binder {
                 }
             }
         }
-        DataType::String
+        DataType::Unknown
     }
 
     /// Resolve the type of a STRUCT field access `base.field`.
     ///
     /// The base expression carries its own concrete type when schema context
     /// is available (a `STRUCT{...}` literal, or a `Property` whose schema
-    /// declares a Struct type). Falls back to `String` otherwise, mirroring
+    /// declares a Struct type). Falls back to `Unknown` otherwise, mirroring
     /// `Property` semantics.
     fn resolve_struct_field_type(&self, base: &BoundExpression, field: &str) -> DataType {
         if let DataType::Struct(info) = base.return_type() {
@@ -597,7 +596,7 @@ impl Binder {
                 return field_type.clone();
             }
         }
-        DataType::String
+        DataType::Unknown
     }
 
     // ── Clause helpers ─────────────────────────────────────────────────────
@@ -614,7 +613,7 @@ impl Binder {
                     // Reject references to variables that are not defined in
                     // the current binding scope (e.g. `RETURN undefined_var`).
                     self.ensure_variables_defined(expression)?;
-                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                    self.bind_expr(expression).map(|be| BoundProjectionItem {
                         expression: be,
                         alias: alias.clone(),
                     })
@@ -656,7 +655,7 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                self.bind_expr(&item.expression).map(|be| BoundProjectionItem {
                     expression: be,
                     alias: item.alias.clone(),
                 })

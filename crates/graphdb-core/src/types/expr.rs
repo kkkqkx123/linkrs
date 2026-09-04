@@ -105,6 +105,9 @@ mod traverse;
 // Type deduction
 mod type_deduce;
 
+// Validator trait and walker
+pub mod validator;
+
 // Visitor pattern
 pub mod expression_context;
 pub mod visitor;
@@ -133,6 +136,9 @@ pub use analysis_utils::{
     collect_variables, collect_variables_from_contextual, extract_aggregate_functions, find_all,
     has_aggregate_function, is_constant, is_constant_expression, is_evaluable,
 };
+
+// Unified Export - Validator
+pub use validator::{walk_expr, ExprValidator, MAX_EXPR_DEPTH};
 
 // Unified Export - Expression utilities
 pub use expression_utils::{

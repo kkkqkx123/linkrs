@@ -211,41 +211,6 @@ pub struct BoundAggregateCall {
 }
 
 impl BoundExpression {
-    pub fn value_type(&self) -> ValueType {
-        match self {
-            Self::Literal(_, dt) => ValueType::from_data_type(dt),
-            Self::ColumnRef(r) => r.value_type.clone(),
-            Self::Variable(_, _) => ValueType::String,
-            Self::Property { value_type, .. } => ValueType::from_data_type(value_type),
-            Self::StructField { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::BinaryOp { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::UnaryOp { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::Function(f) => f.return_type.clone(),
-            Self::Aggregate(a) => a.return_type.clone(),
-            Self::ParameterRef(_, dt) => ValueType::from_data_type(dt),
-            Self::SessionVariable(_, _) => ValueType::Unknown,
-            Self::Subquery(_) => ValueType::Unknown,
-            Self::Cast { target_type, .. } => ValueType::from_data_type(target_type),
-            Self::List(_, dt) => ValueType::from_data_type(dt),
-            Self::Map(_, dt) => ValueType::from_data_type(dt),
-            Self::Case { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::Exists { .. } => ValueType::Bool,
-            Self::Pattern(_) => ValueType::Path,
-            Self::Label(_) => ValueType::String,
-            Self::TagProperty { value_type, .. } => ValueType::from_data_type(value_type),
-            Self::EdgeProperty { value_type, .. } => ValueType::from_data_type(value_type),
-            Self::Predicate { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::Subscript { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::WindowFunction { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::In { .. } => ValueType::Bool,
-            Self::Path(_, dt) => ValueType::from_data_type(dt),
-            Self::ListComprehension { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::Reduce { return_type, .. } => ValueType::from_data_type(return_type),
-            Self::PathBuild(_, dt) => ValueType::from_data_type(dt),
-            Self::Vector(_) => ValueType::List,
-        }
-    }
-
     /// Return the concrete DataType of this expression.
     pub fn return_type(&self) -> DataType {
         match self {
@@ -281,15 +246,29 @@ impl BoundExpression {
             Self::Vector(v) => DataType::VectorDense(v.len()),
         }
     }
+
+    /// Get the ValueType of this expression for downstream consumers.
+    pub fn value_type(&self) -> ValueType {
+        ValueType::from_data_type(&self.return_type())
+    }
 }
 
 // ── Clause-level bound types ─────────────────────────────────────────────────
 
+/// A unified projection item used by RETURN, YIELD, WITH, and COLLECT clauses.
+///
+/// Previously `BoundReturnItem` and `BoundYieldItem` existed as identical
+/// separate structs; they have been merged into this single type.
 #[derive(Debug, Clone)]
-pub struct BoundReturnItem {
+pub struct BoundProjectionItem {
     pub expression: BoundExpression,
     pub alias: Option<String>,
 }
+
+/// Backward-compatible alias for [`BoundProjectionItem`].
+pub type BoundReturnItem = BoundProjectionItem;
+/// Backward-compatible alias for [`BoundProjectionItem`].
+pub type BoundYieldItem = BoundProjectionItem;
 
 #[derive(Debug, Clone)]
 pub struct BoundOrderByItem {
@@ -299,7 +278,7 @@ pub struct BoundOrderByItem {
 
 #[derive(Debug, Clone)]
 pub struct BoundReturnClause {
-    pub items: Vec<BoundReturnItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub limit: Option<LimitClause>,
@@ -308,14 +287,8 @@ pub struct BoundReturnClause {
 }
 
 #[derive(Debug, Clone)]
-pub struct BoundYieldItem {
-    pub expression: BoundExpression,
-    pub alias: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct BoundYieldClause {
-    pub items: Vec<BoundYieldItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub limit: Option<LimitClause>,
@@ -329,7 +302,7 @@ pub struct BoundWhereClause {
 
 #[derive(Debug, Clone)]
 pub struct BoundWithClause {
-    pub items: Vec<BoundReturnItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub condition: Option<BoundExpression>,
 }
 
@@ -355,7 +328,7 @@ pub struct BoundFilter {
 
 #[derive(Debug, Clone)]
 pub struct BoundYield {
-    pub items: Vec<BoundYieldItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub where_clause: Option<BoundExpression>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
@@ -365,7 +338,7 @@ pub struct BoundYield {
 
 #[derive(Debug, Clone)]
 pub struct BoundCollect {
-    pub items: Vec<BoundYieldItem>,
+    pub items: Vec<BoundProjectionItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -474,7 +447,7 @@ pub struct BoundSubgraphStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundReturnStatement {
-    pub items: Vec<BoundReturnItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub skip: Option<SkipClause>,
@@ -483,7 +456,7 @@ pub struct BoundReturnStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundWithStatement {
-    pub items: Vec<BoundReturnItem>,
+    pub items: Vec<BoundProjectionItem>,
     pub condition: Option<BoundExpression>,
 }
 

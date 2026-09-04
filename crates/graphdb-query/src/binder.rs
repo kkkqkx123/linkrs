@@ -5,6 +5,7 @@
 
 pub mod bind;
 pub mod bound;
+pub mod error;
 pub mod expr_binder;
 pub mod expr_converter;
 pub mod query_graph;

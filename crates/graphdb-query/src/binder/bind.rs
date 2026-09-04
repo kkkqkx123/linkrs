@@ -57,7 +57,6 @@ impl Binder {
     pub fn bind(
         mut self,
         ast: Arc<Ast>,
-        _qctx: Arc<crate::QueryContext>,
     ) -> DBResult<BoundStatement> {
         let bound = self.bind_stmt(&ast.stmt)?;
         Ok(bound)
@@ -137,21 +136,6 @@ mod tests {
     use super::*;
     use crate::binder::bound::BoundExpression;
     use graphdb_core::error::DBError;
-    use std::sync::Arc;
-
-    #[allow(clippy::arc_with_non_send_sync)]
-    fn test_qctx() -> Arc<crate::QueryContext> {
-        Arc::new(crate::QueryContext::new(Arc::new(
-            crate::QueryRequestContext {
-                session_id: None,
-                user_name: None,
-                space_name: None,
-                query: String::new(),
-                parameters: std::collections::HashMap::new(),
-                ..Default::default()
-            },
-        )))
-    }
 
     fn bind_query(query: &str) -> DBResult<BoundStatement> {
         let mut parser = crate::parser::Parser::new(query);
@@ -160,7 +144,7 @@ mod tests {
             .map_err(|e| DBError::from(graphdb_core::error::QueryError::pipeline_parse_error(e)))?;
         Binder::new()
             .with_space(None, 0)
-            .bind(result.ast, test_qctx())
+            .bind(result.ast)
     }
 
     #[test]

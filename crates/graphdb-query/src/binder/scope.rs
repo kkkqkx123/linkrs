@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use graphdb_core::types::semantic::{AliasType, ValueType};
 
@@ -14,7 +15,7 @@ pub struct BinderVariable {
 #[derive(Debug, Clone)]
 pub struct BinderScope {
     variables: HashMap<String, BinderVariable>,
-    parent: Option<Box<BinderScope>>,
+    parent: Option<Rc<BinderScope>>,
 }
 
 impl BinderScope {
@@ -28,7 +29,7 @@ impl BinderScope {
     pub fn with_parent(parent: BinderScope) -> Self {
         Self {
             variables: HashMap::new(),
-            parent: Some(Box::new(parent)),
+            parent: Some(Rc::new(parent)),
         }
     }
 
@@ -40,16 +41,6 @@ impl BinderScope {
         self.variables
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|p| p.lookup(name)))
-    }
-
-    pub fn lookup_mut(&mut self, name: &str) -> Option<&mut BinderVariable> {
-        if self.variables.contains_key(name) {
-            self.variables.get_mut(name)
-        } else if let Some(ref mut parent) = self.parent {
-            parent.lookup_mut(name)
-        } else {
-            None
-        }
     }
 
     pub fn contains(&self, name: &str) -> bool {

@@ -72,7 +72,7 @@ impl QueryStage for BindStage {
         }
 
         binder
-            .bind(parser_result.ast, qctx)
+            .bind(parser_result.ast)
             .map(Some)
             .map_err(|e| QueryPipelineError::Pipeline {
                 phase: crate::error::PipelinePhase::Bind,

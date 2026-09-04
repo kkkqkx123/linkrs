@@ -287,7 +287,7 @@ impl Binder {
 
     fn bind_merge_pattern(&mut self, pattern: &Pattern) -> DBResult<BoundMergePattern> {
         match pattern {
-            Pattern::Node(np) => Ok(BoundMergePattern::Node(Self::bind_pattern_vertex(np)?)),
+            Pattern::Node(np) => Ok(BoundMergePattern::Node(self.bind_pattern_vertex(np)?)),
             Pattern::Edge(ep) => {
                 let edge = self.bind_pattern_edge(ep)?;
                 let src = BoundPatternVertex {
@@ -310,11 +310,11 @@ impl Binder {
         }
     }
 
-    fn bind_pattern_vertex(np: &NodePattern) -> DBResult<BoundPatternVertex> {
+    fn bind_pattern_vertex(&mut self, np: &NodePattern) -> DBResult<BoundPatternVertex> {
         let properties = np
             .properties
             .as_ref()
-            .map(Self::extract_map_properties)
+            .map(|p| self.extract_map_properties(p))
             .transpose()?;
         Ok(BoundPatternVertex {
             variable: np.variable.clone(),
@@ -330,7 +330,7 @@ impl Binder {
         let properties = ep
             .properties
             .as_ref()
-            .map(Self::extract_map_properties)
+            .map(|p| self.extract_map_properties(p))
             .transpose()?;
         Ok(BoundPatternEdge {
             variable: ep.variable.clone(),
@@ -341,6 +341,7 @@ impl Binder {
     }
 
     pub(crate) fn extract_map_properties(
+        &self,
         expr: &graphdb_core::types::ContextualExpression,
     ) -> DBResult<Vec<(String, BoundExpression)>> {
         use graphdb_core::types::Expression;
@@ -348,7 +349,7 @@ impl Binder {
             if let Expression::Map(pairs) = meta.inner() {
                 let mut result = Vec::with_capacity(pairs.len());
                 for (key, val) in pairs {
-                    let bound_val = Self::convert_ast_expr_to_bound(val)?;
+                    let bound_val = self.convert_ast_expr_to_bound(val)?;
                     result.push((key.clone(), bound_val));
                 }
                 return Ok(result);
@@ -357,36 +358,18 @@ impl Binder {
         Ok(Vec::new())
     }
 
-    pub(crate) fn convert_ast_expr_to_bound(expr: &Expression) -> DBResult<BoundExpression> {
-        use graphdb_core::DataType;
-        match expr {
-            Expression::Literal(v) => Ok(BoundExpression::Literal(v.clone(), DataType::Unknown)),
-            Expression::Variable(name) => {
-                Ok(BoundExpression::Variable(name.clone(), DataType::Unknown))
-            }
-            Expression::Property { object, property } => {
-                let obj = Self::convert_ast_expr_to_bound(object)?;
-                Ok(BoundExpression::Property {
-                    object: Box::new(obj),
-                    property: property.clone(),
-                    value_type: DataType::Unknown,
-                })
-            }
-            Expression::Function { name, args } => {
-                let bound_args = args
-                    .iter()
-                    .map(Self::convert_ast_expr_to_bound)
-                    .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::Function(BoundFunctionCall {
-                    name: name.clone(),
-                    args: bound_args,
-                    return_type: graphdb_core::types::semantic::ValueType::Unknown,
-                }))
-            }
-            _ => Ok(BoundExpression::Variable(
-                "_".to_string(),
-                DataType::Unknown,
-            )),
-        }
+    pub(crate) fn convert_ast_expr_to_bound(&self, expr: &Expression) -> DBResult<BoundExpression> {
+        use graphdb_core::types::expr::contextual::ContextualExpression;
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let meta = graphdb_core::types::expr::ExpressionMeta::new(expr.clone());
+        let id = ctx.register_expression(meta);
+        let contextual = ContextualExpression::new(id, ctx);
+        let mut binder = super::Binder::new();
+        binder.scope = self.scope.clone();
+        binder.schema_manager = self.schema_manager.clone();
+        binder.space_name = self.space_name.clone();
+        binder.bind_expr(&contextual)
     }
 }

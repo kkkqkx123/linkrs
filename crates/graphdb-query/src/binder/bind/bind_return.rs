@@ -17,7 +17,7 @@ impl Binder {
             .iter()
             .map(|item| match item {
                 ReturnItem::Expression { expression, alias } => {
-                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                    self.bind_expr(expression).map(|be| BoundProjectionItem {
                         expression: be,
                         alias: alias.clone(),
                     })
@@ -61,7 +61,7 @@ impl Binder {
             .iter()
             .map(|item| match item {
                 ReturnItem::Expression { expression, alias } => {
-                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                    self.bind_expr(expression).map(|be| BoundProjectionItem {
                         expression: be,
                         alias: alias.clone(),
                     })
