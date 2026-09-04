@@ -58,6 +58,13 @@ impl RegexFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             RegexFunction::RegexMatch => match (&args[0], &args[1]) {
                 (Value::String(s), Value::String(pattern)) => {

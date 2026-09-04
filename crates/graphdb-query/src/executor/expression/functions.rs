@@ -211,7 +211,7 @@ impl BuiltinFunction {
             BuiltinFunction::Graph(f) => f.arity(),
             BuiltinFunction::Container(f) => f.arity(),
             BuiltinFunction::Path(f) => f.arity(),
-            BuiltinFunction::Fulltext(_) => 0,
+            BuiltinFunction::Fulltext(f) => f.arity(),
             BuiltinFunction::Vector(f) => f.arity(),
             BuiltinFunction::Window(f) => f.arity(),
             BuiltinFunction::Sequence(f) => f.arity(),
@@ -434,6 +434,13 @@ impl BuiltinFunction {
 
     /// executable function
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             BuiltinFunction::Math(f) => f.execute(args),
             BuiltinFunction::String(f) => f.execute(args),
@@ -888,5 +895,141 @@ mod tests {
                 "function `{name}` is not explicitly classified as pure or non-pure"
             );
         }
+    }
+
+    /// Fixed-arity functions reject wrong argument counts at the central
+    /// `BuiltinFunction::execute` entry with a unified error.
+    #[test]
+    fn test_central_arity_fixed_functions() {
+        let registry = global_registry();
+        // Correct calls still succeed.
+        assert!(registry.execute("length", &[Value::string("hi")]).is_ok());
+        assert!(
+            registry
+                .execute("substring", &[Value::string("hi"), Value::Int(0), Value::Int(1)])
+                .is_ok()
+        );
+        // One sample per category: too few and too many arguments.
+        let cases: &[(&str, Vec<Value>, Vec<Value>)] = &[
+            ("length", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("size", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("upper", vec![], vec![Value::string("a"), Value::string("b")]),
+            (
+                "substring",
+                vec![Value::string("a")],
+                vec![
+                    Value::string("a"),
+                    Value::Int(0),
+                    Value::Int(1),
+                    Value::Int(2),
+                ],
+            ),
+            ("abs", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("pow", vec![Value::Int(1)], vec![Value::Int(1); 3]),
+            ("head", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("id", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("row_number", vec![Value::Int(1)], vec![Value::Int(1), Value::Int(2)]),
+            ("regex_match", vec![Value::string("a")], vec![Value::string("a"); 3]),
+            (
+                "cosine_similarity",
+                vec![Value::string("a")],
+                vec![Value::string("a"); 3],
+            ),
+            ("to_string", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("year", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("octet_length", vec![], vec![Value::string("a"), Value::string("b")]),
+            ("curr_val", vec![], vec![Value::string("a"), Value::string("b")]),
+            ("lead", vec![Value::Int(1)], vec![Value::Int(1); 3]),
+        ];
+        for (name, too_few, too_many) in cases {
+            for args in [too_few, too_many] {
+                let err = registry.execute(name, args).unwrap_err();
+                assert_eq!(
+                    err.error_type,
+                    ExpressionErrorType::InvalidArgumentCount,
+                    "`{name}` with wrong arity must report InvalidArgumentCount"
+                );
+                assert!(
+                    err.message.contains(*name),
+                    "`{name}` arity error must name the function"
+                );
+            }
+        }
+    }
+
+    /// The unified arity error carries the function name and both counts.
+    #[test]
+    fn test_central_arity_error_format() {
+        let registry = global_registry();
+        let err = registry.execute("length", &[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert_eq!(
+            err.message,
+            "function 'length' expects 1 argument(s), got 0"
+        );
+        let err = registry
+            .execute("substring", &[Value::string("a"), Value::Int(0)])
+            .unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("'substring'"));
+        assert!(err.message.contains("3"));
+        assert!(err.message.contains("2"));
+    }
+
+    /// Variadic functions skip central validation; their own range checks stay.
+    #[test]
+    fn test_central_arity_variadic_boundaries() {
+        let registry = global_registry();
+        // Zero-argument calls that handlers accept.
+        assert!(registry.execute("concat", &[]).is_ok());
+        assert!(registry.execute("coalesce", &[]).is_ok());
+        assert!(registry.execute("date", &[]).is_ok());
+        assert!(registry.execute("rand32", &[]).is_ok());
+        assert!(
+            registry
+                .execute("rand32", &[Value::Int(1), Value::Int(5)])
+                .is_ok()
+        );
+        // Handler-level range checks still fire.
+        assert!(registry.execute("range", &[Value::Int(1)]).is_err());
+        assert!(
+            registry
+                .execute("concat_ws", &[Value::string(",")])
+                .is_err()
+        );
+        assert!(
+            registry
+                .execute("format", &[Value::string("{0}")])
+                .is_err()
+        );
+        assert!(registry.execute("list_concat", &[Value::Int(1)]).is_err());
+        assert!(
+            registry
+                .execute("struct_pack", &[Value::string("k")])
+                .is_err()
+        );
+        assert!(registry.execute("rand32", &[Value::Int(1), Value::Int(2), Value::Int(3)]).is_err());
+        assert!(
+            registry
+                .execute("range", &[Value::Int(1), Value::Int(5), Value::Int(1), Value::Int(2)])
+                .is_err()
+        );
+    }
+
+    /// Arity errors take precedence over context errors for aggregate and
+    /// fulltext functions.
+    #[test]
+    fn test_central_arity_before_context_interception() {
+        let count = BuiltinFunction::Aggregate(AggregateFunction::Count);
+        let err = count.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        let err = count.execute(&[Value::Int(1)]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidOperation);
+
+        let score = BuiltinFunction::Fulltext(FulltextFunction::Score);
+        let err = score.execute(&[Value::Int(1)]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        let err = score.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidOperation);
     }
 }

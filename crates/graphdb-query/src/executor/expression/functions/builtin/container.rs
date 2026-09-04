@@ -153,6 +153,13 @@ impl ContainerFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             Self::Head => execute_head(args),
             Self::Last => execute_last(args),
@@ -187,9 +194,6 @@ impl ContainerFunction {
 }
 
 fn execute_head(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("head requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => Ok(list
             .values
@@ -202,9 +206,6 @@ fn execute_head(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_last(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("last requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => Ok(list
             .values
@@ -217,9 +218,6 @@ fn execute_last(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_tail(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("tail requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => {
             if list.values.is_empty() {
@@ -236,11 +234,8 @@ fn execute_tail(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_size(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("size requires 1 argument"));
-    }
     match &args[0] {
-        Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
+        Value::String(s) => Ok(Value::BigInt(s.chars().count() as i64)),
         Value::List(list) => Ok(Value::BigInt(list.values.len() as i64)),
         Value::Map(map) => Ok(Value::BigInt(map.len() as i64)),
         Value::Set(set) => Ok(Value::BigInt(set.len() as i64)),
@@ -335,9 +330,6 @@ fn execute_range(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("keys requires 1 argument"));
-    }
     let mut keys: BTreeSet<String> = BTreeSet::new();
 
     match &args[0] {
@@ -390,9 +382,6 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_reverse_list(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("reverse requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => {
             let mut reversed = list.values.clone();
@@ -405,9 +394,6 @@ fn execute_reverse_list(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_toset(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("toset requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => {
             let set: std::collections::HashSet<Value> = list.values.iter().cloned().collect();
@@ -419,11 +405,6 @@ fn execute_toset(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_contains(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_contains requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::List(list), value) => {
             let contains = list.values.iter().any(|v| v == value);
@@ -437,11 +418,6 @@ fn execute_list_contains(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_append(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_append requires 2 arguments",
-        ));
-    }
     match &args[0] {
         Value::List(list) => {
             let mut new_values = list.values.clone();
@@ -456,11 +432,6 @@ fn execute_list_append(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_prepend(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_prepend requires 2 arguments",
-        ));
-    }
     match &args[0] {
         Value::List(list) => {
             let mut new_values = vec![args[1].clone()];
@@ -475,11 +446,6 @@ fn execute_list_prepend(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_filter(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_filter requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::List(list), Value::List(mask)) => {
             let min_len = list.values.len().min(mask.values.len());
@@ -506,11 +472,6 @@ fn execute_list_filter(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_transform(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_transform requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::List(list), Value::List(replacements)) => {
             let mut result = list.values.clone();
@@ -553,9 +514,6 @@ fn execute_list_concat(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_sort(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("list_sort requires 1 argument"));
-    }
     match &args[0] {
         Value::List(list) => {
             let mut sorted = list.values.clone();
@@ -570,11 +528,6 @@ fn execute_list_sort(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_slice(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 3 {
-        return Err(ExpressionError::type_error(
-            "list_slice requires 3 arguments",
-        ));
-    }
     match (&args[0], &args[1], &args[2]) {
         (Value::List(list), Value::Int(start), Value::Int(end)) => {
             let len = list.values.len() as i32;
@@ -606,11 +559,6 @@ fn execute_list_slice(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_to_string requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::List(list), Value::String(delimiter)) => {
             let strings: Vec<String> = list.values.iter().map(value_to_string).collect();
@@ -624,11 +572,6 @@ fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_distinct(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "list_distinct requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::List(list) => {
             let mut seen = std::collections::HashSet::new();
@@ -648,11 +591,6 @@ fn execute_list_distinct(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "list_extract requires 2 arguments",
-        ));
-    }
     let len = match &args[0] {
         Value::List(list) => list.values.len() as i64,
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
@@ -736,11 +674,6 @@ fn execute_struct_pack(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_struct_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "struct_extract requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::Map(map), Value::String(key)) => {
             let key_val = Value::string(key);
@@ -777,11 +710,6 @@ fn execute_map_creation(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_map_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "map_extract requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::Map(map), Value::String(key)) => {
             let key_val = Value::string(key);
@@ -798,11 +726,6 @@ fn execute_map_extract(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_element_at(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "element_at requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::List(list), Value::Int(idx)) => {
             let idx = *idx;
@@ -839,11 +762,6 @@ fn execute_element_at(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_cardinality(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "cardinality requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Map(map) => Ok(Value::BigInt(map.len() as i64)),
         Value::Set(set) => Ok(Value::BigInt(set.len() as i64)),
@@ -856,9 +774,6 @@ fn execute_cardinality(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_map_keys(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("map_keys requires 1 argument"));
-    }
     match &args[0] {
         Value::Map(map) => {
             let keys: Vec<Value> = map.keys().cloned().collect();
@@ -870,11 +785,6 @@ fn execute_map_keys(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_map_values(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "map_values requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Map(map) => {
             let values: Vec<Value> = map.values().cloned().collect();
@@ -1171,5 +1081,21 @@ mod tests {
             .execute(&[Value::string_map(map)])
             .expect("map_values should succeed");
         assert!(matches!(result, Value::List(_)));
+    }
+
+    #[test]
+    fn test_size_non_ascii_counts_chars() {
+        let result = ContainerFunction::Size
+            .execute(&[Value::string("你好世界")])
+            .expect("size function should succeed");
+        assert_eq!(result, Value::BigInt(4));
+    }
+
+    #[test]
+    fn test_size_arity() {
+        use crate::executor::expression::ExpressionErrorType;
+        let err = ContainerFunction::Size.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("size"));
     }
 }

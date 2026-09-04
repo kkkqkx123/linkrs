@@ -152,6 +152,13 @@ impl UtilityFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             UtilityFunction::Coalesce => execute_coalesce(args),
             UtilityFunction::Hash => execute_hash(args),
@@ -219,11 +226,6 @@ fn execute_hash(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "json_extract requires 2 arguments",
-        ));
-    }
     if args[0].is_null() || args[1].is_null() {
         return Ok(Value::Null(NullType::Null));
     }
@@ -281,7 +283,7 @@ fn execute_json_build_array(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_json_object_keys(args: &[Value]) -> Result<Value, ExpressionError> {
     use graphdb_core::value::list::List;
 
-    if args.is_empty() || args[0].is_null() {
+    if args[0].is_null() {
         return Ok(Value::Null(NullType::Null));
     }
     let json_value = arg_to_json_value(&args[0])?;
@@ -406,9 +408,6 @@ fn json_to_value(json: &JsonValue) -> Value {
 }
 
 fn execute_nullif(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("nullif requires 2 arguments"));
-    }
     match (&args[0], &args[1]) {
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         (a, b) => {
@@ -482,7 +481,7 @@ fn execute_gen_random_uuid(_args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_each(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.is_empty() || args[0].is_null() {
+    if args[0].is_null() {
         return Ok(Value::Null(NullType::Null));
     }
     let json_value = arg_to_json_value(&args[0])?;
@@ -518,7 +517,7 @@ fn execute_json_each(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.is_empty() || args[0].is_null() {
+    if args[0].is_null() {
         return Ok(Value::Null(NullType::Null));
     }
     let json_value = arg_to_json_value(&args[0])?;
@@ -535,7 +534,7 @@ fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.is_empty() || args[0].is_null() {
+    if args[0].is_null() {
         return Ok(Value::Null(NullType::Null));
     }
     let json_value = arg_to_json_value(&args[0])?;
@@ -568,9 +567,6 @@ fn strip_nulls_from_json(value: JsonValue) -> JsonValue {
 }
 
 fn execute_ifnull(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("ifnull requires 2 arguments"));
-    }
     match &args[0] {
         Value::Null(_) => Ok(args[1].clone()),
         other => Ok(other.clone()),
@@ -578,9 +574,6 @@ fn execute_ifnull(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("typeof requires 1 argument"));
-    }
     let type_name = match &args[0] {
         Value::Null(_) => "null",
         Value::Bool(_) => "bool",
@@ -620,9 +613,6 @@ fn execute_current_database(_args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn extract_numeric_pairs(args: &[Value]) -> Result<(Vec<f64>, Vec<f64>), ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("Function requires 2 arguments"));
-    }
     let xs = match &args[0] {
         Value::List(list) => list
             .values
@@ -729,11 +719,6 @@ fn execute_covar_samp(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_octet_length(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "octet_length requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
         Value::Blob(b) => Ok(Value::BigInt(b.len() as i64)),
@@ -745,9 +730,6 @@ fn execute_octet_length(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_encode(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("encode requires 1 argument"));
-    }
     match &args[0] {
         Value::String(s) => Ok(Value::Blob(s.as_bytes().to_vec())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -756,9 +738,6 @@ fn execute_encode(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_decode(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("decode requires 1 argument"));
-    }
     match &args[0] {
         Value::Blob(b) => {
             let s = String::from_utf8(b.to_vec()).map_err(|_| {
@@ -772,11 +751,6 @@ fn execute_decode(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_union_value(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "union_value requires 2 arguments",
-        ));
-    }
     let tag = match &args[0] {
         Value::Int(i) => *i,
         Value::SmallInt(i) => *i as i32,
@@ -801,9 +775,6 @@ fn execute_union_value(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_union_tag(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("union_tag requires 1 argument"));
-    }
     match &args[0] {
         Value::Map(m) => {
             let tag_key = Value::string("__tag");
@@ -825,11 +796,6 @@ fn execute_union_tag(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_union_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "union_extract requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Map(m) => {
             let value_key = Value::string("__value");
@@ -1093,5 +1059,45 @@ mod tests {
             .execute(&[u])
             .expect("extract value");
         assert_eq!(val, Value::Double(3.14));
+    }
+
+    #[test]
+    fn test_octet_length_counts_bytes() {
+        // Two Chinese characters are 6 bytes in UTF-8.
+        let result = UtilityFunction::OctetLength
+            .execute(&[Value::string("你好")])
+            .expect("octet_length should succeed");
+        assert_eq!(result, Value::BigInt(6));
+        let result = UtilityFunction::OctetLength
+            .execute(&[Value::string("hello")])
+            .expect("octet_length should succeed");
+        assert_eq!(result, Value::BigInt(5));
+    }
+
+    #[test]
+    fn test_length_size_octet_length_contrast() {
+        use crate::executor::expression::functions::{ContainerFunction, PathFunction};
+        // 5 ASCII chars + 2 Chinese chars: 7 chars, 5 + 6 = 11 bytes.
+        let s = Value::string("hello你好");
+        let length = PathFunction::PathLength
+            .execute(std::slice::from_ref(&s))
+            .expect("length should succeed");
+        let size = ContainerFunction::Size
+            .execute(std::slice::from_ref(&s))
+            .expect("size should succeed");
+        let octets = UtilityFunction::OctetLength
+            .execute(std::slice::from_ref(&s))
+            .expect("octet_length should succeed");
+        assert_eq!(length, Value::BigInt(7));
+        assert_eq!(size, Value::BigInt(7));
+        assert_eq!(octets, Value::BigInt(11));
+    }
+
+    #[test]
+    fn test_utility_arity() {
+        use crate::executor::expression::ExpressionErrorType;
+        let err = UtilityFunction::OctetLength.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("octet_length"));
     }
 }

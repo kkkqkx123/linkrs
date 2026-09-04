@@ -1,6 +1,10 @@
 //! COPY FROM Planner
 //!
 //! Plans COPY VERTEX/EDGE FROM CSV statements into CopyFromNode
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
 
 use std::sync::Arc;
 
@@ -8,7 +12,9 @@ use crate::binder::BoundStatement;
 use crate::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::ArgumentNode;
-use crate::planning::plan::core::nodes::{CopyFromNode, CopyTarget as PlanCopyTarget, CopyToNode};
+use crate::planning::plan::core::nodes::CopyTarget;
+use crate::planning::plan::logical::logical_nodes::dml::{LogicalCopyFromNode, LogicalCopyToNode};
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -57,8 +63,8 @@ impl Planner for CopyPlanner {
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
         let target = match &copy.target {
-            AstCopyTarget::Vertex(tag) => PlanCopyTarget::Vertex(tag.clone()),
-            AstCopyTarget::Edge(edge) => PlanCopyTarget::Edge(edge.clone()),
+            AstCopyTarget::Vertex(tag) => CopyTarget::Vertex(tag.clone()),
+            AstCopyTarget::Edge(edge) => CopyTarget::Edge(edge.clone()),
         };
 
         let batch_size = copy.batch_size.unwrap_or(1000);
@@ -74,38 +80,40 @@ impl Planner for CopyPlanner {
             ));
         }
 
-        let arg_node = || ArgumentNode::new(next_node_id(), "copy_args");
-        match copy.direction {
+        let logical_root = match copy.direction {
             CopyDirection::From => {
-                let node = CopyFromNode::new(
-                    next_node_id(),
+                LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
+                    id: next_node_id(),
                     space_name,
                     target,
-                    copy.file_path.clone(),
-                    copy.header,
-                    copy.delimiter,
+                    file_path: copy.file_path.clone(),
+                    header: copy.header,
+                    delimiter: copy.delimiter,
                     batch_size,
-                );
-                Ok(SubPlan::new(
-                    Some(PlanNodeEnum::CopyFrom(node)),
-                    Some(PlanNodeEnum::Argument(arg_node())),
-                ))
+                    output_var: None,
+                    col_names: vec!["copy_result".to_string()],
+                    column_types: vec![],
+                })
             }
             CopyDirection::To => {
-                let node = CopyToNode::new(
-                    next_node_id(),
+                LogicalNodeEnum::CopyTo(LogicalCopyToNode {
+                    id: next_node_id(),
                     space_name,
                     target,
-                    copy.file_path.clone(),
-                    copy.header,
-                    copy.delimiter,
-                );
-                Ok(SubPlan::new(
-                    Some(PlanNodeEnum::CopyTo(node)),
-                    Some(PlanNodeEnum::Argument(arg_node())),
-                ))
+                    file_path: copy.file_path.clone(),
+                    header: copy.header,
+                    delimiter: copy.delimiter,
+                    output_var: None,
+                    col_names: vec!["copy_result".to_string()],
+                    column_types: vec![],
+                })
             }
-        }
+        };
+
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node = ArgumentNode::new(next_node_id(), "copy_args");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+        Ok(sub_plan)
     }
 
     fn transform(
@@ -117,8 +125,8 @@ impl Planner for CopyPlanner {
         let copy_stmt = self.extract_copy_stmt(validated.stmt())?;
 
         let target = match copy_stmt.target {
-            AstCopyTarget::Vertex(tag) => PlanCopyTarget::Vertex(tag),
-            AstCopyTarget::Edge(edge) => PlanCopyTarget::Edge(edge),
+            AstCopyTarget::Vertex(tag) => CopyTarget::Vertex(tag),
+            AstCopyTarget::Edge(edge) => CopyTarget::Edge(edge),
         };
 
         let batch_size = copy_stmt.batch_size.unwrap_or(1000);
@@ -135,38 +143,40 @@ impl Planner for CopyPlanner {
             ));
         }
 
-        let arg_node = || ArgumentNode::new(next_node_id(), "copy_args");
-        match copy_stmt.direction {
+        let logical_root = match copy_stmt.direction {
             CopyDirection::From => {
-                let node = CopyFromNode::new(
-                    next_node_id(),
+                LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
+                    id: next_node_id(),
                     space_name,
                     target,
-                    copy_stmt.file_path,
-                    copy_stmt.header,
-                    copy_stmt.delimiter,
+                    file_path: copy_stmt.file_path,
+                    header: copy_stmt.header,
+                    delimiter: copy_stmt.delimiter,
                     batch_size,
-                );
-                Ok(SubPlan::new(
-                    Some(PlanNodeEnum::CopyFrom(node)),
-                    Some(PlanNodeEnum::Argument(arg_node())),
-                ))
+                    output_var: None,
+                    col_names: vec!["copy_result".to_string()],
+                    column_types: vec![],
+                })
             }
             CopyDirection::To => {
-                let node = CopyToNode::new(
-                    next_node_id(),
+                LogicalNodeEnum::CopyTo(LogicalCopyToNode {
+                    id: next_node_id(),
                     space_name,
                     target,
-                    copy_stmt.file_path,
-                    copy_stmt.header,
-                    copy_stmt.delimiter,
-                );
-                Ok(SubPlan::new(
-                    Some(PlanNodeEnum::CopyTo(node)),
-                    Some(PlanNodeEnum::Argument(arg_node())),
-                ))
+                    file_path: copy_stmt.file_path,
+                    header: copy_stmt.header,
+                    delimiter: copy_stmt.delimiter,
+                    output_var: None,
+                    col_names: vec!["copy_result".to_string()],
+                    column_types: vec![],
+                })
             }
-        }
+        };
+
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node = ArgumentNode::new(next_node_id(), "copy_args");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+        Ok(sub_plan)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

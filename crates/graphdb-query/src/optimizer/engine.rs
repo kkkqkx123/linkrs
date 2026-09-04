@@ -1423,6 +1423,12 @@ impl OptimizerEngine {
             LogicalNodeEnum::Remove(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
+            LogicalNodeEnum::PipeDeleteVertices(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            LogicalNodeEnum::PipeDeleteEdges(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
             LogicalNodeEnum::DataCollect(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
@@ -1487,6 +1493,12 @@ impl OptimizerEngine {
             | LogicalNodeEnum::InsertVertices(_)
             | LogicalNodeEnum::InsertEdges(_)
             | LogicalNodeEnum::Update(_)
+            | LogicalNodeEnum::DeleteVertices(_)
+            | LogicalNodeEnum::DeleteEdges(_)
+            | LogicalNodeEnum::DeleteTags(_)
+            | LogicalNodeEnum::DeleteIndex(_)
+            | LogicalNodeEnum::CopyFrom(_)
+            | LogicalNodeEnum::CopyTo(_)
             | LogicalNodeEnum::FulltextSearch(_)
             | LogicalNodeEnum::FulltextLookup(_)
             | LogicalNodeEnum::MatchFulltext(_) => vec![],

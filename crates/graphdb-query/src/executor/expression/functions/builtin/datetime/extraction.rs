@@ -35,11 +35,6 @@ pub(crate) fn execute_second(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 pub(crate) fn execute_date_part(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "date_part requires 2 arguments",
-        ));
-    }
     let part = match &args[0] {
         Value::String(s) => s.to_lowercase(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
@@ -133,9 +128,6 @@ fn extract_date_part(part: &str, p: DateParts) -> Result<Value, ExpressionError>
 }
 
 pub(crate) fn execute_century(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("century requires 1 argument"));
-    }
     match &args[0] {
         Value::Date(d) => Ok(Value::Int((d.year - 1) / 100 + 1)),
         Value::DateTime(dt) => Ok(Value::Int((dt.year - 1) / 100 + 1)),
@@ -147,9 +139,6 @@ pub(crate) fn execute_century(args: &[Value]) -> Result<Value, ExpressionError> 
 }
 
 pub(crate) fn execute_day_name(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("day_name requires 1 argument"));
-    }
     match &args[0] {
         Value::Date(d) => {
             let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
@@ -175,11 +164,6 @@ pub(crate) fn execute_day_name(args: &[Value]) -> Result<Value, ExpressionError>
 }
 
 pub(crate) fn execute_month_name(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "month_name requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Date(d) => {
             let name = match d.month {

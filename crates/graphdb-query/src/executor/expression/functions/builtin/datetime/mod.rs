@@ -34,14 +34,14 @@ define_function_enum! {
         Date => {
             name: "date",
             arity: 1,
-            variadic: false,
+            variadic: true,
             description: "Date of creation",
             handler: execute_date
         },
         Time => {
             name: "time",
             arity: 1,
-            variadic: false,
+            variadic: true,
             description: "Creation time",
             handler: execute_time
         },

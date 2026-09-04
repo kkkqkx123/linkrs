@@ -934,6 +934,105 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             },
         )),
 
+        PlanNodeEnum::DeleteVertices(n) => Ok(LogicalNodeEnum::DeleteVertices(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteVerticesNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::DeleteEdges(n) => Ok(LogicalNodeEnum::DeleteEdges(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteEdgesNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::DeleteTags(n) => Ok(LogicalNodeEnum::DeleteTags(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteTagsNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::DeleteIndex(n) => Ok(LogicalNodeEnum::DeleteIndex(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteIndexNode {
+                id: n.id(),
+                info: n.info().clone(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::PipeDeleteVertices(n) => {
+            let logical_input = convert_plan(n.input())?;
+            Ok(LogicalNodeEnum::PipeDeleteVertices(
+                crate::planning::plan::logical::logical_nodes::dml::LogicalPipeDeleteVerticesNode {
+                    id: n.id(),
+                    input: Some(Box::new(logical_input.clone())),
+                    deps: vec![logical_input],
+                    info: n.info().clone(),
+                    output_var: n.output_var().map(|s| s.to_string()),
+                    col_names: n.col_names().to_vec(),
+                    column_types: n.column_types().to_vec(),
+                },
+            ))
+        }
+
+        PlanNodeEnum::PipeDeleteEdges(n) => {
+            let logical_input = convert_plan(n.input())?;
+            Ok(LogicalNodeEnum::PipeDeleteEdges(
+                crate::planning::plan::logical::logical_nodes::dml::LogicalPipeDeleteEdgesNode {
+                    id: n.id(),
+                    input: Some(Box::new(logical_input.clone())),
+                    deps: vec![logical_input],
+                    info: n.info().clone(),
+                    output_var: n.output_var().map(|s| s.to_string()),
+                    col_names: n.col_names().to_vec(),
+                    column_types: n.column_types().to_vec(),
+                },
+            ))
+        }
+
+        PlanNodeEnum::CopyFrom(n) => Ok(LogicalNodeEnum::CopyFrom(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalCopyFromNode {
+                id: n.id(),
+                space_name: n.space_name().to_string(),
+                target: n.target().clone(),
+                file_path: n.file_path().to_string(),
+                header: n.header(),
+                delimiter: n.delimiter(),
+                batch_size: n.batch_size(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
+        PlanNodeEnum::CopyTo(n) => Ok(LogicalNodeEnum::CopyTo(
+            crate::planning::plan::logical::logical_nodes::dml::LogicalCopyToNode {
+                id: n.id(),
+                space_name: n.space_name().to_string(),
+                target: n.target().clone(),
+                file_path: n.file_path().to_string(),
+                header: n.header(),
+                delimiter: n.delimiter(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+            },
+        )),
+
         // === Fallback for unsupported nodes ===
         // Intentionally not mapped: Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
         // and Fulltext/Vector search remain `NotYetImplemented`.

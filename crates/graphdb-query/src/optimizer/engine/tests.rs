@@ -425,20 +425,14 @@ mod factorization_fallback_tests {
 
     #[test]
     fn unsupported_node_records_counted_fallback_notes() {
-        use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
-        use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
+        use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
+        use crate::planning::plan::core::nodes::management::ShowSpacesNode;
 
         let mut engine = OptimizerEngine::default();
         engine.set_enable_heuristic(false);
-        let info = VertexDeleteInfo {
-            space_name: "test".to_string(),
-            vertex_ids: vec![],
-            with_edge: false,
-            condition: None,
-        };
-        let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(
-            1, info,
-        ))));
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
+            SpaceManageNode::Show(ShowSpacesNode::new(1)),
+        )));
         let optimized = engine
             .optimize(plan, Some("test"))
             .expect("optimization should succeed");
@@ -546,17 +540,11 @@ mod factorization_fallback_tests {
 
         // Fallback path: an unsupported physical-only plan increments the
         // fallback counter through the full optimize pipeline.
-        use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
-        use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
-        let info = VertexDeleteInfo {
-            space_name: "test".to_string(),
-            vertex_ids: vec![],
-            with_edge: false,
-            condition: None,
-        };
-        let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(DeleteVerticesNode::new(
-            1, info,
-        ))));
+        use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
+        use crate::planning::plan::core::nodes::management::ShowSpacesNode;
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
+            SpaceManageNode::Show(ShowSpacesNode::new(1)),
+        )));
         engine
             .optimize(plan, Some("test"))
             .expect("optimization should succeed");
@@ -920,25 +908,18 @@ fn cost_based_consumes_logical_plan_when_attached() {
 
 #[test]
 fn cost_based_falls_back_when_no_logical_plan_attached() {
-    use crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode;
-    use crate::planning::plan::core::nodes::data_modification::info::VertexDeleteInfo;
+    use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
+    use crate::planning::plan::core::nodes::management::ShowSpacesNode;
 
     let mut engine = OptimizerEngine::default();
     engine.set_enable_heuristic(false);
 
-    // DeleteVertices is not supported by the physical-to-logical
+    // ShowSpaces is not supported by the physical-to-logical
     // converter, so no logical plan is attached and the physical
-    // fallback path must keep the plan intact. Argument is now
-    // supported (conversion produces LogicalArgument), so it no longer
-    // exercises the fallback path.
-    let info = VertexDeleteInfo {
-        space_name: "test".to_string(),
-        vertex_ids: vec![],
-        with_edge: false,
-        condition: None,
-    };
-    let del = DeleteVerticesNode::new(1, info);
-    let plan = ExecutionPlan::new(Some(PlanNodeEnum::DeleteVertices(del)));
+    // fallback path must keep the plan intact.
+    let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
+        SpaceManageNode::Show(ShowSpacesNode::new(1)),
+    )));
     assert!(plan.logical_plan().is_none());
 
     let optimized = engine
@@ -946,7 +927,7 @@ fn cost_based_falls_back_when_no_logical_plan_attached() {
         .expect("optimization should succeed");
     assert!(matches!(
         optimized.root,
-        Some(PlanNodeEnum::DeleteVertices(_))
+        Some(PlanNodeEnum::SpaceManage(_))
     ));
     assert!(optimized.logical_plan().is_none());
 }

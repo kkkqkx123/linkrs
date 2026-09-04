@@ -5,12 +5,6 @@ use graphdb_core::Value;
 macro_rules! define_interval_fn {
     ($name:ident, $factor:expr, $desc:expr) => {
         pub(crate) fn $name(args: &[Value]) -> Result<Value, ExpressionError> {
-            if args.len() != 1 {
-                return Err(ExpressionError::type_error(concat!(
-                    $desc,
-                    " requires 1 argument"
-                )));
-            }
             match &args[0] {
                 Value::SmallInt(i) => Ok(Value::BigInt(*i as i64 * $factor)),
                 Value::Int(i) => Ok(Value::BigInt(*i as i64 * $factor)),

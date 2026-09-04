@@ -33,11 +33,6 @@ pub(crate) fn execute_timestamp(args: &[Value]) -> Result<Value, ExpressionError
 }
 
 pub(crate) fn execute_to_timestamp(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "to_timestamp requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::SmallInt(i) => convert_epoch_secs(*i as i64),
         Value::Int(i) => convert_epoch_secs(*i as i64),

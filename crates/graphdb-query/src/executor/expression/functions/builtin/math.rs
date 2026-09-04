@@ -373,11 +373,6 @@ define_binary_numeric_fn!(
 );
 
 fn execute_sign(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The sign function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::SmallInt(i) => Ok(Value::SmallInt(i.signum())),
         Value::Int(i) => Ok(Value::Int(i.signum())),
@@ -444,11 +439,6 @@ fn execute_pi(_args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_bit_and(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The bit_and function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a & b)),
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
@@ -461,11 +451,6 @@ fn execute_bit_and(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_bit_or(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The bit_or function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a | b)),
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a | b)),
@@ -489,11 +474,6 @@ define_unary_float_fn!(execute_tanh, |v: f32| v.tanh(), "tanh");
 define_unary_float_fn!(execute_degrees, |v: f32| v.to_degrees(), "degrees");
 
 fn execute_bit_xor(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The bit_xor function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a ^ b)),
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a ^ b)),
@@ -506,11 +486,6 @@ fn execute_bit_xor(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_gcd(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The gcd function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(gcd(*a, *b))),
         (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(gcd(*a, *b))),
@@ -524,11 +499,6 @@ fn execute_gcd(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_lcm(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The lcm function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(lcm(*a, *b))),
         (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(lcm(*a, *b))),
@@ -595,9 +565,6 @@ fn lcm<
 }
 
 fn execute_factorial(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("factorial requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(i) => {
             if *i < 0 {
@@ -685,9 +652,6 @@ fn gamma(mut x: f32) -> f32 {
 }
 
 fn execute_gamma(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("gamma requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(i) => Ok(Value::Float(gamma(*i as f32))),
         Value::Int(i) => Ok(Value::Float(gamma(*i as f32))),
@@ -700,9 +664,6 @@ fn execute_gamma(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_lgamma(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("lgamma requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(i) => Ok(Value::Float(gamma(*i as f32).abs().ln())),
         Value::Int(i) => Ok(Value::Float(gamma(*i as f32).abs().ln())),
@@ -717,9 +678,6 @@ fn execute_lgamma(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_negate(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("negate requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(i) => Ok(Value::SmallInt(-i)),
         Value::Int(i) => Ok(Value::Int(-i)),
@@ -734,9 +692,6 @@ fn execute_negate(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_even(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("even requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(i) => Ok(Value::SmallInt(if *i % 2 == 0 { *i } else { *i + 1 })),
         Value::Int(i) => Ok(Value::Int(if *i % 2 == 0 { *i } else { *i + 1 })),
@@ -763,9 +718,6 @@ fn execute_even(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_set_seed(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("set_seed requires 1 argument"));
-    }
     match &args[0] {
         Value::SmallInt(_) => Ok(Value::Null(NullType::Null)),
         Value::Int(_) => Ok(Value::Null(NullType::Null)),
@@ -780,11 +732,6 @@ fn execute_set_seed(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_bit_shift_left(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "bit_shift_left requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a << *b)),
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a << *b)),
@@ -797,11 +744,6 @@ fn execute_bit_shift_left(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_bit_shift_right(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "bit_shift_right requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::SmallInt(a), Value::SmallInt(b)) => Ok(Value::SmallInt(a >> *b)),
         (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a >> *b)),

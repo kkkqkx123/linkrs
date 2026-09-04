@@ -1170,6 +1170,151 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             }
             PlanNodeEnum::Update(node)
         }
+
+        LogicalNodeEnum::DeleteVertices(n) => {
+            let mut node = crate::planning::plan::core::nodes::DeleteVerticesNode::new(
+                n.id, n.info,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::DeleteVertices(node)
+        }
+
+        LogicalNodeEnum::DeleteEdges(n) => {
+            let mut node = crate::planning::plan::core::nodes::DeleteEdgesNode::new(
+                n.id, n.info,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::DeleteEdges(node)
+        }
+
+        LogicalNodeEnum::DeleteTags(n) => {
+            let mut node = crate::planning::plan::core::nodes::DeleteTagsNode::new(
+                n.id, n.info,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::DeleteTags(node)
+        }
+
+        LogicalNodeEnum::DeleteIndex(n) => {
+            let mut node = crate::planning::plan::core::nodes::DeleteIndexNode::new(
+                n.id, n.info,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::DeleteIndex(node)
+        }
+
+        LogicalNodeEnum::PipeDeleteVertices(n) => {
+            let input = n
+                .input
+                .expect("PipeDeleteVertices requires an input node");
+            let physical_input = convert_logical_to_physical(*input);
+            let mut node = crate::planning::plan::core::nodes::PipeDeleteVerticesNode::new(
+                n.id, n.info, physical_input,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::PipeDeleteVertices(node)
+        }
+
+        LogicalNodeEnum::PipeDeleteEdges(n) => {
+            let input = n.input.expect("PipeDeleteEdges requires an input node");
+            let physical_input = convert_logical_to_physical(*input);
+            let mut node = crate::planning::plan::core::nodes::PipeDeleteEdgesNode::new(
+                n.id, n.info, physical_input,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::PipeDeleteEdges(node)
+        }
+
+        LogicalNodeEnum::CopyFrom(n) => {
+            let mut node = crate::planning::plan::core::nodes::CopyFromNode::new(
+                n.id,
+                n.space_name.clone(),
+                n.target.clone(),
+                n.file_path.clone(),
+                n.header,
+                n.delimiter,
+                n.batch_size,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::CopyFrom(node)
+        }
+
+        LogicalNodeEnum::CopyTo(n) => {
+            let mut node = crate::planning::plan::core::nodes::CopyToNode::new(
+                n.id,
+                n.space_name.clone(),
+                n.target.clone(),
+                n.file_path.clone(),
+                n.header,
+                n.delimiter,
+            );
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
+            }
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
+            if !n.column_types.is_empty() {
+                node.set_column_types(n.column_types);
+            }
+            PlanNodeEnum::CopyTo(node)
+        }
     }
 }
 

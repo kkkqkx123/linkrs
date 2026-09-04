@@ -77,37 +77,19 @@ define_function_enum! {
     }
 }
 
-fn execute_row_number(args: &[Value]) -> Result<Value, ExpressionError> {
-    if !args.is_empty() {
-        return Err(ExpressionError::type_error(
-            "row_number() takes no arguments",
-        ));
-    }
+fn execute_row_number(_args: &[Value]) -> Result<Value, ExpressionError> {
     Ok(Value::BigInt(1))
 }
 
-fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
-    if !args.is_empty() {
-        return Err(ExpressionError::type_error("rank() takes no arguments"));
-    }
+fn execute_rank(_args: &[Value]) -> Result<Value, ExpressionError> {
     Ok(Value::BigInt(1))
 }
 
-fn execute_dense_rank(args: &[Value]) -> Result<Value, ExpressionError> {
-    if !args.is_empty() {
-        return Err(ExpressionError::type_error(
-            "dense_rank() takes no arguments",
-        ));
-    }
+fn execute_dense_rank(_args: &[Value]) -> Result<Value, ExpressionError> {
     Ok(Value::BigInt(1))
 }
 
 fn execute_lead(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "lead(expr, offset) takes exactly 2 arguments",
-        ));
-    }
     let offset = match &args[1] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,
@@ -126,11 +108,6 @@ fn execute_lead(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_lag(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "lag(expr, offset) takes exactly 2 arguments",
-        ));
-    }
     let offset = match &args[1] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,
@@ -145,29 +122,14 @@ fn execute_lag(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_first_value(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "first_value(expr) takes exactly 1 argument",
-        ));
-    }
     Ok(args[0].clone())
 }
 
 fn execute_last_value(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "last_value(expr) takes exactly 1 argument",
-        ));
-    }
     Ok(args[0].clone())
 }
 
 fn execute_nth_value(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "nth_value(expr, n) takes exactly 2 arguments",
-        ));
-    }
     let n = match &args[1] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,
@@ -184,11 +146,6 @@ fn execute_nth_value(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_ntile(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "ntile(n) takes exactly 1 argument",
-        ));
-    }
     let n = match &args[0] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,

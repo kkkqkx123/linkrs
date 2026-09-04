@@ -8,7 +8,9 @@
 
 use crate::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::planning::plan::logical::logical_nodes::access::{IndexHint, LogicalScanVerticesNode};
+use crate::planning::plan::logical::logical_nodes::access::{
+    IndexHint, LogicalScanEdgesNode, LogicalScanVerticesNode,
+};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
 
@@ -98,6 +100,12 @@ fn apply_hints(logical: &LogicalNodeEnum, physical: PlanNodeEnum) -> PlanNodeEnu
         }
         return physical;
     }
+    if let LogicalNodeEnum::ScanEdges(scan) = logical {
+        if let (Some(hint), PlanNodeEnum::ScanEdges(_)) = (&scan.index_hint, &physical) {
+            return index_scan_from_edge_hint(scan, hint);
+        }
+        return physical;
+    }
     let logical_children = logical_children(logical);
     if logical_children.is_empty() {
         return physical;
@@ -119,6 +127,34 @@ fn apply_hints(logical: &LogicalNodeEnum, physical: PlanNodeEnum) -> PlanNodeEnu
 /// limit travel with the node; scan limits stay with the cost-based
 /// physical choice and win during the merge when present.
 fn index_scan_from_hint(scan: &LogicalScanVerticesNode, hint: &IndexHint) -> PlanNodeEnum {
+    let mut node = IndexScanNode::new_with_str(
+        scan.space_id,
+        hint.tag_id,
+        hint.index_id,
+        &hint.index_name,
+        &hint.schema_name,
+        &hint.scan_type,
+    );
+    if let Some(expression) = &scan.expression {
+        node.set_filter(expression.clone());
+    }
+    node.set_return_columns(scan.projected_properties.clone());
+    if let Some(limit) = scan.limit {
+        node.set_limit(limit);
+    }
+    if let Some(output_var) = &scan.output_var {
+        node.set_output_var(output_var.clone());
+    }
+    node.set_col_names(scan.col_names.clone());
+    node.set_column_types(scan.column_types.clone());
+    PlanNodeEnum::IndexScan(node)
+}
+
+/// Build an index scan from a hinted logical edge scan.
+///
+/// Mirrors [`index_scan_from_hint`] for edge lookups: the edge type name
+/// travels as the schema name and the tag id is 0 (edges have no tag id).
+fn index_scan_from_edge_hint(scan: &LogicalScanEdgesNode, hint: &IndexHint) -> PlanNodeEnum {
     let mut node = IndexScanNode::new_with_str(
         scan.space_id,
         hint.tag_id,
@@ -171,7 +207,10 @@ fn merge_inner(
     // A mapped index scan wins over a physical full scan: the logical
     // decision fired where the physical rewrite did not.
     if let PlanNodeEnum::IndexScan(_) = &mapped {
-        if matches!(physical, PlanNodeEnum::ScanVertices(_)) {
+        if matches!(
+            physical,
+            PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_)
+        ) {
             return mapped;
         }
     }
@@ -252,6 +291,12 @@ pub(crate) fn logical_children(
             v
         }
         LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+        LogicalNodeEnum::PipeDeleteVertices(n) => {
+            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
+        }
+        LogicalNodeEnum::PipeDeleteEdges(n) => {
+            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
+        }
         LogicalNodeEnum::DataCollect(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Materialize(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::RollUpApply(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
@@ -303,6 +348,12 @@ pub(crate) fn logical_children(
         | LogicalNodeEnum::InsertVertices(_)
         | LogicalNodeEnum::InsertEdges(_)
         | LogicalNodeEnum::Update(_)
+        | LogicalNodeEnum::DeleteVertices(_)
+        | LogicalNodeEnum::DeleteEdges(_)
+        | LogicalNodeEnum::DeleteTags(_)
+        | LogicalNodeEnum::DeleteIndex(_)
+        | LogicalNodeEnum::CopyFrom(_)
+        | LogicalNodeEnum::CopyTo(_)
         | LogicalNodeEnum::FulltextSearch(_)
         | LogicalNodeEnum::FulltextLookup(_)
         | LogicalNodeEnum::MatchFulltext(_) => vec![],

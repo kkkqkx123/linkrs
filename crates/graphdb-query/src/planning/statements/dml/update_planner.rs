@@ -1,13 +1,20 @@
 //! Update Operation Planner
 //!
 //! Query planning for processing UPDATE VERTEX/EDGE statements
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
-use crate::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{EdgeUpdateInfo, UpdateNode, UpdateTargetType, VertexUpdateInfo},
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::core::nodes::{
+    EdgeUpdateInfo, UpdateNode, UpdateTargetType, VertexUpdateInfo,
 };
+use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
@@ -220,10 +227,6 @@ impl Planner for UpdatePlanner {
                 ));
                 let placeholder_id = expr_ctx.register_expression(placeholder_meta);
 
-                let mut scan_node =
-                    crate::planning::plan::core::nodes::ScanVerticesNode::new(0, &space_name);
-                scan_node.set_tag(tag_name);
-
                 let vertex_info = VertexUpdateInfo {
                     space_name: space_name.clone(),
                     vertex_id: ContextualExpression::new(placeholder_id, expr_ctx.clone()),
@@ -233,13 +236,26 @@ impl Planner for UpdatePlanner {
                     is_upsert: update.is_upsert,
                 };
 
-                let update_node =
-                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info));
+                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                    id: next_node_id(),
+                    space_id: 0,
+                    space_name: space_name.clone(),
+                    tag: Some(tag_name.clone()),
+                    expression: None,
+                    limit: None,
+                    projected_properties: vec![],
+                    index_hint: None,
+                    estimated_cardinality: None,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                });
 
-                let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
-                let update_enum = PlanNodeEnum::Update(update_node);
-
-                let sub_plan = SubPlan::new(Some(scan_enum), Some(update_enum));
+                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
+                let physical_update = PlanNodeEnum::Update(
+                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info)),
+                );
+                sub_plan.set_tail(physical_update);
                 return Ok(sub_plan);
             }
             crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
@@ -269,9 +285,17 @@ impl Planner for UpdatePlanner {
             }
         };
 
-        let update_node = UpdateNode::new(next_node_id(), update_target);
-        let update_node_enum = PlanNodeEnum::Update(update_node);
-        let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+        let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+            id: next_node_id(),
+            info: update_target,
+            output_var: None,
+            col_names: vec!["updated".to_string()],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 
@@ -362,13 +386,26 @@ impl Planner for UpdatePlanner {
                     is_upsert: update_stmt.is_upsert,
                 };
 
-                let update_node =
-                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info));
+                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                    id: next_node_id(),
+                    space_id: 0,
+                    space_name: space_name.clone(),
+                    tag: Some(tag_name.clone()),
+                    expression: None,
+                    limit: None,
+                    projected_properties: vec![],
+                    index_hint: None,
+                    estimated_cardinality: None,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                });
 
-                let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
-                let update_enum = PlanNodeEnum::Update(update_node);
-
-                let sub_plan = SubPlan::new(Some(scan_enum), Some(update_enum));
+                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
+                let physical_update = PlanNodeEnum::Update(
+                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info)),
+                );
+                sub_plan.set_tail(physical_update);
                 return Ok(sub_plan);
             }
             UpdateTarget::TagOnVertex { vid, tag_name } => {
@@ -391,11 +428,19 @@ impl Planner for UpdatePlanner {
         };
 
         // Create the UpdateNode
-        let update_node = UpdateNode::new(next_node_id(), update_target);
-        let update_node_enum = PlanNodeEnum::Update(update_node);
+        let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+            id: next_node_id(),
+            info: update_target,
+            output_var: None,
+            col_names: vec!["updated".to_string()],
+            column_types: vec![],
+        });
 
         // Create a SubPlan with the update node as the final node
-        let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
 
         Ok(sub_plan)
     }

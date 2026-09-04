@@ -1,6 +1,6 @@
 //! Implementation of string functions
 
-use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use crate::executor::expression::ExpressionError;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
@@ -200,14 +200,15 @@ define_unary_string_fn!(execute_trim, |s: &str| s.trim().to_string(), "trim");
 fn execute_substring(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1], &args[2]) {
         (Value::String(s), Value::Int(start), Value::Int(len)) => {
-            let start = *start as usize;
-            let len = *len as usize;
-            if start >= s.len() {
-                Ok(Value::string(String::new()))
-            } else {
-                let end = (start + len).min(s.len());
-                Ok(Value::string(&s[start..end]))
+            if *start < 0 || *len <= 0 {
+                return Ok(Value::string(String::new()));
             }
+            let result: String = s
+                .chars()
+                .skip(*start as usize)
+                .take(*len as usize)
+                .collect();
+            Ok(Value::string(result))
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
             Ok(Value::Null(NullType::Null))
@@ -245,12 +246,6 @@ fn execute_replace(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_contains(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::new(
-            ExpressionErrorType::InvalidArgumentCount,
-            "The contains function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(sub)) => Ok(Value::Bool(s.contains(sub.as_str()))),
         (Value::List(list), Value::String(target)) => Ok(Value::Bool(
@@ -283,11 +278,6 @@ define_binary_string_bool_fn!(
 
 fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
     use graphdb_core::value::list::List;
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The split function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s.split(delimiter.as_str()).map(Value::string).collect();
@@ -299,25 +289,25 @@ fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 3 {
-        return Err(ExpressionError::type_error(
-            "The lpad function takes 3 arguments",
-        ));
-    }
     match (&args[0], &args[1], &args[2]) {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
+            if *len < 0 {
+                return Err(ExpressionError::type_error(
+                    "The lpad function requires a non-negative length",
+                ));
+            }
             let len = *len as usize;
-            if s.len() >= len {
-                Ok(Value::string(&s[..len]))
+            let char_count = s.chars().count();
+            if char_count >= len {
+                Ok(Value::string(s.chars().take(len).collect::<String>()))
             } else {
-                let pad_len = len - s.len();
-                let mut result = String::new();
-                while result.len() < pad_len {
-                    result.push_str(pad);
+                let pad_chars: Vec<char> = pad.chars().collect();
+                if pad_chars.is_empty() {
+                    return Ok(Value::string(s.clone()));
                 }
-                result.truncate(pad_len);
-                result.push_str(s);
-                Ok(Value::string(result))
+                let pad_str: String =
+                    pad_chars.into_iter().cycle().take(len - char_count).collect();
+                Ok(Value::string(format!("{}{}", pad_str, s)))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -330,26 +320,25 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_rpad(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 3 {
-        return Err(ExpressionError::type_error(
-            "The rpad function takes 3 arguments",
-        ));
-    }
     match (&args[0], &args[1], &args[2]) {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
+            if *len < 0 {
+                return Err(ExpressionError::type_error(
+                    "The rpad function requires a non-negative length",
+                ));
+            }
             let len = *len as usize;
-            if s.len() >= len {
-                Ok(Value::string(&s[..len]))
+            let char_count = s.chars().count();
+            if char_count >= len {
+                Ok(Value::string(s.chars().take(len).collect::<String>()))
             } else {
-                let pad_len = len - s.len();
-                let mut result = s.clone();
-                let mut pad_str = String::new();
-                while pad_str.len() < pad_len {
-                    pad_str.push_str(pad);
+                let pad_chars: Vec<char> = pad.chars().collect();
+                if pad_chars.is_empty() {
+                    return Ok(Value::string(s.clone()));
                 }
-                pad_str.truncate(pad_len);
-                result.push_str(&pad_str);
-                Ok(Value::string(result))
+                let pad_str: String =
+                    pad_chars.into_iter().cycle().take(len - char_count).collect();
+                Ok(Value::string(format!("{}{}", s, pad_str)))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -397,11 +386,6 @@ fn execute_concat_ws(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_strcasecmp(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The strcasecmp function takes 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::String(a), Value::String(b)) => {
             let cmp = a.to_lowercase().cmp(&b.to_lowercase());
@@ -419,11 +403,6 @@ fn execute_strcasecmp(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_levenshtein(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "levenshtein requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s1), Value::String(s2)) => {
             let dist = levenshtein_distance(s1, s2);
@@ -437,11 +416,6 @@ fn execute_levenshtein(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_split_part(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 3 {
-        return Err(ExpressionError::type_error(
-            "split_part requires 3 arguments",
-        ));
-    }
     match (&args[0], &args[1], &args[2]) {
         (Value::String(s), Value::String(delimiter), Value::Int(n)) => {
             if *n <= 0 {
@@ -490,9 +464,6 @@ fn execute_initcap(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_repeat(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("repeat requires 2 arguments"));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::Int(n)) => {
             if *n < 0 {
@@ -510,13 +481,11 @@ fn execute_repeat(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_position(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("position requires 2 arguments"));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(sub)) => {
-            if let Some(idx) = s.find(sub.as_str()) {
-                Ok(Value::Int((idx + 1) as i32))
+            if let Some(byte_idx) = s.find(sub.as_str()) {
+                let char_pos = s[..byte_idx].chars().count() + 1;
+                Ok(Value::Int(char_pos as i32))
             } else {
                 Ok(Value::Int(0))
             }
@@ -529,9 +498,6 @@ fn execute_position(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_left(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("left requires 2 arguments"));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::Int(n)) => {
             let n = *n;
@@ -552,9 +518,6 @@ fn execute_left(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_right(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("right requires 2 arguments"));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::Int(n)) => {
             let n = *n;
@@ -576,18 +539,18 @@ fn execute_right(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_string_insert(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 4 {
-        return Err(ExpressionError::type_error("insert requires 4 arguments"));
-    }
     match (&args[0], &args[1], &args[2], &args[3]) {
         (Value::String(s), Value::Int(pos), Value::Int(len), Value::String(newsub)) => {
-            let pos = *pos as usize;
-            let len = *len as usize;
-            if pos > s.len() {
+            let char_count = s.chars().count();
+            let pos = (*pos).max(0) as usize;
+            let del = (*len).max(0) as usize;
+            if pos > char_count {
                 return Ok(Value::string(s.clone()));
             }
-            let result = format!("{}{}{}", &s[..pos], newsub, &s[(pos + len).min(s.len())..]);
-            Ok(Value::string(result))
+            let end = (pos + del).min(char_count);
+            let prefix: String = s.chars().take(pos).collect();
+            let suffix: String = s.chars().skip(end).collect();
+            Ok(Value::string(format!("{}{}{}", prefix, newsub, suffix)))
         }
         (Value::Null(_), _, _, _)
         | (_, Value::Null(_), _, _)
@@ -600,11 +563,6 @@ fn execute_string_insert(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_translate(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 3 {
-        return Err(ExpressionError::type_error(
-            "translate requires 3 arguments",
-        ));
-    }
     match (&args[0], &args[1], &args[2]) {
         (Value::String(s), Value::String(from), Value::String(to)) => {
             let result: String = s
@@ -657,11 +615,6 @@ fn execute_format(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "string_split requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s.split(delimiter.as_str()).map(Value::string).collect();
@@ -675,9 +628,6 @@ fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_reverse(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("reverse requires 1 argument"));
-    }
     match &args[0] {
         Value::String(s) => Ok(Value::string(s.chars().rev().collect::<String>())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -872,5 +822,185 @@ mod tests {
             .execute(&[Value::string("hello")])
             .expect("Execution should succeed");
         assert_eq!(result, Value::string("olleh"));
+    }
+
+    #[test]
+    fn test_substring_non_ascii() {
+        let func = StringFunction::Substring;
+        let result = func
+            .execute(&[
+                Value::string("你好世界"),
+                Value::Int(1),
+                Value::Int(2),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::string("好世"));
+    }
+
+    #[test]
+    fn test_substring_non_ascii_single_char() {
+        // Byte slicing would cut 1/3 of a Chinese character and panic;
+        // character semantics return the whole character.
+        let func = StringFunction::Substring;
+        let result = func
+            .execute(&[Value::string("你好"), Value::Int(0), Value::Int(1)])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::string("你"));
+    }
+
+    #[test]
+    fn test_substring_boundaries() {
+        let func = StringFunction::Substring;
+        let empty = Value::string(String::new());
+        assert_eq!(
+            func.execute(&[Value::string("你好"), Value::Int(5), Value::Int(2)])
+                .unwrap(),
+            empty
+        );
+        assert_eq!(
+            func.execute(&[Value::string("你好"), Value::Int(-1), Value::Int(2)])
+                .unwrap(),
+            empty
+        );
+        assert_eq!(
+            func.execute(&[Value::string("你好"), Value::Int(0), Value::Int(0)])
+                .unwrap(),
+            empty
+        );
+        assert_eq!(
+            func.execute(&[Value::string(""), Value::Int(0), Value::Int(3)])
+                .unwrap(),
+            empty
+        );
+        // Length beyond the end is clamped, not an error.
+        assert_eq!(
+            func.execute(&[Value::string("你好"), Value::Int(1), Value::Int(10)])
+                .unwrap(),
+            Value::string("好")
+        );
+    }
+
+    #[test]
+    fn test_lpad_rpad_non_ascii() {
+        assert_eq!(
+            StringFunction::Lpad
+                .execute(&[
+                    Value::string("你好"),
+                    Value::Int(4),
+                    Value::string("ab")
+                ])
+                .unwrap(),
+            Value::string("ab你好")
+        );
+        assert_eq!(
+            StringFunction::Rpad
+                .execute(&[
+                    Value::string("你好"),
+                    Value::Int(4),
+                    Value::string("ab")
+                ])
+                .unwrap(),
+            Value::string("你好ab")
+        );
+        // Truncation keeps whole characters.
+        assert_eq!(
+            StringFunction::Lpad
+                .execute(&[
+                    Value::string("你好世界"),
+                    Value::Int(2),
+                    Value::string("x")
+                ])
+                .unwrap(),
+            Value::string("你好")
+        );
+        assert_eq!(
+            StringFunction::Rpad
+                .execute(&[
+                    Value::string("你好世界"),
+                    Value::Int(2),
+                    Value::string("x")
+                ])
+                .unwrap(),
+            Value::string("你好")
+        );
+        // Empty padding cannot extend the string; return it unchanged
+        // instead of looping forever.
+        assert_eq!(
+            StringFunction::Lpad
+                .execute(&[Value::string("hi"), Value::Int(5), Value::string("")])
+                .unwrap(),
+            Value::string("hi")
+        );
+        // Negative target length is rejected.
+        assert!(
+            StringFunction::Lpad
+                .execute(&[
+                    Value::string("hi"),
+                    Value::Int(-1),
+                    Value::string("x")
+                ])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_left_right_non_ascii() {
+        assert_eq!(
+            StringFunction::Left
+                .execute(&[Value::string("你好世界"), Value::Int(2)])
+                .unwrap(),
+            Value::string("你好")
+        );
+        assert_eq!(
+            StringFunction::Right
+                .execute(&[Value::string("你好世界"), Value::Int(2)])
+                .unwrap(),
+            Value::string("世界")
+        );
+    }
+
+    #[test]
+    fn test_position_non_ascii_returns_char_position() {
+        let result = StringFunction::Position
+            .execute(&[Value::string("你好世界"), Value::string("世界")])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::Int(3));
+        let missing = StringFunction::Position
+            .execute(&[Value::string("你好"), Value::string("世")])
+            .expect("Execution should succeed");
+        assert_eq!(missing, Value::Int(0));
+    }
+
+    #[test]
+    fn test_string_insert_non_ascii() {
+        let result = StringFunction::StringInsert
+            .execute(&[
+                Value::string("你好世界"),
+                Value::Int(2),
+                Value::Int(1),
+                Value::string("X"),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::string("你好X界"));
+        // Position beyond the end leaves the string unchanged.
+        let result = StringFunction::StringInsert
+            .execute(&[
+                Value::string("你好"),
+                Value::Int(5),
+                Value::Int(1),
+                Value::string("X"),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::string("你好"));
+    }
+
+    #[test]
+    fn test_arity_error_type() {
+        use crate::executor::expression::ExpressionErrorType;
+        let err = StringFunction::Substring
+            .execute(&[Value::string("hi"), Value::Int(0)])
+            .unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("substring"));
     }
 }

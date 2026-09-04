@@ -117,6 +117,13 @@ impl GraphFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             Self::Id => execute_id(args),
             Self::Tags => execute_tags(args),
@@ -147,6 +154,13 @@ impl GraphFunction {
         args: &[Value],
         storage: &GraphStorageRef,
     ) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             Self::Neighbors => execute_neighbors_with_storage(args, storage),
             Self::Degree => execute_degree_with_storage(args, storage),
@@ -163,11 +177,6 @@ impl GraphFunction {
 }
 
 fn execute_id(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The id function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => Ok(Value::from(v.vid)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -178,11 +187,6 @@ fn execute_id(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_tags(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The tags function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => {
             let tags: Vec<Value> = v
@@ -202,11 +206,6 @@ fn execute_labels(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "properties requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => {
             let mut props = std::collections::HashMap::new();
@@ -234,11 +233,6 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_edge_type(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The type function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => Ok(Value::string(e.edge_type.clone())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -249,11 +243,6 @@ fn execute_edge_type(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_src(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The src function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => Ok(Value::from(e.src)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -264,11 +253,6 @@ fn execute_src(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_dst(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The dst function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => Ok(Value::from(e.dst)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -279,11 +263,6 @@ fn execute_dst(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The rank function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => Ok(Value::BigInt(e.ranking)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -294,11 +273,6 @@ fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The startnode function takes 1 argument.",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => {
             let vertex = Vertex::new(e.src, vec![]);
@@ -312,11 +286,6 @@ fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The endnode function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Edge(e) => {
             let vertex = Vertex::new(e.dst, vec![]);
@@ -344,11 +313,6 @@ fn extract_vertex_id(value: &Value) -> Result<VertexId, ExpressionError> {
 }
 
 fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The neighbors function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => Ok(Value::from(v.vid)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -359,11 +323,6 @@ fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_degree(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The degree function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => {
             let degree = v
@@ -381,11 +340,6 @@ fn execute_degree(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_out_edges(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The out_edges function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
@@ -404,11 +358,6 @@ fn execute_out_edges(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_in_edges(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The in_edges function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
@@ -427,11 +376,6 @@ fn execute_in_edges(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_shortest_path(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The shortest_path function takes 2 arguments (start_vid, end_vid)",
-        ));
-    }
     let start_vid = match &args[0] {
         Value::BigInt(id) => *id,
         Value::Int(id) => *id as i64,
@@ -475,11 +419,6 @@ fn execute_neighbors_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The neighbors function takes 1 argument",
-        ));
-    }
     let vid = extract_vertex_id(&args[0])?;
     let neighbors = storage
         .get_neighbors(&vid)
@@ -497,11 +436,6 @@ fn execute_degree_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The degree function takes 1 argument",
-        ));
-    }
     let vid = extract_vertex_id(&args[0])?;
     let neighbors = storage
         .get_neighbors(&vid)
@@ -513,11 +447,6 @@ fn execute_out_edges_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The out_edges function takes 1 argument",
-        ));
-    }
     use graphdb_core::types::EdgeDirection;
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
@@ -538,11 +467,6 @@ fn execute_in_edges_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The in_edges function takes 1 argument",
-        ));
-    }
     use graphdb_core::types::EdgeDirection;
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
@@ -563,11 +487,6 @@ fn execute_shortest_path_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The shortest_path function takes 2 arguments (start_vid, end_vid)",
-        ));
-    }
     let start_vid = extract_vertex_id(&args[0])?;
     let end_vid = extract_vertex_id(&args[1])?;
 
@@ -608,11 +527,6 @@ fn execute_bfs_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "The bfs function takes 2 arguments (start_vid, max_depth)",
-        ));
-    }
     let start_vid = extract_vertex_id(&args[0])?;
     let max_depth = match &args[1] {
         Value::BigInt(d) => *d,
@@ -657,12 +571,6 @@ fn execute_connected_components_with_storage(
     _args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if !_args.is_empty() {
-        return Err(ExpressionError::type_error(
-            "The connected_components function takes no arguments",
-        ));
-    }
-
     // Get all vertices from storage
     let reader = storage.storage.read();
     let all_vertices = reader
@@ -850,12 +758,6 @@ fn execute_pagerank_with_storage(
     _args: &[Value],
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
-    if !_args.is_empty() {
-        return Err(ExpressionError::type_error(
-            "The pagerank function takes no arguments",
-        ));
-    }
-
     let reader = storage.storage.read();
     let all_vertices = reader
         .scan_vertices(&storage.space)

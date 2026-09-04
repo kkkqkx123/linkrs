@@ -35,11 +35,12 @@ impl SequenceFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 1 {
-            return Err(ExpressionError::type_error(format!(
-                "{} requires exactly 1 argument (sequence name)",
-                self.name()
-            )));
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
         }
 
         let name = match &args[0] {

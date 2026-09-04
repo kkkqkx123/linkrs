@@ -1,13 +1,18 @@
 //! Attribute/Tag Remover Planner
 //!
 //! Query planning for handling the REMOVE statement
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::{RemoveStmt, Stmt};
-use crate::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{ArgumentNode, ProjectNode, RemoveNode},
-};
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
+use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalRemoveNode;
+use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -56,9 +61,6 @@ impl Planner for RemovePlanner {
             }
         };
 
-        let arg_node = ArgumentNode::new(next_node_id(), "remove_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-
         let expr_ctx = Arc::new(
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
@@ -75,11 +77,23 @@ impl Planner for RemovePlanner {
             remove_items.push((item_type.to_string(), ctx_expr));
         }
 
-        let remove_node = RemoveNode::new(arg_node_enum.clone(), remove_items).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create RemoveNode: {}", e))
-        })?;
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "remove_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
-        let remove_node_enum = PlanNodeEnum::Remove(remove_node);
+        let logical_remove = LogicalNodeEnum::Remove(LogicalRemoveNode {
+            id: next_node_id(),
+            input: Some(Box::new(arg_logical)),
+            deps: vec![],
+            remove_items,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
             graphdb_core::Expression::Variable("removed_count".to_string()),
@@ -93,13 +107,20 @@ impl Planner for RemovePlanner {
             is_matched: false,
         }];
 
-        let project_node =
-            ProjectNode::new(remove_node_enum.clone(), yield_columns).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+        let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(logical_remove)),
+            deps: vec![],
+            columns: yield_columns,
+            output_var: None,
+            col_names: vec!["removed_count".to_string()],
+            column_types: vec![],
+        });
 
-        let final_node = PlanNodeEnum::Project(project_node);
-        let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
+        let mut sub_plan = SubPlan::from_logical_root(logical_project);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "remove_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 
@@ -126,9 +147,13 @@ impl Planner for RemovePlanner {
 
         let remove_stmt = self.extract_remove_stmt(validated.stmt())?;
 
-        // Create a parameter node as input.
-        let arg_node = ArgumentNode::new(next_node_id(), "remove_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "remove_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
         // Analyze the REMOVE item to determine whether it refers to the deletion of an attribute or a tag.
         let mut remove_items = Vec::new();
@@ -145,12 +170,15 @@ impl Planner for RemovePlanner {
             }
         }
 
-        // Create a Remove node
-        let remove_node = RemoveNode::new(arg_node_enum.clone(), remove_items).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create RemoveNode: {}", e))
-        })?;
-
-        let remove_node_enum = PlanNodeEnum::Remove(remove_node);
+        let logical_remove = LogicalNodeEnum::Remove(LogicalRemoveNode {
+            id: next_node_id(),
+            input: Some(Box::new(arg_logical)),
+            deps: vec![],
+            remove_items,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
         // Build the output column – Return the number of attributes/tagging elements that were deleted.
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
@@ -165,17 +193,20 @@ impl Planner for RemovePlanner {
             is_matched: false,
         }];
 
-        // Create a projection node to output the deletion results.
-        let project_node =
-            ProjectNode::new(remove_node_enum.clone(), yield_columns).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+        let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(logical_remove)),
+            deps: vec![],
+            columns: yield_columns,
+            output_var: None,
+            col_names: vec!["removed_count".to_string()],
+            column_types: vec![],
+        });
 
-        let final_node = PlanNodeEnum::Project(project_node);
-
-        // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
-
+        let mut sub_plan = SubPlan::from_logical_root(logical_project);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "remove_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 

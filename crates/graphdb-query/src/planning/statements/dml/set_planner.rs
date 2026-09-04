@@ -1,13 +1,19 @@
 //! SET Operation Planner
 //!
 //! Query planning for processing SET statements (set properties on vertices/edges)
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::{SetStmt, Stmt};
-use crate::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{UpdateNode, UpdateTargetType, VertexUpdateInfo},
-};
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::core::nodes::{UpdateTargetType, VertexUpdateInfo};
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
+use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
+use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
@@ -158,35 +164,56 @@ impl Planner for SetPlanner {
 
         if !vertex_updates.is_empty() {
             let update_info = UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap());
-            let update_node = UpdateNode::new(next_node_id(), update_info);
-            let update_node_enum = PlanNodeEnum::Update(update_node);
-            let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+                id: next_node_id(),
+                info: update_info,
+                output_var: None,
+                col_names: vec!["updated".to_string()],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
             return Ok(sub_plan);
         }
 
         if !variable_assignments.is_empty() {
-            use crate::planning::plan::core::nodes::{ArgumentNode, AssignNode};
+            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: "set_input".to_string(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
 
-            let arg_node = ArgumentNode::new(next_node_id(), "set_input");
-            let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-
-            let assign_node = AssignNode::new(arg_node_enum.clone(), variable_assignments)
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create AssignNode: {}",
-                        e
-                    ))
-                })?;
-
-            let assign_node_enum = PlanNodeEnum::Assign(assign_node);
-            let sub_plan = SubPlan::new(Some(assign_node_enum.clone()), Some(assign_node_enum));
+            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
+                id: next_node_id(),
+                input: Some(Box::new(arg_logical)),
+                deps: vec![],
+                assignments: variable_assignments,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
             return Ok(sub_plan);
         }
 
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "set_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
         let arg_node =
             crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-        let sub_plan = SubPlan::new(Some(arg_node_enum.clone()), Some(arg_node_enum));
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 
@@ -267,38 +294,59 @@ impl Planner for SetPlanner {
                 UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap())
             };
 
-            let update_node = UpdateNode::new(next_node_id(), update_info);
-            let update_node_enum = PlanNodeEnum::Update(update_node);
+            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+                id: next_node_id(),
+                info: update_info,
+                output_var: None,
+                col_names: vec!["updated".to_string()],
+                column_types: vec![],
+            });
 
-            let sub_plan = SubPlan::new(Some(update_node_enum.clone()), Some(update_node_enum));
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
             return Ok(sub_plan);
         }
 
         // If no vertex updates, fall back to AssignNode for variable assignments
         if !variable_assignments.is_empty() {
-            use crate::planning::plan::core::nodes::{ArgumentNode, AssignNode};
+            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: "set_input".to_string(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
 
-            let arg_node = ArgumentNode::new(next_node_id(), "set_input");
-            let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-
-            let assign_node = AssignNode::new(arg_node_enum.clone(), variable_assignments)
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create AssignNode: {}",
-                        e
-                    ))
-                })?;
-
-            let assign_node_enum = PlanNodeEnum::Assign(assign_node);
-            let sub_plan = SubPlan::new(Some(assign_node_enum.clone()), Some(assign_node_enum));
+            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
+                id: next_node_id(),
+                input: Some(Box::new(arg_logical)),
+                deps: vec![],
+                assignments: variable_assignments,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
             return Ok(sub_plan);
         }
 
         // If no assignments at all, return an empty plan
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "set_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
         let arg_node =
             crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-        let sub_plan = SubPlan::new(Some(arg_node_enum.clone()), Some(arg_node_enum));
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }
 

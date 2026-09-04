@@ -62,6 +62,13 @@ macro_rules! define_function_enum {
 
             /// Execute the function
             $vis fn execute(&self, args: &[graphdb_core::Value]) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
+                if !self.is_variadic() && args.len() != self.arity() {
+                    return Err($crate::executor::expression::ExpressionError::invalid_arity(
+                        self.name(),
+                        self.arity(),
+                        args.len(),
+                    ));
+                }
                 let handler: fn(&[graphdb_core::Value]) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> = match self {
                     $(Self::$variant => $handler,)*
                 };
@@ -78,13 +85,6 @@ macro_rules! define_unary_float_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.is_empty() {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 1 argument"),
-                ));
-            }
-
             let op = $op;
             match &args[0] {
                 Value::SmallInt(i) => Ok(Value::Float(op(*i as f32))),
@@ -108,13 +108,6 @@ macro_rules! define_unary_numeric_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.is_empty() {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 1 argument"),
-                ));
-            }
-
             match &args[0] {
                 Value::SmallInt(i) => $int_op(*i as i32),
                 Value::Int(i) => $int_op(*i),
@@ -137,13 +130,6 @@ macro_rules! define_unary_string_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.is_empty() {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 1 argument"),
-                ));
-            }
-
             let op = $op;
             match &args[0] {
                 Value::String(s) => Ok(Value::string(op(s))),
@@ -163,13 +149,6 @@ macro_rules! define_datetime_extractor {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.is_empty() {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!(stringify!($name), "The function takes 1 argument"),
-                ));
-            }
-
             match &args[0] {
                 Value::Date(d) => Ok(Value::BigInt(d.$date_field as i64)),
                 Value::DateTime(dt) => Ok(Value::BigInt(dt.$datetime_field as i64)),
@@ -187,13 +166,6 @@ macro_rules! define_datetime_extractor {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.is_empty() {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!(stringify!($name), "The function takes 1 argument"),
-                ));
-            }
-
             match &args[0] {
                 Value::Time(t) => Ok(Value::BigInt(t.$time_field as i64)),
                 Value::DateTime(dt) => Ok(Value::BigInt(dt.$datetime_field as i64)),
@@ -209,28 +181,6 @@ macro_rules! define_datetime_extractor {
     };
 }
 
-/// Define a wrapper function that performs a check on the number of parameters
-#[macro_export]
-macro_rules! define_arg_checked_fn {
-    ($name:ident, $arity:expr, $handler:expr, $type_desc:literal) => {
-        fn $name(
-            args: &[graphdb_core::Value],
-        ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.len() != $arity {
-                return Err($crate::executor::expression::ExpressionError::type_error(
-                    concat!(
-                        stringify!($name),
-                        "The function requires",
-                        stringify!($arity),
-                        "specifications"
-                    ),
-                ));
-            }
-            $handler(args)
-        }
-    };
-}
-
 /// Define a binary numeric operation function
 #[macro_export]
 macro_rules! define_binary_numeric_fn {
@@ -238,13 +188,6 @@ macro_rules! define_binary_numeric_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.len() != 2 {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 2 arguments"),
-                ));
-            }
-
             let op = $op;
             match (&args[0], &args[1]) {
                 (Value::SmallInt(a), Value::SmallInt(b)) => op(*a as f32, *b as f32),
@@ -272,13 +215,6 @@ macro_rules! define_binary_string_bool_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.len() != 2 {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 2 arguments"),
-                ));
-            }
-
             let op = $op;
             match (&args[0], &args[1]) {
                 (Value::String(a), Value::String(b)) => Ok(Value::Bool(op(a, b))),
@@ -298,13 +234,6 @@ macro_rules! define_binary_geography_fn {
         fn $name(
             args: &[graphdb_core::Value],
         ) -> Result<graphdb_core::Value, $crate::executor::expression::ExpressionError> {
-            if args.len() != 2 {
-                return Err($crate::executor::expression::ExpressionError::new(
-                    $crate::executor::expression::ExpressionErrorType::InvalidArgumentCount,
-                    concat!($desc, "The function takes 2 arguments"),
-                ));
-            }
-
             let op = $op;
             match (&args[0], &args[1]) {
                 (Value::Geography(geo1), Value::Geography(geo2)) => op(geo1, geo2),

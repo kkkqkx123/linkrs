@@ -12,9 +12,9 @@ use crate::binder::BoundStatement;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::{LookupStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::access::{IndexLimit, IndexScanNode, ScanType};
+use crate::planning::plan::core::nodes::access::{IndexLimit, ScanType};
 use crate::planning::plan::logical::logical_nodes::access::{
-    LogicalScanEdgesNode, LogicalScanVerticesNode,
+    IndexHint, LogicalScanEdgesNode, LogicalScanVerticesNode,
 };
 use crate::planning::plan::logical::logical_nodes::operation::{
     LogicalFilterNode, LogicalProjectNode,
@@ -28,12 +28,6 @@ use graphdb_core::types::ContextualExpression;
 use graphdb_core::Expression;
 use graphdb_core::Value;
 use std::sync::Arc;
-
-pub use crate::planning::plan::core::nodes::{
-    ArgumentNode, DedupNode, FilterNode, GetEdgesNode, GetVerticesNode, InnerJoinNode, ProjectNode,
-    ScanEdgesNode, ScanVerticesNode,
-};
-pub use crate::planning::plan::core::PlanNodeEnum;
 
 /// LOOKUP Query Planner
 /// Responsible for converting the LOOKUP statement into an execution plan.
@@ -221,88 +215,11 @@ impl LookupPlanner {
             crate::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
         };
 
-        // 2. When an index was selected, extract the scan limits from WHERE.
-        let (scan_limits, scan_type) = if let Some(index) = selected_index {
-            let limits = Self::extract_scan_limits_from_where(
-                &lookup_stmt.where_clause,
-                std::slice::from_ref(&index.field_name),
-            );
-            let scan_type = if limits.len() == 1 && limits[0].scan_type == ScanType::Unique {
-                // Single equality condition: use index point lookup
-                ScanType::Unique
-            } else {
-                // Multiple conditions or range queries: use Range
-                ScanType::Range
-            };
-            (limits, scan_type)
-        } else {
-            (Vec::new(), ScanType::Full)
-        };
+        let _ = selected_index;
+        let _ = tag_id;
 
-        // 3. Create the appropriate scan node. With an index the lookup uses
-        // a unified IndexScan node; otherwise it falls back to a full scan of
-        // the tag/edge, with WHERE filtering applied by a Filter node above.
-        //
-        // A parallel pure logical tree is built alongside (the index scan is
-        // a physical choice that the logical representation drops); it is
-        // attached to the SubPlan so the compiler can construct the
-        // LogicalPlan natively.
-        let mut current_node: PlanNodeEnum = match selected_index {
-            Some(index) => {
-                let mut index_scan_node = IndexScanNode::new(
-                    space_id,
-                    tag_id,
-                    index.index_id,
-                    index.index_name.clone(),
-                    target_name.clone(),
-                    scan_type,
-                );
-
-                index_scan_node.set_scan_limits(scan_limits);
-                // Set col_names so the output layout has a named slot that
-                // YIELD/Filter expressions like `person.name` can resolve via TagProperty.
-                // No return_columns are set: the scan fetches full rows so the
-                // WHERE Filter above can evaluate any property.
-                index_scan_node.set_col_names(vec![target_name.clone()]);
-
-                // Set limit from yield clause
-                if let Some(ref yield_clause) = lookup_stmt.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        index_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-
-                PlanNodeEnum::IndexScan(index_scan_node)
-            }
-            None if is_edge => {
-                let mut edge_scan_node = ScanEdgesNode::new(space_id, &target_name);
-                edge_scan_node.set_col_names(vec![target_name.clone()]);
-
-                if let Some(ref yield_clause) = lookup_stmt.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        edge_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-
-                PlanNodeEnum::ScanEdges(edge_scan_node)
-            }
-            None => {
-                let mut vertex_scan_node = ScanVerticesNode::new(space_id, &space_name);
-                vertex_scan_node.set_col_names(vec![target_name.clone()]);
-                vertex_scan_node.set_tag(&target_name);
-
-                if let Some(ref yield_clause) = lookup_stmt.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        vertex_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-
-                PlanNodeEnum::ScanVertices(vertex_scan_node)
-            }
-        };
-
-        // Pure logical mirror of the scan (index scans are a physical choice
-        // and map to a tagged vertex scan in the logical representation).
+        // Build the logical tree only (index scans are a physical choice
+        // that the logical representation drops).
         let limit_from_yield = lookup_stmt
             .yield_clause
             .as_ref()
@@ -339,11 +256,6 @@ impl LookupPlanner {
         };
 
         if let Some(ref condition) = lookup_stmt.where_clause {
-            let filter_node = FilterNode::new(current_node, condition.clone()).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
-            })?;
-            current_node = PlanNodeEnum::Filter(filter_node);
-
             let logical_filter = LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -358,15 +270,6 @@ impl LookupPlanner {
 
         if lookup_stmt.yield_clause.is_some() {
             let yield_columns = Self::build_yield_columns(lookup_stmt, validated)?;
-            let project_node =
-                ProjectNode::new(current_node, yield_columns.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create ProjectNode: {}",
-                        e
-                    ))
-                })?;
-            current_node = PlanNodeEnum::Project(project_node);
-
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -379,14 +282,7 @@ impl LookupPlanner {
             logical_root = LogicalNodeEnum::Project(logical_project);
         }
 
-        let arg_node = ArgumentNode::new(0, "lookup_input");
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Argument(arg_node)),
-            logical_root: Some(logical_root),
-        };
-
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     /// Build a lookup plan from a bound statement (plan_bound path).
@@ -417,70 +313,35 @@ impl LookupPlanner {
             crate::binder::bound::BoundLookupTarget::Edge(_)
         );
 
-        // Extract scan limits from WHERE when an index is available
-        let (scan_limits, scan_type) = if let Some(index) = selected_index {
-            let limits = if let Some(ref where_ctx) = where_ctx {
-                Self::extract_scan_limits_from_where(
-                    &Some(where_ctx.clone()),
-                    std::slice::from_ref(&index.field_name),
-                )
-            } else {
-                Vec::new()
-            };
+        // When an index was selected, stamp it onto the logical scan as an
+        // index hint so the logical-to-physical mapping rebuilds an
+        // IndexScan instead of a full storage scan.
+        let index_hint: Option<IndexHint> = selected_index.and_then(|index| {
+            let where_expr = where_ctx.as_ref()?.get_expression()?;
+            let mut limits = Vec::new();
+            Self::extract_conditions(
+                &where_expr,
+                std::slice::from_ref(&index.field_name),
+                &mut limits,
+            );
+            if limits.is_empty() {
+                return None;
+            }
             let scan_type = if limits.len() == 1 && limits[0].scan_type == ScanType::Unique {
                 ScanType::Unique
             } else {
                 ScanType::Range
             };
-            (limits, scan_type)
-        } else {
-            (Vec::new(), ScanType::Full)
-        };
+            Some(IndexHint::new(
+                index.index_name.clone(),
+                target_name.clone(),
+                tag_id,
+                index.index_id,
+                scan_type.as_str().to_string(),
+            ))
+        });
 
-        // Build physical scan node
-        let mut current_node: PlanNodeEnum = match selected_index {
-            Some(index) => {
-                let mut index_scan_node = IndexScanNode::new(
-                    space_id,
-                    tag_id,
-                    index.index_id,
-                    index.index_name.clone(),
-                    target_name.clone(),
-                    scan_type,
-                );
-                index_scan_node.set_scan_limits(scan_limits);
-                index_scan_node.set_col_names(vec![target_name.clone()]);
-                if let Some(ref yield_clause) = lookup.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        index_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-                PlanNodeEnum::IndexScan(index_scan_node)
-            }
-            None if is_edge => {
-                let mut edge_scan_node = ScanEdgesNode::new(space_id, &target_name);
-                edge_scan_node.set_col_names(vec![target_name.clone()]);
-                if let Some(ref yield_clause) = lookup.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        edge_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-                PlanNodeEnum::ScanEdges(edge_scan_node)
-            }
-            None => {
-                let mut vertex_scan_node = ScanVerticesNode::new(space_id, &space_name);
-                vertex_scan_node.set_col_names(vec![target_name.clone()]);
-                vertex_scan_node.set_tag(&target_name);
-                if let Some(ref yield_clause) = lookup.yield_clause {
-                    if let Some(ref limit_clause) = yield_clause.limit {
-                        vertex_scan_node.set_limit(limit_clause.count as i64);
-                    }
-                }
-                PlanNodeEnum::ScanVertices(vertex_scan_node)
-            }
-        };
-
-        // Build logical mirror
+        // Build the logical tree only
         let limit_from_yield = lookup
             .yield_clause
             .as_ref()
@@ -493,7 +354,7 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
-                index_hint: None,
+                index_hint: index_hint.clone(),
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
@@ -508,7 +369,7 @@ impl LookupPlanner {
                 expression: None,
                 limit: limit_from_yield,
                 projected_properties: vec![],
-                index_hint: None,
+                index_hint,
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
@@ -518,11 +379,6 @@ impl LookupPlanner {
 
         // Add filter node if WHERE clause present
         if let Some(ref condition) = where_ctx {
-            let filter_node = FilterNode::new(current_node, condition.clone()).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
-            })?;
-            current_node = PlanNodeEnum::Filter(filter_node);
-
             let logical_filter = LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -538,15 +394,6 @@ impl LookupPlanner {
         // Add project node if YIELD clause present
         if lookup.yield_clause.is_some() {
             let yield_columns = self.build_yield_columns_from_bound(lookup, validated)?;
-            let project_node =
-                ProjectNode::new(current_node, yield_columns.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create ProjectNode: {}",
-                        e
-                    ))
-                })?;
-            current_node = PlanNodeEnum::Project(project_node);
-
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -559,14 +406,7 @@ impl LookupPlanner {
             logical_root = LogicalNodeEnum::Project(logical_project);
         }
 
-        let arg_node = ArgumentNode::new(0, "lookup_input");
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Argument(arg_node)),
-            logical_root: Some(logical_root),
-        };
-
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     /// Build YIELD columns from bound statement (plan_bound path)
@@ -640,26 +480,6 @@ impl LookupPlanner {
         }
 
         Ok(columns)
-    }
-
-    /// Extract scan limits from WHERE clause
-    fn extract_scan_limits_from_where(
-        where_clause: &Option<ContextualExpression>,
-        index_columns: &[String],
-    ) -> Vec<IndexLimit> {
-        let mut limits = Vec::new();
-
-        let Some(ref where_expr) = where_clause else {
-            return limits;
-        };
-
-        let Some(expr) = where_expr.get_expression() else {
-            return limits;
-        };
-
-        Self::extract_conditions(&expr, index_columns, &mut limits);
-
-        limits
     }
 
     fn extract_conditions(

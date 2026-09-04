@@ -3,11 +3,6 @@ use graphdb_core::value::{DateTimeValue, DateValue, NullType};
 use graphdb_core::Value;
 
 pub(crate) fn execute_date_trunc(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "date_trunc requires 2 arguments",
-        ));
-    }
     let precision = match &args[1] {
         Value::String(s) => s.as_str(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),

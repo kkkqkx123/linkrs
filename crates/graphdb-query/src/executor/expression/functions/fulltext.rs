@@ -231,12 +231,12 @@ impl FulltextFunction {
         if let Some(source) = &context.source {
             if let Some(Value::String(text)) = source.get(field_name.as_str()) {
                 // Truncate if needed
-                if text.len() > fragment_size {
+                let char_count = text.chars().count();
+                if char_count > fragment_size {
+                    let truncated: String = text.chars().take(fragment_size).collect();
                     return Ok(Value::string(format!(
                         "{}{}{}",
-                        pre_tag,
-                        &text[..fragment_size.min(text.len())],
-                        post_tag
+                        pre_tag, truncated, post_tag
                     )));
                 }
                 return Ok(Value::string(text.clone()));
@@ -307,14 +307,15 @@ impl FulltextFunction {
         // Get text from source
         if let Some(source) = &context.source {
             if let Some(Value::String(text)) = source.get(field_name.as_str()) {
-                if text.len() <= max_len {
+                if text.chars().count() <= max_len {
                     return Ok(Value::string(text.clone()));
                 }
 
                 // Try to find a good break point
-                let break_point = text[..max_len].rfind(' ').unwrap_or(max_len);
+                let prefix: String = text.chars().take(max_len).collect();
+                let break_point = prefix.rfind(' ').unwrap_or(prefix.len());
 
-                return Ok(Value::string(format!("{}...", &text[..break_point])));
+                return Ok(Value::string(format!("{}...", &prefix[..break_point])));
             }
         }
 
@@ -613,5 +614,45 @@ mod tests {
         if let Value::String(text) = result {
             assert!(text.len() <= 53); // 50 + "..."
         }
+    }
+
+    #[test]
+    fn test_snippet_non_ascii_truncation() {
+        let func = FulltextFunction::Snippet;
+        let mut source = HashMap::new();
+        source.insert(
+            "content".to_string(),
+            Value::string("你好世界这是一个测试内容"),
+        );
+        let context = FulltextExecutionContext {
+            source: Some(source),
+            ..FulltextExecutionContext::default()
+        };
+        // Byte slicing at max_len would panic mid-character; character
+        // truncation returns the first 5 characters plus an ellipsis.
+        let result = func
+            .execute(&[Value::string("content"), Value::Int(5)], &context)
+            .unwrap();
+        assert_eq!(result, Value::string("你好世界这..."));
+    }
+
+    #[test]
+    fn test_highlight_non_ascii_truncation() {
+        let func = FulltextFunction::Highlight;
+        let mut source = HashMap::new();
+        source.insert("title".to_string(), Value::string("数据库优化指南"));
+        let context = FulltextExecutionContext {
+            source: Some(source),
+            ..FulltextExecutionContext::default()
+        };
+        let result = func
+            .execute(&[
+                Value::string("title"),
+                Value::string("<b>"),
+                Value::string("</b>"),
+                Value::Int(2),
+            ], &context)
+            .unwrap();
+        assert_eq!(result, Value::string("<b>数据</b>"));
     }
 }

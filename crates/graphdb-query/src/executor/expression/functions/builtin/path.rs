@@ -54,6 +54,13 @@ impl PathFunction {
     }
 
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             Self::Nodes => execute_nodes(args),
             Self::Relationships => execute_relationships(args),
@@ -66,11 +73,6 @@ impl PathFunction {
 }
 
 fn execute_nodes(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "The nodes function takes 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Path(path) => {
             let mut result = vec![Value::Vertex(Box::new((*path.src).clone()))];
@@ -85,11 +87,6 @@ fn execute_nodes(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_relationships(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "relationships requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Path(path) => {
             let result: Vec<Value> = path
@@ -107,11 +104,6 @@ fn execute_relationships(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "properties requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Path(path) => {
             let mut all_props = std::collections::HashMap::new();
@@ -156,9 +148,6 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_is_trail(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("is_trail requires 1 argument"));
-    }
     match &args[0] {
         Value::Path(path) => {
             let mut seen_edges = std::collections::HashSet::new();
@@ -180,11 +169,6 @@ fn execute_is_trail(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_is_acyclic(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error(
-            "is_acyclic requires 1 argument",
-        ));
-    }
     match &args[0] {
         Value::Path(path) => {
             let mut seen_vertices = std::collections::HashSet::new();
@@ -205,12 +189,9 @@ fn execute_is_acyclic(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_length(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 1 {
-        return Err(ExpressionError::type_error("length requires 1 argument"));
-    }
     match &args[0] {
         Value::Path(path) => Ok(Value::BigInt(path.steps.len() as i64)),
-        Value::String(s) => Ok(Value::BigInt(s.len() as i64)),
+        Value::String(s) => Ok(Value::BigInt(s.chars().count() as i64)),
         Value::List(list) => Ok(Value::BigInt(list.values.len() as i64)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -410,5 +391,24 @@ mod tests {
             .execute(&[list])
             .expect("length should succeed");
         assert_eq!(result, Value::BigInt(3));
+    }
+
+    #[test]
+    fn test_path_length_non_ascii_counts_chars() {
+        let result = PathFunction::PathLength
+            .execute(&[Value::string("你好")])
+            .expect("length should succeed");
+        assert_eq!(result, Value::BigInt(2));
+    }
+
+    #[test]
+    fn test_path_length_arity() {
+        use crate::executor::expression::ExpressionErrorType;
+        let err = PathFunction::PathLength.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("length"));
+        assert!(PathFunction::PathLength
+            .execute(&[Value::string("a"), Value::string("b")])
+            .is_err());
     }
 }

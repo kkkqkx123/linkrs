@@ -196,6 +196,13 @@ impl VectorFunction {
 
     /// Execute the function
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
         match self {
             VectorFunction::CosineSimilarity => self.execute_cosine_similarity(args),
             VectorFunction::DotProduct => self.execute_dot_product(args),
@@ -216,16 +223,6 @@ impl VectorFunction {
 
     /// Execute cosine_similarity function
     fn execute_cosine_similarity(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 2 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!(
-                    "cosine_similarity() expects 2 arguments, got {}",
-                    args.len()
-                ),
-            ));
-        }
-
         let vec1 = extract_vector(&args[0])?;
         let vec2 = extract_vector(&args[1])?;
 
@@ -235,13 +232,6 @@ impl VectorFunction {
 
     /// Execute dot_product function
     fn execute_dot_product(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 2 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!("dot_product() expects 2 arguments, got {}", args.len()),
-            ));
-        }
-
         let vec1 = extract_vector(&args[0])?;
         let vec2 = extract_vector(&args[1])?;
 
@@ -251,16 +241,6 @@ impl VectorFunction {
 
     /// Execute euclidean_distance function
     fn execute_euclidean_distance(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 2 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!(
-                    "euclidean_distance() expects 2 arguments, got {}",
-                    args.len()
-                ),
-            ));
-        }
-
         let vec1 = extract_vector(&args[0])?;
         let vec2 = extract_vector(&args[1])?;
 
@@ -270,16 +250,6 @@ impl VectorFunction {
 
     /// Execute manhattan_distance function
     fn execute_manhattan_distance(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 2 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!(
-                    "manhattan_distance() expects 2 arguments, got {}",
-                    args.len()
-                ),
-            ));
-        }
-
         let vec1 = extract_vector(&args[0])?;
         let vec2 = extract_vector(&args[1])?;
 
@@ -289,26 +259,12 @@ impl VectorFunction {
 
     /// Execute dimension function
     fn execute_dimension(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 1 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!("dimension() expects 1 argument, got {}", args.len()),
-            ));
-        }
-
         let vec = extract_vector(&args[0])?;
         Ok(Value::BigInt(vec.len() as i64))
     }
 
     /// Execute l2_norm function
     fn execute_l2_norm(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 1 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!("l2_norm() expects 1 argument, got {}", args.len()),
-            ));
-        }
-
         let vec = extract_vector(&args[0])?;
         let norm = compute_l2_norm(&vec);
         Ok(Value::Double(norm as f64))
@@ -316,13 +272,6 @@ impl VectorFunction {
 
     /// Execute nnz function
     fn execute_nnz(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 1 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!("nnz() expects 1 argument, got {}", args.len()),
-            ));
-        }
-
         let vec = extract_vector(&args[0])?;
         let nnz = vec.iter().filter(|&&x| x != 0.0).count();
         Ok(Value::BigInt(nnz as i64))
@@ -330,13 +279,6 @@ impl VectorFunction {
 
     /// Execute normalize function
     fn execute_normalize(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 1 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!("normalize() expects 1 argument, got {}", args.len()),
-            ));
-        }
-
         let vec = extract_vector(&args[0])?;
         let norm = compute_l2_norm(&vec);
 
@@ -356,16 +298,6 @@ impl VectorFunction {
 
     /// Execute array_squared_distance function
     fn execute_array_squared_distance(&self, args: &[Value]) -> Result<Value, ExpressionError> {
-        if args.len() != 2 {
-            return Err(ExpressionError::new(
-                ExpressionErrorType::InvalidArgumentCount,
-                format!(
-                    "array_squared_distance() expects 2 arguments, got {}",
-                    args.len()
-                ),
-            ));
-        }
-
         let vec1 = extract_vector(&args[0])?;
         let vec2 = extract_vector(&args[1])?;
 

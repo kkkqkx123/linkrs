@@ -241,6 +241,17 @@ impl ExpressionError {
         )
     }
 
+    /// Create an arity mismatch error with function name, expected and actual counts.
+    pub fn invalid_arity(name: &str, expected: usize, actual: usize) -> Self {
+        Self::new(
+            ExpressionErrorType::InvalidArgumentCount,
+            format!(
+                "function '{}' expects {} argument(s), got {}",
+                name, expected, actual
+            ),
+        )
+    }
+
     /// An error occurred during the creation of an unsupported operation.
     pub fn unsupported_operation(
         operation: impl Into<String>,

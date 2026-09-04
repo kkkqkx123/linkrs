@@ -4,9 +4,6 @@ use graphdb_core::value::{DateTimeValue, DateValue, NullType};
 use graphdb_core::Value;
 
 pub(crate) fn execute_date_add(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("date_add requires 2 arguments"));
-    }
     let amount = match &args[1] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,
@@ -54,9 +51,6 @@ pub(crate) fn execute_date_add(args: &[Value]) -> Result<Value, ExpressionError>
 }
 
 pub(crate) fn execute_date_sub(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("date_sub requires 2 arguments"));
-    }
     let amount = match &args[1] {
         Value::Int(i) => *i as i64,
         Value::BigInt(i) => *i,
@@ -104,11 +98,6 @@ pub(crate) fn execute_date_sub(args: &[Value]) -> Result<Value, ExpressionError>
 }
 
 pub(crate) fn execute_date_diff(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error(
-            "date_diff requires 2 arguments",
-        ));
-    }
     match (&args[0], &args[1]) {
         (Value::Date(d1), Value::Date(d2)) => {
             let n1 = chrono::NaiveDate::from_ymd_opt(d1.year, d1.month, d1.day)

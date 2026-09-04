@@ -4,9 +4,6 @@ use graphdb_core::value::{DateValue, NullType};
 use graphdb_core::Value;
 
 pub(crate) fn execute_to_char(args: &[Value]) -> Result<Value, ExpressionError> {
-    if args.len() != 2 {
-        return Err(ExpressionError::type_error("to_char requires 2 arguments"));
-    }
     let format_str = match &args[1] {
         Value::String(s) => s.to_string(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
