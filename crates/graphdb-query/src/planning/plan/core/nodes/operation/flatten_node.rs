@@ -3,6 +3,8 @@ use crate::define_plan_node_with_deps;
 define_plan_node_with_deps! {
     pub struct FlattenNode {
         group_pos: u32,
+        group_columns: Vec<String>,
+        expected_groups: Option<u32>,
         schema_snapshot: Option<String>,
     }
     enum: Flatten
@@ -20,6 +22,8 @@ impl FlattenNode {
             input: Some(Box::new(input.clone())),
             deps: vec![input],
             group_pos,
+            group_columns: Vec::new(),
+            expected_groups: None,
             schema_snapshot: None,
             output_var: None,
             col_names,
@@ -29,6 +33,22 @@ impl FlattenNode {
 
     pub fn group_pos(&self) -> u32 {
         self.group_pos
+    }
+
+    pub fn group_columns(&self) -> &[String] {
+        &self.group_columns
+    }
+
+    pub fn set_group_columns(&mut self, columns: Vec<String>) {
+        self.group_columns = columns;
+    }
+
+    pub fn expected_groups(&self) -> Option<u32> {
+        self.expected_groups
+    }
+
+    pub fn set_expected_groups(&mut self, count: u32) {
+        self.expected_groups = Some(count);
     }
 
     pub fn schema_snapshot(&self) -> Option<&str> {

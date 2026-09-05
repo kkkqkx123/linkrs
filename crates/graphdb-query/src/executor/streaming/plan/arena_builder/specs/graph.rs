@@ -226,6 +226,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_flatten_spec(
 ) -> Result<UnarySpec, PlanBuildError> {
     Ok(UnarySpec::Flatten {
         group_pos: node.group_pos(),
+        group_columns: node.group_columns().to_vec(),
+        expected_groups: node.expected_groups(),
     })
 }
 

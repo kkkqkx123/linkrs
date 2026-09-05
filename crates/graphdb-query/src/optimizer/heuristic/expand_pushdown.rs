@@ -163,11 +163,15 @@ fn source_unreferenced(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> b
 
 /// Whether `anc` is a node type whose variable references the annotation pass
 /// can fully audit.  Unknown types conservatively block the annotation.
+/// `Flatten` is row-preserving (it replays child rows without evaluating
+/// any column), so it neither consumes the destination/edge/source
+/// variables nor blocks the raw-id fast path.
 fn known_reference_ancestor(anc: &PlanNodeEnum) -> bool {
     matches!(
         anc,
         PlanNodeEnum::Filter(_)
             | PlanNodeEnum::Project(_)
+            | PlanNodeEnum::Flatten(_)
             | PlanNodeEnum::Aggregate(_)
             | PlanNodeEnum::ExpandAll(_)
             | PlanNodeEnum::InnerJoin(_)
@@ -348,6 +352,7 @@ fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool
     match root {
         Project(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Filter(n) => changed |= apply_decisions(n.input_mut(), decisions),
+        Flatten(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Sort(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Limit(n) => changed |= apply_decisions(n.input_mut(), decisions),
         TopN(n) => changed |= apply_decisions(n.input_mut(), decisions),

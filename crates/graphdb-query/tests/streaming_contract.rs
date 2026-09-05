@@ -6,6 +6,9 @@
 //!
 //! Fixtures: single/multi chunk, empty input, first-row NULL,
 //! mid-stream empty chunk, cancel, early stop.
+//!
+//! Scope: component contract level (in-memory operators, no SQL/storage).
+//! SQL end-to-end streaming coverage lives in `integration_streaming.rs`.
 
 use graphdb_core::Value;
 use graphdb_query::executor::streaming::executor::StreamingExecutor;

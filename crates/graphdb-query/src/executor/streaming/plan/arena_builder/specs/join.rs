@@ -13,6 +13,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_inner_join_spec
 ) -> Result<JoinSpec, PlanBuildError> {
     // Default path: a valid equi-condition produces the condition
     // (nested-loop) form; a join without usable keys keeps the default.
+    // The partitioned join paths rely on this condition form: each
+    // partition-local join carries the equality explicitly.
     build_join_with_condition(
         node.hash_keys(),
         node.probe_keys(),

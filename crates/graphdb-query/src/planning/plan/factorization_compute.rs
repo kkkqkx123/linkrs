@@ -137,7 +137,7 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             }
             LogicalNodeEnum::FullOuterJoin(n) => {
                 let (left, right) = pair(child_schemas);
-                join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+                join::binary_join_full_outer(left, right, &n.hash_keys, &n.probe_keys)
             }
             LogicalNodeEnum::SemiJoin(n) => {
                 let (left, right) = pair(child_schemas);
@@ -996,6 +996,101 @@ mod tests {
         let out = node.compute_factorized_schema(&[left_schema, right_schema]);
         out.validate_at_most_one_unflat();
         assert_eq!(out.unflat_group_pos(), Some(0));
+    }
+
+    #[test]
+    fn full_outer_join_compute_flattens_both_key_sides() {
+        use crate::planning::plan::logical::logical_nodes::join::LogicalFullOuterJoinNode;
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let left_key_id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable("k".to_string()),
+        ));
+        let right_key_id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable("k".to_string()),
+        ));
+        let left_key = ContextualExpression::new(left_key_id.clone(), ctx.clone());
+        let right_key = ContextualExpression::new(right_key_id.clone(), ctx);
+        let mut left_schema = FactorizedSchema::new();
+        let lg0 = left_schema.create_flat_group(false);
+        let lg1 = left_schema.create_group();
+        left_schema.insert_to_group_and_scope(test_id(1), lg0);
+        left_schema.insert_to_group_and_scope(left_key_id.clone(), lg1);
+        let mut right_schema = FactorizedSchema::new();
+        let rg0 = right_schema.create_flat_group(false);
+        let rg1 = right_schema.create_group();
+        right_schema.insert_to_group_and_scope(test_id(2), rg0);
+        right_schema.insert_to_group_and_scope(right_key_id.clone(), rg1);
+        let mut node = LogicalNodeEnum::FullOuterJoin(LogicalFullOuterJoinNode {
+            id: next_node_id(),
+            left: Box::new(scan()),
+            right: Box::new(scan()),
+            hash_keys: vec![left_key],
+            probe_keys: vec![right_key],
+            deps: vec![scan(), scan()],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let out = node.compute_factorized_schema(&[left_schema, right_schema]);
+        out.validate_at_most_one_unflat();
+        // Full-outer policy flattens both key sides: either side can emit
+        // unmatched rows, so no unflat key group survives. With no other
+        // unflat groups the output is fully flat, unlike Inner which
+        // would keep the right key group alive.
+        assert!(out.is_flat_schema());
+        assert!(out
+            .get_group_pos(&left_key_id)
+            .is_some_and(|pos| { out.get_group(pos).is_some_and(|g| g.is_flat()) }));
+        assert!(out
+            .get_group_pos(&right_key_id)
+            .is_some_and(|pos| { out.get_group(pos).is_some_and(|g| g.is_flat()) }));
+    }
+
+    #[test]
+    fn multi_unflat_non_key_fallback_keeps_first_with_keys_flat() {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let left_key_id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable("lk".to_string()),
+        ));
+        let right_key_id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable("rk".to_string()),
+        ));
+        let left_key = ContextualExpression::new(left_key_id.clone(), ctx.clone());
+        let right_key = ContextualExpression::new(right_key_id.clone(), ctx);
+        // Key groups are already flat; each side carries one unflat
+        // non-key group into the merge.
+        let mut left_schema = FactorizedSchema::new();
+        let lg0 = left_schema.create_flat_group(false);
+        let lg1 = left_schema.create_group();
+        left_schema.insert_to_group_and_scope(left_key_id.clone(), lg0);
+        left_schema.insert_to_group_and_scope(test_id(11), lg1);
+        let mut right_schema = FactorizedSchema::new();
+        let rg0 = right_schema.create_flat_group(false);
+        let rg1 = right_schema.create_group();
+        right_schema.insert_to_group_and_scope(right_key_id.clone(), rg0);
+        right_schema.insert_to_group_and_scope(test_id(22), rg1);
+        let mut node = LogicalNodeEnum::InnerJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
+                id: next_node_id(),
+                left: Box::new(scan()),
+                right: Box::new(scan()),
+                hash_keys: vec![left_key],
+                probe_keys: vec![right_key],
+                deps: vec![scan(), scan()],
+                recommended_algorithm: None,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            },
+        );
+        let out = node.compute_factorized_schema(&[left_schema, right_schema]);
+        out.validate_at_most_one_unflat();
+        // Key groups stayed flat, so the positional fallback keeps the
+        // first unflat non-key group (left position 1).
+        assert_eq!(out.unflat_group_pos(), Some(lg1));
+        assert!(out
+            .get_group_pos(&left_key_id)
+            .is_some_and(|pos| { out.get_group(pos).is_some_and(|g| g.is_flat()) }));
     }
 
     fn select_node(cond: ContextualExpression) -> LogicalNodeEnum {

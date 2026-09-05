@@ -403,8 +403,11 @@ fn anchored_hop_filter_is_pushed_below_expand() {
         "plan must contain ExpandAll, got:\n{plan}"
     );
     let scan_pos = plan.find("StorageScan").expect("anchor scan");
-    let filter_pos = plan.find("Filter").expect("pushed filter");
-    let expand_pos = plan.find("ExpandAll").expect("expand");
+    // Scope the order check to the operator listing: the CBO preamble may
+    // mention operator names (e.g. "ExpandAll: ..."), so search forward
+    // from the scan instead of matching the first global occurrence.
+    let filter_pos = scan_pos + plan[scan_pos..].find("Filter").expect("pushed filter");
+    let expand_pos = filter_pos + plan[filter_pos..].find("ExpandAll").expect("expand");
     assert!(
         scan_pos < filter_pos && filter_pos < expand_pos,
         "anchor predicate must be evaluated before expansion, got:\n{plan}"

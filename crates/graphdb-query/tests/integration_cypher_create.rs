@@ -1,9 +1,9 @@
 //! Cypher Style CREATE Data Statement Integration Testing
 //!
 //! Test Range.
-//! - CREATE (n:Label {prop: value}) - 创建node
-//! - CREATE (a)-[:Type {prop: value}]->(b) - 创建edge
-//! - CREATE (a:Label1)-[:Type]->(b:Label2) - 创建path
+//! - CREATE (n:Label {prop: value}) - createnode
+//! - CREATE (a)-[:Type {prop: value}]->(b) - createedge
+//! - CREATE (a:Label1)-[:Type]->(b:Label2) - createpath
 //! - Automatic Schema Inference and Creation
 
 mod common;
@@ -30,7 +30,7 @@ fn test_create_cypher_node_basic() {
         result.err()
     );
 
-    let stmt = result.expect("CREATE语句: should succeed");
+    let stmt = result.expect("CREATEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "CREATE");
 }
 
@@ -55,7 +55,7 @@ fn test_create_cypher_node_multiple_labels() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "Cypher CREATEnode多标签: should succeed: {:?}",
+        "Cypher CREATE nodemulti-label: should succeed: {:?}",
         result.err()
     );
 }
@@ -68,7 +68,7 @@ fn test_create_cypher_node_without_variable() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "Cypher CREATEnode无变量: should succeed: {:?}",
+        "Cypher CREATE nodewithout variable: should succeed: {:?}",
         result.err()
     );
 }
@@ -99,7 +99,7 @@ fn test_create_cypher_edge_basic() {
         result.err()
     );
 
-    let stmt = result.expect("CREATE语句: should succeed");
+    let stmt = result.expect("CREATEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "CREATE");
 }
 
@@ -153,7 +153,7 @@ fn test_create_cypher_path_with_props() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "Cypher CREATEpath带属性: should succeed: {:?}",
+        "Cypher CREATE pathwith properties: should succeed: {:?}",
         result.err()
     );
 }
@@ -175,7 +175,7 @@ fn test_create_cypher_multiple_nodes() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "Cypher CREATE多个node: should succeed: {:?}",
+        "Cypher CREATE multiplenode: should succeed: {:?}",
         result.err()
     );
 }
@@ -190,7 +190,7 @@ fn test_create_cypher_mixed_patterns() {
 
 #[test]
 fn test_create_cypher_node_execution() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
     let schema_manager = test_storage.schema_manager();
@@ -214,7 +214,7 @@ fn test_create_cypher_node_execution() {
 
 #[test]
 fn test_create_cypher_edge_execution() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
     let schema_manager = test_storage.schema_manager();

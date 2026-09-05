@@ -405,7 +405,7 @@ impl PartitioningPlanner {
     }
 
     /// Choose a partition layout for an anchored bounded traversal (E4):
-    /// a linear chain with exactly one `ExpandAll` above the anchor vertex
+    /// a linear chain of `ExpandAll` hops above the anchor vertex
     /// scan. The anchor is partitioned by vertex-id range; every partition
     /// runs the bounded traversal locally over its anchor subrange and the
     /// results are gathered globally. Recursive traversals and path
@@ -492,9 +492,10 @@ impl PartitioningPlanner {
         }
     }
 
-    /// Walk a linear chain that ends in a tagged vertex scan and contains at
-    /// most one bounded `ExpandAll` hop. Any other graph operator (Traverse,
-    /// Loop, path algorithms, vertex-property fetches) fails the walk.
+    /// Walk a linear chain that ends in a tagged vertex scan. `Flatten` is
+    /// row-preserving (it replays child rows), so it passes through like the
+    /// other non-graph operators. Any other graph operator (Traverse, Loop,
+    /// path algorithms, vertex-property fetches) fails the walk.
     fn collect_anchored_chain<'a>(
         node: &'a PlanNodeEnum,
         chain: &mut Vec<&'a PlanNodeEnum>,
@@ -504,6 +505,7 @@ impl PartitioningPlanner {
             PlanNodeEnum::ScanVertices(_) => true,
             PlanNodeEnum::Filter(filter) => Self::collect_anchored_chain(filter.input(), chain),
             PlanNodeEnum::Project(project) => Self::collect_anchored_chain(project.input(), chain),
+            PlanNodeEnum::Flatten(flatten) => Self::collect_anchored_chain(flatten.input(), chain),
             PlanNodeEnum::Limit(limit) => Self::collect_anchored_chain(limit.input(), chain),
             PlanNodeEnum::Sort(sort) => Self::collect_anchored_chain(sort.input(), chain),
             PlanNodeEnum::Aggregate(agg) => Self::collect_anchored_chain(agg.input(), chain),

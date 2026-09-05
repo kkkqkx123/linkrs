@@ -197,8 +197,7 @@ impl Planner for DeletePlanner {
         };
 
         let mut sub_plan = SubPlan::from_logical_root(final_node);
-        let arg_node =
-            ArgumentNode::new(next_node_id(), "delete_input");
+        let arg_node = ArgumentNode::new(next_node_id(), "delete_input");
         sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
         Ok(sub_plan)
     }

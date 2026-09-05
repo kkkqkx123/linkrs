@@ -591,6 +591,12 @@ impl PlanNodeVisitor for DescribeVisitor {
         }
         desc.set_dependencies(deps);
         desc.add_description("group", node.group_pos().to_string());
+        if !node.group_columns().is_empty() {
+            desc.add_description("group_columns", node.group_columns().join(","));
+        }
+        if let Some(groups) = node.expected_groups() {
+            desc.add_description("expected_groups", groups.to_string());
+        }
         if let Some(snapshot) = node.schema_snapshot() {
             desc.add_description("schema", snapshot.to_string());
         }

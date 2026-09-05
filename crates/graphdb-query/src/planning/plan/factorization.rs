@@ -324,6 +324,24 @@ impl FactorizedSchema {
         self.expression_name_to_group.insert(name, group_pos);
     }
 
+    /// Alias names currently mapped to a group, in sorted order.
+    ///
+    /// Used to snapshot the group-to-column mapping onto inserted
+    /// `LogicalFlatten` nodes so the executor can validate the plan
+    /// position against the runtime layout. Anonymous groups (no tracked
+    /// alias) yield an empty list, which means "mapping unknown" rather
+    /// than "group is empty".
+    pub fn member_names(&self, group_pos: FGroupPos) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .expression_name_to_group
+            .iter()
+            .filter(|(_, pos)| **pos == group_pos)
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     pub fn get_expression_pos(&self, expr_id: &ExpressionId) -> Option<(FGroupPos, usize)> {
         let gpos = self.get_group_pos(expr_id)?;
         let group = self.get_group(gpos)?;
@@ -639,6 +657,22 @@ mod tests {
         assert!(extend_schema.get_group(g0).expect("g0").is_flat());
         assert!(!extend_schema.get_group(g1).expect("g1").is_flat());
         extend_schema.validate_at_most_one_unflat();
+    }
+
+    #[test]
+    fn member_names_reports_sorted_aliases_per_group() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope(expr(1), g0);
+        schema.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1);
+        schema.insert_to_group_and_scope_with_name(expr(3), Some("a".to_string()), g1);
+        assert_eq!(
+            schema.member_names(g1),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(schema.member_names(g0).is_empty());
+        assert!(schema.member_names(99).is_empty());
     }
 
     #[test]

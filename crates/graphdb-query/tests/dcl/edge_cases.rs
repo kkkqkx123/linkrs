@@ -161,6 +161,7 @@ fn test_role_case_insensitivity() {
 
 #[test]
 fn test_username_chinese_chars() {
+    // Unicode identifiers are legitimate test data (not code comments).
     new_scenario()
         .exec_dcl("CREATE USER 用户名 WITH PASSWORD 'pass'")
         .assert_success()
@@ -170,6 +171,7 @@ fn test_username_chinese_chars() {
 
 #[test]
 fn test_username_mixed_unicode() {
+    // Unicode identifiers are legitimate test data (not code comments).
     new_scenario()
         .exec_dcl("CREATE USER user_用户_名 WITH PASSWORD 'pass'")
         .assert_success()
@@ -188,6 +190,7 @@ fn test_password_emoji() {
 
 #[test]
 fn test_unicode_space_name() {
+    // Unicode identifiers are legitimate test data (not code comments).
     let scenario = new_scenario()
         .exec_dcl("CREATE USER unicode_space_user WITH PASSWORD 'pass'")
         .assert_success()

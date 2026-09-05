@@ -1154,7 +1154,8 @@ impl OptimizerEngine {
     fn apply_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
         if let Some(logical) = plan.logical_plan.clone() {
             let mut root = logical.root.clone();
-            crate::optimizer::factorization::FactorizationRewriter::new().rewrite(&mut root);
+            let mut rewriter = crate::optimizer::factorization::FactorizationRewriter::new();
+            rewriter.rewrite(&mut root);
             let mut updated = logical.clone();
             updated.root = root.clone();
             plan.set_logical_plan(updated);
@@ -1167,6 +1168,18 @@ impl OptimizerEngine {
             flattens.dedup();
             for pos in &flattens {
                 plan.cbo_notes.push(format!("Flatten(group={})", pos));
+            }
+            // Already-flat no-op skips are intentional decisions, not
+            // silent drops: surface each skipped position so EXPLAIN
+            // shows what the rewriter considered and declined.
+            let mut skipped = rewriter.take_skipped_flat_groups();
+            skipped.sort_unstable();
+            skipped.dedup();
+            for pos in &skipped {
+                if !flattens.contains(pos) {
+                    plan.cbo_notes
+                        .push(format!("factorization: flatten_noop_flat(group={})", pos));
+                }
             }
             // Record total flatten count for metrics observability.
             if !flattens.is_empty() {

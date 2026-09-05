@@ -36,15 +36,43 @@ fn flatten_keys(schema: &mut FactorizedSchema, keys: &[ContextualExpression], ke
     }
 }
 
-fn merge_flattened(left: &FactorizedSchema, right: &FactorizedSchema) -> FactorizedSchema {
+fn merge_flattened(
+    left: &FactorizedSchema,
+    right: &FactorizedSchema,
+    left_key_groups: &HashSet<FGroupPos>,
+    right_key_groups: &HashSet<FGroupPos>,
+) -> FactorizedSchema {
     let mut merged = left.clone();
     let mapping = merged.merge_groups_from(right);
     for (expr_id, gpos) in right.expression_to_group_iter() {
         let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
         merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
     }
+    // Key groups must already be flat here: every binary policy above
+    // flattens its join-key groups before the merge, so any surviving
+    // unflat group is a non-key group by construction. The debug assertion
+    // pins that contract; release keeps the conservative fallback below.
+    for pos in left_key_groups {
+        debug_assert!(
+            merged.get_group(*pos).is_none_or(|g| g.is_flat()),
+            "left join-key group {} must be flat before merge",
+            pos
+        );
+    }
+    for (old_pos, new_pos) in &mapping {
+        if right_key_groups.contains(old_pos) {
+            debug_assert!(
+                merged.get_group(*new_pos).is_none_or(|g| g.is_flat()),
+                "right join-key group {} must be flat before merge",
+                old_pos
+            );
+        }
+    }
     // Non-key unflat groups can still collide after the merge; keep the
     // first unflat group in position order to hold the global invariant.
+    // This is deliberately conservative: without key/type/uniqueness
+    // context the merge cannot prove which side preserves row identity,
+    // so it keeps one side factorized instead of flattening everything.
     if merged.has_unflat_group() {
         let unflat_count = merged.groups().iter().filter(|g| !g.is_flat()).count();
         if unflat_count > 1 {
@@ -67,18 +95,20 @@ fn merge_flattened(left: &FactorizedSchema, right: &FactorizedSchema) -> Factori
     merged
 }
 
-/// Inner/Left/Semi/FullOuter policy: left keys flatten fully, right keeps one.
+/// Inner/Left/Semi policy: left keys flatten fully, right keeps one.
 pub(super) fn binary_join_inner(
     left: &FactorizedSchema,
     right: &FactorizedSchema,
     hash_keys: &[ContextualExpression],
     probe_keys: &[ContextualExpression],
 ) -> FactorizedSchema {
+    let left_keys = key_groups(hash_keys, left);
+    let right_keys = key_groups(probe_keys, right);
     let mut left = left.clone();
     let mut right = right.clone();
     flatten_keys(&mut left, hash_keys, false);
     flatten_keys(&mut right, probe_keys, true);
-    merge_flattened(&left, &right)
+    merge_flattened(&left, &right, &left_keys, &right_keys)
 }
 
 /// Right policy: left keeps one, right flattens fully.
@@ -88,11 +118,33 @@ pub(super) fn binary_join_right(
     hash_keys: &[ContextualExpression],
     probe_keys: &[ContextualExpression],
 ) -> FactorizedSchema {
+    let left_keys = key_groups(hash_keys, left);
+    let right_keys = key_groups(probe_keys, right);
     let mut left = left.clone();
     let mut right = right.clone();
     flatten_keys(&mut left, hash_keys, true);
     flatten_keys(&mut right, probe_keys, false);
-    merge_flattened(&left, &right)
+    merge_flattened(&left, &right, &left_keys, &right_keys)
+}
+
+/// Full-outer policy: both key sides flatten fully.
+///
+/// Either side can emit unmatched rows, so neither side keeps an unflat
+/// key group. Non-key unflat groups still collapse through the shared
+/// positional fallback, keeping the at-most-one-unflat invariant.
+pub(super) fn binary_join_full_outer(
+    left: &FactorizedSchema,
+    right: &FactorizedSchema,
+    hash_keys: &[ContextualExpression],
+    probe_keys: &[ContextualExpression],
+) -> FactorizedSchema {
+    let left_keys = key_groups(hash_keys, left);
+    let right_keys = key_groups(probe_keys, right);
+    let mut left = left.clone();
+    let mut right = right.clone();
+    flatten_keys(&mut left, hash_keys, false);
+    flatten_keys(&mut right, probe_keys, false);
+    merge_flattened(&left, &right, &left_keys, &right_keys)
 }
 
 /// Cross without keys: no key flattening, only the positional fallback.
@@ -100,5 +152,6 @@ pub(super) fn cross_join_no_keys(
     left: &FactorizedSchema,
     right: &FactorizedSchema,
 ) -> FactorizedSchema {
-    merge_flattened(left, right)
+    let empty = HashSet::new();
+    merge_flattened(left, right, &empty, &empty)
 }

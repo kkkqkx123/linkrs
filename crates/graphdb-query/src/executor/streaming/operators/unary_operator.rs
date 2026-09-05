@@ -74,6 +74,8 @@ pub enum UnaryOperatorKind {
     },
     Flatten {
         group_pos: u32,
+        group_columns: Vec<String>,
+        expected_groups: Option<u32>,
         current_idx: usize,
         size_to_flatten: usize,
         saved_sel_vector: Option<Vec<usize>>,
@@ -175,8 +177,14 @@ impl UnaryOperator {
                 count: *count,
                 consumed: 0,
             },
-            super::spec::UnarySpec::Flatten { group_pos } => UnaryOperatorKind::Flatten {
+            super::spec::UnarySpec::Flatten {
+                group_pos,
+                group_columns,
+                expected_groups,
+            } => UnaryOperatorKind::Flatten {
                 group_pos: *group_pos,
+                group_columns: group_columns.clone(),
+                expected_groups: *expected_groups,
                 current_idx: 0,
                 size_to_flatten: 0,
                 saved_sel_vector: None,
@@ -246,6 +254,42 @@ impl UnaryOperator {
         } = &mut self.kind
         {
             *target = storage;
+        }
+        // The streaming engine stores flat row batches only, so flatten
+        // replays rows instead of expanding a nested layout. The
+        // `expected_groups` count snapshotted at rewrite time makes the
+        // plan position checkable anyway: a stale `group_pos` at or above
+        // the count fails loudly here instead of replaying the wrong
+        // group silently. `None` means unknown (hand-built or legacy
+        // plan) and skips the check honestly. The `group_columns`
+        // mapping is traceability metadata only (EXPLAIN-visible): the
+        // schema alias namespace and the runtime column namespace are
+        // not identical, so names are logged, never validated.
+        if let UnaryOperatorKind::Flatten {
+            group_pos,
+            group_columns,
+            expected_groups,
+            ..
+        } = &self.kind
+        {
+            match expected_groups {
+                Some(count) if *group_pos >= *count => {
+                    return Err(QueryError::execution(format!(
+                        "Flatten(group={group_pos}): position out of range for {count} group(s)"
+                    )));
+                }
+                Some(count) => {
+                    log::debug!(
+                        "flatten(group={group_pos}): position within {count} group(s), mapped columns: [{}]",
+                        group_columns.join(", ")
+                    );
+                }
+                None => {
+                    log::debug!(
+                        "flatten(group={group_pos}): unknown group count; skipping position validation"
+                    );
+                }
+            }
         }
         input.open()?;
         Ok(())
@@ -737,11 +781,13 @@ impl UnaryOperator {
                 // Plan level group identifier, carried end to end
                 // (plan -> spec -> operator) and visible in EXPLAIN /
                 // cbo_notes. The streaming engine stores flat row batches
-                // only, so flatten currently replays the child selection
-                // without group aware column projection; the position is
-                // logged for traceability until the compressed
-                // representation lands.
+                // only, so flatten replays the child selection; the
+                // `group_columns`/`expected_groups` carried alongside are
+                // EXPLAIN traceability; the stale-position check runs in
+                // `open()` so a wrong group never replays silently.
                 group_pos,
+                group_columns: _,
+                expected_groups: _,
                 current_idx,
                 size_to_flatten,
                 saved_sel_vector,
@@ -1030,6 +1076,8 @@ mod tests {
     fn flatten_group_pos_is_observable() {
         let kind = UnaryOperatorKind::Flatten {
             group_pos: 7,
+            group_columns: vec!["a".to_string()],
+            expected_groups: Some(8),
             current_idx: 0,
             size_to_flatten: 0,
             saved_sel_vector: None,
@@ -1044,6 +1092,61 @@ mod tests {
             consumed: 0,
         };
         assert_eq!(filter.flatten_group_pos(), None);
+    }
+
+    fn flatten_op_with_mapping(
+        group_columns: Vec<String>,
+        expected_groups: Option<u32>,
+        layout_names: &[&str],
+    ) -> (UnaryOperator, Box<StreamingExecutor>) {
+        let layout = Arc::new(SlotLayout::from_names(
+            &layout_names
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        ));
+        let op = UnaryOperator::from_spec(
+            &crate::executor::streaming::operators::spec::UnarySpec::Flatten {
+                group_pos: 1,
+                group_columns,
+                expected_groups,
+            },
+            layout,
+        );
+        let input = scan_source(
+            vec![vec![Value::Int(1)]],
+            layout_names.iter().map(|s| s.to_string()).collect(),
+        );
+        (op, input)
+    }
+
+    #[test]
+    fn flatten_open_accepts_position_within_expected_groups() {
+        let (mut op, mut input) =
+            flatten_op_with_mapping(vec!["b".to_string()], Some(2), &["a", "b"]);
+        assert!(op.open(&mut input).is_ok());
+    }
+
+    #[test]
+    fn flatten_open_without_expected_groups_skips_validation() {
+        let (mut op, mut input) = flatten_op_with_mapping(vec![], None, &["a", "b"]);
+        assert!(op.open(&mut input).is_ok());
+    }
+
+    #[test]
+    fn flatten_open_rejects_stale_group_position() {
+        // Plan/executor drift: group 1 cannot exist when the rewrite saw
+        // only one group. The stale position fails loudly at open instead
+        // of replaying the wrong group silently.
+        let (mut op, mut input) =
+            flatten_op_with_mapping(vec!["b".to_string()], Some(1), &["a", "b"]);
+        let err = op
+            .open(&mut input)
+            .expect_err("stale group position must fail");
+        assert!(
+            err.to_string().contains("out of range"),
+            "error must report the range violation, got: {err}"
+        );
     }
 
     #[test]

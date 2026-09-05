@@ -440,6 +440,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode {
                     id: n.id(),
                     group_pos: n.group_pos(),
+                    group_columns: n.group_columns().to_vec(),
+                    expected_groups: n.expected_groups(),
                     input: Some(Box::new(logical_input.clone())),
                     deps: vec![logical_input],
                     output_var: n.output_var().map(|s| s.to_string()),

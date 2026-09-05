@@ -1,5 +1,12 @@
 //! Core Type and Expression Integration Testing
 //!
+//! Scope: two layers.
+//! - Unit layer (direct `Value`/`ExpressionEvaluator`/`FunctionRegistry`
+//!   assertions) pins type-system semantics; canonical unit coverage also
+//!   exists under `src/executor/expression`.
+//! - Pipeline layer (tests at the bottom of this file going through
+//!   `TestScenario` + SQL `RETURN`) proves the same semantics end to end.
+//!
 //! Test Range.
 //! - core::value - value type conversions, comparisons, operations
 //! - core::types - type system compatibility checking
@@ -9,6 +16,7 @@
 
 mod common;
 
+use common::test_scenario::TestScenario;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::DataType;
 use graphdb_core::value::{
@@ -19,7 +27,7 @@ use graphdb_query::executor::expression::functions::FunctionRegistry;
 use graphdb_query::executor::expression::{ExpressionContext, ExpressionEvaluator};
 use graphdb_query::DataSet;
 
-// ==================== Value 类型测试 ====================
+// ==================== Value type tests ====================
 
 #[test]
 fn test_value_null_type_variants() {
@@ -176,67 +184,61 @@ fn test_value_float_conversion() {
 fn test_value_arithmetic_operations() {
     // addition
     assert_eq!(
-        Value::Int(10)
-            .add(&Value::Int(5))
-            .expect("整数加法应该成功"),
+        Value::Int(10).add(&Value::Int(5)).expect("should succeed"),
         Value::Int(15)
     );
     assert_eq!(
         Value::Float(3.5)
             .add(&Value::Float(2.5))
-            .expect("浮点数加法应该成功"),
+            .expect("should succeed"),
         Value::Float(6.0)
     );
     assert_eq!(
         Value::Int(10)
             .add(&Value::Float(2.5))
-            .expect("整数与浮点数加法应该成功"),
+            .expect("should succeed"),
         Value::Float(12.5)
     );
     assert_eq!(
         Value::string("Hello, ")
             .add(&Value::string("World"))
-            .expect("字符串连接应该成功"),
+            .expect("should succeed"),
         Value::string("Hello, World")
     );
 
     // subtractive
     assert_eq!(
-        Value::Int(10)
-            .sub(&Value::Int(3))
-            .expect("整数减法应该成功"),
+        Value::Int(10).sub(&Value::Int(3)).expect("should succeed"),
         Value::Int(7)
     );
     assert_eq!(
         Value::Float(10.5)
             .sub(&Value::Float(3.5))
-            .expect("浮点数减法应该成功"),
+            .expect("should succeed"),
         Value::Float(7.0)
     );
 
     // subtraction
     assert_eq!(
-        Value::Int(6).mul(&Value::Int(7)).expect("整数乘法应该成功"),
+        Value::Int(6).mul(&Value::Int(7)).expect("should succeed"),
         Value::Int(42)
     );
     assert_eq!(
         Value::Float(3.0)
             .mul(&Value::Float(4.0))
-            .expect("浮点数乘法应该成功"),
+            .expect("should succeed"),
         Value::Float(12.0)
     );
 
     // division (math.)
     assert_eq!(
-        Value::Int(10)
-            .div(&Value::Int(2))
-            .expect("整数除法应该成功"),
+        Value::Int(10).div(&Value::Int(2)).expect("should succeed"),
         Value::Int(5)
     );
     assert_eq!(
         Value::Float(10.0)
             .div(&Value::Float(4.0))
-            .expect("浮点数除法应该成功"),
+            .expect("should succeed"),
         Value::Float(2.5)
     );
 
@@ -246,9 +248,7 @@ fn test_value_arithmetic_operations() {
 
     // take a mold
     assert_eq!(
-        Value::Int(10)
-            .rem(&Value::Int(3))
-            .expect("整数取模应该成功"),
+        Value::Int(10).rem(&Value::Int(3)).expect("should succeed"),
         Value::Int(1)
     );
     assert!(Value::Int(10).rem(&Value::Int(0)).is_err());
@@ -280,31 +280,29 @@ fn test_value_comparison() {
 fn test_value_unary_operations() {
     // retrieve the opposite of what one intended
     assert_eq!(
-        Value::Int(42).neg().expect("整数取反应该成功"),
+        Value::Int(42).neg().expect("should succeed"),
         Value::Int(-42)
     );
     assert_eq!(
-        Value::Float(2.5_f32).neg().expect("浮点数取反应该成功"),
+        Value::Float(2.5_f32).neg().expect("should succeed"),
         Value::Float(-2.5_f32)
     );
     assert!(Value::string("test").neg().is_err());
 
     // absolute value
     assert_eq!(
-        Value::Int(-42).abs().expect("整数绝对值应该成功"),
+        Value::Int(-42).abs().expect("should succeed"),
         Value::Int(42)
     );
     assert_eq!(
-        Value::Float(-2.5_f32).abs().expect("浮点数绝对值应该成功"),
+        Value::Float(-2.5_f32).abs().expect("should succeed"),
         Value::Float(2.5_f32)
     );
     assert!(Value::string("test").abs().is_err());
 
     // lengths
     assert_eq!(
-        Value::string("hello")
-            .len()
-            .expect("字符串长度计算应该成功"),
+        Value::string("hello").len().expect("should succeed"),
         Value::Int(5)
     );
     assert_eq!(
@@ -312,13 +310,13 @@ fn test_value_unary_operations() {
             values: vec![Value::Int(1), Value::Int(2)]
         }))
         .len()
-        .expect("列表长度计算应该成功"),
+        .expect("list lengthshould succeed"),
         Value::Int(2)
     );
     assert_eq!(
         Value::Map(Box::<std::collections::HashMap<_, _>>::default())
             .len()
-            .expect("映射长度计算应该成功"),
+            .expect("map lengthshould succeed"),
         Value::Int(0)
     );
 }
@@ -445,7 +443,7 @@ fn test_value_hash_and_equality() {
     assert_eq!(set.len(), 2);
 }
 
-// ==================== DataType 测试 ====================
+// ==================== DataType  ====================
 
 #[test]
 fn test_datatype_variants() {
@@ -551,7 +549,7 @@ fn test_expression_unary_creation() {
     }
 }
 
-// ==================== ExpressionEvaluator 测试 ====================
+// ==================== ExpressionEvaluator  ====================
 
 #[test]
 fn test_evaluator_literal() {
@@ -559,17 +557,17 @@ fn test_evaluator_literal() {
 
     // Integer
     let expr = Expression::literal(42i64);
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("整数字面量求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(42));
 
     // String
     let expr = Expression::literal("test".to_string());
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("字符串字面量求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::string("test"));
 
     // Boolean value
     let expr = Expression::literal(true);
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("布尔字面量求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Bool(true));
 }
 
@@ -581,11 +579,11 @@ fn test_evaluator_variable() {
 
     // Read the set variables
     let expr = Expression::variable("x");
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("变量求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(100));
 
     let expr = Expression::variable("name");
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("变量求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::string("Alice"));
 }
 
@@ -600,7 +598,7 @@ fn test_evaluator_binary_arithmetic() {
         op: BinaryOperator::Add,
         right: Box::new(Expression::literal(5i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元加法求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(15));
 
     // Subtraction: 20 - 8
@@ -609,7 +607,7 @@ fn test_evaluator_binary_arithmetic() {
         op: BinaryOperator::Subtract,
         right: Box::new(Expression::literal(8i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元减法求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(12));
 
     // Multiplication: 6 * 7
@@ -618,7 +616,7 @@ fn test_evaluator_binary_arithmetic() {
         op: BinaryOperator::Multiply,
         right: Box::new(Expression::literal(7i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元乘法求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(42));
 
     // Division: 20 / 4
@@ -627,7 +625,7 @@ fn test_evaluator_binary_arithmetic() {
         op: BinaryOperator::Divide,
         right: Box::new(Expression::literal(4i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元除法求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(5));
 }
 
@@ -642,7 +640,7 @@ fn test_evaluator_binary_comparison() {
         op: BinaryOperator::Equal,
         right: Box::new(Expression::literal(5i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元相等比较求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Bool(true));
 
     // Not equal to: 5 != 3
@@ -651,7 +649,7 @@ fn test_evaluator_binary_comparison() {
         op: BinaryOperator::NotEqual,
         right: Box::new(Expression::literal(3i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元不等比较求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Bool(true));
 
     // Greater than: 10 > 5
@@ -660,7 +658,7 @@ fn test_evaluator_binary_comparison() {
         op: BinaryOperator::GreaterThan,
         right: Box::new(Expression::literal(5i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元大于比较求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Bool(true));
 
     // Less than: 3 < 7
@@ -669,7 +667,7 @@ fn test_evaluator_binary_comparison() {
         op: BinaryOperator::LessThan,
         right: Box::new(Expression::literal(7i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元小于比较求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Bool(true));
 }
 
@@ -684,7 +682,7 @@ fn test_evaluator_binary_logical() {
         op: BinaryOperator::And,
         right: Box::new(Expression::literal(true)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元AND逻辑求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("ANDshould succeed");
     assert_eq!(result, Value::Bool(true));
 
     // AND: true && false
@@ -693,7 +691,7 @@ fn test_evaluator_binary_logical() {
         op: BinaryOperator::And,
         right: Box::new(Expression::literal(false)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元AND逻辑求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("ANDshould succeed");
     assert_eq!(result, Value::Bool(false));
 
     // OR: false || true
@@ -702,7 +700,7 @@ fn test_evaluator_binary_logical() {
         op: BinaryOperator::Or,
         right: Box::new(Expression::literal(true)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("二元OR逻辑求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("ORshould succeed");
     assert_eq!(result, Value::Bool(true));
 }
 
@@ -716,7 +714,7 @@ fn test_evaluator_unary() {
         op: UnaryOperator::Not,
         operand: Box::new(Expression::literal(true)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("一元NOT求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("NOTshould succeed");
     assert_eq!(result, Value::Bool(false));
 
     // NOT: !false
@@ -724,7 +722,7 @@ fn test_evaluator_unary() {
         op: UnaryOperator::Not,
         operand: Box::new(Expression::literal(false)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("一元NOT求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("NOTshould succeed");
     assert_eq!(result, Value::Bool(true));
 
     // Negative number: -42
@@ -732,7 +730,7 @@ fn test_evaluator_unary() {
         op: UnaryOperator::Minus,
         operand: Box::new(Expression::literal(42i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("一元负号求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(-42));
 }
 
@@ -751,7 +749,7 @@ fn test_evaluator_nested_expression() {
         op: BinaryOperator::Multiply,
         right: Box::new(Expression::literal(2i64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("嵌套表达式求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(30));
 
     // 10 + (5 * 2) = 20
@@ -764,7 +762,7 @@ fn test_evaluator_nested_expression() {
             right: Box::new(Expression::literal(2i64)),
         }),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("嵌套表达式求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("should succeed");
     assert_eq!(result, Value::Int(20));
 }
 
@@ -783,7 +781,7 @@ fn test_evaluator_can_evaluate() {
     assert!(!ExpressionEvaluator::can_evaluate(&var_expr));
 }
 
-// ==================== Function Registry 测试 ====================
+// ==================== Function Registry  ====================
 
 #[test]
 fn test_function_registry_builtins() {
@@ -792,24 +790,24 @@ fn test_function_registry_builtins() {
     // Testing mathematical functions
     let result = registry
         .execute("abs", &[Value::Int(-42)])
-        .expect("abs函数执行应该成功");
+        .expect("absfunction executionshould succeed");
     assert_eq!(result, Value::Int(42));
 
     let result = registry
         .execute("abs", &[Value::Float(-2.5_f32)])
-        .expect("abs函数执行应该成功");
+        .expect("absfunction executionshould succeed");
     assert_eq!(result, Value::Float(2.5_f32));
 
     // Testing the string function
     let result = registry
         .execute("length", &[Value::string("hello")])
-        .expect("length函数执行应该成功");
+        .expect("lengthfunction executionshould succeed");
     assert_eq!(result, Value::Int(5));
 
     // Test type conversion function
     let result = registry
         .execute("to_int", &[Value::string("42")])
-        .expect("to_int函数执行应该成功");
+        .expect("to_intfunction executionshould succeed");
     assert_eq!(result, Value::Int(42));
 }
 
@@ -826,7 +824,7 @@ fn test_function_registry_errors() {
     assert!(result.is_err());
 }
 
-// ==================== ExpressionContext 测试 ====================
+// ==================== ExpressionContext  ====================
 
 #[test]
 fn test_basic_context_variables() {
@@ -920,7 +918,8 @@ fn test_complex_arithmetic_expression() {
         }),
     };
 
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("复杂表达式求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx)
+        .expect("complex expression evaluationshould succeed");
     assert_eq!(result, Value::Int(102));
 }
 
@@ -935,7 +934,8 @@ fn test_mixed_type_operations() {
         op: BinaryOperator::Add,
         right: Box::new(Expression::literal(5.5f64)),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("混合类型操作求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx)
+        .expect("mixed-type evaluationshould succeed");
     assert_eq!(result, Value::Float(15.5));
 }
 
@@ -950,7 +950,8 @@ fn test_string_concatenation() {
         op: BinaryOperator::Add,
         right: Box::new(Expression::literal("World!".to_string())),
     };
-    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("字符串连接求值应该成功");
+    let result = ExpressionEvaluator::evaluate(&expr, &mut ctx)
+        .expect("string concat evaluationshould succeed");
     assert_eq!(result, Value::string("Hello, World!"));
 }
 
@@ -961,13 +962,16 @@ fn test_list_operations() {
         values: vec![Value::Int(1), Value::Int(2), Value::Int(3)],
     }));
 
-    assert_eq!(list.len().expect("列表长度计算应该成功"), Value::Int(3));
+    assert_eq!(
+        list.len().expect("list lengthshould succeed"),
+        Value::Int(3)
+    );
     assert_eq!(list.get_type(), DataType::List(Box::new(DataType::Int)));
 
     // Empty list
     let empty_list = Value::List(Box::new(graphdb_core::List { values: vec![] }));
     assert_eq!(
-        empty_list.len().expect("空列表长度计算应该成功"),
+        empty_list.len().expect("list lengthshould succeed"),
         Value::Int(0)
     );
 }
@@ -983,7 +987,7 @@ fn test_map_operations() {
     let map_value = Value::Map(Box::new(map));
 
     assert_eq!(
-        map_value.len().expect("映射长度计算应该成功"),
+        map_value.len().expect("map lengthshould succeed"),
         Value::Int(2)
     );
     assert_eq!(
@@ -1037,4 +1041,49 @@ fn test_default_values() {
     let default_geo: GeographyValue = Default::default();
     assert_eq!(default_geo.latitude, 0.0);
     assert_eq!(default_geo.longitude, 0.0);
+}
+
+// ==================== Pipeline Layer (SQL end to end) ====================
+
+#[test]
+fn test_sql_arithmetic_evaluation() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("core_sql_arith")
+        .query("RETURN 1 + 2 AS result")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_columns(&["result"])
+        .assert_result_contains(vec![Value::Int(3)]);
+}
+
+#[test]
+fn test_sql_builtin_abs_and_length() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("core_sql_funcs")
+        .query("RETURN abs(-42) AS a, length('hello') AS b")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::Int(42), Value::Int(5)]);
+}
+
+#[test]
+fn test_sql_type_coercion_to_int() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("core_sql_coerce")
+        .query("RETURN to_int('42') AS v")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::Int(42)]);
+}
+
+#[test]
+fn test_sql_unknown_function_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("core_sql_unknown_fn")
+        .query("RETURN undefined_func_xyz(1) AS v")
+        .assert_error();
 }

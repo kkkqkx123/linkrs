@@ -182,17 +182,15 @@ pub(super) fn flatten(
         FactorizedSchema::new()
     };
     // Out-of-range positions indicate a stale rewriter decision and must
-    // surface in debug builds; release keeps the honest no-op so a stale
-    // plan never corrupts rows silently.
-    debug_assert!(
+    // surface as a hard error in every build profile; a stale plan must
+    // never corrupt rows silently, and release keeps no silent fallback.
+    assert!(
         (n.group_pos as usize) < schema.num_groups(),
         "LogicalFlatten(group={}) out of range for {} groups",
         n.group_pos,
         schema.num_groups()
     );
-    if (n.group_pos as usize) < schema.num_groups() {
-        schema.flatten_group(n.group_pos);
-    }
+    schema.flatten_group(n.group_pos);
     schema.validate_at_most_one_unflat();
     schema
 }

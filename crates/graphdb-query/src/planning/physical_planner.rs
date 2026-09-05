@@ -1113,6 +1113,10 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                     n.group_pos,
                 )
                 .expect("Failed to construct FlattenNode");
+            node.set_group_columns(n.group_columns);
+            if let Some(groups) = n.expected_groups {
+                node.set_expected_groups(groups);
+            }
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -1174,9 +1178,8 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::DeleteVertices(n) => {
-            let mut node = crate::planning::plan::core::nodes::DeleteVerticesNode::new(
-                n.id, n.info,
-            );
+            let mut node =
+                crate::planning::plan::core::nodes::DeleteVerticesNode::new(n.id, n.info);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -1190,9 +1193,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::DeleteEdges(n) => {
-            let mut node = crate::planning::plan::core::nodes::DeleteEdgesNode::new(
-                n.id, n.info,
-            );
+            let mut node = crate::planning::plan::core::nodes::DeleteEdgesNode::new(n.id, n.info);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -1206,9 +1207,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::DeleteTags(n) => {
-            let mut node = crate::planning::plan::core::nodes::DeleteTagsNode::new(
-                n.id, n.info,
-            );
+            let mut node = crate::planning::plan::core::nodes::DeleteTagsNode::new(n.id, n.info);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -1222,9 +1221,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::DeleteIndex(n) => {
-            let mut node = crate::planning::plan::core::nodes::DeleteIndexNode::new(
-                n.id, n.info,
-            );
+            let mut node = crate::planning::plan::core::nodes::DeleteIndexNode::new(n.id, n.info);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
@@ -1238,12 +1235,12 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::PipeDeleteVertices(n) => {
-            let input = n
-                .input
-                .expect("PipeDeleteVertices requires an input node");
+            let input = n.input.expect("PipeDeleteVertices requires an input node");
             let physical_input = convert_logical_to_physical(*input);
             let mut node = crate::planning::plan::core::nodes::PipeDeleteVerticesNode::new(
-                n.id, n.info, physical_input,
+                n.id,
+                n.info,
+                physical_input,
             );
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
@@ -1261,7 +1258,9 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             let input = n.input.expect("PipeDeleteEdges requires an input node");
             let physical_input = convert_logical_to_physical(*input);
             let mut node = crate::planning::plan::core::nodes::PipeDeleteEdgesNode::new(
-                n.id, n.info, physical_input,
+                n.id,
+                n.info,
+                physical_input,
             );
             if let Some(var) = n.output_var {
                 node.set_output_var(var);

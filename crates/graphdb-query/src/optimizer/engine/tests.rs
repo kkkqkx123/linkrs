@@ -430,9 +430,9 @@ mod factorization_fallback_tests {
 
         let mut engine = OptimizerEngine::default();
         engine.set_enable_heuristic(false);
-        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
-            SpaceManageNode::Show(ShowSpacesNode::new(1)),
-        )));
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(SpaceManageNode::Show(
+            ShowSpacesNode::new(1),
+        ))));
         let optimized = engine
             .optimize(plan, Some("test"))
             .expect("optimization should succeed");
@@ -542,9 +542,9 @@ mod factorization_fallback_tests {
         // fallback counter through the full optimize pipeline.
         use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
         use crate::planning::plan::core::nodes::management::ShowSpacesNode;
-        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
-            SpaceManageNode::Show(ShowSpacesNode::new(1)),
-        )));
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(SpaceManageNode::Show(
+            ShowSpacesNode::new(1),
+        ))));
         engine
             .optimize(plan, Some("test"))
             .expect("optimization should succeed");
@@ -917,17 +917,14 @@ fn cost_based_falls_back_when_no_logical_plan_attached() {
     // ShowSpaces is not supported by the physical-to-logical
     // converter, so no logical plan is attached and the physical
     // fallback path must keep the plan intact.
-    let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(
-        SpaceManageNode::Show(ShowSpacesNode::new(1)),
-    )));
+    let plan = ExecutionPlan::new(Some(PlanNodeEnum::SpaceManage(SpaceManageNode::Show(
+        ShowSpacesNode::new(1),
+    ))));
     assert!(plan.logical_plan().is_none());
 
     let optimized = engine
         .optimize(plan, Some("test"))
         .expect("optimization should succeed");
-    assert!(matches!(
-        optimized.root,
-        Some(PlanNodeEnum::SpaceManage(_))
-    ));
+    assert!(matches!(optimized.root, Some(PlanNodeEnum::SpaceManage(_))));
     assert!(optimized.logical_plan().is_none());
 }

@@ -23,7 +23,7 @@ use graphdb_query::parser::Parser;
 use graphdb_query::pipeline::QueryPipelineManager;
 use std::sync::Arc;
 
-// ==================== USE 语句测试 ====================
+// ==================== USE Statement Tests ====================
 
 #[test]
 fn test_use_parser_basic() {
@@ -33,11 +33,11 @@ fn test_use_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "USE基础: should succeed: {:?}",
+        "USE basic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("USE语句: should succeed");
+    let stmt = result.expect("USE statement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "USE");
 }
 
@@ -49,11 +49,11 @@ fn test_use_parser_complex_name() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "USE复杂名称: should succeed: {:?}",
+        "USE complex name: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("USE语句: should succeed");
+    let stmt = result.expect("USE statement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "USE");
 }
 
@@ -65,17 +65,17 @@ fn test_use_parser_with_dots() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "USE带点号名称: should succeed: {:?}",
+        "USE dotted name: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("USE语句: should succeed");
+    let stmt = result.expect("USE statement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "USE");
 }
 
 #[test]
 fn test_use_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -88,12 +88,18 @@ fn test_use_execution_basic() {
     let query = "USE test_space";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    match result {
+        Ok(_) => panic!("USE of a missing space should not succeed"),
+        Err(e) => assert!(
+            format!("{e:?}").contains("Space not found"),
+            "USE missing space should report Space not found, got: {e:?}"
+        ),
+    };
 }
 
 #[test]
 fn test_use_execution_nonexistent() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -106,10 +112,16 @@ fn test_use_execution_nonexistent() {
     let query = "USE nonexistent_space_xyz";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    match result {
+        Ok(_) => panic!("USE of a missing space should not succeed"),
+        Err(e) => assert!(
+            format!("{e:?}").contains("Space not found"),
+            "USE missing space should report Space not found, got: {e:?}"
+        ),
+    };
 }
 
-// ==================== SHOW 语句测试 ====================
+// ==================== SHOW statement ====================
 
 #[test]
 fn test_show_parser_spaces() {
@@ -123,7 +135,7 @@ fn test_show_parser_spaces() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
@@ -139,7 +151,7 @@ fn test_show_parser_tags() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
@@ -155,7 +167,7 @@ fn test_show_parser_edges() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
@@ -171,7 +183,7 @@ fn test_show_parser_hosts() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
@@ -187,13 +199,13 @@ fn test_show_parser_parts() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
 #[test]
 fn test_show_execution_spaces() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -206,46 +218,38 @@ fn test_show_execution_spaces() {
     let query = "SHOW SPACES";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_show_execution_tags() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let query = "SHOW TAGS";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("show_tags_space")
+        .exec_ddl("CREATE TAG person(name STRING)")
+        .assert_success()
+        .query("SHOW TAGS")
+        .assert_success();
 }
 
 #[test]
 fn test_show_execution_edges() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let query = "SHOW EDGES";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("show_edges_space")
+        .exec_ddl("CREATE EDGE knows()")
+        .assert_success()
+        .query("SHOW EDGES")
+        .assert_success();
 }
 
-// ==================== EXPLAIN 语句测试 ====================
+// ==================== EXPLAIN statement ====================
 
 #[test]
 fn test_explain_parser_match() {
@@ -259,7 +263,7 @@ fn test_explain_parser_match() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
@@ -275,7 +279,7 @@ fn test_explain_parser_go() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
@@ -291,13 +295,13 @@ fn test_explain_parser_lookup() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
 #[test]
 fn test_explain_execution_match() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -310,12 +314,16 @@ fn test_explain_execution_match() {
     let query = "EXPLAIN MATCH (n:Person) RETURN n";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_explain_execution_go() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -328,7 +336,11 @@ fn test_explain_execution_go() {
     let query = "EXPLAIN GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -343,7 +355,7 @@ fn test_explain_analyze_parser() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN ANALYZE语句: should succeed");
+    let stmt = result.expect("EXPLAIN ANALYZEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
     assert!(
         stmt.ast
@@ -377,7 +389,7 @@ fn test_explain_analyze_execution() {
     );
 }
 
-// ==================== RETURN 语句测试 ====================
+// ==================== RETURN statement ====================
 
 #[test]
 fn test_return_parser_basic() {
@@ -387,11 +399,11 @@ fn test_return_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "RETURN基础: should succeed: {:?}",
+        "RETURNbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("RETURN语句: should succeed");
+    let stmt = result.expect("RETURNstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "RETURN");
 }
 
@@ -403,11 +415,11 @@ fn test_return_parser_with_alias() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "RETURN带别名: should succeed: {:?}",
+        "RETURNwith alias: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("RETURN语句: should succeed");
+    let stmt = result.expect("RETURNstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "RETURN");
 }
 
@@ -419,11 +431,11 @@ fn test_return_parser_with_expression() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "RETURN带表达式: should succeed: {:?}",
+        "RETURNwith expression: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("RETURN语句: should succeed");
+    let stmt = result.expect("RETURNstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "RETURN");
 }
 
@@ -435,11 +447,11 @@ fn test_return_parser_with_aggregate() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "RETURN带聚合函数: should succeed: {:?}",
+        "RETURNwith aggregate: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("RETURN语句: should succeed");
+    let stmt = result.expect("RETURNstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "RETURN");
 }
 
@@ -451,17 +463,17 @@ fn test_return_parser_with_distinct() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "RETURN带DISTINCT: should succeed: {:?}",
+        "RETURNDISTINCT: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("RETURN语句: should succeed");
+    let stmt = result.expect("RETURNstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "RETURN");
 }
 
 #[test]
 fn test_return_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -474,10 +486,14 @@ fn test_return_execution_basic() {
     let query = "RETURN 'Hello World'";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
-// ==================== WITH 语句测试 ====================
+// ==================== WITH statement ====================
 
 #[test]
 fn test_with_parser_basic() {
@@ -487,11 +503,11 @@ fn test_with_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "WITH基础: should succeed: {:?}",
+        "WITHbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("WITH语句: should succeed");
+    let stmt = result.expect("WITHstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "WITH");
 }
 
@@ -503,11 +519,11 @@ fn test_with_parser_with_aggregate() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "WITH带聚合: should succeed: {:?}",
+        "WITHwith aggregation: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("WITH语句: should succeed");
+    let stmt = result.expect("WITHstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "WITH");
 }
 
@@ -519,17 +535,17 @@ fn test_with_parser_with_expression() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "WITH带表达式: should succeed: {:?}",
+        "WITHwith expression: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("WITH语句: should succeed");
+    let stmt = result.expect("WITHstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "WITH");
 }
 
 #[test]
 fn test_with_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -542,10 +558,14 @@ fn test_with_execution_basic() {
     let query = "WITH 1 AS x RETURN x";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
-// ==================== UNWIND 语句测试 ====================
+// ==================== UNWIND statement ====================
 
 #[test]
 fn test_unwind_parser_basic() {
@@ -555,11 +575,11 @@ fn test_unwind_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UNWIND基础: should succeed: {:?}",
+        "UNWINDbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UNWIND语句: should succeed");
+    let stmt = result.expect("UNWINDstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UNWIND");
 }
 
@@ -571,11 +591,11 @@ fn test_unwind_parser_with_string_list() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UNWIND字符串列表: should succeed: {:?}",
+        "UNWINDstring list: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UNWIND语句: should succeed");
+    let stmt = result.expect("UNWINDstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UNWIND");
 }
 
@@ -587,17 +607,17 @@ fn test_unwind_parser_with_expression() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UNWIND带表达式: should succeed: {:?}",
+        "UNWINDwith expression: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UNWIND语句: should succeed");
+    let stmt = result.expect("UNWINDstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UNWIND");
 }
 
 #[test]
 fn test_unwind_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -610,10 +630,14 @@ fn test_unwind_execution_basic() {
     let query = "UNWIND [1, 2, 3] AS n RETURN n";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
-// ==================== PIPE 语句测试 ====================
+// ==================== PIPE statement ====================
 
 #[test]
 fn test_pipe_parser_basic() {
@@ -623,11 +647,11 @@ fn test_pipe_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "PIPE基础: should succeed: {:?}",
+        "PIPEbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("PIPE语句: should succeed");
+    let stmt = result.expect("PIPEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PIPE");
 }
 
@@ -639,11 +663,11 @@ fn test_pipe_parser_multiple() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "PIPE多个操作: should succeed: {:?}",
+        "PIPEmultiple ops: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("PIPE语句: should succeed");
+    let stmt = result.expect("PIPEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PIPE");
 }
 
@@ -653,19 +677,15 @@ fn test_pipe_parser_complex() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    assert!(
-        result.is_ok(),
-        "PIPE复杂查询: should succeed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "PIPE: should succeed: {:?}", result.err());
 
-    let stmt = result.expect("PIPE语句: should succeed");
+    let stmt = result.expect("PIPEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PIPE");
 }
 
 #[test]
 fn test_pipe_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -678,7 +698,11 @@ fn test_pipe_execution_basic() {
     let query = "GO FROM 1 OVER KNOWS | YIELD target.name";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 // ==================== PROFILE Statement Tests ====================
@@ -695,7 +719,7 @@ fn test_profile_parser_match() {
         result.err()
     );
 
-    let stmt = result.expect("PROFILE语句: should succeed");
+    let stmt = result.expect("PROFILEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PROFILE");
 }
 
@@ -711,7 +735,7 @@ fn test_profile_parser_go() {
         result.err()
     );
 
-    let stmt = result.expect("PROFILE语句: should succeed");
+    let stmt = result.expect("PROFILEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PROFILE");
 }
 
@@ -723,48 +747,40 @@ fn test_profile_parser_with_limit() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "PROFILE带LIMIT: should succeed: {:?}",
+        "PROFILELIMIT: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("PROFILE语句: should succeed");
+    let stmt = result.expect("PROFILEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PROFILE");
 }
 
 #[test]
 fn test_profile_execution_match() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let query = "PROFILE MATCH (n:Person) RETURN n";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("profile_match_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query("PROFILE MATCH (n:Person) RETURN n")
+        .assert_success();
 }
 
 #[test]
 fn test_profile_execution_go() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let query = "PROFILE GO FROM 1 OVER KNOWS";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("profile_go_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS()")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS() VALUES 1 -> 2")
+        .assert_success()
+        .query("PROFILE GO FROM 1 OVER KNOWS")
+        .assert_success();
 }
 
 // ==================== GROUP BY Statement Tests ====================
@@ -777,11 +793,11 @@ fn test_group_by_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "GROUP BY基础: should succeed: {:?}",
+        "GROUP BYbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("GROUP BY语句: should succeed");
+    let stmt = result.expect("GROUP BYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "GROUP BY");
 }
 
@@ -793,30 +809,26 @@ fn test_group_by_parser_with_aggregation() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "GROUP BY带聚合函数: should succeed: {:?}",
+        "GROUP BYwith aggregate: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("GROUP BY语句: should succeed");
+    let stmt = result.expect("GROUP BYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "GROUP BY");
 }
 
 #[test]
 fn test_group_by_execution_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let query = "GROUP BY category YIELD category, count(*) AS total";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("group_by_space")
+        .exec_ddl("CREATE TAG sales(category STRING, amount INT)")
+        .exec_dml("INSERT VERTEX sales(category, amount) VALUES 1:('a', 10), 2:('b', 20)")
+        .assert_success()
+        .query("MATCH (s:sales) RETURN s.category, sum(s.amount) AS total GROUP BY s.category")
+        .assert_success()
+        .assert_result_count(2);
 }
 
 // ==================== KILL QUERY Statement Tests ====================
@@ -829,11 +841,11 @@ fn test_kill_query_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "KILL QUERY基础: should succeed: {:?}",
+        "KILL QUERYbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("KILL QUERY语句: should succeed");
+    let stmt = result.expect("KILL QUERYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "KILL QUERY");
 }
 
@@ -845,17 +857,27 @@ fn test_kill_query_parser_multiple() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "KILL QUERY多个查询: should succeed: {:?}",
+        "KILL QUERYmultiple queries: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("KILL QUERY语句: should succeed");
+    let stmt = result.expect("KILL QUERYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "KILL QUERY");
 }
 
 #[test]
 fn test_kill_query_execution() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    // KILL QUERY is a server/session-layer operation: it parses in the
+    // embedded pipeline but planning reports unsupported. Pin that contract.
+    let mut parser = Parser::new("KILL QUERY 123, 456");
+    let parsed = parser.parse();
+    assert!(
+        parsed.is_ok(),
+        "KILL QUERY should parse: {:?}",
+        parsed.err()
+    );
+
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -865,10 +887,14 @@ fn test_kill_query_execution() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let query = "KILL QUERY 123";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    let result = pipeline_manager.execute_query("KILL QUERY 123, 456");
+    match result {
+        Ok(_) => panic!("KILL QUERY should not execute in the embedded pipeline"),
+        Err(e) => assert!(
+            format!("{e:?}").contains("not supported"),
+            "KILL QUERY should report unsupported, got: {e:?}"
+        ),
+    };
 }
 
 // ==================== UPDATE CONFIGS Statement Tests ====================
@@ -881,11 +907,11 @@ fn test_update_configs_parser_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UPDATE CONFIGS基础: should succeed: {:?}",
+        "UPDATE CONFIGSbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UPDATE CONFIGS语句: should succeed");
+    let stmt = result.expect("UPDATE CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UPDATE CONFIGS");
 }
 
@@ -897,11 +923,11 @@ fn test_update_configs_parser_with_module() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UPDATE CONFIGS带模块: should succeed: {:?}",
+        "UPDATE CONFIGS: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UPDATE CONFIGS语句: should succeed");
+    let stmt = result.expect("UPDATE CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UPDATE CONFIGS");
 }
 
@@ -913,17 +939,19 @@ fn test_update_configs_parser_multiple() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "UPDATE CONFIGS多个配置: should succeed: {:?}",
+        "UPDATE CONFIGSmultiple: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("UPDATE CONFIGS语句: should succeed");
+    let stmt = result.expect("UPDATE CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UPDATE CONFIGS");
 }
 
 #[test]
 fn test_update_configs_execution() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    // UPDATE CONFIGS is a server-layer operation: it parses in the embedded
+    // pipeline but planning reports unsupported. Pin that contract.
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -933,10 +961,14 @@ fn test_update_configs_execution() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let query = "UPDATE CONFIGS max_connections = 100";
-    let result = pipeline_manager.execute_query(query);
-
-    assert!(result.is_ok() || result.is_err());
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_connections = 100");
+    match result {
+        Ok(_) => panic!("UPDATE CONFIGS should not execute in the embedded pipeline"),
+        Err(e) => assert!(
+            format!("{e:?}").contains("not supported"),
+            "UPDATE CONFIGS should report unsupported, got: {e:?}"
+        ),
+    };
 }
 
 // ==================== SHOW SESSIONS/QUERIES/CONFIGS Tests ====================
@@ -953,7 +985,7 @@ fn test_show_parser_sessions() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW SESSIONS");
 }
 
@@ -969,7 +1001,7 @@ fn test_show_parser_queries() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW QUERIES");
 }
 
@@ -985,7 +1017,7 @@ fn test_show_parser_configs() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
@@ -997,17 +1029,17 @@ fn test_show_parser_configs_with_module() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "SHOW CONFIGS带模块: should succeed: {:?}",
+        "SHOW CONFIGS: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("SHOW语句: should succeed");
+    let stmt = result.expect("SHOWstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
 #[test]
 fn test_show_execution_sessions() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1020,12 +1052,16 @@ fn test_show_execution_sessions() {
     let query = "SHOW SESSIONS";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_show_execution_queries() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1038,12 +1074,16 @@ fn test_show_execution_queries() {
     let query = "SHOW QUERIES";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_show_execution_configs() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1056,7 +1096,11 @@ fn test_show_execution_configs() {
     let query = "SHOW CONFIGS";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 // ==================== EXPLAIN FORMAT Tests ====================
@@ -1073,7 +1117,7 @@ fn test_explain_parser_format_table() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
@@ -1089,13 +1133,13 @@ fn test_explain_parser_format_dot() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
 #[test]
 fn test_explain_execution_format_table() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1108,12 +1152,16 @@ fn test_explain_execution_format_table() {
     let query = "EXPLAIN FORMAT = TABLE MATCH (n:Person) RETURN n";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_explain_execution_format_dot() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1126,14 +1174,18 @@ fn test_explain_execution_format_dot() {
     let query = "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
-// ==================== 管理和辅助语句综合测试 ====================
+// ==================== statement ====================
 
 #[test]
 fn test_management_show_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1143,10 +1195,10 @@ fn test_management_show_operations() {
         Arc::new(OptimizerEngine::default()),
     );
 
+    // SHOW TAGS / SHOW EDGES require a selected space; they are covered
+    // with space context in test_show_execution_tags/edges.
     let show_queries = [
         "SHOW SPACES",
-        "SHOW TAGS",
-        "SHOW EDGES",
         "SHOW HOSTS",
         "SHOW PARTS",
         "SHOW SESSIONS",
@@ -1156,13 +1208,17 @@ fn test_management_show_operations() {
 
     for query in &show_queries {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_management_explain_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1183,62 +1239,62 @@ fn test_management_explain_operations() {
 
     for query in &explain_queries {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_management_profile_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let profile_queries = [
-        "PROFILE MATCH (n:Person) RETURN n",
-        "PROFILE GO FROM 1 OVER KNOWS",
-        "PROFILE LOOKUP ON Person WHERE Person.age > 25",
-        "PROFILE FETCH PROP ON Person 1",
-    ];
-
-    for query in &profile_queries {
-        let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
-    }
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("mgmt_profile_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query("PROFILE MATCH (n:Person) RETURN n")
+        .assert_success();
 }
 
 #[test]
 fn test_management_group_by_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
+    // Standalone GROUP BY executes against grouped input; cover the
+    // end-to-end aggregation shape through MATCH + GROUP BY with data.
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("mgmt_group_by_space")
+        .exec_ddl("CREATE TAG sales(category STRING, amount INT)")
+        .exec_dml(
+            "INSERT VERTEX sales(category, amount) VALUES 1:('a', 10), 2:('a', 20), 3:('b', 5)",
+        )
+        .assert_success()
+        .query("MATCH (s:sales) RETURN s.category, sum(s.amount) AS total GROUP BY s.category")
+        .assert_success()
+        .assert_result_count(2);
 
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let group_by_queries = [
+    // The legacy standalone GROUP BY syntax must still parse.
+    for query in [
         "GROUP BY category YIELD category, count(*) AS total",
         "GROUP BY city YIELD city, avg(age) AS avg_age",
-        "GROUP BY department YIELD department, sum(salary) AS total_salary",
-    ];
-
-    for query in &group_by_queries {
-        let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+    ] {
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "GROUP BY should parse '{query}': {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_management_kill_query_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1248,17 +1304,25 @@ fn test_management_kill_query_operations() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let kill_queries = ["KILL QUERY 123", "KILL QUERY 456", "KILL QUERY 789"];
+    // KILL QUERY takes a (session, query) id pair and is executed by the
+    // server layer; the embedded pipeline reports unsupported.
+    let kill_queries = ["KILL QUERY 123, 456", "KILL QUERY 456, 789"];
 
     for query in &kill_queries {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        match result {
+            Ok(_) => panic!("{query} should not execute in the embedded pipeline"),
+            Err(e) => assert!(
+                format!("{e:?}").contains("not supported"),
+                "{query} should report unsupported, got: {e:?}"
+            ),
+        };
     }
 }
 
 #[test]
 fn test_management_update_configs_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1274,15 +1338,23 @@ fn test_management_update_configs_operations() {
         "UPDATE CONFIGS storage cache_size = 1024",
     ];
 
+    // UPDATE CONFIGS is a server-layer operation; the embedded pipeline
+    // reports unsupported. Pin that contract per statement.
     for query in &update_configs_queries {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        match result {
+            Ok(_) => panic!("{query} should not execute in the embedded pipeline"),
+            Err(e) => assert!(
+                format!("{e:?}").contains("not supported"),
+                "{query} should report unsupported, got: {e:?}"
+            ),
+        };
     }
 }
 
 #[test]
 fn test_auxiliary_return_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1301,13 +1373,17 @@ fn test_auxiliary_return_operations() {
 
     for query in return_queries.iter() {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_auxiliary_unwind_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1325,37 +1401,35 @@ fn test_auxiliary_unwind_operations() {
 
     for query in unwind_queries.iter() {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_auxiliary_pipe_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let pipe_queries = [
-        "GO FROM 1 OVER KNOWS | YIELD target.name",
-        "GO FROM 1 OVER KNOWS | YIELD target.name AS name | RETURN name",
-        "LOOKUP ON Person WHERE Person.age > 25 | YIELD Person.name",
-    ];
-
-    for query in pipe_queries.iter() {
-        let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
-    }
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("pipe_ops_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS()")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS() VALUES 1 -> 2")
+        .assert_success()
+        .query("GO FROM 1 OVER KNOWS | YIELD target.name")
+        .assert_success()
+        .query("GO FROM 1 OVER KNOWS | YIELD target.name AS name | RETURN name")
+        .assert_success()
+        .assert_result_count(1);
 }
 
 #[test]
 fn test_management_error_handling() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1381,46 +1455,42 @@ fn test_management_error_handling() {
 
     for query in invalid_queries {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_err(), "无效查询应该返回错误: {}", query);
+        assert!(result.is_err(), ": {}", query);
     }
 }
 
 #[test]
 fn test_management_combined_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let combined_queries = [
-        "USE test_space",
-        "SHOW TAGS",
-        "SHOW SESSIONS",
-        "SHOW QUERIES",
-        "SHOW CONFIGS",
-        "EXPLAIN GO FROM 1 OVER KNOWS",
-        "EXPLAIN FORMAT = TABLE MATCH (n:Person) RETURN n",
-        "PROFILE GO FROM 1 OVER KNOWS",
-        "UNWIND [1, 2, 3] AS n RETURN n",
-        "WITH 1 AS x RETURN x",
-        "RETURN 'Complete'",
-        "GROUP BY category YIELD category, count(*) AS total",
-    ];
-
-    for query in &combined_queries {
-        let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
-    }
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("mgmt_combined_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query("SHOW TAGS")
+        .assert_success()
+        .query("SHOW SESSIONS")
+        .assert_success()
+        .query("SHOW QUERIES")
+        .assert_success()
+        .query("SHOW CONFIGS")
+        .assert_success()
+        .query("EXPLAIN MATCH (n:Person) RETURN n")
+        .assert_success()
+        .query("UNWIND [1, 2, 3] AS n RETURN n")
+        .assert_success()
+        .assert_result_count(3)
+        .query("WITH 1 AS x RETURN x")
+        .assert_success()
+        .assert_result_count(1)
+        .query("RETURN 'Complete'")
+        .assert_success();
 }
 
 #[test]
 fn test_auxiliary_with_operations() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1432,19 +1502,23 @@ fn test_auxiliary_with_operations() {
 
     let with_queries = [
         "WITH 1 AS x RETURN x",
-        "WITH [1, 2, 3] AS list RETURN list",
+        "WITH [1, 2, 3] AS nums RETURN nums",
         "WITH 'Hello' AS msg RETURN msg",
     ];
 
     for query in with_queries.iter() {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
 #[test]
 fn test_management_performance() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -1459,11 +1533,15 @@ fn test_management_performance() {
 
     for _ in 0..iterations {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
+        );
     }
 }
 
-// ==================== EXPLAIN FORMAT 语句测试 ====================
+// ==================== EXPLAIN FORMAT statement ====================
 
 #[test]
 fn test_explain_format_table() {
@@ -1477,7 +1555,7 @@ fn test_explain_format_table() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
@@ -1493,7 +1571,7 @@ fn test_explain_format_dot() {
         result.err()
     );
 
-    let stmt = result.expect("EXPLAIN语句: should succeed");
+    let stmt = result.expect("EXPLAINstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
 }
 
@@ -1509,7 +1587,7 @@ fn test_profile_statement() {
         result.err()
     );
 
-    let stmt = result.expect("PROFILE语句: should succeed");
+    let stmt = result.expect("PROFILEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PROFILE");
 }
 
@@ -1525,11 +1603,11 @@ fn test_profile_format_dot() {
         result.err()
     );
 
-    let stmt = result.expect("PROFILE语句: should succeed");
+    let stmt = result.expect("PROFILEstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "PROFILE");
 }
 
-// ==================== GROUP BY 语句测试 ====================
+// ==================== GROUP BY statement ====================
 
 #[test]
 fn test_group_by_basic() {
@@ -1539,11 +1617,11 @@ fn test_group_by_basic() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "GROUP BY基础: should succeed: {:?}",
+        "GROUP BYbasic: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("GROUP BY语句: should succeed");
+    let stmt = result.expect("GROUP BYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "GROUP BY");
 }
 
@@ -1555,11 +1633,11 @@ fn test_group_by_multiple_items() {
     let result = parser.parse();
     assert!(
         result.is_ok(),
-        "GROUP BY多字段: should succeed: {:?}",
+        "GROUP BY: should succeed: {:?}",
         result.err()
     );
 
-    let stmt = result.expect("GROUP BY语句: should succeed");
+    let stmt = result.expect("GROUP BYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "GROUP BY");
 }
 
@@ -1577,7 +1655,7 @@ fn test_show_sessions() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW SESSIONS语句: should succeed");
+    let stmt = result.expect("SHOW SESSIONSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW SESSIONS");
 }
 
@@ -1593,7 +1671,7 @@ fn test_show_queries() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW QUERIES语句: should succeed");
+    let stmt = result.expect("SHOW QUERIESstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW QUERIES");
 }
 
@@ -1609,7 +1687,7 @@ fn test_kill_query() {
         result.err()
     );
 
-    let stmt = result.expect("KILL QUERY语句: should succeed");
+    let stmt = result.expect("KILL QUERYstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "KILL QUERY");
 }
 
@@ -1627,7 +1705,7 @@ fn test_show_configs() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW CONFIGS语句: should succeed");
+    let stmt = result.expect("SHOW CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
@@ -1643,7 +1721,7 @@ fn test_show_configs_with_module() {
         result.err()
     );
 
-    let stmt = result.expect("SHOW CONFIGS语句: should succeed");
+    let stmt = result.expect("SHOW CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
@@ -1659,7 +1737,7 @@ fn test_update_configs() {
         result.err()
     );
 
-    let stmt = result.expect("UPDATE CONFIGS语句: should succeed");
+    let stmt = result.expect("UPDATE CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UPDATE CONFIGS");
 }
 
@@ -1675,7 +1753,7 @@ fn test_update_configs_with_module() {
         result.err()
     );
 
-    let stmt = result.expect("UPDATE CONFIGS语句: should succeed");
+    let stmt = result.expect("UPDATE CONFIGSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "UPDATE CONFIGS");
 }
 
@@ -1683,31 +1761,25 @@ fn test_update_configs_with_module() {
 
 #[test]
 fn test_new_management_features() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    let new_queries = [
-        "EXPLAIN FORMAT = TABLE MATCH (n:Person) RETURN n",
-        "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS",
-        "PROFILE MATCH (n:Person) RETURN n LIMIT 10",
-        "GROUP BY category YIELD category",
-        "SHOW SESSIONS",
-        "SHOW QUERIES",
-        "SHOW CONFIGS",
-        "SHOW CONFIGS storage",
-    ];
-
-    for query in new_queries.iter() {
-        let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err());
-    }
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("new_mgmt_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query("EXPLAIN FORMAT = TABLE MATCH (n:Person) RETURN n")
+        .assert_success()
+        .query("PROFILE MATCH (n:Person) RETURN n LIMIT 10")
+        .assert_success()
+        .query("SHOW SESSIONS")
+        .assert_success()
+        .query("SHOW QUERIES")
+        .assert_success()
+        .query("SHOW CONFIGS")
+        .assert_success()
+        .query("SHOW CONFIGS storage")
+        .assert_success();
 }
 
 // ==================== Variable Assignment Statement Test ====================
@@ -1718,17 +1790,13 @@ fn test_assignment_statement() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    assert!(
-        result.is_ok(),
-        "变量赋值: should succeed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), ": should succeed: {:?}", result.err());
 
-    let stmt = result.expect("变量赋值语句: should succeed");
+    let stmt = result.expect("statement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "ASSIGNMENT");
 }
 
-// ==================== 集合操作语句测试
+// ==================== statement
 
 #[test]
 fn test_union_statement() {
@@ -1738,7 +1806,7 @@ fn test_union_statement() {
     let result = parser.parse();
     assert!(result.is_ok(), "UNION: should succeed: {:?}", result.err());
 
-    let stmt = result.expect("UNION语句: should succeed");
+    let stmt = result.expect("UNIONstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SET OPERATION");
 }
 
@@ -1754,7 +1822,7 @@ fn test_intersect_statement() {
         result.err()
     );
 
-    let stmt = result.expect("INTERSECT语句: should succeed");
+    let stmt = result.expect("INTERSECTstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SET OPERATION");
 }
 
@@ -1766,6 +1834,6 @@ fn test_minus_statement() {
     let result = parser.parse();
     assert!(result.is_ok(), "MINUS: should succeed: {:?}", result.err());
 
-    let stmt = result.expect("MINUS语句: should succeed");
+    let stmt = result.expect("MINUSstatement: should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SET OPERATION");
 }

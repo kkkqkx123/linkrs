@@ -7,6 +7,7 @@
 //! - PushProjectDownJoinRule: Push projection operations down to JOIN inputs
 //! - LeftJoinToInnerJoinRule: Convert LeftJoin to InnerJoin when possible
 //! - JoinConditionSimplifyRule: Simplify and deduplicate JOIN conditions
+//! - ExtractEquiJoinKeysRule: Move cross-side Filter equalities into InnerJoin keys
 //!
 //! # Graph Traversal Optimization
 //! - JoinToExpandRule: Convert vertex-edge JOIN to ExpandAll
@@ -18,6 +19,7 @@
 //! - IndexJoinSelectionRule: Select index-based JOIN when appropriate
 //! - JoinReorderRule: Reorder multi-table JOINs for better performance
 
+pub mod extract_equi_join_keys;
 pub mod index_join_selection;
 pub mod join_condition_simplify;
 pub mod join_elimination;
@@ -28,6 +30,7 @@ pub mod left_join_to_inner_join;
 pub mod merge_consecutive_expand;
 pub mod push_project_down_join;
 
+pub use extract_equi_join_keys::ExtractEquiJoinKeysRule;
 pub use index_join_selection::IndexJoinSelectionRule;
 pub use join_condition_simplify::JoinConditionSimplifyRule;
 pub use join_elimination::JoinEliminationRule;

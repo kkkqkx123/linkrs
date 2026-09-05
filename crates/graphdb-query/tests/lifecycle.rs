@@ -7,6 +7,10 @@
 //! - EXPLAIN ANALYZE / PROFILE inheriting the caller's TransactionScope
 //! - partition-plan cache hit consistency (hit and miss produce equal results)
 //! - DDL invalidating cached (partitioned) plans
+//!
+//! Scope: white-box lifecycle contract (hand-built plans/bindings).
+//! SQL end-to-end transaction/cancel coverage lives in
+//! `integration_coverage_gaps.rs`.
 
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_query::executor::base::ExecutionContext;
@@ -31,7 +35,7 @@ use std::sync::Arc;
 mod common;
 
 /// Build a typed TransactionId from a raw integer (tests only).
-fn crate_test_txn_id(raw: u64) -> graphdb_core::types::TransactionId {
+fn make_test_txn_id(raw: u64) -> graphdb_core::types::TransactionId {
     graphdb_core::types::TransactionId(raw)
 }
 
@@ -264,9 +268,9 @@ fn lifecycle_diagnostic_scopes_instantiate_all_variants() {
     for scope in [
         TransactionScope::None,
         TransactionScope::CommandScope,
-        TransactionScope::auto_commit(crate_test_txn_id(7)),
-        TransactionScope::explicit(crate_test_txn_id(8), false),
-        TransactionScope::explicit(crate_test_txn_id(9), true),
+        TransactionScope::auto_commit(make_test_txn_id(7)),
+        TransactionScope::explicit(make_test_txn_id(8), false),
+        TransactionScope::explicit(make_test_txn_id(9), true),
     ] {
         let mut instance = QueryExecutionInstance::instantiate_plan(
             plan.clone(),

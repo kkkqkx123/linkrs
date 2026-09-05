@@ -793,6 +793,22 @@ mod tests {
     }
 
     #[test]
+    fn map_flatten_preserves_group_column_mapping() {
+        let mut flatten = LogicalFlattenNode::new(2, hinted_scan());
+        flatten.set_group_columns(vec!["b".to_string()]);
+        flatten.set_expected_groups(3);
+        let mapped = PhysicalMapper::map(LogicalNodeEnum::Flatten(flatten));
+        match &mapped {
+            PlanNodeEnum::Flatten(f) => {
+                assert_eq!(f.group_pos(), 2);
+                assert_eq!(f.group_columns(), &["b".to_string()]);
+                assert_eq!(f.expected_groups(), Some(3));
+            }
+            other => panic!("expected physical flatten, got {}", other.type_name()),
+        }
+    }
+
+    #[test]
     fn merge_preserves_flatten_and_physical_index_scan() {
         let mapped = PhysicalMapper::map(LogicalNodeEnum::Flatten(LogicalFlattenNode::new(
             0,

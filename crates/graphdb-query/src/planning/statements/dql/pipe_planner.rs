@@ -190,8 +190,7 @@ impl Planner for PipePlanner {
                     // adapter that drops the ExpandAll `target` alias. Elide
                     // it so downstream stages resolve `target` directly.
                     let prev_root = elide_go_default_adapter(prev_root);
-                    let prev_logical =
-                        prev_logical.map(elide_go_default_adapter_logical);
+                    let prev_logical = prev_logical.map(elide_go_default_adapter_logical);
 
                     let combined_root = replace_argument_node(new_root, prev_root);
                     let combined_logical = match (prev_logical, new_logical) {

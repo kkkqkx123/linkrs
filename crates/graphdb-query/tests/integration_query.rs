@@ -44,10 +44,7 @@ fn test_parser_match_statement_basic() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    // The current parser may have syntactic limitations and we accept success or failure
-    // Mainly to test that the parser doesn't crash
-    // As long as the parser returns a result (either success or failure), the test passes!
-    let _ = result;
+    assert!(result.is_ok(), "MATCH should parse: {:?}", result.err());
 }
 
 #[test]
@@ -56,8 +53,7 @@ fn test_parser_go_statement() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    // The parser should be able to handle GO statements
-    let _ = result;
+    assert!(result.is_ok(), "GO should parse: {:?}", result.err());
 }
 
 #[test]
@@ -66,8 +62,7 @@ fn test_parser_use_statement() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    // The USE statement should parse successfully
-    let _ = result;
+    assert!(result.is_ok(), "USE should parse: {:?}", result.err());
 }
 
 #[test]
@@ -81,8 +76,11 @@ fn test_parser_create_tag() {
     for query in queries {
         let mut parser = Parser::new(query);
         let result = parser.parse();
-        // Record results without mandating success
-        let _ = result;
+        assert!(
+            result.is_ok(),
+            "CREATE TAG variant should parse '{query}': {:?}",
+            result.err()
+        );
     }
 }
 
@@ -93,8 +91,11 @@ fn test_parser_show_statements() {
     for query in queries {
         let mut parser = Parser::new(query);
         let result = parser.parse();
-        // The SHOW statement should usually parse successfully!
-        let _ = result;
+        assert!(
+            result.is_ok(),
+            "SHOW variant should parse '{query}': {:?}",
+            result.err()
+        );
     }
 }
 
@@ -104,7 +105,11 @@ fn test_parser_insert_vertex() {
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
-    let _ = result;
+    assert!(
+        result.is_ok(),
+        "INSERT VERTEX should parse: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -128,7 +133,7 @@ fn test_planner_config_creation() {
 
 #[test]
 fn test_planner_match_statement() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
 
     // Creating a graph space
@@ -157,11 +162,11 @@ fn test_planner_match_statement() {
     // The test passes and is successful when it reaches this point
 }
 
-// ==================== QueryPipelineManager 集成测试 ====================
+// ==================== QueryPipelineManager  ====================
 
 #[test]
 fn test_pipeline_manager_creation() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -175,28 +180,18 @@ fn test_pipeline_manager_creation() {
 
 #[test]
 fn test_pipeline_manager_create_tag() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    // Execute create tag query (using supported syntax)
-    // Note: Since the type name is a keyword, CREATE TAG may not be resolved
-    let query = "CREATE TAG pipeline_test_tag(name: STRING, age: INT)";
-    let result = pipeline_manager.execute_query(query);
-
-    // Implementation may succeed or fail, depending on the specific implementation
-    assert!(result.is_ok() || result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("pipeline_tag_space")
+        .exec_ddl("CREATE TAG pipeline_test_tag(name STRING, age INT)")
+        .assert_success()
+        .assert_tag_exists("pipeline_test_tag");
 }
 
 #[test]
 fn test_pipeline_manager_use_space() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -217,14 +212,18 @@ fn test_pipeline_manager_use_space() {
     let query = "USE use_test_space";
     let result = pipeline_manager.execute_query(query);
 
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Integrated Testing of the Complete Query Process ====================
 
 #[test]
 fn test_complete_query_flow_show_spaces() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -252,7 +251,7 @@ fn test_complete_query_flow_show_spaces() {
 
 #[test]
 fn test_complete_query_flow_with_metrics() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -276,34 +275,22 @@ fn test_complete_query_flow_with_metrics() {
 
 #[test]
 fn test_query_flow_create_and_desc_tag() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-    let stats_manager = Arc::new(StatsManager::new());
-
-    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
-        storage,
-        stats_manager,
-        Arc::new(OptimizerEngine::default()),
-    );
-
-    // Create tags
-    let create_query = "CREATE TAG desc_test_tag(name: STRING)";
-    let create_result = pipeline_manager.execute_query(create_query);
-
-    // Describe the label.
-    let desc_query = "DESC TAG desc_test_tag";
-    let desc_result = pipeline_manager.execute_query(desc_query);
-
-    // Both operations should be completed.
-    assert!(create_result.is_ok() || create_result.is_err());
-    assert!(desc_result.is_ok() || desc_result.is_err());
+    use crate::common::test_scenario::TestScenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("desc_flow_space")
+        .exec_ddl("CREATE TAG desc_test_tag(name STRING)")
+        .assert_success()
+        .query("DESC TAG desc_test_tag")
+        .assert_success()
+        .assert_result_count(1);
 }
 
 // ==================== Integrated Testing for Error Handling ====================
 
 #[test]
 fn test_query_error_invalid_syntax() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -323,7 +310,7 @@ fn test_query_error_invalid_syntax() {
 
 #[test]
 fn test_query_error_nonexistent_space() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -337,15 +324,21 @@ fn test_query_error_nonexistent_space() {
     let query = "USE nonexistent_space_xyz";
     let result = pipeline_manager.execute_query(query);
 
-    // Errors may occur, depending on the implementation.
-    assert!(result.is_ok() || result.is_err());
+    // Using a missing space must fail with a clear error.
+    match result {
+        Ok(_) => panic!("USE of a missing space should not succeed"),
+        Err(e) => assert!(
+            format!("{e:?}").contains("Space not found"),
+            "USE missing space should report Space not found, got: {e:?}"
+        ),
+    };
 }
 
 // ==================== Performance Testing ====================
 
 #[test]
 fn test_query_pipeline_performance() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 
@@ -361,7 +354,12 @@ fn test_query_pipeline_performance() {
 
     for i in 0..iterations {
         let result = pipeline_manager.execute_query(query);
-        assert!(result.is_ok() || result.is_err(), "第 {} 次查询执行失败", i);
+        assert!(
+            result.is_ok(),
+            "Query {} should execute: {:?}",
+            i,
+            result.err()
+        );
     }
 }
 
@@ -370,7 +368,7 @@ fn test_query_pipeline_performance() {
 #[test]
 fn test_sequential_query_execution() {
     // Since QueryPipelineManager does not belong to the Send category, we execute the tests in a sequential manner.
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
 

@@ -1,10 +1,10 @@
-//! Factorization schema end-to-end tests (schema level only).
+//! Factorization schema and rewriter tests (schema level only).
 //!
-//! Despite the `e2e` name, these tests assert `compute_factorized_schema`
-//! invariants, `Flatten` placement by the rewriter, and EXPLAIN strings.
-//! They do not execute rows against storage; row-execution equivalence
-//! lives in the streaming operator unit tests (`flatten.rs`, single-row
-//! vs batched paths) until a factorized row layout lands.
+//! These tests assert `compute_factorized_schema` invariants, `Flatten`
+//! placement by the rewriter, and EXPLAIN strings. They do not execute
+//! rows against storage; row-execution equivalence lives in
+//! `factorization_row_equivalence.rs` and in the streaming operator unit
+//! tests (`flatten.rs`, single-row vs batched paths).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -451,10 +451,10 @@ fn factorization_disabled_vs_enabled_semantics() {
 
     // Disabled rewriter should not insert Flatten, enabled may or may not depending on deps
     let mut plan_enabled = scan();
-    let rewriter = FactorizationRewriter::new();
+    let mut rewriter = FactorizationRewriter::new();
     rewriter.rewrite(&mut plan_enabled);
     let mut plan_disabled = scan();
-    let disabler = FactorizationRewriter::disabled();
+    let mut disabler = FactorizationRewriter::disabled();
     disabler.rewrite(&mut plan_disabled);
     assert_eq!(plan_enabled.type_name(), plan_disabled.type_name());
 }

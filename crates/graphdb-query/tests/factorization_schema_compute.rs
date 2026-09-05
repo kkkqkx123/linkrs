@@ -1,11 +1,11 @@
-//! Factorization execution-adjacent end-to-end tests (schema level only).
+//! Factorization compute invariants across operators (schema level only).
 //!
-//! The file name is historical: these tests assert
-//! `compute_factorized_schema` invariants (the `<=1 unflat` invariant and
-//! `Flatten` placement), not row execution against storage. True
-//! on/off-factorization row comparison requires a factorized row layout,
-//! which does not exist yet; row-equivalence coverage lives in the
-//! streaming operator unit tests (`flatten.rs`).
+//! These tests assert `compute_factorized_schema` invariants (the
+//! `<=1 unflat` invariant and `Flatten` placement), not row execution
+//! against storage. Row-execution equivalence (factorization on/off row
+//! comparison) lives in `factorization_row_equivalence.rs`; the
+//! streaming engine stores flat row batches, so flatten is row-preserving
+//! by contract and that contract is pinned by draining real operators.
 
 use std::sync::Arc;
 

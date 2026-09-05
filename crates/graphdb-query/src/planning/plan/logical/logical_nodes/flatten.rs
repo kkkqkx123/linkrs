@@ -10,6 +10,19 @@ use crate::planning::plan::logical::logical_node_traits::{LogicalNode, LogicalSi
 pub struct LogicalFlattenNode {
     pub id: i64,
     pub group_pos: FGroupPos,
+    /// Alias names of the flattened group snapshotted at rewrite time.
+    ///
+    /// Traceability metadata only (EXPLAIN-visible): the schema alias
+    /// namespace and the runtime column namespace are not identical, so
+    /// the executor never validates these names. Empty means the mapping
+    /// is unknown (anonymous group), not that the group is empty.
+    pub group_columns: Vec<String>,
+    /// Group count of the child schema at rewrite time.
+    ///
+    /// Lets the executor reject a stale `group_pos` loudly (`group_pos`
+    /// must be below this count). `None` means unknown (hand-built or
+    /// legacy plan) and skips the check honestly.
+    pub expected_groups: Option<u32>,
     pub input: Option<Box<LogicalNodeEnum>>,
     pub deps: Vec<LogicalNodeEnum>,
     pub output_var: Option<String>,
@@ -22,6 +35,8 @@ impl LogicalFlattenNode {
         Self {
             id: next_node_id(),
             group_pos,
+            group_columns: Vec::new(),
+            expected_groups: None,
             input: Some(Box::new(input)),
             deps: Vec::new(),
             output_var: None,
@@ -34,6 +49,8 @@ impl LogicalFlattenNode {
         Self {
             id,
             group_pos,
+            group_columns: Vec::new(),
+            expected_groups: None,
             input: Some(Box::new(input)),
             deps: Vec::new(),
             output_var: None,
@@ -44,6 +61,22 @@ impl LogicalFlattenNode {
 
     pub fn group_pos(&self) -> FGroupPos {
         self.group_pos
+    }
+
+    pub fn group_columns(&self) -> &[String] {
+        &self.group_columns
+    }
+
+    pub fn set_group_columns(&mut self, columns: Vec<String>) {
+        self.group_columns = columns;
+    }
+
+    pub fn expected_groups(&self) -> Option<u32> {
+        self.expected_groups
+    }
+
+    pub fn set_expected_groups(&mut self, count: u32) {
+        self.expected_groups = Some(count);
     }
 
     pub fn id(&self) -> i64 {

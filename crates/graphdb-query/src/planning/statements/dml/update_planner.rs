@@ -252,9 +252,10 @@ impl Planner for UpdatePlanner {
                 });
 
                 let mut sub_plan = SubPlan::from_logical_root(logical_scan);
-                let physical_update = PlanNodeEnum::Update(
-                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info)),
-                );
+                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
+                    next_node_id(),
+                    UpdateTargetType::Vertex(vertex_info),
+                ));
                 sub_plan.set_tail(physical_update);
                 return Ok(sub_plan);
             }
@@ -402,9 +403,10 @@ impl Planner for UpdatePlanner {
                 });
 
                 let mut sub_plan = SubPlan::from_logical_root(logical_scan);
-                let physical_update = PlanNodeEnum::Update(
-                    UpdateNode::new(next_node_id(), UpdateTargetType::Vertex(vertex_info)),
-                );
+                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
+                    next_node_id(),
+                    UpdateTargetType::Vertex(vertex_info),
+                ));
                 sub_plan.set_tail(physical_update);
                 return Ok(sub_plan);
             }

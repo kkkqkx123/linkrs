@@ -19,9 +19,14 @@ mod cost_estimation {
             .expect("Failed to create test scenario")
             .setup_space("test_scan_cost")
             .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice'), 2:('Bob')")
             .assert_success()
             .query("MATCH (n:person) RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(2)
+            .query("EXPLAIN MATCH (n:person) RETURN n")
+            .assert_success()
+            .assert_plan_contains_any(&["Scan", "scan"]);
     }
 
     #[test]
@@ -31,9 +36,14 @@ mod cost_estimation {
             .setup_space("test_index_scan_cost")
             .exec_ddl("CREATE TAG person(name STRING, age INT)")
             .exec_ddl("CREATE TAG INDEX idx_person_age ON person(age)")
+            .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
             .assert_success()
             .query("MATCH (n:person) WHERE n.age = 30 RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1)
+            .query("EXPLAIN MATCH (n:person) WHERE n.age = 30 RETURN n")
+            .assert_success()
+            .assert_plan_contains_any(&["IndexScan", "index_scan", "Scan", "scan"]);
     }
 
     #[test]

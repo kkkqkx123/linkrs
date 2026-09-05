@@ -257,6 +257,7 @@ fn test_system_state_after_invalid_role_attempt() {
 
 #[test]
 fn test_unicode_username_security() {
+    // Unicode identifiers are legitimate test data (not code comments).
     let scenario = new_scenario();
 
     scenario
@@ -270,6 +271,7 @@ fn test_unicode_username_security() {
 
 #[test]
 fn test_mixed_charset_username() {
+    // Unicode identifiers are legitimate test data (not code comments).
     let scenario = new_scenario();
 
     scenario

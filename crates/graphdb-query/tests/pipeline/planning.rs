@@ -19,9 +19,14 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_scan_plan")
             .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice'), 2:('Bob')")
             .assert_success()
             .query("MATCH (n:person) RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(2)
+            .query("EXPLAIN MATCH (n:person) RETURN n")
+            .assert_success()
+            .assert_plan_contains_any(&["Scan", "scan"]);
     }
 
     #[test]
@@ -31,9 +36,21 @@ mod plan_construction {
             .setup_space("test_index_scan_plan")
             .exec_ddl("CREATE TAG person(name STRING, age INT)")
             .exec_ddl("CREATE TAG INDEX idx_person_age ON person(age)")
+            .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
             .assert_success()
             .query("MATCH (n:person) WHERE n.age = 30 RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1)
+            .query("EXPLAIN MATCH (n:person) WHERE n.age = 30 RETURN n")
+            .assert_success()
+            .assert_plan_contains_any(&[
+                "IndexScan",
+                "index_scan",
+                "ScanVertices",
+                "scan_vertices",
+                "Scan",
+                "scan",
+            ]);
     }
 
     #[test]
@@ -43,9 +60,12 @@ mod plan_construction {
             .setup_space("test_traversal_plan")
             .exec_ddl("CREATE TAG person(name STRING)")
             .exec_ddl("CREATE EDGE knows()")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice'), 2:('Bob')")
+            .exec_dml("INSERT EDGE knows() VALUES 1 -> 2")
             .assert_success()
             .query("MATCH (a:person)-[:knows]->(b:person) RETURN a, b")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1);
     }
 
     #[test]
@@ -66,9 +86,11 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_filter_plan")
             .exec_ddl("CREATE TAG person(age INT)")
+            .exec_dml("INSERT VERTEX person(age) VALUES 1:(20), 2:(16)")
             .assert_success()
             .query("MATCH (n:person) WHERE n.age > 18 RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1);
     }
 
     #[test]
@@ -77,9 +99,12 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_project_plan")
             .exec_ddl("CREATE TAG person(name STRING, age INT)")
+            .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30)")
             .assert_success()
             .query("MATCH (n:person) RETURN n.name, n.age")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1)
+            .assert_result_columns(&["n.name", "n.age"]);
     }
 
     #[test]
@@ -88,9 +113,11 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_aggregate_plan")
             .exec_ddl("CREATE TAG person(age INT)")
+            .exec_dml("INSERT VERTEX person(age) VALUES 1:(20), 2:(30)")
             .assert_success()
             .query("MATCH (n:person) RETURN count(n), avg(n.age)")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1);
     }
 
     #[test]
@@ -99,9 +126,11 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_sort_plan")
             .exec_ddl("CREATE TAG person(name STRING, age INT)")
+            .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
             .assert_success()
             .query("MATCH (n:person) RETURN n ORDER BY n.age DESC")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(2);
     }
 
     #[test]
@@ -110,9 +139,11 @@ mod plan_construction {
             .expect("Failed to create test scenario")
             .setup_space("test_limit_plan")
             .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('A'), 2:('B'), 3:('C')")
             .assert_success()
-            .query("MATCH (n:person) RETURN n LIMIT 10")
-            .assert_success();
+            .query("MATCH (n:person) RETURN n LIMIT 2")
+            .assert_success()
+            .assert_result_count(2);
     }
 
     #[test]
@@ -201,11 +232,14 @@ mod plan_cache {
             .expect("Failed to create test scenario")
             .setup_space("test_cache_hit")
             .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
             .query("MATCH (n:person) RETURN n.name")
             .assert_success()
+            .assert_result_count(1)
             .query("MATCH (n:person) RETURN n.name")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1);
     }
 
     #[test]
@@ -214,13 +248,16 @@ mod plan_cache {
             .expect("Failed to create test scenario")
             .setup_space("test_cache_invalidate")
             .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
             .query("MATCH (n:person) RETURN n")
             .assert_success()
+            .assert_result_count(1)
             .exec_ddl("ALTER TAG person ADD (age INT)")
             .assert_success()
             .query("MATCH (n:person) RETURN n")
-            .assert_success();
+            .assert_success()
+            .assert_result_count(1);
     }
 
     #[test]

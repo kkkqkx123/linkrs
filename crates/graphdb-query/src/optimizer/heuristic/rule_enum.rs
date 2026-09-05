@@ -203,6 +203,7 @@ define_rewrite_rules! {
 
         // ==================== JOIN Optimization Rules ====================
         PushProjectDownJoin(join_optimization::PushProjectDownJoinRule),
+        ExtractEquiJoinKeys(join_optimization::ExtractEquiJoinKeysRule),
         LeftJoinToInnerJoin(join_optimization::LeftJoinToInnerJoinRule),
         JoinConditionSimplify(join_optimization::JoinConditionSimplifyRule),
         JoinToExpand(join_optimization::JoinToExpandRule),
@@ -391,6 +392,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushProjectDownJoin(
             join_optimization::PushProjectDownJoinRule::new(),
         ));
+        registry.add(RewriteRule::ExtractEquiJoinKeys(
+            join_optimization::ExtractEquiJoinKeysRule::new(),
+        ));
         registry.add(RewriteRule::LeftJoinToInnerJoin(
             join_optimization::LeftJoinToInnerJoinRule::new(),
         ));
@@ -426,7 +430,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 55);
+        assert_eq!(registry.len(), 56);
     }
 
     #[test]

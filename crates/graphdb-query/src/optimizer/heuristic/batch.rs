@@ -578,6 +578,7 @@ impl BatchOptimizer {
 
             // Join optimization (part of normalize/cleanup)
             PushProjectDownJoin(_)
+            | ExtractEquiJoinKeys(_)
             | LeftJoinToInnerJoin(_)
             | JoinConditionSimplify(_)
             | JoinToExpand(_)

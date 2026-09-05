@@ -55,6 +55,18 @@ pub enum UnarySpec {
     },
     Flatten {
         group_pos: u32,
+        /// Alias names of the flattened group snapshotted at rewrite time.
+        ///
+        /// Traceability metadata only; the executor never validates these
+        /// names because the schema alias namespace and the runtime
+        /// column namespace are not identical.
+        group_columns: Vec<String>,
+        /// Group count of the child schema at rewrite time, when known.
+        ///
+        /// The executor rejects a stale `group_pos` (`group_pos` must be
+        /// below this count) loudly at `open()`. `None` means unknown
+        /// (hand-built or legacy plan) and skips the check honestly.
+        expected_groups: Option<u32>,
     },
 }
 

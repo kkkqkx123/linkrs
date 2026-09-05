@@ -48,7 +48,19 @@ impl ArenaPlanAssembler {
                     Some(crate::optimizer::JoinAlgorithm::HashJoin { .. }) => {
                         build_inner_join_hash_spec(join_node)?
                     }
-                    _ => build_inner_join_spec(join_node)?,
+                    // No cost-based decision: valid equi keys take the hash
+                    // join form (linear instead of quadratic); otherwise the
+                    // condition (nested-loop) default applies. The
+                    // partitioned join paths keep using
+                    // `build_inner_join_spec` explicitly because each
+                    // partition-local join must carry the equality condition.
+                    _ => build_join_with_keys(
+                        join_node.hash_keys(),
+                        join_node.probe_keys(),
+                        JoinSpec::InnerJoin {
+                            join_condition: None,
+                        },
+                    )?,
                 };
                 let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {

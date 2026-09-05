@@ -1,3 +1,10 @@
+//! Join partition probe integration test.
+//!
+//! Exercises partitioned parallel execution against real storage with a
+//! larger vertex population. Complements
+//! `parallel_partition_execution.rs` (contract level) by verifying row
+//! counts and serial/parallel equivalence end to end.
+
 mod common;
 
 use common::TestStorage;

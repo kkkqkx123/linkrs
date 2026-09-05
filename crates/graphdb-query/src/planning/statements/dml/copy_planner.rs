@@ -81,33 +81,29 @@ impl Planner for CopyPlanner {
         }
 
         let logical_root = match copy.direction {
-            CopyDirection::From => {
-                LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
-                    id: next_node_id(),
-                    space_name,
-                    target,
-                    file_path: copy.file_path.clone(),
-                    header: copy.header,
-                    delimiter: copy.delimiter,
-                    batch_size,
-                    output_var: None,
-                    col_names: vec!["copy_result".to_string()],
-                    column_types: vec![],
-                })
-            }
-            CopyDirection::To => {
-                LogicalNodeEnum::CopyTo(LogicalCopyToNode {
-                    id: next_node_id(),
-                    space_name,
-                    target,
-                    file_path: copy.file_path.clone(),
-                    header: copy.header,
-                    delimiter: copy.delimiter,
-                    output_var: None,
-                    col_names: vec!["copy_result".to_string()],
-                    column_types: vec![],
-                })
-            }
+            CopyDirection::From => LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
+                id: next_node_id(),
+                space_name,
+                target,
+                file_path: copy.file_path.clone(),
+                header: copy.header,
+                delimiter: copy.delimiter,
+                batch_size,
+                output_var: None,
+                col_names: vec!["copy_result".to_string()],
+                column_types: vec![],
+            }),
+            CopyDirection::To => LogicalNodeEnum::CopyTo(LogicalCopyToNode {
+                id: next_node_id(),
+                space_name,
+                target,
+                file_path: copy.file_path.clone(),
+                header: copy.header,
+                delimiter: copy.delimiter,
+                output_var: None,
+                col_names: vec!["copy_result".to_string()],
+                column_types: vec![],
+            }),
         };
 
         let mut sub_plan = SubPlan::from_logical_root(logical_root);
@@ -144,33 +140,29 @@ impl Planner for CopyPlanner {
         }
 
         let logical_root = match copy_stmt.direction {
-            CopyDirection::From => {
-                LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
-                    id: next_node_id(),
-                    space_name,
-                    target,
-                    file_path: copy_stmt.file_path,
-                    header: copy_stmt.header,
-                    delimiter: copy_stmt.delimiter,
-                    batch_size,
-                    output_var: None,
-                    col_names: vec!["copy_result".to_string()],
-                    column_types: vec![],
-                })
-            }
-            CopyDirection::To => {
-                LogicalNodeEnum::CopyTo(LogicalCopyToNode {
-                    id: next_node_id(),
-                    space_name,
-                    target,
-                    file_path: copy_stmt.file_path,
-                    header: copy_stmt.header,
-                    delimiter: copy_stmt.delimiter,
-                    output_var: None,
-                    col_names: vec!["copy_result".to_string()],
-                    column_types: vec![],
-                })
-            }
+            CopyDirection::From => LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
+                id: next_node_id(),
+                space_name,
+                target,
+                file_path: copy_stmt.file_path,
+                header: copy_stmt.header,
+                delimiter: copy_stmt.delimiter,
+                batch_size,
+                output_var: None,
+                col_names: vec!["copy_result".to_string()],
+                column_types: vec![],
+            }),
+            CopyDirection::To => LogicalNodeEnum::CopyTo(LogicalCopyToNode {
+                id: next_node_id(),
+                space_name,
+                target,
+                file_path: copy_stmt.file_path,
+                header: copy_stmt.header,
+                delimiter: copy_stmt.delimiter,
+                output_var: None,
+                col_names: vec!["copy_result".to_string()],
+                column_types: vec![],
+            }),
         };
 
         let mut sub_plan = SubPlan::from_logical_root(logical_root);

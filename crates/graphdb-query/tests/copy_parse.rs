@@ -1,3 +1,9 @@
+//! Parser-level tests for COPY statements.
+//!
+//! Scope: lexer/parser mapping only, no storage or execution.
+//! Execution coverage lives in `copy_e2e.rs`. Kept under `tests/`
+//! so parser regressions are caught by the integration target as well
+//! as crate unit tests.
 use graphdb_query::parser::Parser;
 
 #[test]
