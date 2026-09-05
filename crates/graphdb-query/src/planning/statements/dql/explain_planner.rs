@@ -29,10 +29,10 @@ impl ExplainPlanner {
         Self { is_profile: true }
     }
 
-    fn extract_inner_stmt(&self, stmt: &Stmt) -> Result<Box<Stmt>, PlannerError> {
+    fn extract_inner_stmt<'a>(&self, stmt: &'a Stmt) -> Result<&'a Stmt, PlannerError> {
         match stmt {
-            Stmt::Explain(explain_stmt) => Ok(explain_stmt.statement.clone()),
-            Stmt::Profile(profile_stmt) => Ok(profile_stmt.statement.clone()),
+            Stmt::Explain(explain_stmt) => Ok(explain_stmt.statement.as_ref()),
+            Stmt::Profile(profile_stmt) => Ok(profile_stmt.statement.as_ref()),
             _ => Err(PlannerError::PlanGenerationFailed(
                 "statement does not contain EXPLAIN or PROFILE".to_string(),
             )),
@@ -50,14 +50,14 @@ impl ExplainPlanner {
 
         let inner_validated = ValidatedStatement::new(
             Arc::new(crate::parser::ast::stmt::Ast::new(
-                (*inner_stmt).clone(),
+                inner_stmt.clone(),
                 validated.ast.expr_context().clone(),
             )),
             validated.validation_info.clone(),
         );
 
-        let mut inner_planner = PlannerEnum::from_stmt(&Arc::new((*inner_stmt).clone()))
-            .ok_or_else(|| {
+        let mut inner_planner =
+            PlannerEnum::from_stmt_ref(inner_validated.stmt()).ok_or_else(|| {
                 PlannerError::NoSuitablePlanner(format!(
                     "explain inner statement: {}",
                     inner_stmt.kind()

@@ -148,6 +148,11 @@ pub struct FactorizedSchema {
     groups: Vec<FactorizationGroup>,
     expression_to_group: HashMap<ExpressionId, FGroupPos>,
     expression_name_to_group: HashMap<String, FGroupPos>,
+    /// Reverse alias lookup: expression id to its registered output name.
+    /// Used to carry alias names across schema rebuilds (e.g. sink
+    /// operators) and to name expressions in diagnostics. Bare names
+    /// registered via `insert_name_for_group` have no entry here.
+    expression_id_to_name: HashMap<ExpressionId, String>,
     expressions_in_scope: Vec<ExpressionId>,
 }
 
@@ -225,7 +230,9 @@ impl FactorizedSchema {
             "group_pos {} out of range",
             group_pos
         );
-        self.expression_name_to_group.insert(name, group_pos);
+        self.expression_name_to_group
+            .insert(name.clone(), group_pos);
+        self.expression_id_to_name.insert(expr_id.clone(), name);
         self.insert_to_scope(expr_id, group_pos);
     }
 
@@ -247,7 +254,8 @@ impl FactorizedSchema {
         let group = &mut self.groups[group_pos as usize];
         group.insert_expression_with_name(expr_id.clone(), name.clone());
         if let Some(n) = name {
-            self.expression_name_to_group.insert(n, group_pos);
+            self.expression_name_to_group.insert(n.clone(), group_pos);
+            self.expression_id_to_name.insert(expr_id.clone(), n);
         }
         assert!(
             !self.expression_to_group.contains_key(&expr_id),
@@ -307,6 +315,14 @@ impl FactorizedSchema {
         // unresolved names fall back to flatten-all via
         // `GroupDependencyAnalyzer::mark_unresolved` instead of silent miss.
         self.expression_name_to_group.get(name).copied()
+    }
+
+    /// Registered output name for an expression id, if any.
+    ///
+    /// Bare names from `insert_name_for_group` have no owning id and are
+    /// absent here; use `member_names` to enumerate a group's aliases.
+    pub fn expression_name(&self, expr_id: &ExpressionId) -> Option<&str> {
+        self.expression_id_to_name.get(expr_id).map(String::as_str)
     }
 
     /// Register a bare alias name for a group.
@@ -409,6 +425,7 @@ impl FactorizedSchema {
     pub fn clear_expressions_in_scope(&mut self) {
         self.expression_to_group.clear();
         self.expression_name_to_group.clear();
+        self.expression_id_to_name.clear();
         self.expressions_in_scope.clear();
     }
 
@@ -472,6 +489,10 @@ impl FactorizedSchema {
                 self.expression_name_to_group.insert(name.clone(), *new_pos);
             }
         }
+        for (expr_id, name) in &other.expression_id_to_name {
+            self.expression_id_to_name
+                .insert(expr_id.clone(), name.clone());
+        }
         mapping
     }
 
@@ -527,6 +548,154 @@ impl SchemaUtils {
         for &pos in group_positions {
             if let Some(g) = schema.get_group(pos) {
                 assert!(g.is_flat(), "group {} expected flat but is unflat", pos);
+            }
+        }
+    }
+}
+
+/// Rebuilds factorized schemas across sink boundaries.
+///
+/// A sink operator collects its whole input before producing output, so the
+/// output groups no longer share the input's nesting structure. Flat
+/// payloads are gathered into one new group (marked single-state when unflat
+/// payloads also exist); each contributing unflat input group is copied into
+/// its own new group with the cardinality multiplier preserved.
+///
+/// Mirrors `lbug::planner::SinkOperatorUtil` in
+/// `ref/ladybug/src/planner/operator/factorization/sink_util.cpp`.
+pub struct SinkOperatorUtil;
+
+impl SinkOperatorUtil {
+    /// Merge payload expressions from the input schema into the result
+    /// schema, regrouping them as described above. Alias names of merged
+    /// expressions (and bare group names of contributing groups) are carried
+    /// over so downstream name resolution keeps working.
+    pub fn merge_schema(
+        input_schema: &FactorizedSchema,
+        expressions_to_merge: &[ExpressionId],
+        result_schema: &mut FactorizedSchema,
+    ) {
+        let mut flat_payloads = Vec::new();
+        let mut unflat_per_group: HashMap<FGroupPos, Vec<ExpressionId>> = HashMap::new();
+        for expr_id in expressions_to_merge {
+            let Some(pos) = input_schema.get_group_pos(expr_id) else {
+                continue;
+            };
+            let Some(group) = input_schema.get_group(pos) else {
+                continue;
+            };
+            if group.is_flat() {
+                flat_payloads.push(expr_id.clone());
+            } else {
+                unflat_per_group
+                    .entry(pos)
+                    .or_default()
+                    .push(expr_id.clone());
+            }
+        }
+        let mut unflat_groups: Vec<FGroupPos> = unflat_per_group.keys().copied().collect();
+        unflat_groups.sort_unstable();
+        // Old group position to rebuilt group position, for alias remapping.
+        let mut old_to_new: HashMap<FGroupPos, FGroupPos> = HashMap::new();
+        // New position of the single group holding flat payloads, if any.
+        let mut flat_new_pos: Option<FGroupPos> = None;
+        if unflat_groups.is_empty() {
+            if !flat_payloads.is_empty() {
+                let new_pos = result_schema.create_group();
+                for expr_id in &flat_payloads {
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                }
+                flat_new_pos = Some(new_pos);
+            }
+        } else {
+            if !flat_payloads.is_empty() {
+                let new_pos = result_schema.create_group();
+                for expr_id in &flat_payloads {
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                }
+                result_schema.set_group_as_single_state(new_pos);
+                flat_new_pos = Some(new_pos);
+            }
+            for old_pos in unflat_groups {
+                let new_pos = result_schema.create_group();
+                for expr_id in &unflat_per_group[&old_pos] {
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                }
+                if let Some(input_group) = input_schema.get_group(old_pos) {
+                    let multiplier = input_group.cardinality_multiplier();
+                    if let Some(new_group) = result_schema.get_group_mut(new_pos) {
+                        new_group.set_multiplier(multiplier);
+                    }
+                }
+                old_to_new.insert(old_pos, new_pos);
+            }
+        }
+        // Every flat contributor group maps onto the single new flat group.
+        if let Some(flat_new_pos) = flat_new_pos {
+            let mut flat_old: Vec<FGroupPos> = flat_payloads
+                .iter()
+                .filter_map(|eid| input_schema.get_group_pos(eid))
+                .collect();
+            flat_old.sort_unstable();
+            flat_old.dedup();
+            for old_pos in flat_old {
+                old_to_new.entry(old_pos).or_insert(flat_new_pos);
+            }
+        }
+        Self::remap_names(
+            input_schema,
+            expressions_to_merge,
+            &old_to_new,
+            result_schema,
+        );
+        result_schema.validate_at_most_one_unflat();
+    }
+
+    /// Clear the result schema, then merge.
+    pub fn recompute_schema(
+        input_schema: &FactorizedSchema,
+        expressions_to_merge: &[ExpressionId],
+        result_schema: &mut FactorizedSchema,
+    ) {
+        result_schema.clear();
+        Self::merge_schema(input_schema, expressions_to_merge, result_schema);
+    }
+
+    /// Carry alias names of merged expressions (plus bare group names of
+    /// contributing groups) onto the rebuilt groups. A name owned by an
+    /// expression outside the merge set is left behind so it can never
+    /// resolve into a group that does not hold its data.
+    fn remap_names(
+        input_schema: &FactorizedSchema,
+        expressions_to_merge: &[ExpressionId],
+        old_to_new: &HashMap<FGroupPos, FGroupPos>,
+        result_schema: &mut FactorizedSchema,
+    ) {
+        let mut owned_names: HashSet<&str> = HashSet::new();
+        for expr_id in expressions_to_merge {
+            if let Some(name) = input_schema.expression_name(expr_id) {
+                owned_names.insert(name);
+            }
+        }
+        let linked_names: HashSet<&str> = input_schema
+            .expression_id_to_name
+            .values()
+            .map(String::as_str)
+            .collect();
+        let mut names: Vec<(&String, &FGroupPos)> =
+            input_schema.expression_name_to_group_iter().collect();
+        names.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, old_pos) in names {
+            let Some(new_pos) = old_to_new.get(old_pos).copied() else {
+                continue;
+            };
+            // An id-linked name is only carried over for its owning merged
+            // expression; bare group names follow their contributing group.
+            if !owned_names.contains(name.as_str()) && linked_names.contains(name.as_str()) {
+                continue;
+            }
+            if result_schema.get_group_pos_by_name_opt(name).is_none() {
+                result_schema.insert_name_for_group(name.clone(), new_pos);
             }
         }
     }
@@ -704,5 +873,89 @@ mod tests {
         let out = agg_schema.create_flat_group(false);
         agg_schema.insert_to_group_and_scope(expr(10), out);
         assert!(agg_schema.is_flat_schema());
+    }
+
+    #[test]
+    fn expression_id_to_name_roundtrip() {
+        let mut schema = FactorizedSchema::new();
+        let g = schema.create_flat_group(false);
+        schema.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g);
+        assert_eq!(schema.expression_name(&expr(1)), Some("a"));
+        assert_eq!(schema.expression_name(&expr(2)), None);
+        // Merge carries the reverse map alongside the forward one.
+        let mut other = FactorizedSchema::new();
+        other.merge_groups_from(&schema);
+        other.insert_to_scope_may_repeat(expr(1), 0);
+        assert_eq!(other.expression_name(&expr(1)), Some("a"));
+        // Clearing scope drops both directions.
+        other.clear_expressions_in_scope();
+        assert_eq!(other.expression_name(&expr(1)), None);
+    }
+
+    #[test]
+    fn sink_merge_preserves_multiplier_and_single_state() {
+        let mut input = FactorizedSchema::new();
+        let flat_pos = input.create_flat_group(false);
+        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos);
+        let unflat_pos = input.create_group();
+        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos);
+        input
+            .get_group_mut(unflat_pos)
+            .expect("unflat group")
+            .set_multiplier(2.5);
+        let mut out = FactorizedSchema::new();
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out);
+        out.validate_at_most_one_unflat();
+        assert_eq!(out.num_groups(), 2);
+        // Flat payload "a" lands in a single-state group.
+        let a_pos = out.get_group_pos(&expr(1)).expect("a placed");
+        let a_group = out.get_group(a_pos).expect("a group");
+        assert!(a_group.is_flat());
+        assert!(a_group.is_single_state());
+        // Unflat payload "b" keeps its group and multiplier.
+        let b_pos = out.get_group_pos(&expr(2)).expect("b placed");
+        assert_ne!(a_pos, b_pos);
+        let b_group = out.get_group(b_pos).expect("b group");
+        assert!(!b_group.is_flat());
+        assert_eq!(b_group.cardinality_multiplier(), 2.5);
+        // Alias names survive the rebuild for downstream name resolution.
+        assert_eq!(out.get_group_pos_by_name_opt("a"), Some(a_pos));
+        assert_eq!(out.get_group_pos_by_name_opt("b"), Some(b_pos));
+    }
+
+    #[test]
+    fn sink_recompute_all_flat_input() {
+        let mut input = FactorizedSchema::new();
+        let g0 = input.create_flat_group(false);
+        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g0);
+        let g1 = input.create_flat_group(false);
+        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1);
+        let mut out = FactorizedSchema::new();
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out);
+        // All payloads gather into one new group; names follow.
+        assert_eq!(out.num_groups(), 1);
+        assert!(out.is_expression_in_scope(&expr(1)));
+        assert!(out.is_expression_in_scope(&expr(2)));
+        assert!(out.get_group_pos_by_name_opt("a").is_some());
+        assert!(out.get_group_pos_by_name_opt("b").is_some());
+        out.validate_at_most_one_unflat();
+    }
+
+    #[test]
+    fn sink_merge_partial_scope_leaves_unmerged_names() {
+        let mut input = FactorizedSchema::new();
+        let flat_pos = input.create_flat_group(false);
+        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos);
+        let unflat_pos = input.create_group();
+        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos);
+        input.insert_name_for_group("bare".to_string(), unflat_pos);
+        let mut out = FactorizedSchema::new();
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1)], &mut out);
+        // Only the merged payload and its name cross the sink boundary.
+        assert!(out.is_expression_in_scope(&expr(1)));
+        assert!(!out.is_expression_in_scope(&expr(2)));
+        assert!(out.get_group_pos_by_name_opt("a").is_some());
+        assert!(out.get_group_pos_by_name_opt("b").is_none());
+        assert!(out.get_group_pos_by_name_opt("bare").is_none());
     }
 }

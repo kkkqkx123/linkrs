@@ -138,7 +138,7 @@ impl NondeterministicChecker {
             | "localtimestamp" => true,
 
             // Random number function
-            "rand" | "random" | "uuid" => true,
+            "rand" | "random" | "uuid" | "gen_random_uuid" => true,
 
             // Window functions (the result depends on the row position)
             "row_number" | "rank" | "dense_rank" | "percent_rank" | "cume_dist" => true,
@@ -148,6 +148,28 @@ impl NondeterministicChecker {
 
             // Deterministic function
             _ => false,
+        }
+    }
+
+    /// Check whether an expression tree contains any non-deterministic
+    /// function call (e.g. `rand()`, `gen_random_uuid()`, `now()`).
+    ///
+    /// Non-deterministic functions must be evaluated tuple-at-a-time: if a
+    /// factorized group stays unflat, the value would be shared across rows
+    /// instead of generated per row. Callers (e.g. the factorization
+    /// rewriter) use this to fall back to flatten-all.
+    pub fn contains_nondeterministic(expr: &Expression) -> bool {
+        match expr {
+            Expression::Function { name, args } => {
+                if Self::is_nondeterministic(name) {
+                    return true;
+                }
+                args.iter().any(Self::contains_nondeterministic)
+            }
+            _ => expr
+                .children()
+                .iter()
+                .any(|c| Self::contains_nondeterministic(c)),
         }
     }
 }
@@ -591,6 +613,40 @@ mod tests {
         let ctx_expr = graphdb_core::types::ContextualExpression::new(expr_id, expr_ctx);
         let analysis = analyzer.analyze(&ctx_expr);
         assert!(!analysis.is_deterministic);
+    }
+
+    #[test]
+    fn test_contains_nondeterministic_tree_walk() {
+        // Direct non-deterministic call, including the runtime spelling.
+        assert!(NondeterministicChecker::contains_nondeterministic(
+            &Expression::Function {
+                name: "gen_random_uuid".to_string(),
+                args: vec![],
+            }
+        ));
+        // Nested inside a deterministic outer function.
+        assert!(NondeterministicChecker::contains_nondeterministic(
+            &Expression::Function {
+                name: "concat".to_string(),
+                args: vec![
+                    Expression::Literal(Value::Int(1)),
+                    Expression::Function {
+                        name: "rand".to_string(),
+                        args: vec![],
+                    },
+                ],
+            }
+        ));
+        // Deterministic trees stay negative.
+        assert!(!NondeterministicChecker::contains_nondeterministic(
+            &Expression::Function {
+                name: "abs".to_string(),
+                args: vec![Expression::Literal(Value::Int(-5))],
+            }
+        ));
+        assert!(!NondeterministicChecker::contains_nondeterministic(
+            &Expression::Literal(Value::Int(1))
+        ));
     }
 
     #[test]

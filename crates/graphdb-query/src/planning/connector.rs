@@ -20,25 +20,22 @@ impl SegmentsConnector {
     /// Perform an inner join on the two plans, using the specified join key.
     pub fn inner_join(
         _qctx: &QueryContext,
-        left: SubPlan,
-        right: SubPlan,
+        mut left: SubPlan,
+        mut right: SubPlan,
         _inter_aliases: HashSet<&str>,
     ) -> Result<SubPlan, PlannerError> {
-        let left_root = match left.root {
-            Some(ref r) => r,
-            None => return Ok(right),
+        let Some(left_root) = left.root.take() else {
+            return Ok(right);
+        };
+        let Some(right_root) = right.root.take() else {
+            left.root = Some(left_root);
+            return Ok(left);
         };
 
-        let right_root = match right.root {
-            Some(ref r) => r,
-            None => return Ok(left),
-        };
-
-        let _col_names = left_root.col_names().to_vec();
         let join_node = PlanNodeEnum::InnerJoin(
             crate::planning::plan::core::nodes::InnerJoinNode::new(
-                left_root.clone(),
-                right_root.clone(),
+                left_root,
+                right_root,
                 vec![],
                 vec![],
             )
@@ -47,8 +44,8 @@ impl SegmentsConnector {
             })?,
         );
         let logical_root = join_logical_roots(
-            &left.logical_root,
-            &right.logical_root,
+            left.logical_root.take(),
+            right.logical_root.take(),
             join_node.col_names().to_vec(),
             LogicalJoinKind::Inner,
         );
@@ -65,24 +62,23 @@ impl SegmentsConnector {
     /// Perform a left join on the two plans, for use in scenarios such as an optional MATCH operation.
     pub fn left_join(
         _qctx: &QueryContext,
-        left: SubPlan,
-        right: SubPlan,
+        mut left: SubPlan,
+        mut right: SubPlan,
         _inter_aliases: HashSet<&str>,
     ) -> Result<SubPlan, PlannerError> {
-        let left_root = match left.root {
-            Some(ref r) => r,
-            None => return Ok(right),
+        let Some(left_root) = left.root.take() else {
+            return Ok(right);
         };
 
-        let right_root = match right.root {
-            Some(ref r) => r,
-            None => return Ok(left),
+        let Some(right_root) = right.root.take() else {
+            left.root = Some(left_root);
+            return Ok(left);
         };
 
         let join_node = PlanNodeEnum::LeftJoin(
             crate::planning::plan::core::nodes::LeftJoinNode::new(
-                left_root.clone(),
-                right_root.clone(),
+                left_root,
+                right_root,
                 vec![],
                 vec![],
             )
@@ -91,8 +87,8 @@ impl SegmentsConnector {
             })?,
         );
         let logical_root = join_logical_roots(
-            &left.logical_root,
-            &right.logical_root,
+            left.logical_root.take(),
+            right.logical_root.take(),
             join_node.col_names().to_vec(),
             LogicalJoinKind::Left,
         );
@@ -107,29 +103,24 @@ impl SegmentsConnector {
     /// Create a cross-link
     ///
     /// Connect the two plans using the Cartesian product.
-    pub fn cross_join(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerError> {
-        let left_root = match left.root {
-            Some(ref r) => r,
-            None => return Ok(right),
+    pub fn cross_join(mut left: SubPlan, mut right: SubPlan) -> Result<SubPlan, PlannerError> {
+        let Some(left_root) = left.root.take() else {
+            return Ok(right);
         };
 
-        let right_root = match right.root {
-            Some(ref r) => r,
-            None => return Ok(left),
+        let Some(right_root) = right.root.take() else {
+            left.root = Some(left_root);
+            return Ok(left);
         };
 
         let join_node = PlanNodeEnum::CrossJoin(
-            crate::planning::plan::core::nodes::CrossJoinNode::new(
-                left_root.clone(),
-                right_root.clone(),
-            )
-            .map_err(|e| {
-                PlannerError::JoinFailed(format!("Cross join node creation failed: {}", e))
-            })?,
+            crate::planning::plan::core::nodes::CrossJoinNode::new(left_root, right_root).map_err(
+                |e| PlannerError::JoinFailed(format!("Cross join node creation failed: {}", e)),
+            )?,
         );
         let logical_root = join_logical_roots(
-            &left.logical_root,
-            &right.logical_root,
+            left.logical_root.take(),
+            right.logical_root.take(),
             join_node.col_names().to_vec(),
             LogicalJoinKind::Cross,
         );
@@ -150,13 +141,13 @@ enum LogicalJoinKind {
 }
 
 fn join_logical_roots(
-    left: &Option<LogicalNodeEnum>,
-    right: &Option<LogicalNodeEnum>,
+    left: Option<LogicalNodeEnum>,
+    right: Option<LogicalNodeEnum>,
     col_names: Vec<String>,
     kind: LogicalJoinKind,
 ) -> Option<LogicalNodeEnum> {
-    let left_logical = left.clone()?;
-    let right_logical = right.clone()?;
+    let left_logical = left?;
+    let right_logical = right?;
     match kind {
         LogicalJoinKind::Inner => Some(LogicalNodeEnum::InnerJoin(
             crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {

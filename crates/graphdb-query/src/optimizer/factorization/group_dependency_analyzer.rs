@@ -86,9 +86,17 @@ impl<'a> GroupDependencyAnalyzer<'a> {
 
     /// Record an unresolvable expression and fall back to flattening every
     /// unflat group, so callers never silently miss a required flatten.
+    /// The recorded description carries the schema shape (group count and
+    /// scope size) to pinpoint missing alias registrations in the producing
+    /// operator's `compute_factorized_schema`.
     fn mark_unresolved(&mut self, what: String) {
-        log::warn!("GroupDependencyAnalyzer: unresolved {what}");
-        self.unresolved.push(what);
+        let context = format!(
+            "{what} (schema: {} groups, {} expressions in scope)",
+            self.schema.num_groups(),
+            self.schema.expressions_in_scope().len()
+        );
+        log::warn!("GroupDependencyAnalyzer: unresolved {context}");
+        self.unresolved.push(context);
         for (pos, group) in self.schema.groups().iter().enumerate() {
             if !group.is_flat() {
                 self.required_flat_groups.insert(pos as u32);

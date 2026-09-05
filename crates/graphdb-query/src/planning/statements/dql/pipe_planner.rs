@@ -5,7 +5,7 @@
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::{PipeStmt, Stmt};
-use crate::planning::plan::core::nodes::{PipeDeleteEdgesNode, PipeDeleteVerticesNode};
+use crate::planning::plan::core::nodes::{PipeDeleteEdgesNode, PipeDeleteVerticesNode, StartNode};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode},
@@ -27,9 +27,9 @@ impl PipePlanner {
         Self
     }
 
-    fn extract_pipe_stmt(&self, stmt: &Stmt) -> Result<PipeStmt, PlannerError> {
+    fn extract_pipe_stmt<'a>(&self, stmt: &'a Stmt) -> Result<&'a PipeStmt, PlannerError> {
         match stmt {
-            Stmt::Pipe(pipe_stmt) => Ok(pipe_stmt.clone()),
+            Stmt::Pipe(pipe_stmt) => Ok(pipe_stmt),
             _ => Err(PlannerError::PlanGenerationFailed(
                 "statement does not contain the Pipe".to_string(),
             )),
@@ -45,9 +45,14 @@ impl Planner for PipePlanner {
     ) -> Result<SubPlan, PlannerError> {
         let pipe_stmt = self.extract_pipe_stmt(validated.stmt())?;
 
+        // Clone each branch once for its sub-context; planner dispatch below
+        // reuses those owned fragments by reference instead of cloning again.
+        let left_stmt = (*pipe_stmt.left).clone();
+        let right_stmt = (*pipe_stmt.right).clone();
+
         let left_validated = ValidatedStatement::new(
             Arc::new(crate::parser::ast::stmt::Ast::new(
-                (*pipe_stmt.left).clone(),
+                left_stmt,
                 validated.ast.expr_context().clone(),
             )),
             validated.validation_info.clone(),
@@ -55,17 +60,17 @@ impl Planner for PipePlanner {
 
         let right_validated = ValidatedStatement::new(
             Arc::new(crate::parser::ast::stmt::Ast::new(
-                (*pipe_stmt.right).clone(),
+                right_stmt,
                 validated.ast.expr_context().clone(),
             )),
             validated.validation_info.clone(),
         );
 
-        let mut left_planner = PlannerEnum::from_stmt(&Arc::new((*pipe_stmt.left).clone()))
+        let mut left_planner = PlannerEnum::from_stmt_ref(left_validated.stmt())
             .ok_or_else(|| PlannerError::NoSuitablePlanner("left statement".to_string()))?;
         let left_plan = left_planner.transform(&left_validated, qctx.clone())?;
 
-        let mut right_planner = PlannerEnum::from_stmt(&Arc::new((*pipe_stmt.right).clone()))
+        let mut right_planner = PlannerEnum::from_stmt_ref(right_validated.stmt())
             .ok_or_else(|| PlannerError::NoSuitablePlanner("right statement".to_string()))?;
 
         let right_plan = right_planner.transform(&right_validated, qctx)?;
@@ -230,7 +235,7 @@ impl Default for PipePlanner {
 /// it (Project -> ExpandAll). Returns the plan unchanged when its shape does
 /// not match the GO default adapter.
 fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
-    let PlanNodeEnum::Project(project) = plan else {
+    let PlanNodeEnum::Project(mut project) = plan else {
         return plan;
     };
 
@@ -244,28 +249,35 @@ fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
         return PlanNodeEnum::Project(project);
     }
 
-    let input = project.input().clone();
-    // Bound path: Project directly over ExpandAll.
-    if matches!(input, PlanNodeEnum::ExpandAll(_)) {
-        return input;
-    }
-
-    let PlanNodeEnum::Filter(filter) = input else {
-        return PlanNodeEnum::Project(project);
-    };
-
-    let is_true_filter = filter
-        .condition()
-        .as_literal()
-        .is_some_and(|value| matches!(value, graphdb_core::Value::Bool(true)));
-    if !is_true_filter {
-        return PlanNodeEnum::Project(project);
-    }
-
-    if let PlanNodeEnum::ExpandAll(_) = filter.input().clone() {
-        filter.input().clone()
-    } else {
-        PlanNodeEnum::Project(project)
+    // Take the input by value instead of cloning the whole subtree; the
+    // detached inputs below are restored when the shape does not match.
+    let input = take_single_input(project.input_mut());
+    match input {
+        // Bound path: Project directly over ExpandAll.
+        expand @ PlanNodeEnum::ExpandAll(_) => expand,
+        PlanNodeEnum::Filter(mut filter) => {
+            let is_true_filter = filter
+                .condition()
+                .as_literal()
+                .is_some_and(|value| matches!(value, graphdb_core::Value::Bool(true)));
+            if !is_true_filter {
+                project.set_input(PlanNodeEnum::Filter(filter));
+                return PlanNodeEnum::Project(project);
+            }
+            let inner = take_single_input(filter.input_mut());
+            match inner {
+                expand @ PlanNodeEnum::ExpandAll(_) => expand,
+                other => {
+                    filter.set_input(other);
+                    project.set_input(PlanNodeEnum::Filter(filter));
+                    PlanNodeEnum::Project(project)
+                }
+            }
+        }
+        other => {
+            project.set_input(other);
+            PlanNodeEnum::Project(project)
+        }
     }
 }
 
@@ -377,7 +389,7 @@ fn replace_logical_argument(
 /// legacy Project -> Filter(true) -> ExpandAll shape and the bound
 /// Project -> ExpandAll shape.
 fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
-    let LogicalNodeEnum::Project(project) = plan else {
+    let LogicalNodeEnum::Project(mut project) = plan else {
         return plan;
     };
 
@@ -391,15 +403,23 @@ fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
         return LogicalNodeEnum::Project(project);
     }
 
-    let Some(input) = project.input.clone() else {
-        return LogicalNodeEnum::Project(project);
-    };
-    // Bound path: Project directly over ExpandAll.
-    if matches!(*input, LogicalNodeEnum::ExpandAll(_)) {
-        return *input;
+    // Judge by reference first so a mismatch costs no clone.
+    if matches!(
+        project.input.as_deref(),
+        Some(LogicalNodeEnum::ExpandAll(_))
+    ) {
+        return *project.input.take().expect("checked project input");
     }
-    let LogicalNodeEnum::Filter(filter) = *input else {
-        return LogicalNodeEnum::Project(project);
+    let input = match project.input.take() {
+        Some(boxed) => *boxed,
+        None => return LogicalNodeEnum::Project(project),
+    };
+    let mut filter = match input {
+        LogicalNodeEnum::Filter(filter) => filter,
+        other => {
+            project.set_input(other);
+            return LogicalNodeEnum::Project(project);
+        }
     };
 
     let is_true_filter = filter
@@ -407,13 +427,25 @@ fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
         .as_literal()
         .is_some_and(|value| matches!(value, graphdb_core::Value::Bool(true)));
     if !is_true_filter {
+        project.set_input(LogicalNodeEnum::Filter(filter));
         return LogicalNodeEnum::Project(project);
     }
 
-    match filter.input.clone() {
+    match filter.input.take() {
         Some(boxed) if matches!(*boxed, LogicalNodeEnum::ExpandAll(_)) => *boxed,
-        _ => LogicalNodeEnum::Project(project),
+        taken => {
+            filter.input = taken;
+            project.set_input(LogicalNodeEnum::Filter(filter));
+            LogicalNodeEnum::Project(project)
+        }
     }
+}
+
+/// Detach the single input of a node without cloning the subtree.
+/// The caller receives the owned input and must attach a new one afterwards.
+fn take_single_input(input_mut: &mut PlanNodeEnum) -> PlanNodeEnum {
+    let placeholder = PlanNodeEnum::Start(StartNode::new());
+    std::mem::replace(input_mut, placeholder)
 }
 
 fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanNodeEnum {
@@ -421,7 +453,7 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
         PlanNodeEnum::Argument(_) => replacement,
         PlanNodeEnum::Start(_) => replacement,
         PlanNodeEnum::Project(mut project) => {
-            let input = project.input().clone();
+            let input = take_single_input(project.input_mut());
             let new_input = replace_argument_node(input, replacement);
             project.set_input(new_input);
             PlanNodeEnum::Project(project)
@@ -431,13 +463,13 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
             // When the GROUP BY appears on the right side of a pipe, replace the
             // whole adapter with the left plan so the aggregate consumes the
             // piped rows directly.
-            let input = aggregate.input().clone();
+            let input = take_single_input(aggregate.input_mut());
             let new_input = match input {
                 PlanNodeEnum::Project(mut project) => {
-                    if matches!(project.input().clone(), PlanNodeEnum::ScanVertices(_)) {
+                    if matches!(project.input(), PlanNodeEnum::ScanVertices(_)) {
                         replacement
                     } else {
-                        let project_input = project.input().clone();
+                        let project_input = take_single_input(project.input_mut());
                         let new_project_input = replace_argument_node(project_input, replacement);
                         project.set_input(new_project_input);
                         PlanNodeEnum::Project(project)
@@ -449,38 +481,38 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
             PlanNodeEnum::Aggregate(aggregate)
         }
         PlanNodeEnum::Filter(mut filter) => {
-            let input = filter.input().clone();
+            let input = take_single_input(filter.input_mut());
             let new_input = replace_argument_node(input, replacement);
             filter.set_input(new_input);
             PlanNodeEnum::Filter(filter)
         }
         PlanNodeEnum::Sort(mut sort) => {
-            let input = sort.input().clone();
+            let input = take_single_input(sort.input_mut());
             let new_input = replace_argument_node(input, replacement);
             sort.set_input(new_input);
             PlanNodeEnum::Sort(sort)
         }
         PlanNodeEnum::Limit(mut limit) => {
-            let input = limit.input().clone();
+            let input = take_single_input(limit.input_mut());
             let new_input = replace_argument_node(input, replacement);
             limit.set_input(new_input);
             PlanNodeEnum::Limit(limit)
         }
         PlanNodeEnum::Dedup(mut dedup) => {
-            let input = dedup.input().clone();
+            let input = take_single_input(dedup.input_mut());
             let new_input = replace_argument_node(input, replacement);
             dedup.set_input(new_input);
             PlanNodeEnum::Dedup(dedup)
         }
         PlanNodeEnum::Unwind(mut unwind) => {
-            let input = unwind.input().clone();
-            let new_input = replace_argument_node(input, replacement.clone());
+            let mut new_col_names = replacement.col_names().to_vec();
+            if let Some(alias) = unwind.col_names().last().cloned() {
+                new_col_names.push(alias);
+            }
+            let input = take_single_input(unwind.input_mut());
+            let new_input = replace_argument_node(input, replacement);
             unwind.set_input(new_input);
 
-            let mut new_col_names = replacement.col_names().to_vec();
-            if let Some(alias) = unwind.col_names().last() {
-                new_col_names.push(alias.clone());
-            }
             unwind.set_col_names(new_col_names);
 
             PlanNodeEnum::Unwind(unwind)
@@ -496,40 +528,30 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
             PlanNodeEnum::PipeDeleteEdges(node)
         }
         PlanNodeEnum::PipeDeleteVertices(mut pipe_delete_vertices) => {
-            let input = pipe_delete_vertices.input().clone();
+            let input = take_single_input(pipe_delete_vertices.input_mut());
             let new_input = replace_argument_node(input, replacement);
             pipe_delete_vertices.set_input(new_input);
             PlanNodeEnum::PipeDeleteVertices(pipe_delete_vertices)
         }
         PlanNodeEnum::PipeDeleteEdges(mut pipe_delete_edges) => {
-            let input = pipe_delete_edges.input().clone();
+            let input = take_single_input(pipe_delete_edges.input_mut());
             let new_input = replace_argument_node(input, replacement);
             pipe_delete_edges.set_input(new_input);
             PlanNodeEnum::PipeDeleteEdges(pipe_delete_edges)
         }
         PlanNodeEnum::ExpandAll(mut expand) => {
-            let new_inputs: Vec<_> = expand
-                .inputs()
-                .iter()
-                .cloned()
-                .map(|i| replace_argument_node(i, replacement.clone()))
-                .collect();
-            expand.inputs_mut().clear();
-            for inp in new_inputs {
-                expand.add_input(inp);
+            let old_inputs = std::mem::take(expand.inputs_mut());
+            for inp in old_inputs {
+                let wired = replace_argument_node(inp, replacement.clone());
+                expand.add_input(wired);
             }
             PlanNodeEnum::ExpandAll(expand)
         }
         PlanNodeEnum::GetVertices(mut gv) => {
-            let new_inputs: Vec<_> = gv
-                .inputs()
-                .iter()
-                .cloned()
-                .map(|i| replace_argument_node(i, replacement.clone()))
-                .collect();
-            gv.inputs_mut().clear();
-            for inp in new_inputs {
-                gv.add_input(inp);
+            let old_inputs = std::mem::take(gv.inputs_mut());
+            for inp in old_inputs {
+                let wired = replace_argument_node(inp, replacement.clone());
+                gv.add_input(wired);
             }
             PlanNodeEnum::GetVertices(gv)
         }

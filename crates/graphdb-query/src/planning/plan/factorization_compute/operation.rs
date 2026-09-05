@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use graphdb_core::types::expr::ExpressionId;
 
 use crate::optimizer::factorization::flatten_resolver::{FlattenAll, FlattenAllButOne};
-use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema, SchemaUtils};
+use crate::planning::plan::factorization::{
+    FGroupPos, FactorizedSchema, SchemaUtils, SinkOperatorUtil,
+};
 
 use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
 use crate::planning::plan::logical::logical_nodes::operation::{
@@ -196,14 +198,18 @@ pub(super) fn flatten(
 }
 
 pub(super) fn sort(_n: &LogicalSortNode, child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
-    let mut schema = child_schemas.first().cloned().unwrap_or_default();
-    let groups = schema.groups_pos_in_scope();
-    let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &schema);
-    for pos in to_flatten {
-        schema.flatten_group(pos);
+    // Sink semantics: the sort collects its whole input before emitting
+    // rows, so the output regroups the child payloads instead of inheriting
+    // the input nesting. Flat payloads gather into one group; unflat
+    // payloads keep their group with the multiplier preserved.
+    let child = child_schemas.first().cloned().unwrap_or_default();
+    let payloads: Vec<ExpressionId> = child.expressions_in_scope().to_vec();
+    if payloads.is_empty() {
+        return child;
     }
-    schema.validate_at_most_one_unflat();
-    schema
+    let mut out = FactorizedSchema::new();
+    SinkOperatorUtil::recompute_schema(&child, &payloads, &mut out);
+    out
 }
 
 pub(super) fn top_n(_n: &LogicalTopNNode, child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
@@ -255,4 +261,73 @@ pub(super) fn sample(
     child_schemas: &[FactorizedSchema],
 ) -> FactorizedSchema {
     child_schemas.first().cloned().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planning::plan::core::node_id_generator::next_node_id;
+    use crate::planning::plan::core::nodes::operation::sort_node::SortItem;
+
+    fn expr(id: u64) -> ExpressionId {
+        ExpressionId::new(id)
+    }
+
+    #[test]
+    fn sort_compute_regroups_sink_payloads() {
+        let mut child = FactorizedSchema::new();
+        let flat_pos = child.create_flat_group(false);
+        child.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos);
+        let unflat_pos = child.create_group();
+        child.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos);
+        child
+            .get_group_mut(unflat_pos)
+            .expect("unflat group")
+            .set_multiplier(2.5);
+        let node = LogicalSortNode {
+            id: next_node_id(),
+            input: None,
+            deps: vec![],
+            sort_items: vec![SortItem::column_asc("b".to_string())],
+            limit: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        };
+        let out = sort(&node, &[child]);
+        out.validate_at_most_one_unflat();
+        // Flat payload "a" gathers into a single-state group; unflat "b"
+        // keeps its group with the multiplier preserved.
+        let a_pos = out.get_group_pos(&expr(1)).expect("a placed");
+        assert!(out.get_group(a_pos).expect("a group").is_single_state());
+        let b_pos = out.get_group_pos(&expr(2)).expect("b placed");
+        assert_ne!(a_pos, b_pos);
+        assert_eq!(
+            out.get_group(b_pos)
+                .expect("b group")
+                .cardinality_multiplier(),
+            2.5
+        );
+        // Alias names survive so downstream key references keep resolving.
+        assert_eq!(out.get_group_pos_by_name_opt("a"), Some(a_pos));
+        assert_eq!(out.get_group_pos_by_name_opt("b"), Some(b_pos));
+    }
+
+    #[test]
+    fn sort_compute_empty_scope_passthrough() {
+        let mut child = FactorizedSchema::new();
+        child.create_flat_group(false);
+        let node = LogicalSortNode {
+            id: next_node_id(),
+            input: None,
+            deps: vec![],
+            sort_items: vec![],
+            limit: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        };
+        let out = sort(&node, &[child]);
+        assert_eq!(out.num_groups(), 1);
+    }
 }

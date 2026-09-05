@@ -155,19 +155,14 @@ impl ExecutionPlan {
     /// Calculate the number of nodes in the plan.
     /// Recursively traverse the entire execution plan tree and count all the nodes.
     pub fn node_count(&self) -> usize {
-        fn count_nodes(node: &Option<PlanNodeEnum>) -> usize {
-            match node {
-                Some(n) => {
-                    let mut count = 1;
-                    for child in n.children() {
-                        count += count_nodes(&Some(child.clone()));
-                    }
-                    count
-                }
-                None => 0,
+        fn count_nodes(node: &PlanNodeEnum) -> usize {
+            let mut count = 1;
+            for child in node.children() {
+                count += count_nodes(child);
             }
+            count
         }
-        count_nodes(&self.root)
+        self.root.as_ref().map_or(0, count_nodes)
     }
 }
 

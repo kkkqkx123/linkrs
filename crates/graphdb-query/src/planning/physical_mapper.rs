@@ -187,12 +187,12 @@ fn merge_inner(
     // Factorization operators live only on the mapped side and are always
     // preserved; the merge continues below them against the same physical
     // node.
-    if let PlanNodeEnum::Flatten(flatten) = mapped {
-        let child = flatten.input().clone();
+    if let PlanNodeEnum::Flatten(mut flatten) = mapped {
+        let placeholder = PlanNodeEnum::Start(crate::planning::plan::core::nodes::StartNode::new());
+        let child = std::mem::replace(flatten.input_mut(), placeholder);
         let merged_child = merge_inner(child, physical, notes);
-        let mut rebuilt = flatten.clone();
-        rebuilt.set_input(merged_child);
-        return PlanNodeEnum::Flatten(rebuilt);
+        flatten.set_input(merged_child);
+        return PlanNodeEnum::Flatten(flatten);
     }
     // A cost-based index scan (with limits) always wins over a mapped
     // full scan or a limit-less mapped index scan.

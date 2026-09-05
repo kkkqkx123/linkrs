@@ -171,7 +171,13 @@ impl PlannerEnum {
     /// Create a planner directly from Arc<Stmt> (the recommended method).
     /// Use the enumeration pattern for matching to completely eliminate the need for string matching.
     pub fn from_stmt(stmt: &Arc<Stmt>) -> Option<Self> {
-        match stmt.as_ref() {
+        Self::from_stmt_ref(stmt.as_ref())
+    }
+
+    /// Create a planner directly from a statement reference.
+    /// This avoids cloning the whole statement tree when only dispatching.
+    pub fn from_stmt_ref(stmt: &Stmt) -> Option<Self> {
+        match stmt {
             Stmt::Match(_) => Some(PlannerEnum::Match(Box::default())),
             Stmt::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
             Stmt::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
@@ -266,7 +272,7 @@ impl PlannerEnum {
     /// Create a planner from Arc<Ast>.
     /// This is the new recommendation method; the context of the expressions is defined within Ast.
     pub fn from_ast(ast: &Arc<crate::parser::ast::stmt::Ast>) -> Option<Self> {
-        Self::from_stmt(&Arc::new(ast.stmt.clone()))
+        Self::from_stmt_ref(&ast.stmt)
     }
 
     /// Convert the verified statement into an execution plan.
@@ -391,7 +397,7 @@ impl PlannerEnum {
             BoundStatement::Assignment(_) => {
                 Some(PlannerEnum::Assignment(AssignmentPlanner::new()))
             }
-            BoundStatement::Other(stmt) => Self::from_stmt(&Arc::new(*stmt.clone())),
+            BoundStatement::Other(stmt) => Self::from_stmt_ref(stmt.as_ref()),
         }
     }
 

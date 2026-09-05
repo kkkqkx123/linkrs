@@ -3,6 +3,11 @@ use crate::planning::plan::factorization::FactorizedSchema;
 use crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
 
 pub(super) fn union_minus(child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
+    // Set-operation union keeps both sides' expression ids in scope (each
+    // side has distinct ids for the same output columns), so unlike
+    // Ladybug's first-child-only sink rebuild this merges both children and
+    // then flattens: dropping either side's ids would break downstream
+    // scope resolution.
     if child_schemas.len() >= 2 {
         let left = &child_schemas[0];
         let right = &child_schemas[1];
