@@ -690,6 +690,7 @@ fn build_group_join_right_subtree(
             deps: vec![logical_project],
             group_key_exprs: group_key_exprs.clone(),
             aggregation_functions: vec![agg_func],
+            aggregation_args: aggregate.aggregation_args().to_vec(),
             aggregation_distinct: vec![distinct],
             aggregation_filters: vec![None],
             grouping_sets: vec![],

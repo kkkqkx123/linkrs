@@ -904,16 +904,21 @@ mod tests {
         let registry = global_registry();
         // Correct calls still succeed.
         assert!(registry.execute("length", &[Value::string("hi")]).is_ok());
-        assert!(
-            registry
-                .execute("substring", &[Value::string("hi"), Value::Int(0), Value::Int(1)])
-                .is_ok()
-        );
+        assert!(registry
+            .execute(
+                "substring",
+                &[Value::string("hi"), Value::Int(0), Value::Int(1)]
+            )
+            .is_ok());
         // One sample per category: too few and too many arguments.
         let cases: &[(&str, Vec<Value>, Vec<Value>)] = &[
             ("length", vec![], vec![Value::Int(1), Value::Int(2)]),
             ("size", vec![], vec![Value::Int(1), Value::Int(2)]),
-            ("upper", vec![], vec![Value::string("a"), Value::string("b")]),
+            (
+                "upper",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
             (
                 "substring",
                 vec![Value::string("a")],
@@ -928,8 +933,16 @@ mod tests {
             ("pow", vec![Value::Int(1)], vec![Value::Int(1); 3]),
             ("head", vec![], vec![Value::Int(1), Value::Int(2)]),
             ("id", vec![], vec![Value::Int(1), Value::Int(2)]),
-            ("row_number", vec![Value::Int(1)], vec![Value::Int(1), Value::Int(2)]),
-            ("regex_match", vec![Value::string("a")], vec![Value::string("a"); 3]),
+            (
+                "row_number",
+                vec![Value::Int(1)],
+                vec![Value::Int(1), Value::Int(2)],
+            ),
+            (
+                "regex_match",
+                vec![Value::string("a")],
+                vec![Value::string("a"); 3],
+            ),
             (
                 "cosine_similarity",
                 vec![Value::string("a")],
@@ -937,8 +950,16 @@ mod tests {
             ),
             ("to_string", vec![], vec![Value::Int(1), Value::Int(2)]),
             ("year", vec![], vec![Value::Int(1), Value::Int(2)]),
-            ("octet_length", vec![], vec![Value::string("a"), Value::string("b")]),
-            ("curr_val", vec![], vec![Value::string("a"), Value::string("b")]),
+            (
+                "octet_length",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
+            (
+                "curr_val",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
             ("lead", vec![Value::Int(1)], vec![Value::Int(1); 3]),
         ];
         for (name, too_few, too_many) in cases {
@@ -985,35 +1006,28 @@ mod tests {
         assert!(registry.execute("coalesce", &[]).is_ok());
         assert!(registry.execute("date", &[]).is_ok());
         assert!(registry.execute("rand32", &[]).is_ok());
-        assert!(
-            registry
-                .execute("rand32", &[Value::Int(1), Value::Int(5)])
-                .is_ok()
-        );
+        assert!(registry
+            .execute("rand32", &[Value::Int(1), Value::Int(5)])
+            .is_ok());
         // Handler-level range checks still fire.
         assert!(registry.execute("range", &[Value::Int(1)]).is_err());
-        assert!(
-            registry
-                .execute("concat_ws", &[Value::string(",")])
-                .is_err()
-        );
-        assert!(
-            registry
-                .execute("format", &[Value::string("{0}")])
-                .is_err()
-        );
+        assert!(registry
+            .execute("concat_ws", &[Value::string(",")])
+            .is_err());
+        assert!(registry.execute("format", &[Value::string("{0}")]).is_err());
         assert!(registry.execute("list_concat", &[Value::Int(1)]).is_err());
-        assert!(
-            registry
-                .execute("struct_pack", &[Value::string("k")])
-                .is_err()
-        );
-        assert!(registry.execute("rand32", &[Value::Int(1), Value::Int(2), Value::Int(3)]).is_err());
-        assert!(
-            registry
-                .execute("range", &[Value::Int(1), Value::Int(5), Value::Int(1), Value::Int(2)])
-                .is_err()
-        );
+        assert!(registry
+            .execute("struct_pack", &[Value::string("k")])
+            .is_err());
+        assert!(registry
+            .execute("rand32", &[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .is_err());
+        assert!(registry
+            .execute(
+                "range",
+                &[Value::Int(1), Value::Int(5), Value::Int(1), Value::Int(2)]
+            )
+            .is_err());
     }
 
     /// Arity errors take precedence over context errors for aggregate and

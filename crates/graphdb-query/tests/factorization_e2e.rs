@@ -1,3 +1,11 @@
+//! Factorization schema end-to-end tests (schema level only).
+//!
+//! Despite the `e2e` name, these tests assert `compute_factorized_schema`
+//! invariants, `Flatten` placement by the rewriter, and EXPLAIN strings.
+//! They do not execute rows against storage; row-execution equivalence
+//! lives in the streaming operator unit tests (`flatten.rs`, single-row
+//! vs batched paths) until a factorized row layout lands.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -6,8 +14,8 @@ use graphdb_core::types::expr::ExpressionMeta;
 use graphdb_core::types::expr::{contextual::ContextualExpression, ExpressionId};
 use graphdb_core::Expression;
 use graphdb_query::optimizer::factorization::{
-    flatten_resolver::{FlattenAll, FlattenAllButOne},
-    FactorizationRewriter, GroupDependencyAnalyzer, RemoveFactorizationRewriter,
+    flatten_resolver::FlattenAllButOne, FactorizationRewriter, GroupDependencyAnalyzer,
+    RemoveFactorizationRewriter,
 };
 use graphdb_query::planning::plan::core::node_id_generator::next_node_id;
 use graphdb_query::planning::plan::factorization::{FactorizedSchema, FactorizedSchemaCompute};
@@ -202,10 +210,11 @@ fn e2e_filter_needs_flatten() {
         "filter predicate should depend on unflat group g1, got {:?}",
         deps
     );
-    let to_flatten = FlattenAll::get_groups_pos_to_flatten_for_expr(&pred_id, &schema, &store);
+    let to_flatten =
+        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(&pred_id, &schema, &store);
     assert!(
-        to_flatten.contains(&g1),
-        "filter should flatten unflat dependent group, to_flatten={:?}",
+        to_flatten.is_empty(),
+        "single unflat predicate stays factorized under FlattenAllButOne, to_flatten={:?}",
         to_flatten
     );
 
@@ -235,9 +244,10 @@ fn e2e_filter_needs_flatten() {
         s
     };
     let out_schema = tmp_filter.compute_factorized_schema(&[child_schema]);
+    out_schema.validate_at_most_one_unflat();
     assert!(
-        out_schema.is_flat_schema(),
-        "Filter should produce flat schema after flatten"
+        !out_schema.is_flat_schema(),
+        "Filter on a single unflat group keeps factorization under FlattenAllButOne"
     );
 }
 
@@ -333,13 +343,14 @@ fn unwind_passthrough() {
         },
     );
     let out = unwind.compute_factorized_schema(&[child_schema.clone()]);
-    assert_eq!(out.num_groups(), child_schema.num_groups());
-    assert_eq!(out.has_unflat_group(), child_schema.has_unflat_group());
-    assert_eq!(
-        out.unflat_group_pos(),
-        child_schema.unflat_group_pos(),
-        "Unwind should pass through without flattening"
+    out.validate_at_most_one_unflat();
+    // Baseline builds a fresh unflat group for the unwind output even when
+    // the list is unresolved: children are flattened, the alias is unflat.
+    assert!(
+        out.has_unflat_group(),
+        "Unwind on an unresolved list flattens children and creates an unflat alias group"
     );
+    assert_eq!(out.get_group_pos_by_name_opt("x"), out.unflat_group_pos());
 }
 
 #[test]
@@ -531,5 +542,210 @@ fn assign_over_expansion_keeps_factorization() {
         !explain_contains_flatten(&plan),
         "SET over an expansion must keep factorization, got: {}",
         explain_flatten_str(&plan)
+    );
+}
+
+// ── Stage 1-2 regression: aggregate two-stage rule ───────────────────────────
+// Same-group distinct payloads need no extra flatten beyond the key rule,
+// while list-lambda payloads always flatten via `required_flat`.
+
+#[test]
+fn aggregate_same_group_distinct_needs_no_extra_flatten() {
+    use graphdb_query::optimizer::factorization::flatten_resolver::aggregate_groups_to_flatten;
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let key_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
+    let mut child = FactorizedSchema::new();
+    let g0 = child.create_flat_group(false);
+    let g1 = child.create_group();
+    child.insert_to_group_and_scope(expr_id(1), g0);
+    child.insert_to_group_and_scope(key_id.clone(), g1);
+    child.insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1);
+    let mut store = HashMap::new();
+    store.insert(key_id.clone(), Expression::Variable("a".to_string()));
+    let (leading, to_flatten) = aggregate_groups_to_flatten(
+        &[key_id],
+        &store,
+        &[vec![Expression::Variable("b".to_string())]],
+        &[true],
+        &child,
+    );
+    assert_eq!(leading, g1);
+    assert!(
+        to_flatten.is_empty(),
+        "distinct payload on the leading group needs no extra flatten, got {:?}",
+        to_flatten
+    );
+}
+
+#[test]
+fn aggregate_lambda_payload_requires_flat() {
+    use graphdb_query::optimizer::factorization::flatten_resolver::aggregate_groups_to_flatten;
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let key_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
+    let mut child = FactorizedSchema::new();
+    let g0 = child.create_flat_group(false);
+    let g1 = child.create_group();
+    child.insert_to_group_and_scope(expr_id(1), g0);
+    child.insert_to_group_and_scope(key_id.clone(), g1);
+    child.insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1);
+    let mut store = HashMap::new();
+    store.insert(key_id.clone(), Expression::Variable("a".to_string()));
+    let payload = Expression::Function {
+        name: "list_transform".to_string(),
+        args: vec![
+            Expression::List(vec![]),
+            Expression::Variable("b".to_string()),
+        ],
+    };
+    let (_, to_flatten) =
+        aggregate_groups_to_flatten(&[key_id], &store, &[vec![payload]], &[false], &child);
+    assert!(
+        to_flatten.contains(&g1),
+        "list-lambda payload must flatten its group, got {:?}",
+        to_flatten
+    );
+}
+
+// ── Stage 2 regression: WCO bound keys flatten on both sides ─────────────────
+
+#[test]
+fn wco_bound_keys_flatten_probe_and_build() {
+    use graphdb_query::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let bound_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
+    let bound = ContextualExpression::new(bound_id.clone(), ctx.clone());
+    let intersect_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("c".to_string())));
+    let intersect = ContextualExpression::new(intersect_id, ctx.clone());
+    let node = LogicalWcoIntersectNode::new(
+        scan(),
+        vec![scan()],
+        intersect,
+        vec![bound],
+        vec!["a".to_string(), "c".to_string()],
+    );
+    let mut probe = FactorizedSchema::new();
+    let pg0 = probe.create_flat_group(false);
+    let pg1 = probe.create_group();
+    probe.insert_to_group_and_scope(expr_id(1), pg0);
+    probe.insert_to_group_and_scope(bound_id.clone(), pg1);
+    let mut build = FactorizedSchema::new();
+    let bg0 = build.create_flat_group(false);
+    let bg1 = build.create_group();
+    build.insert_to_group_and_scope(expr_id(2), bg0);
+    build.insert_to_group_and_scope(bound_id.clone(), bg1);
+    assert_eq!(
+        node.get_groups_to_flatten_on_probe_side(&probe),
+        std::collections::HashSet::from([pg1])
+    );
+    assert_eq!(
+        node.get_groups_to_flatten_on_build_side(0, &build),
+        std::collections::HashSet::from([bg1])
+    );
+}
+
+// ── Stage 2 regression: RightJoin rewriter matches key-aware compute ─────────
+
+#[test]
+fn right_join_rewriter_flattens_build_keys() {
+    use graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode;
+    use graphdb_query::planning::plan::logical::logical_nodes::join::LogicalRightJoinNode;
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let out_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
+    let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
+        id: next_node_id(),
+        space_id: 1,
+        src_vids: "1".to_string(),
+        edge_types: vec!["knows".to_string()],
+        direction: "OUT".to_string(),
+        edge_props: vec![],
+        tag_props: vec![],
+        expression: Some(ContextualExpression::new(out_id.clone(), ctx.clone())),
+        dedup: false,
+        limit: None,
+        projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
+        output_var: None,
+        col_names: vec!["b".to_string()],
+        column_types: vec![],
+        deps: vec![scan()],
+    });
+    let mut plan = LogicalNodeEnum::RightJoin(LogicalRightJoinNode {
+        id: next_node_id(),
+        left: Box::new(scan()),
+        right: Box::new(nbr),
+        hash_keys: vec![],
+        probe_keys: vec![ContextualExpression::new(out_id, ctx)],
+        deps: vec![],
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    FactorizationRewriter::new().rewrite(&mut plan);
+    assert!(
+        explain_contains_flatten(&plan),
+        "unflat build key on a RightJoin must be flattened, got: {}",
+        explain_flatten_str(&plan)
+    );
+}
+
+// ── Stage 1 regression: barrier operators expose Flatten explicitly ──────────
+
+#[test]
+fn rollup_apply_barrier_inserts_flatten_and_outputs_flat() {
+    use graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode;
+    use graphdb_query::planning::plan::logical::logical_nodes::graph_ops::LogicalRollUpApplyNode;
+    let ctx = Arc::new(ExpressionAnalysisContext::new());
+    let out_id =
+        ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
+    let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
+        id: next_node_id(),
+        space_id: 1,
+        src_vids: "1".to_string(),
+        edge_types: vec!["knows".to_string()],
+        direction: "OUT".to_string(),
+        edge_props: vec![],
+        tag_props: vec![],
+        expression: Some(ContextualExpression::new(out_id, ctx)),
+        dedup: false,
+        limit: None,
+        projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
+        output_var: None,
+        col_names: vec!["b".to_string()],
+        column_types: vec![],
+        deps: vec![scan()],
+    });
+    let mut plan = LogicalNodeEnum::RollUpApply(LogicalRollUpApplyNode {
+        id: next_node_id(),
+        input: Some(Box::new(nbr)),
+        deps: vec![],
+        left_input_var: None,
+        right_input_var: None,
+        compare_cols: vec![],
+        collect_col: None,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    FactorizationRewriter::new().rewrite(&mut plan);
+    assert!(
+        explain_contains_flatten(&plan),
+        "barrier input must carry an explicit Flatten, got: {}",
+        explain_flatten_str(&plan)
+    );
+    let mut tmp = plan.clone();
+    let out = tmp.compute_factorized_schema(&[]);
+    out.validate_at_most_one_unflat();
+    assert!(
+        out.is_flat_schema(),
+        "barrier output must be flat, got {} groups",
+        out.num_groups()
     );
 }

@@ -59,6 +59,7 @@ impl CollectPlanner {
             deps: vec![input],
             group_key_exprs: vec![],
             aggregation_functions: aggregate_node.aggregation_functions().to_vec(),
+            aggregation_args: aggregate_node.aggregation_args().to_vec(),
             aggregation_distinct: vec![false; width],
             aggregation_filters: vec![None; width],
             grouping_sets: vec![],

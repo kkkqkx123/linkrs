@@ -17,7 +17,8 @@ impl RemoveFactorizationRewriter {
     /// Rewrite the plan in place: bottom-up traversal, replace every
     /// `LogicalFlatten` with its child. Caller is responsible for updating
     /// associated FactorizedSchemas to flat copies via `compute_flat_schema`
-    /// if needed.
+    /// if needed. The optimizer engine currently swaps only the root, so any
+    /// cached schema must be recomputed after this call.
     pub fn rewrite(&self, plan: &mut LogicalNodeEnum) {
         let new_root = Self::visit_operator(plan.clone());
         *plan = new_root;

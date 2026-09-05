@@ -46,10 +46,75 @@ impl Binder {
             .map(|k| self.bind_expr(k))
             .collect::<DBResult<Vec<_>>>()?;
 
+        let mut aggregates = Vec::new();
+        for item in &stmt.yield_clause.items {
+            let bound = self.bind_expr(&item.expression)?;
+            Self::collect_bound_aggregates(&bound, item.alias.clone(), &mut aggregates);
+        }
+
         Ok(BoundStatement::GroupBy(BoundGroupByStatement {
             keys,
-            aggregates: Vec::new(),
+            aggregates,
         }))
+    }
+
+    fn collect_bound_aggregates(
+        bound: &BoundExpression,
+        alias: Option<String>,
+        out: &mut Vec<crate::binder::bound::BoundAggregateCall>,
+    ) {
+        match bound {
+            BoundExpression::Aggregate(agg) => {
+                let mut agg = agg.clone();
+                if agg.alias.is_none() {
+                    agg.alias = alias;
+                }
+                out.push(agg);
+            }
+            BoundExpression::BinaryOp { left, right, .. } => {
+                Self::collect_bound_aggregates(left, None, out);
+                Self::collect_bound_aggregates(right, None, out);
+            }
+            BoundExpression::UnaryOp { operand, .. } => {
+                Self::collect_bound_aggregates(operand, None, out);
+            }
+            BoundExpression::Function(f) => {
+                for arg in &f.args {
+                    Self::collect_bound_aggregates(arg, None, out);
+                }
+            }
+            BoundExpression::Cast { expr, .. } => {
+                Self::collect_bound_aggregates(expr, None, out);
+            }
+            BoundExpression::List(items, _) => {
+                for item in items {
+                    Self::collect_bound_aggregates(item, None, out);
+                }
+            }
+            BoundExpression::Map(pairs, _) => {
+                for (_, v) in pairs {
+                    Self::collect_bound_aggregates(v, None, out);
+                }
+            }
+            BoundExpression::Case {
+                expr,
+                when_then,
+                else_expr,
+                ..
+            } => {
+                if let Some(e) = expr {
+                    Self::collect_bound_aggregates(e, None, out);
+                }
+                for (c, v) in when_then {
+                    Self::collect_bound_aggregates(c, None, out);
+                    Self::collect_bound_aggregates(v, None, out);
+                }
+                if let Some(e) = else_expr {
+                    Self::collect_bound_aggregates(e, None, out);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn bind_insert(

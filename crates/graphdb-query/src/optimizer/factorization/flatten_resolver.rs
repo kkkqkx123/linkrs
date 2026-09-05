@@ -169,24 +169,14 @@ impl FlattenAll {
         schema: &FactorizedSchema,
         expr_store: &HashMap<ExpressionId, graphdb_core::Expression>,
     ) -> HashSet<FGroupPos> {
+        // Baseline `FlattenAll(expr)` flattens only dependent groups and
+        // ignores `required_flat` (see ladybug `flatten_resolver.cpp:92-97`).
+        // Callers that need lambda-body flatness use `FlattenAllButOne`,
+        // which merges `required_flat` explicitly.
         let mut analyzer =
             GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store.clone());
         analyzer.visit(expr_id);
-        let mut result =
-            Self::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), schema);
-        result.extend(
-            analyzer
-                .required_flat_groups()
-                .iter()
-                .copied()
-                .filter(|pos| {
-                    schema
-                        .get_group(*pos)
-                        .map(|g| !g.is_flat())
-                        .unwrap_or(false)
-                }),
-        );
-        result
+        Self::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), schema)
     }
 
     pub fn get_groups_pos_to_flatten_for_groups(
@@ -204,6 +194,53 @@ impl FlattenAll {
             .copied()
             .collect()
     }
+}
+
+/// Shared two-stage aggregate flatten rule mirroring
+/// `LogicalAggregate::getGroupsPosToFlatten` (`logical_aggregate.cpp:32-57`).
+///
+/// Stage 1 runs `FlattenAllButOne` over the group keys and returns the
+/// surviving `leading` group. Stage 2 walks every aggregate payload: lambda
+/// bodies (`required_flat`) always flatten, while `distinct` payloads
+/// additionally flatten any dependent group other than `leading`. Plain
+/// payloads on the leading group stay factorized.
+pub fn aggregate_groups_to_flatten(
+    key_ids: &[ExpressionId],
+    key_store: &HashMap<ExpressionId, graphdb_core::Expression>,
+    aggregate_args: &[Vec<graphdb_core::Expression>],
+    aggregate_distinct: &[bool],
+    child_schema: &FactorizedSchema,
+) -> (FGroupPos, HashSet<FGroupPos>) {
+    let (leading, mut to_flatten) =
+        FlattenAllButOne::get_groups_pos_to_flatten_for_exprs_with_leading(
+            key_ids,
+            child_schema,
+            key_store,
+        );
+    if leading == INVALID_F_GROUP_POS {
+        return (leading, to_flatten);
+    }
+    for (idx, args) in aggregate_args.iter().enumerate() {
+        let is_distinct = aggregate_distinct.get(idx).copied().unwrap_or(false);
+        for payload in args {
+            let mut analyzer =
+                GroupDependencyAnalyzer::with_expr_store(child_schema, false, key_store.clone());
+            analyzer.visit_expression(payload);
+            for pos in analyzer.required_flat_groups().iter().copied() {
+                if child_schema.get_group(pos).is_some_and(|g| !g.is_flat()) {
+                    to_flatten.insert(pos);
+                }
+            }
+            if is_distinct {
+                for pos in analyzer.dependent_groups().iter().copied() {
+                    if pos != leading && child_schema.get_group(pos).is_some_and(|g| !g.is_flat()) {
+                        to_flatten.insert(pos);
+                    }
+                }
+            }
+        }
+    }
+    (leading, to_flatten)
 }
 
 /// Legacy wrapper providing the Ladybug-style static API.
@@ -299,14 +336,16 @@ mod tests {
     }
 
     #[test]
-    fn flatten_all_required_flat() {
+    fn flatten_all_expr_matches_dependent_only() {
+        use crate::optimizer::factorization::GroupDependencyAnalyzer;
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
         schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
         schema.insert_to_group_and_scope_with_name(expr(20), Some("x".to_string()), g1);
-        // Simulate list_extract(lambda) where lambda body depends on x (unflat)
-        // The analyzer should mark g1 as required_flat
+        // Simulate list_extract(lambda) where lambda body depends on x (unflat).
+        // Baseline `FlattenAll(expr)` flattens only dependent groups and
+        // ignores `required_flat`; `AllButOne` merges `required_flat`.
         let the_expr = graphdb_core::Expression::Function {
             name: "list_extract".to_string(),
             args: vec![
@@ -319,11 +358,19 @@ mod tests {
         let mut store = HashMap::new();
         let fake_id = expr(999);
         store.insert(fake_id.clone(), the_expr);
-        let res = FlattenAll::get_groups_pos_to_flatten_for_expr(&fake_id, &schema, &store);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store.clone());
+        analyzer.visit(&fake_id);
+        let expected =
+            FlattenAll::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), &schema);
+        let all = FlattenAll::get_groups_pos_to_flatten_for_expr(&fake_id, &schema, &store);
+        assert_eq!(all, expected, "FlattenAll(expr) must equal dependent-only");
+        assert!(all.contains(&g1));
+        let but_one =
+            FlattenAllButOne::get_groups_pos_to_flatten_for_expr(&fake_id, &schema, &store);
         assert!(
-            res.contains(&g1),
-            "required_flat group g1 should be flattened for list lambda, got {:?}",
-            res
+            but_one.contains(&g1),
+            "required_flat group g1 should be flattened via AllButOne, got {:?}",
+            but_one
         );
     }
 }

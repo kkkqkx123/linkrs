@@ -646,12 +646,15 @@ mod tests {
             ..FulltextExecutionContext::default()
         };
         let result = func
-            .execute(&[
-                Value::string("title"),
-                Value::string("<b>"),
-                Value::string("</b>"),
-                Value::Int(2),
-            ], &context)
+            .execute(
+                &[
+                    Value::string("title"),
+                    Value::string("<b>"),
+                    Value::string("</b>"),
+                    Value::Int(2),
+                ],
+                &context,
+            )
             .unwrap();
         assert_eq!(result, Value::string("<b>数据</b>"));
     }

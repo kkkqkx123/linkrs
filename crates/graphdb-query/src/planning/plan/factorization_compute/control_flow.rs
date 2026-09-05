@@ -45,6 +45,9 @@ pub(super) fn loop_node(
     schema
 }
 
+/// Transaction and argument nodes carry no factorized state across their
+/// boundary, hence they start a fresh empty flat schema instead of forwarding
+/// child scope.
 pub(super) fn passthrough(_child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
     let mut schema = FactorizedSchema::new();
     schema.create_flat_group(false);

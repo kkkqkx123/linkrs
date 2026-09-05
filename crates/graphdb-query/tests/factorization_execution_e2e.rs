@@ -1,9 +1,11 @@
-//! Execution-level factorization end-to-end tests.
+//! Factorization execution-adjacent end-to-end tests (schema level only).
 //!
-//! Verifies that factorization produces correct results by comparing
-//! `EXPLAIN` output with factorization enabled vs disabled, checking
-//! the `<=1 unflat` invariant, and asserting `Flatten` presence in
-//! appropriate query patterns.
+//! The file name is historical: these tests assert
+//! `compute_factorized_schema` invariants (the `<=1 unflat` invariant and
+//! `Flatten` placement), not row execution against storage. True
+//! on/off-factorization row comparison requires a factorized row layout,
+//! which does not exist yet; row-equivalence coverage lives in the
+//! streaming operator unit tests (`flatten.rs`).
 
 use std::sync::Arc;
 
@@ -85,7 +87,7 @@ fn exec_match_return_keeps_one_unflat() {
     );
 }
 
-// ── Test 2: Filter on unflat triggers flatten ───────────────────────────────
+// ── Test 2: Filter on single unflat keeps factorization ───────────────────────
 
 #[test]
 fn exec_filter_on_unflat_flattens() {
@@ -128,9 +130,10 @@ fn exec_filter_on_unflat_flattens() {
     });
 
     let out = filter_node.compute_factorized_schema(&[child_schema]);
+    out.validate_at_most_one_unflat();
     assert!(
-        out.is_flat_schema(),
-        "filter on unflat should produce flat schema"
+        !out.is_flat_schema(),
+        "filter on a single unflat group keeps factorization under FlattenAllButOne"
     );
 }
 

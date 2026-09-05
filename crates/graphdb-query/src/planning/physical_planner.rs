@@ -311,6 +311,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 .collect();
             let group_key_exprs = n.group_key_exprs.clone();
             let aggregation_functions = n.aggregation_functions.clone();
+            let aggregation_args = n.aggregation_args.clone();
             let aggregation_distinct = n.aggregation_distinct.clone();
             let aggregation_filters = n.aggregation_filters.clone();
             let grouping_sets = n.grouping_sets.clone();
@@ -320,6 +321,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             // Preserve lossless identities for reverse conversion; execution
             // still uses `group_keys` strings.
             node.set_group_key_exprs(group_key_exprs);
+            node.set_aggregation_args(aggregation_args);
             node.set_aggregation_distinct(aggregation_distinct);
             node.set_aggregation_filters(aggregation_filters);
             node.set_grouping_sets(grouping_sets);

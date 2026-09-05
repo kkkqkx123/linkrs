@@ -23,8 +23,20 @@ pub(super) fn unwind(
             schema.insert_name_for_group(n.alias.clone(), group);
         }
     } else if let Some(pos) = schema.get_group_pos(&list_id) {
+        // Baseline always builds a fresh group for the unwind output
+        // (`logical_unwind.cpp:16-23`): flatten the input group first, then
+        // create a new unflat group holding the element alias.
         schema.flatten_group(pos);
-        schema.insert_name_for_group(n.alias.clone(), pos);
+        let out = schema.create_group();
+        schema.insert_name_for_group(n.alias.clone(), out);
+    } else {
+        // Unresolved list expression (bare variable, parameter or function
+        // result with no tracked id). The output cardinality is unknown, so
+        // conservatively flatten every unflat group, then create a fresh
+        // unflat group for the alias instead of reusing a flat group.
+        schema.flatten_all();
+        let out = schema.create_group();
+        schema.insert_name_for_group(n.alias.clone(), out);
     }
     schema.validate_at_most_one_unflat();
     schema

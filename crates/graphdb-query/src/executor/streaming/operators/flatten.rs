@@ -13,6 +13,10 @@ pub const DEFAULT_FLATTEN_BATCH_SIZE: usize = VECTORIZED_BATCH_SIZE;
 /// Production streaming uses `UnaryOperatorKind::Flatten` via `unary_operator.rs`.
 /// This module provides the single-row `flatten_next_inner` implementation
 /// on top of the batched `flatten_next_batch` core.
+///
+/// The streaming engine stores flat row batches only. There is no nested
+/// vector layout behind `group_pos`, so flatten replays visible rows in order
+/// instead of expanding one factorization group.
 pub(crate) fn prepare_flatten_buffer(chunk: DataChunk) -> (Vec<usize>, DataChunk) {
     let sel = chunk.visible_indices();
     let mut buffered = chunk;
@@ -371,6 +375,45 @@ mod tests {
         assert_eq!(chunks[1].len(), 2);
         assert_eq!(chunks[2].len(), 1);
         assert_eq!(flat_rows(&chunks), single_rows);
+    }
+
+    #[test]
+    fn flatten_single_row_path_matches_full_morsel() {
+        // Monotonicity across batch sizes: single-row drains must replay the
+        // same rows in the same order as one full-morsel batch.
+        let rows = vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+            vec![Value::Int(3)],
+            vec![Value::Int(4)],
+        ];
+        let mut single = source_executor(rows.clone(), vec!["id"]);
+        single.open().expect("open");
+        let mut current_idx = 0usize;
+        let mut size_to_flatten = 0usize;
+        let mut saved = None;
+        let mut buffered = None;
+        let mut single_rows = Vec::new();
+        loop {
+            let chunk = flatten_next_inner(
+                &mut current_idx,
+                &mut size_to_flatten,
+                &mut saved,
+                &mut buffered,
+                &mut single,
+            )
+            .expect("next");
+            match chunk {
+                Some(c) => single_rows.extend(c.rows.clone()),
+                None => break,
+            }
+        }
+        let mut batched = source_executor(rows.clone(), vec!["id"]);
+        batched.open().expect("open");
+        let chunks = drain_batch(&mut batched, 2048);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(flat_rows(&chunks), single_rows);
+        assert_eq!(flat_rows(&chunks), rows);
     }
 
     #[test]

@@ -98,6 +98,16 @@ pub struct UnaryOperator {
     pub config: OperatorConfig,
 }
 
+impl UnaryOperatorKind {
+    /// Plan level factorization group this flatten replays, if any.
+    pub fn flatten_group_pos(&self) -> Option<u32> {
+        match self {
+            UnaryOperatorKind::Flatten { group_pos, .. } => Some(*group_pos),
+            _ => None,
+        }
+    }
+}
+
 impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(spec: &super::spec::UnarySpec, output_layout: Arc<SlotLayout>) -> Self {
@@ -724,13 +734,21 @@ impl UnaryOperator {
                 }
             }
             UnaryOperatorKind::Flatten {
-                group_pos: _,
+                // Plan level group identifier, carried end to end
+                // (plan -> spec -> operator) and visible in EXPLAIN /
+                // cbo_notes. The streaming engine stores flat row batches
+                // only, so flatten currently replays the child selection
+                // without group aware column projection; the position is
+                // logged for traceability until the compressed
+                // representation lands.
+                group_pos,
                 current_idx,
                 size_to_flatten,
                 saved_sel_vector,
                 buffered_chunk,
                 batch_size,
             } => {
+                log::debug!("flatten: replaying selection for group {group_pos}");
                 if *batch_size <= 1 {
                     crate::executor::streaming::operators::flatten::flatten_next_inner(
                         current_idx,
@@ -1006,6 +1024,26 @@ mod tests {
         let row = &chunk.rows[0];
         assert_eq!(row.len(), 2);
         assert!(matches!(row[1], Value::Null(_)));
+    }
+
+    #[test]
+    fn flatten_group_pos_is_observable() {
+        let kind = UnaryOperatorKind::Flatten {
+            group_pos: 7,
+            current_idx: 0,
+            size_to_flatten: 0,
+            saved_sel_vector: None,
+            buffered_chunk: None,
+            batch_size: crate::executor::streaming::operators::flatten::DEFAULT_FLATTEN_BATCH_SIZE,
+        };
+        assert_eq!(kind.flatten_group_pos(), Some(7));
+        let filter = UnaryOperatorKind::Limit {
+            offset: 0,
+            limit: 1,
+            skipped: 0,
+            consumed: 0,
+        };
+        assert_eq!(filter.flatten_group_pos(), None);
     }
 
     #[test]

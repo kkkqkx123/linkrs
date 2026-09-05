@@ -297,6 +297,7 @@ impl ClausePlanner for ReturnClausePlanner {
             aggregate_node.set_aggregation_args(agg_args);
             aggregate_node.set_aggregation_distinct(agg_distinct.clone());
             aggregate_node.set_aggregation_filters(agg_filters.clone());
+            let logical_agg_args = aggregate_node.aggregation_args().to_vec();
 
             let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
 
@@ -320,6 +321,7 @@ impl ClausePlanner for ReturnClausePlanner {
                     deps: vec![input],
                     group_key_exprs: group_key_exprs.clone(),
                     aggregation_functions: agg_functions,
+                    aggregation_args: logical_agg_args.clone(),
                     aggregation_distinct: agg_distinct,
                     aggregation_filters: agg_filters,
                     grouping_sets: vec![],

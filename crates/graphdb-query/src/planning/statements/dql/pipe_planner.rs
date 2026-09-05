@@ -185,6 +185,14 @@ impl Planner for PipePlanner {
                         )
                     })?;
 
+                    // Mirror the legacy transform path: a leading GO without
+                    // an explicit YIELD carries a default Project(dst, edge)
+                    // adapter that drops the ExpandAll `target` alias. Elide
+                    // it so downstream stages resolve `target` directly.
+                    let prev_root = elide_go_default_adapter(prev_root);
+                    let prev_logical =
+                        prev_logical.map(elide_go_default_adapter_logical);
+
                     let combined_root = replace_argument_node(new_root, prev_root);
                     let combined_logical = match (prev_logical, new_logical) {
                         (Some(left_logical), Some(right_logical)) => {
@@ -217,9 +225,11 @@ impl Default for PipePlanner {
     }
 }
 
-/// Strip the default projection (dst, edge) and trivial filter (true) that the
-/// GoPlanner attaches to a standalone GO plan. Returns the plan unchanged when
-/// its shape does not match the GO default adapter.
+/// Strip the default projection (dst, edge) that the GoPlanner attaches to
+/// a standalone GO plan. Handles both the legacy shape with a trivial
+/// filter (Project -> Filter(true) -> ExpandAll) and the bound shape without
+/// it (Project -> ExpandAll). Returns the plan unchanged when its shape does
+/// not match the GO default adapter.
 fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
     let PlanNodeEnum::Project(project) = plan else {
         return plan;
@@ -235,7 +245,13 @@ fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
         return PlanNodeEnum::Project(project);
     }
 
-    let PlanNodeEnum::Filter(filter) = project.input().clone() else {
+    let input = project.input().clone();
+    // Bound path: Project directly over ExpandAll.
+    if matches!(input, PlanNodeEnum::ExpandAll(_)) {
+        return input;
+    }
+
+    let PlanNodeEnum::Filter(filter) = input else {
         return PlanNodeEnum::Project(project);
     };
 
@@ -357,8 +373,10 @@ fn replace_logical_argument(
 }
 
 /// Mirror of [`elide_go_default_adapter`] on the native logical tree: strip
-/// the default projection and trivial filter of a standalone GO plan when it
-/// feeds a pipe, so downstream stages resolve against the expand output.
+/// the default projection of a standalone GO plan when it feeds a pipe, so
+/// downstream stages resolve against the expand output. Handles both the
+/// legacy Project -> Filter(true) -> ExpandAll shape and the bound
+/// Project -> ExpandAll shape.
 fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
     let LogicalNodeEnum::Project(project) = plan else {
         return plan;
@@ -377,6 +395,10 @@ fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
     let Some(input) = project.input.clone() else {
         return LogicalNodeEnum::Project(project);
     };
+    // Bound path: Project directly over ExpandAll.
+    if matches!(*input, LogicalNodeEnum::ExpandAll(_)) {
+        return *input;
+    }
     let LogicalNodeEnum::Filter(filter) = *input else {
         return LogicalNodeEnum::Project(project);
     };

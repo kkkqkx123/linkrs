@@ -305,8 +305,11 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
                 if pad_chars.is_empty() {
                     return Ok(Value::string(s.clone()));
                 }
-                let pad_str: String =
-                    pad_chars.into_iter().cycle().take(len - char_count).collect();
+                let pad_str: String = pad_chars
+                    .into_iter()
+                    .cycle()
+                    .take(len - char_count)
+                    .collect();
                 Ok(Value::string(format!("{}{}", pad_str, s)))
             }
         }
@@ -336,8 +339,11 @@ fn execute_rpad(args: &[Value]) -> Result<Value, ExpressionError> {
                 if pad_chars.is_empty() {
                     return Ok(Value::string(s.clone()));
                 }
-                let pad_str: String =
-                    pad_chars.into_iter().cycle().take(len - char_count).collect();
+                let pad_str: String = pad_chars
+                    .into_iter()
+                    .cycle()
+                    .take(len - char_count)
+                    .collect();
                 Ok(Value::string(format!("{}{}", s, pad_str)))
             }
         }
@@ -828,11 +834,7 @@ mod tests {
     fn test_substring_non_ascii() {
         let func = StringFunction::Substring;
         let result = func
-            .execute(&[
-                Value::string("你好世界"),
-                Value::Int(1),
-                Value::Int(2),
-            ])
+            .execute(&[Value::string("你好世界"), Value::Int(1), Value::Int(2)])
             .expect("Execution should succeed");
         assert_eq!(result, Value::string("好世"));
     }
@@ -884,42 +886,26 @@ mod tests {
     fn test_lpad_rpad_non_ascii() {
         assert_eq!(
             StringFunction::Lpad
-                .execute(&[
-                    Value::string("你好"),
-                    Value::Int(4),
-                    Value::string("ab")
-                ])
+                .execute(&[Value::string("你好"), Value::Int(4), Value::string("ab")])
                 .unwrap(),
             Value::string("ab你好")
         );
         assert_eq!(
             StringFunction::Rpad
-                .execute(&[
-                    Value::string("你好"),
-                    Value::Int(4),
-                    Value::string("ab")
-                ])
+                .execute(&[Value::string("你好"), Value::Int(4), Value::string("ab")])
                 .unwrap(),
             Value::string("你好ab")
         );
         // Truncation keeps whole characters.
         assert_eq!(
             StringFunction::Lpad
-                .execute(&[
-                    Value::string("你好世界"),
-                    Value::Int(2),
-                    Value::string("x")
-                ])
+                .execute(&[Value::string("你好世界"), Value::Int(2), Value::string("x")])
                 .unwrap(),
             Value::string("你好")
         );
         assert_eq!(
             StringFunction::Rpad
-                .execute(&[
-                    Value::string("你好世界"),
-                    Value::Int(2),
-                    Value::string("x")
-                ])
+                .execute(&[Value::string("你好世界"), Value::Int(2), Value::string("x")])
                 .unwrap(),
             Value::string("你好")
         );
@@ -932,15 +918,9 @@ mod tests {
             Value::string("hi")
         );
         // Negative target length is rejected.
-        assert!(
-            StringFunction::Lpad
-                .execute(&[
-                    Value::string("hi"),
-                    Value::Int(-1),
-                    Value::string("x")
-                ])
-                .is_err()
-        );
+        assert!(StringFunction::Lpad
+            .execute(&[Value::string("hi"), Value::Int(-1), Value::string("x")])
+            .is_err());
     }
 
     #[test]

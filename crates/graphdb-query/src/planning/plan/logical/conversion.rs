@@ -291,6 +291,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                         deps: vec![logical_input],
                         group_key_exprs: exprs.to_vec(),
                         aggregation_functions: n.aggregation_functions().to_vec(),
+                        aggregation_args: n.aggregation_args().to_vec(),
                         aggregation_distinct: n.aggregation_distinct().to_vec(),
                         aggregation_filters: n.aggregation_filters().to_vec(),
                         grouping_sets: n.grouping_sets().to_vec(),

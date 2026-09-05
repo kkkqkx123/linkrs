@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use graphdb_core::types::expr::ExpressionId;
 
@@ -113,20 +113,10 @@ pub(super) fn filter(
     if let Some(expr) = n.condition.get_expression() {
         store.insert(pred_id.clone(), expr);
     }
-    let mut analyzer = crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
-        &schema, false, store,
-    );
-    analyzer.visit(&pred_id);
-    let dependent = analyzer.dependent_groups().clone();
-    let required = analyzer.required_flat_groups().clone();
-    let mut to_flatten: HashSet<FGroupPos> = HashSet::new();
-    for pos in dependent.iter().chain(required.iter()) {
-        if let Some(g) = schema.get_group(*pos) {
-            if !g.is_flat() {
-                to_flatten.insert(*pos);
-            }
-        }
-    }
+    // Keep at most one unflat group so downstream operators can stay
+    // factorized when the predicate touches a single group.
+    let to_flatten =
+        FlattenAllButOne::get_groups_pos_to_flatten_for_expr(&pred_id, &schema, &store);
     for pos in to_flatten {
         schema.flatten_group(pos);
     }
@@ -136,8 +126,31 @@ pub(super) fn filter(
 
 pub(super) fn aggregate(
     n: &LogicalAggregateNode,
-    _child_schemas: &[FactorizedSchema],
+    child_schemas: &[FactorizedSchema],
 ) -> FactorizedSchema {
+    let child = child_schemas.first().cloned().unwrap_or_default();
+    let mut key_ids = Vec::with_capacity(n.group_key_exprs.len());
+    let mut store: HashMap<ExpressionId, graphdb_core::Expression> = HashMap::new();
+    for expr in &n.group_key_exprs {
+        let eid = super::resolve_id(expr);
+        if let Some(e) = expr.get_expression() {
+            store.insert(eid.clone(), e);
+        }
+        key_ids.push(eid);
+    }
+    // Two-stage rule shared with the rewriter (see `aggregate_groups_to_flatten`).
+    let (_leading, to_flatten) =
+        crate::optimizer::factorization::flatten_resolver::aggregate_groups_to_flatten(
+            &key_ids,
+            &store,
+            &n.aggregation_args,
+            &n.aggregation_distinct,
+            &child,
+        );
+    let mut flattened = child;
+    for pos in &to_flatten {
+        flattened.flatten_group(*pos);
+    }
     let mut out = FactorizedSchema::new();
     let g = out.create_flat_group(false);
     for expr in &n.group_key_exprs {
@@ -145,6 +158,16 @@ pub(super) fn aggregate(
         let name = expr.to_expression_string();
         out.insert_to_group_and_scope_with_name(eid, Some(name), g);
     }
+    // Aggregate output itself is flat; register its output names so downstream
+    // references resolve to this group. The child scope does not leak past
+    // the aggregation boundary; flatten decisions are materialized as
+    // `LogicalFlatten` nodes by the rewriter, not via scope inheritance.
+    for name in &n.col_names {
+        if out.get_group_pos_by_name_opt(name).is_none() {
+            out.insert_name_for_group(name.clone(), g);
+        }
+    }
+    drop(flattened);
     out.validate_at_most_one_unflat();
     out
 }
@@ -158,6 +181,15 @@ pub(super) fn flatten(
     } else {
         FactorizedSchema::new()
     };
+    // Out-of-range positions indicate a stale rewriter decision and must
+    // surface in debug builds; release keeps the honest no-op so a stale
+    // plan never corrupts rows silently.
+    debug_assert!(
+        (n.group_pos as usize) < schema.num_groups(),
+        "LogicalFlatten(group={}) out of range for {} groups",
+        n.group_pos,
+        schema.num_groups()
+    );
     if (n.group_pos as usize) < schema.num_groups() {
         schema.flatten_group(n.group_pos);
     }

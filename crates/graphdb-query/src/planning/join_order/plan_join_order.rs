@@ -237,9 +237,16 @@ impl JoinOrderEnumerator {
 
     /// Encode the factorization structure of a candidate plan as a bitset.
     ///
-    /// Bit `i` is set when the `i`-th query node is flat in the plan schema.
-    /// Plans with different encodings are kept as separate DP candidates
-    /// because flatness changes downstream flatten costs.
+    /// Bits `0..64` record node flatness directly: bit `i` is set when the
+    /// `i`-th query node is flat in the plan schema. Plans with different
+    /// encodings are kept as separate DP candidates because flatness changes
+    /// downstream flatten costs.
+    ///
+    /// Truncation policy (explicit fallback): only the first 64 nodes map to
+    /// dedicated bits. Overflow nodes (`i >= 64`) and all rel variables are
+    /// folded into the same `u64` via a deterministic mixing step, so very
+    /// large patterns never panic but may collide. Collisions only merge DP
+    /// candidates; they never change row semantics.
     pub(crate) fn encode_plan(
         &mut self,
         plan: &LogicalNodeEnum,
@@ -248,26 +255,62 @@ impl JoinOrderEnumerator {
         let mut owned = plan.clone();
         let schema = Self::compute_schema_for_plan(&mut owned);
         let mut encoding = 0u64;
-        for (i, node) in query_graph.query_nodes.iter().enumerate().take(64) {
-            let key = self.context.join_key(&node.variable);
-            let id = key.id().clone();
-            if let Some(pos) = schema.get_group_pos(&id) {
-                if let Some(group) = schema.get_group(pos) {
-                    if group.is_flat() {
-                        encoding |= 1u64 << i;
-                    }
-                }
-            } else if schema
-                .get_group_pos_by_name_opt(&node.variable)
-                .and_then(|pos| schema.get_group(pos))
-                .is_some_and(|g| g.is_flat())
-            {
-                encoding |= 1u64 << i;
+        for (i, node) in query_graph.query_nodes.iter().enumerate() {
+            if !Self::variable_is_flat(&schema, &mut self.context, &node.variable) {
+                continue;
             }
+            if i < 64 {
+                encoding |= 1u64 << i;
+            } else {
+                encoding = Self::mix_overflow(encoding, i as u64);
+            }
+        }
+        for (j, rel) in query_graph.query_rels.iter().enumerate() {
+            if !Self::variable_is_flat(&schema, &mut self.context, &rel.variable) {
+                continue;
+            }
+            // Rel flatness is folded rather than given dedicated bits: rels
+            // share the 64-bit space with overflow nodes via mixing.
+            encoding = Self::mix_overflow(encoding, 0x9e37u64 + j as u64);
         }
         encoding
     }
 
+    fn variable_is_flat(
+        schema: &crate::planning::plan::factorization::FactorizedSchema,
+        context: &mut JoinOrderEnumeratorContext,
+        variable: &str,
+    ) -> bool {
+        let key = context.join_key(variable);
+        let id = key.id().clone();
+        if let Some(pos) = schema.get_group_pos(&id) {
+            if let Some(group) = schema.get_group(pos) {
+                return group.is_flat();
+            }
+        }
+        schema
+            .get_group_pos_by_name_opt(variable)
+            .and_then(|pos| schema.get_group(pos))
+            .is_some_and(|g| g.is_flat())
+    }
+
+    /// Deterministic folding for overflow nodes and rel variables.
+    fn mix_overflow(encoding: u64, salt: u64) -> u64 {
+        // SplitMix-style single round: cheap, deterministic, no tables.
+        let mut z = encoding
+            .wrapping_add(0x9e3779b97f4a7c15)
+            .wrapping_add(salt.wrapping_mul(0xbf58476d1ce4e5b9));
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        encoding ^ (z ^ (z >> 31))
+    }
+
+    /// Schema helper for DP candidate plans.
+    ///
+    /// DP enumeration only builds scan leaves plus InnerJoin and WcoIntersect
+    /// combinators, so recursion covers exactly those shapes. Leaf scans take
+    /// no child schema by construction; expansion, filter and projection nodes
+    /// never appear inside DP candidates and are planned outside join order.
     fn compute_schema_for_plan(
         plan: &mut LogicalNodeEnum,
     ) -> crate::planning::plan::factorization::FactorizedSchema {
@@ -868,6 +911,58 @@ mod tests {
         let plan = enumerator.plan_query_graph(&qg).expect("triangle plans");
         let encoding = enumerator.encode_plan(&plan, &qg);
         assert_ne!(encoding, 0, "triangle plan must carry non-zero encoding");
+    }
+
+    #[test]
+    fn encoding_folds_rel_variables() {
+        // Rel variables participate in the encoding via folding: a graph
+        // with rels must not encode identically to the same nodes without
+        // rels when the rel bindings are flat.
+        let nodes_only = {
+            let mut qg = QueryGraph::new();
+            qg.add_node(QueryNode::new("a", "a"));
+            qg.add_node(QueryNode::new("b", "b"));
+            Arc::new(qg)
+        };
+        let with_rel = single_edge();
+        let mut enumerator = JoinOrderEnumerator::new();
+        let plan = enumerator
+            .plan_query_graph(&with_rel)
+            .expect("single edge plans");
+        let enc_nodes = enumerator.encode_plan(&plan, &nodes_only);
+        let enc_rel = enumerator.encode_plan(&plan, &with_rel);
+        assert_ne!(
+            enc_nodes, enc_rel,
+            "rel folding must distinguish node-only and with-rel encodings"
+        );
+    }
+
+    #[test]
+    fn encoding_overflow_is_deterministic() {
+        // Overflow nodes and rels fold via `mix_overflow`: deterministic,
+        // salt-sensitive, and panic-free well beyond 64 entries. The DP
+        // bitset itself (`SubqueryGraph`) stays capped at 64, so the
+        // folding unit is tested directly here.
+        let first = JoinOrderEnumerator::mix_overflow(0, 70);
+        let second = JoinOrderEnumerator::mix_overflow(0, 70);
+        assert_eq!(first, second, "overflow folding must be deterministic");
+        assert_ne!(
+            JoinOrderEnumerator::mix_overflow(0, 70),
+            JoinOrderEnumerator::mix_overflow(0, 71),
+            "different overflow salts must fold differently"
+        );
+        // End-to-end: encoding a plan against a 65-node graph must not
+        // panic even though only the first 64 map to dedicated bits.
+        let mut qg = QueryGraph::new();
+        for i in 0..65 {
+            qg.add_node(QueryNode::new(format!("n{i}"), format!("n{i}")));
+        }
+        let qg = Arc::new(qg);
+        let mut enumerator = JoinOrderEnumerator::new();
+        let plan = enumerator.plan_query_graph(&triangle()).expect("plan");
+        let a = enumerator.encode_plan(&plan, &qg);
+        let b = enumerator.encode_plan(&plan, &qg);
+        assert_eq!(a, b);
     }
 
     #[test]

@@ -15,9 +15,7 @@ use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::clauses::exists_planner::to_contextual;
-use crate::planning::statements::plan_combiner::{
-    logical_start_root, wrap_logical_filter, wrap_logical_project,
-};
+use crate::planning::statements::plan_combiner::{wrap_logical_filter, wrap_logical_project};
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression;
@@ -474,8 +472,17 @@ impl Planner for GroupByPlanner {
             );
         }
 
-        let start_node = crate::planning::plan::core::nodes::StartNode::new();
-        let input_enum = PlanNodeEnum::Start(start_node.clone());
+        // Build the standalone ScanVertices -> Project adapter so a
+        // top-level GROUP BY aggregates over every vertex, mirroring the
+        // legacy transform path. When the GROUP BY is a pipe stage,
+        // PipePlanner replaces this adapter with the piped rows.
+        let (input_enum, input_tail, input_logical) = self.build_standalone_input(
+            validated,
+            &group_keys,
+            &aggregation_functions,
+            &aggregation_args,
+            qctx,
+        )?;
 
         let mut aggregate_node = AggregateNode::with_agg_aliases(
             input_enum.clone(),
@@ -496,11 +503,11 @@ impl Planner for GroupByPlanner {
                 .iter()
                 .map(|key| to_contextual(Expression::Variable(key.clone()), &expr_ctx))
                 .collect();
-            aggregate_mirror(&aggregate_node, logical_start_root(), group_key_exprs)
+            aggregate_mirror(&aggregate_node, input_logical, group_key_exprs)
         };
         let sub_plan = SubPlan {
             root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            tail: Some(input_enum),
+            tail: Some(input_tail),
             logical_root: Some(logical_root),
         };
         Ok(sub_plan)
@@ -764,6 +771,7 @@ fn aggregate_mirror(
         deps: vec![input],
         group_key_exprs,
         aggregation_functions: aggregate_node.aggregation_functions().to_vec(),
+        aggregation_args: aggregate_node.aggregation_args().to_vec(),
         aggregation_distinct: aggregate_node.aggregation_distinct().to_vec(),
         aggregation_filters: aggregate_node.aggregation_filters().to_vec(),
         grouping_sets: aggregate_node.grouping_sets().to_vec(),

@@ -799,6 +799,7 @@ mod tests {
             deps: vec![scan],
             group_key_exprs: vec![ctx_expr],
             aggregation_functions: vec![],
+            aggregation_args: vec![],
             aggregation_distinct: vec![],
             aggregation_filters: vec![],
             grouping_sets: vec![],

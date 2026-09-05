@@ -41,6 +41,16 @@ pub(super) fn register_output_names(
     }
 }
 
+/// Split binary child schemas into `(left, right)`, defaulting missing sides
+/// to an empty schema so key-aware join helpers never index out of bounds.
+fn pair(child_schemas: &[FactorizedSchema]) -> (&FactorizedSchema, &FactorizedSchema) {
+    static EMPTY: std::sync::OnceLock<FactorizedSchema> = std::sync::OnceLock::new();
+    let empty = EMPTY.get_or_init(FactorizedSchema::new);
+    let left = child_schemas.first().unwrap_or(empty);
+    let right = child_schemas.get(1).unwrap_or(empty);
+    (left, right)
+}
+
 /// Schema for bidirectional expansion over two child schemas.
 ///
 /// Child order follows the node inputs: the first child is the probe side
@@ -105,12 +115,34 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             LogicalNodeEnum::Skip(n) => operation::skip(n, child_schemas),
             LogicalNodeEnum::Sample(n) => operation::sample(n, child_schemas),
 
-            LogicalNodeEnum::InnerJoin(_)
-            | LogicalNodeEnum::LeftJoin(_)
-            | LogicalNodeEnum::RightJoin(_)
-            | LogicalNodeEnum::CrossJoin(_)
-            | LogicalNodeEnum::FullOuterJoin(_)
-            | LogicalNodeEnum::SemiJoin(_) => join::binary_join(child_schemas),
+            LogicalNodeEnum::InnerJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+            }
+            LogicalNodeEnum::LeftJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+            }
+            LogicalNodeEnum::RightJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                join::binary_join_right(left, right, &n.hash_keys, &n.probe_keys)
+            }
+            LogicalNodeEnum::CrossJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                if n.hash_keys.is_empty() && n.probe_keys.is_empty() {
+                    join::cross_join_no_keys(left, right)
+                } else {
+                    join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+                }
+            }
+            LogicalNodeEnum::FullOuterJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+            }
+            LogicalNodeEnum::SemiJoin(n) => {
+                let (left, right) = pair(child_schemas);
+                join::binary_join_inner(left, right, &n.hash_keys, &n.probe_keys)
+            }
 
             LogicalNodeEnum::Traverse(n) => traversal::traverse(n, child_schemas),
             LogicalNodeEnum::Expand(n) => traversal::expand(n, child_schemas),
@@ -145,13 +177,28 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             | LogicalNodeEnum::VectorLookup(_)
             | LogicalNodeEnum::VectorMatch(_) => flat_leaf::flat_leaf(),
 
+            // Single-input barrier: output is fully flat. The rewriter
+            // inserts the matching `FlattenAll` nodes explicitly, so compute
+            // and rewrite stay in sync (barrier semantics).
             LogicalNodeEnum::Remove(_)
             | LogicalNodeEnum::DataCollect(_)
-            | LogicalNodeEnum::Materialize(_) => flat_leaf::flatten_all_from_child(child_schemas),
+            | LogicalNodeEnum::Materialize(_)
+            | LogicalNodeEnum::RollUpApply(_) => flat_leaf::flatten_all_from_child(child_schemas),
 
             LogicalNodeEnum::InsertVertices(_)
             | LogicalNodeEnum::InsertEdges(_)
             | LogicalNodeEnum::Update(_) => flat_leaf::flat_leaf(),
+
+            // Binary barrier (Apply family, shortest-path family): no
+            // per-operator flatten rule, so merge both children and flatten.
+            // The rewriter inserts `FlattenAll` on each side explicitly.
+            LogicalNodeEnum::Apply(_)
+            | LogicalNodeEnum::PatternApply(_)
+            | LogicalNodeEnum::CorrelatedApply(_)
+            | LogicalNodeEnum::MultiShortestPath(_)
+            | LogicalNodeEnum::BFSShortest(_)
+            | LogicalNodeEnum::AllPaths(_)
+            | LogicalNodeEnum::ShortestPath(_) => flat_leaf::barrier_binary(child_schemas),
 
             _ => flat_leaf::flatten_all_from_child(child_schemas),
         }
@@ -311,7 +358,9 @@ mod tests {
         );
         let mut filter = filter;
         let out = filter.compute_factorized_schema(&[child_schema]);
-        assert!(out.is_flat_schema());
+        // Single unflat group stays factorized under FlattenAllButOne.
+        out.validate_at_most_one_unflat();
+        assert_eq!(out.unflat_group_pos(), Some(g1));
     }
 
     #[test]
@@ -332,6 +381,7 @@ mod tests {
                 deps: vec![scan()],
                 group_key_exprs: vec![ctx_a],
                 aggregation_functions: vec![],
+                aggregation_args: vec![],
                 aggregation_distinct: vec![],
                 aggregation_filters: vec![],
                 grouping_sets: vec![],
@@ -356,6 +406,26 @@ mod tests {
         let mut flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(pos, scan()));
         let out = flatten.compute_factorized_schema(&[g]);
         assert!(out.is_flat_schema());
+    }
+
+    #[test]
+    fn flatten_already_flat_is_noop() {
+        let mut scan_n = scan();
+        let schema = scan_n.compute_factorized_schema(&[]);
+        assert!(schema.is_flat_schema());
+        let mut flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(0, scan()));
+        let out = flatten.compute_factorized_schema(&[schema.clone()]);
+        assert!(out.is_flat_schema());
+        assert_eq!(out.num_groups(), schema.num_groups());
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn flatten_out_of_range_reports() {
+        let mut scan_n = scan();
+        let schema = scan_n.compute_factorized_schema(&[]);
+        let mut flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(99, scan()));
+        let _ = flatten.compute_factorized_schema(&[schema]);
     }
 
     #[test]
@@ -436,9 +506,11 @@ mod tests {
             },
         );
         let out = unwind.compute_factorized_schema(&[child_schema.clone()]);
-        assert_eq!(out.num_groups(), child_schema.num_groups());
-        assert_eq!(out.has_unflat_group(), child_schema.has_unflat_group());
-        assert_eq!(out.unflat_group_pos(), child_schema.unflat_group_pos());
+        // Unresolved list flattens conservatively, then builds a fresh
+        // unflat group for the alias (baseline恒建新组).
+        out.validate_at_most_one_unflat();
+        assert!(out.has_unflat_group());
+        assert_eq!(out.get_group_pos_by_name_opt("x"), out.unflat_group_pos());
     }
 
     #[test]
@@ -539,9 +611,14 @@ mod tests {
         );
         let out = node.compute_factorized_schema(&[child_schema]);
         out.validate_at_most_one_unflat();
-        assert!(out.is_flat_schema());
+        // Baseline builds a fresh unflat group for the unwind output: the
+        // input list group is flattened in place, the alias lives in a new group.
+        assert!(out.has_unflat_group());
         assert!(out.is_expression_in_scope(&list_id));
-        assert_eq!(
+        assert_eq!(out.get_group_pos(&list_id), Some(g1));
+        assert!(out.get_group(g1).is_some_and(|g| g.is_flat()));
+        assert_eq!(out.get_group_pos_by_name("item"), out.unflat_group_pos());
+        assert_ne!(
             out.get_group_pos_by_name("item"),
             out.get_group_pos(&list_id)
         );
@@ -817,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn semi_join_compute_keeps_first_unflat_with_keys() {
+    fn semi_join_compute_flattens_probe_keys() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let key_id = ctx.register_expression(ExpressionMeta::new(
             graphdb_core::Expression::Variable("a".to_string()),
@@ -848,8 +925,77 @@ mod tests {
         });
         let out = node.compute_factorized_schema(&[left_schema, right_schema]);
         out.validate_at_most_one_unflat();
+        // Key-aware rule (same as the rewriter): the unflat probe key group
+        // is flattened before the membership test, so the surviving unflat
+        // group is the right non-key group and the key itself ends up flat.
+        assert!(out.get_group(lg1).is_some_and(|g| g.is_flat()));
+        assert!(out
+            .get_group_pos(&key_id)
+            .is_some_and(|pos| { out.get_group(pos).is_some_and(|g| g.is_flat()) }));
+    }
+
+    #[test]
+    fn right_join_compute_flattens_build_keys() {
+        use crate::planning::plan::logical::logical_nodes::join::LogicalRightJoinNode;
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let key_id = ctx.register_expression(ExpressionMeta::new(
+            graphdb_core::Expression::Variable("k".to_string()),
+        ));
+        let key = ContextualExpression::new(key_id.clone(), ctx);
+        let mut left_schema = FactorizedSchema::new();
+        let lg0 = left_schema.create_flat_group(false);
+        let lg1 = left_schema.create_group();
+        left_schema.insert_to_group_and_scope(test_id(1), lg0);
+        left_schema.insert_to_group_and_scope(test_id(11), lg1);
+        let mut right_schema = FactorizedSchema::new();
+        let rg0 = right_schema.create_flat_group(false);
+        let rg1 = right_schema.create_group();
+        right_schema.insert_to_group_and_scope(test_id(2), rg0);
+        right_schema.insert_to_group_and_scope(key_id.clone(), rg1);
+        let mut node = LogicalNodeEnum::RightJoin(LogicalRightJoinNode {
+            id: next_node_id(),
+            left: Box::new(scan()),
+            right: Box::new(scan()),
+            hash_keys: vec![],
+            probe_keys: vec![key],
+            deps: vec![scan(), scan()],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let out = node.compute_factorized_schema(&[left_schema, right_schema]);
+        out.validate_at_most_one_unflat();
+        // Right policy mirrors the rewriter: the build (right) key group is
+        // flattened fully while the left side keeps its single unflat group.
         assert_eq!(out.unflat_group_pos(), Some(lg1));
-        assert_eq!(out.get_group_pos(&key_id), Some(lg1));
+        assert!(out.get_group(rg1 + 2).is_none_or(|g| g.is_flat()));
+    }
+
+    #[test]
+    fn multi_unflat_join_keeps_first_in_position_order() {
+        let mut left_schema = FactorizedSchema::new();
+        let lg0 = left_schema.create_group();
+        left_schema.insert_to_group_and_scope(test_id(1), lg0);
+        let mut right_schema = FactorizedSchema::new();
+        let rg0 = right_schema.create_group();
+        right_schema.insert_to_group_and_scope(test_id(2), rg0);
+        let mut node = LogicalNodeEnum::InnerJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
+                id: next_node_id(),
+                left: Box::new(scan()),
+                right: Box::new(scan()),
+                hash_keys: vec![],
+                probe_keys: vec![],
+                deps: vec![scan(), scan()],
+                recommended_algorithm: None,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            },
+        );
+        let out = node.compute_factorized_schema(&[left_schema, right_schema]);
+        out.validate_at_most_one_unflat();
+        assert_eq!(out.unflat_group_pos(), Some(0));
     }
 
     fn select_node(cond: ContextualExpression) -> LogicalNodeEnum {
