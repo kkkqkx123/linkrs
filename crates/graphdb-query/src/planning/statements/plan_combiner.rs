@@ -382,7 +382,7 @@ pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerErro
         (Some(left), Some(right)) => Some(LogicalNodeEnum::Union(LogicalUnionNode {
             id: next_node_id(),
             input: Some(Box::new(left.clone())),
-            deps: vec![left.clone(), right.clone()],
+            deps: vec![left, right],
             distinct: true,
             output_var: None,
             col_names: vec![],

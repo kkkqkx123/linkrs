@@ -177,7 +177,7 @@ impl Planner for UnwindPlanner {
         current_logical = LogicalNodeEnum::Unwind(LogicalUnwindNode {
             id: next_node_id(),
             input: Some(Box::new(current_logical.clone())),
-            deps: vec![current_logical.clone()],
+            deps: vec![current_logical],
             alias: variable.clone(),
             list_expression: expression,
             output_var: None,
@@ -197,7 +197,7 @@ impl Planner for UnwindPlanner {
             current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(current_logical.clone())),
-                deps: vec![current_logical.clone()],
+                deps: vec![current_logical],
                 columns,
                 output_var: None,
                 col_names: current_node.col_names().to_vec(),

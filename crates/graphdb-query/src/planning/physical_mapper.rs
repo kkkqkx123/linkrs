@@ -27,9 +27,12 @@ impl PhysicalMapper {
     /// The structure mirrors the shared logical-to-physical converter;
     /// scan nodes carrying an index hint become index scans instead.
     pub fn map(logical: LogicalNodeEnum) -> PlanNodeEnum {
-        let physical =
-            crate::planning::physical_planner::convert_logical_to_physical(logical.clone());
-        apply_hints(&logical, physical)
+        // Collect index hints by reference first so the converter below can
+        // consume the logical tree by value: only hinted leaf scans are
+        // cloned instead of the whole tree.
+        let hints = collect_index_hints(&logical);
+        let physical = crate::planning::physical_planner::convert_logical_to_physical(logical);
+        apply_collected_hints(physical, &hints)
     }
 
     /// Report whether a logical tree needs the full mapping path.
@@ -88,37 +91,94 @@ impl PhysicalMapper {
     }
 }
 
-/// Overlay index hints onto a converted physical tree.
+/// A hinted leaf scan collected from the logical tree with its position.
 ///
-/// The shared converter preserves tree shape one-to-one, so the logical
-/// and physical trees can be walked in parallel: every logical scan that
-/// carries an index hint replaces its physical full-scan counterpart.
-fn apply_hints(logical: &LogicalNodeEnum, physical: PlanNodeEnum) -> PlanNodeEnum {
-    if let LogicalNodeEnum::ScanVertices(scan) = logical {
-        if let (Some(hint), PlanNodeEnum::ScanVertices(_)) = (&scan.index_hint, &physical) {
-            return index_scan_from_hint(scan, hint);
+/// Only the scan node itself is cloned (it carries no subtree); the path
+/// records child indices from the root following [`logical_children`] order,
+/// which the shared converter preserves one-to-one.
+struct IndexHintTarget {
+    path: Vec<usize>,
+    scan: HintedScan,
+}
+
+/// A logical scan node carrying an index hint.
+enum HintedScan {
+    Vertices(LogicalScanVerticesNode),
+    Edges(LogicalScanEdgesNode),
+}
+
+/// Walk the logical tree by reference and collect every hinted scan.
+fn collect_index_hints(logical: &LogicalNodeEnum) -> Vec<IndexHintTarget> {
+    fn walk(node: &LogicalNodeEnum, path: &mut Vec<usize>, out: &mut Vec<IndexHintTarget>) {
+        match node {
+            LogicalNodeEnum::ScanVertices(scan) if scan.index_hint.is_some() => {
+                out.push(IndexHintTarget {
+                    path: path.clone(),
+                    scan: HintedScan::Vertices(scan.clone()),
+                });
+            }
+            LogicalNodeEnum::ScanEdges(scan) if scan.index_hint.is_some() => {
+                out.push(IndexHintTarget {
+                    path: path.clone(),
+                    scan: HintedScan::Edges(scan.clone()),
+                });
+            }
+            _ => {}
         }
-        return physical;
-    }
-    if let LogicalNodeEnum::ScanEdges(scan) = logical {
-        if let (Some(hint), PlanNodeEnum::ScanEdges(_)) = (&scan.index_hint, &physical) {
-            return index_scan_from_edge_hint(scan, hint);
+        for (index, child) in logical_children(node).iter().enumerate() {
+            path.push(index);
+            walk(child, path, out);
+            path.pop();
         }
-        return physical;
     }
-    let logical_children = logical_children(logical);
-    if logical_children.is_empty() {
-        return physical;
+
+    let mut out = Vec::new();
+    walk(logical, &mut Vec::new(), &mut out);
+    out
+}
+
+/// Overlay collected index hints onto a converted physical tree.
+///
+/// Each hint descends by its recorded child-index path; hints whose path no
+/// longer resolves (or whose target is not the matching scan) are skipped,
+/// keeping the converted node unchanged.
+fn apply_collected_hints(mut physical: PlanNodeEnum, hints: &[IndexHintTarget]) -> PlanNodeEnum {
+    for hint in hints {
+        let Some(target) = descend_to_path(&mut physical, &hint.path) else {
+            continue;
+        };
+        let replacement = match (&hint.scan, &*target) {
+            (HintedScan::Vertices(scan), PlanNodeEnum::ScanVertices(_)) => scan
+                .index_hint
+                .as_ref()
+                .map(|hint| index_scan_from_hint(scan, hint)),
+            (HintedScan::Edges(scan), PlanNodeEnum::ScanEdges(_)) => scan
+                .index_hint
+                .as_ref()
+                .map(|hint| index_scan_from_edge_hint(scan, hint)),
+            _ => None,
+        };
+        if let Some(node) = replacement {
+            *target = node;
+        }
     }
-    let physical_children = physical.children();
-    if logical_children.len() != physical_children.len() {
-        return physical;
+    physical
+}
+
+/// Descend a physical tree by child-index path, returning the target slot.
+///
+/// Returns `None` when any step does not resolve, mirroring the previous
+/// parallel walk's shape-divergence fallback.
+fn descend_to_path<'a>(
+    mut node: &'a mut PlanNodeEnum,
+    path: &[usize],
+) -> Option<&'a mut PlanNodeEnum> {
+    use crate::optimizer::cost::child_accessor::ChildAccessor;
+
+    for &index in path {
+        node = node.get_child_mut(index)?;
     }
-    let mut new_children = Vec::with_capacity(logical_children.len());
-    for (logical_child, physical_child) in logical_children.iter().zip(physical_children.iter()) {
-        new_children.push(apply_hints(logical_child, (*physical_child).clone()));
-    }
-    rebuild_physical_with_new_children(&physical, new_children).unwrap_or(physical)
+    Some(node)
 }
 
 /// Build an index scan from a hinted logical scan.
@@ -224,36 +284,39 @@ fn merge_inner(
         }
     }
     if std::mem::discriminant(&mapped) == std::mem::discriminant(&physical) {
-        let mapped_children = mapped.children();
-        let physical_children = physical.children();
-        if mapped_children.len() == physical_children.len() {
-            let mut new_children = Vec::with_capacity(mapped_children.len());
-            for (mapped_child, physical_child) in
-                mapped_children.iter().zip(physical_children.iter())
-            {
-                new_children.push(merge_inner(
-                    (*mapped_child).clone(),
-                    (*physical_child).clone(),
-                    notes,
+        use crate::optimizer::cost::child_accessor::ChildAccessor;
+
+        // Compare child counts before detaching either side so the
+        // divergence fallback below returns the untouched physical subtree.
+        if mapped.child_count() != physical.child_count() {
+            notes.push(format!(
+                "PhysicalMapping: child count diverged (mapped {} vs physical {}); kept physical subtree",
+                mapped.type_name(),
+                physical.type_name()
+            ));
+            return physical;
+        }
+        let mut mapped = mapped;
+        let mut physical = physical;
+        let mapped_children = mapped.take_children();
+        let physical_children = physical.take_children();
+        let mut new_children = Vec::with_capacity(mapped_children.len());
+        for (mapped_child, physical_child) in mapped_children
+            .into_iter()
+            .zip(physical_children.into_iter())
+        {
+            new_children.push(merge_inner(mapped_child, physical_child, notes));
+        }
+        match physical.set_children(new_children) {
+            Ok(()) => return physical,
+            Err(message) => {
+                notes.push(format!(
+                    "PhysicalMapping: rebuild failed for {} ({message}); kept physical subtree",
+                    physical.type_name()
                 ));
-            }
-            match rebuild_physical_with_new_children(&physical, new_children) {
-                Ok(rebuilt) => return rebuilt,
-                Err(message) => {
-                    notes.push(format!(
-                        "PhysicalMapping: rebuild failed for {} ({message}); kept physical subtree",
-                        physical.type_name()
-                    ));
-                    return physical;
-                }
+                return physical;
             }
         }
-        notes.push(format!(
-            "PhysicalMapping: child count diverged (mapped {} vs physical {}); kept physical subtree",
-            mapped.type_name(),
-            physical.type_name()
-        ));
-        return physical;
     }
     notes.push(format!(
         "PhysicalMapping: structure diverged (mapped {} vs physical {}); kept physical subtree",
@@ -364,355 +427,6 @@ pub(crate) fn logical_children(
     }
 }
 
-pub(crate) fn rebuild_physical_with_new_children(
-    physical: &crate::planning::plan::PlanNodeEnum,
-    new_children: Vec<crate::planning::plan::PlanNodeEnum>,
-) -> Result<crate::planning::plan::PlanNodeEnum, String> {
-    use crate::planning::plan::core::nodes::base::plan_node_traits::{
-        BinaryInputNode, MultipleInputNode, SingleInputNode,
-    };
-    use crate::planning::plan::PlanNodeEnum;
-    match physical {
-        PlanNodeEnum::Project(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Project")?,
-            );
-            Ok(PlanNodeEnum::Project(cloned))
-        }
-        PlanNodeEnum::Filter(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Filter")?,
-            );
-            Ok(PlanNodeEnum::Filter(cloned))
-        }
-        PlanNodeEnum::Sort(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Sort")?,
-            );
-            Ok(PlanNodeEnum::Sort(cloned))
-        }
-        PlanNodeEnum::Limit(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Limit")?,
-            );
-            Ok(PlanNodeEnum::Limit(cloned))
-        }
-        PlanNodeEnum::TopN(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for TopN")?,
-            );
-            Ok(PlanNodeEnum::TopN(cloned))
-        }
-        PlanNodeEnum::Sample(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Sample")?,
-            );
-            Ok(PlanNodeEnum::Sample(cloned))
-        }
-        PlanNodeEnum::Dedup(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Dedup")?,
-            );
-            Ok(PlanNodeEnum::Dedup(cloned))
-        }
-        PlanNodeEnum::Aggregate(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Aggregate")?,
-            );
-            Ok(PlanNodeEnum::Aggregate(cloned))
-        }
-        PlanNodeEnum::Window(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Window")?,
-            );
-            Ok(PlanNodeEnum::Window(cloned))
-        }
-        PlanNodeEnum::Traverse(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Traverse")?,
-            );
-            Ok(PlanNodeEnum::Traverse(cloned))
-        }
-        PlanNodeEnum::Unwind(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Unwind")?,
-            );
-            Ok(PlanNodeEnum::Unwind(cloned))
-        }
-        PlanNodeEnum::Assign(n) => {
-            let mut cloned = n.clone();
-            if new_children.is_empty() {
-                return Err("missing children for Assign".to_string());
-            }
-            cloned.set_input(new_children[0].clone());
-            if new_children.len() > 1 {
-                let mut deps = cloned.dependencies().to_vec();
-                for (i, c) in new_children.iter().skip(1).enumerate() {
-                    if i < deps.len() {
-                        deps[i] = c.clone();
-                    }
-                }
-                cloned.set_dependencies(deps);
-            }
-            Ok(PlanNodeEnum::Assign(cloned))
-        }
-        PlanNodeEnum::DataCollect(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for DataCollect")?,
-            );
-            Ok(PlanNodeEnum::DataCollect(cloned))
-        }
-        PlanNodeEnum::Remove(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Remove")?,
-            );
-            Ok(PlanNodeEnum::Remove(cloned))
-        }
-        PlanNodeEnum::Materialize(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for Materialize")?,
-            );
-            Ok(PlanNodeEnum::Materialize(cloned))
-        }
-        PlanNodeEnum::RollUpApply(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for RollUpApply")?,
-            );
-            Ok(PlanNodeEnum::RollUpApply(cloned))
-        }
-        PlanNodeEnum::PatternApply(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for PatternApply")?,
-            );
-            Ok(PlanNodeEnum::PatternApply(cloned))
-        }
-        PlanNodeEnum::CorrelatedApply(n) => {
-            let mut cloned = n.clone();
-            cloned.set_input(
-                new_children
-                    .into_iter()
-                    .next()
-                    .ok_or("missing child for CorrelatedApply")?,
-            );
-            Ok(PlanNodeEnum::CorrelatedApply(cloned))
-        }
-        PlanNodeEnum::InnerJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("InnerJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::InnerJoin(cloned))
-        }
-        PlanNodeEnum::LeftJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("LeftJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::LeftJoin(cloned))
-        }
-        PlanNodeEnum::RightJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("RightJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::RightJoin(cloned))
-        }
-        PlanNodeEnum::CrossJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("CrossJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::CrossJoin(cloned))
-        }
-        PlanNodeEnum::FullOuterJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("FullOuterJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::FullOuterJoin(cloned))
-        }
-        PlanNodeEnum::SemiJoin(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("SemiJoin requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::SemiJoin(cloned))
-        }
-        PlanNodeEnum::Apply(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("Apply requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::Apply(cloned))
-        }
-        PlanNodeEnum::BiExpand(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("BiExpand requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::BiExpand(cloned))
-        }
-        PlanNodeEnum::BiTraverse(n) => {
-            let mut cloned = n.clone();
-            if new_children.len() != 2 {
-                return Err("BiTraverse requires 2 children".to_string());
-            }
-            cloned.set_left_input(new_children[0].clone());
-            cloned.set_right_input(new_children[1].clone());
-            Ok(PlanNodeEnum::BiTraverse(cloned))
-        }
-        PlanNodeEnum::Expand(n) => {
-            let mut cloned = n.clone();
-            *cloned.inputs_mut() = new_children;
-            Ok(PlanNodeEnum::Expand(cloned))
-        }
-        PlanNodeEnum::ExpandAll(n) => {
-            let mut cloned = n.clone();
-            *cloned.inputs_mut() = new_children;
-            Ok(PlanNodeEnum::ExpandAll(cloned))
-        }
-        PlanNodeEnum::AppendVertices(n) => {
-            let mut cloned = n.clone();
-            *cloned.inputs_mut() = new_children;
-            Ok(PlanNodeEnum::AppendVertices(cloned))
-        }
-        PlanNodeEnum::Union(n) => {
-            let mut cloned = n.clone();
-            *cloned.dependencies_mut() = new_children.clone();
-            if let Some(first) = new_children.first() {
-                *cloned.input_mut() = first.clone();
-            }
-            Ok(PlanNodeEnum::Union(cloned))
-        }
-        PlanNodeEnum::Minus(n) => {
-            let mut cloned = n.clone();
-            *cloned.dependencies_mut() = new_children.clone();
-            if let Some(first) = new_children.first() {
-                *cloned.input_mut() = first.clone();
-            }
-            Ok(PlanNodeEnum::Minus(cloned))
-        }
-        PlanNodeEnum::Intersect(n) => {
-            let mut cloned = n.clone();
-            *cloned.dependencies_mut() = new_children.clone();
-            if let Some(first) = new_children.first() {
-                *cloned.input_mut() = first.clone();
-            }
-            Ok(PlanNodeEnum::Intersect(cloned))
-        }
-        PlanNodeEnum::WcoIntersect(n) => {
-            let mut cloned = n.clone();
-            *cloned.dependencies_mut() = new_children.clone();
-            if let Some(first) = new_children.first() {
-                *cloned.input_mut() = first.clone();
-            }
-            Ok(PlanNodeEnum::WcoIntersect(cloned))
-        }
-        PlanNodeEnum::Select(n) => {
-            let mut cloned = n.clone();
-            let orig_has_if = n.if_branch().is_some();
-            let orig_has_else = n.else_branch().is_some();
-            let mut idx = 0;
-            if orig_has_if && idx < new_children.len() {
-                cloned.set_if_branch(new_children[idx].clone());
-                idx += 1;
-            }
-            if orig_has_else && idx < new_children.len() {
-                cloned.set_else_branch(new_children[idx].clone());
-            }
-            Ok(PlanNodeEnum::Select(cloned))
-        }
-        PlanNodeEnum::Loop(n) => {
-            let mut cloned = n.clone();
-            if let Some(new_body) = new_children.into_iter().next() {
-                cloned.set_body(new_body);
-            }
-            Ok(PlanNodeEnum::Loop(cloned))
-        }
-        _ => Ok(physical.clone()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,6 +523,24 @@ mod tests {
     }
 
     #[test]
+    fn map_hinted_scan_under_flatten_becomes_index_scan() {
+        let mapped = PhysicalMapper::map(LogicalNodeEnum::Flatten(LogicalFlattenNode::new(
+            0,
+            hinted_scan(),
+        )));
+        let flatten = match &mapped {
+            PlanNodeEnum::Flatten(f) => f,
+            other => panic!("expected physical flatten, got {}", other.type_name()),
+        };
+        match flatten.input() {
+            PlanNodeEnum::IndexScan(scan) => {
+                assert_eq!(scan.index_name(), "idx_name");
+            }
+            other => panic!("expected index scan, got {}", other.type_name()),
+        }
+    }
+
+    #[test]
     fn merge_preserves_flatten_and_physical_index_scan() {
         let mapped = PhysicalMapper::map(LogicalNodeEnum::Flatten(LogicalFlattenNode::new(
             0,
@@ -866,20 +598,20 @@ mod tests {
     }
 
     #[test]
-    fn flatten_rebuild_roundtrip() {
+    fn flatten_take_set_roundtrip() {
         let mut scan = ScanVerticesNode::new(1, "test");
         scan.set_col_names(vec!["n".to_string()]);
         let child = PlanNodeEnum::ScanVertices(scan);
         let flatten = FlattenNode::new(child, 0).expect("flatten");
-        let rebuilt = rebuild_physical_with_new_children(
-            &PlanNodeEnum::Flatten(flatten),
-            vec![PlanNodeEnum::ScanVertices({
-                let mut s = ScanVerticesNode::new(1, "test");
-                s.set_col_names(vec!["n".to_string()]);
-                s
-            })],
-        )
-        .expect("rebuild");
-        assert!(matches!(rebuilt, PlanNodeEnum::Flatten(_)));
+        let mut node = PlanNodeEnum::Flatten(flatten);
+        let taken = node.take_children();
+        assert_eq!(taken.len(), 1);
+        node.set_children(vec![PlanNodeEnum::ScanVertices({
+            let mut s = ScanVerticesNode::new(1, "test");
+            s.set_col_names(vec!["n".to_string()]);
+            s
+        })])
+        .expect("set");
+        assert!(matches!(node, PlanNodeEnum::Flatten(_)));
     }
 }

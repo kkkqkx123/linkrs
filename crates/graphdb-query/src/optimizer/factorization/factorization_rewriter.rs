@@ -1376,7 +1376,7 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan.clone())),
-                deps: vec![scan.clone()],
+                deps: vec![scan],
                 group_key_exprs: vec![ctx_a],
                 aggregation_functions: vec![],
                 aggregation_args: vec![],

@@ -3,7 +3,7 @@
 //! Provide a unified way to access the subnodes of various plan nodes.
 
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, SingleInputNode,
+    BinaryInputNode, MultipleInputNode, SingleInputNode,
 };
 use crate::planning::plan::PlanNodeEnum;
 
@@ -42,6 +42,31 @@ impl ChildAccessor for PlanNodeEnum {
                 _ => None,
             },
             PlanNodeEnum::FullOuterJoin(n) => match index {
+                0 => Some(n.left_input_mut()),
+                1 => Some(n.right_input_mut()),
+                _ => None,
+            },
+            PlanNodeEnum::RightJoin(n) => match index {
+                0 => Some(n.left_input_mut()),
+                1 => Some(n.right_input_mut()),
+                _ => None,
+            },
+            PlanNodeEnum::SemiJoin(n) => match index {
+                0 => Some(n.left_input_mut()),
+                1 => Some(n.right_input_mut()),
+                _ => None,
+            },
+            PlanNodeEnum::BiExpand(n) => match index {
+                0 => Some(n.left_input_mut()),
+                1 => Some(n.right_input_mut()),
+                _ => None,
+            },
+            PlanNodeEnum::BiTraverse(n) => match index {
+                0 => Some(n.left_input_mut()),
+                1 => Some(n.right_input_mut()),
+                _ => None,
+            },
+            PlanNodeEnum::Apply(n) => match index {
                 0 => Some(n.left_input_mut()),
                 1 => Some(n.right_input_mut()),
                 _ => None,
@@ -153,7 +178,50 @@ impl ChildAccessor for PlanNodeEnum {
                     None
                 }
             }
+            PlanNodeEnum::Flatten(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::Window(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::Remove(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::Materialize(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::PipeDeleteVertices(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::PipeDeleteEdges(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
             PlanNodeEnum::Union(n) => n.dependencies_mut().get_mut(index),
+            PlanNodeEnum::WcoIntersect(n) => n.dependencies_mut().get_mut(index),
             PlanNodeEnum::Minus(n) => n.dependencies_mut().get_mut(index),
             PlanNodeEnum::Intersect(n) => n.dependencies_mut().get_mut(index),
 

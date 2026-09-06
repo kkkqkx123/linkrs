@@ -78,6 +78,10 @@ macro_rules! define_join_node {
                 &self.deps
             }
 
+            pub fn dependencies_mut(&mut self) -> &mut Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum> {
+                &mut self.deps
+            }
+
             pub fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
             }
@@ -113,14 +117,14 @@ macro_rules! define_join_node {
             pub fn set_left_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
 
@@ -201,14 +205,14 @@ macro_rules! define_join_node {
             fn set_left_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
         }
@@ -332,6 +336,10 @@ macro_rules! define_binary_input_node {
                 &self.deps
             }
 
+            pub fn dependencies_mut(&mut self) -> &mut Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum> {
+                &mut self.deps
+            }
+
             pub fn left_input(&self) -> &$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
                 &self.left
             }
@@ -351,14 +359,14 @@ macro_rules! define_binary_input_node {
             pub fn set_left_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
 
@@ -411,14 +419,14 @@ macro_rules! define_binary_input_node {
             fn set_left_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
         }

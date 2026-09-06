@@ -553,7 +553,7 @@ impl OptimizerEngine {
             ) {
                 return plan;
             }
-            if let Some(root) = plan.root.clone() {
+            if let Some(root) = plan.root.take() {
                 let mapped =
                     crate::planning::physical_mapper::PhysicalMapper::map(logical.root.clone());
                 let (merged, notes) =

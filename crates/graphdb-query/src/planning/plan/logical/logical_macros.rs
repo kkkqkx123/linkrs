@@ -350,14 +350,14 @@ macro_rules! define_logical_join_node {
             pub fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
 
@@ -428,14 +428,14 @@ macro_rules! define_logical_join_node {
             fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
         }
@@ -524,14 +524,14 @@ macro_rules! define_logical_binary_input_node {
             pub fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
 
@@ -574,14 +574,14 @@ macro_rules! define_logical_binary_input_node {
             fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.left = Box::new(input.clone());
                 if self.deps.len() > 0 {
-                    self.deps[0] = input.clone();
+                    self.deps[0] = input;
                 }
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.right = Box::new(input.clone());
                 if self.deps.len() > 1 {
-                    self.deps[1] = input.clone();
+                    self.deps[1] = input;
                 }
             }
         }
