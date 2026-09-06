@@ -73,30 +73,6 @@ impl<'a, T: UndoLogContext> UndoLogRollback<'a, T> {
     }
 }
 
-/// Combined Rollback Processor
-///
-/// Provides UndoLog rollback capabilities for savepoint handling.
-#[allow(dead_code)]
-pub(crate) struct CombinedRollback<'a, T: UndoLogContext> {
-    ctx: &'a T,
-}
-
-#[allow(dead_code)]
-impl<'a, T: UndoLogContext> CombinedRollback<'a, T> {
-    pub fn new(ctx: &'a T) -> Self {
-        Self { ctx }
-    }
-
-    pub fn execute_undo_rollback_from_index<U: UndoTarget + ?Sized>(
-        &self,
-        target: &U,
-        _ts: Timestamp,
-        start_index: usize,
-    ) -> Result<(), StorageError> {
-        self.ctx.execute_undo_logs_from_index(target, start_index)
-    }
-}
-
 /// Rollback helper functions
 ///
 /// Factory for creating undo log entries.

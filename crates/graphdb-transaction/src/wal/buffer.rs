@@ -66,46 +66,6 @@ impl LocalWalBuffer {
         }
     }
 
-    /// Append a redo entry to the local buffer (no disk I/O).
-    pub fn append_entry(
-        &mut self,
-        op_type: WalOpType,
-        timestamp: u64,
-        payload: Vec<u8>,
-    ) -> WalResult<()> {
-        self.append_entry_with_tx(op_type, timestamp, payload, None, None)
-    }
-
-    pub fn append_entry_with_tx(
-        &mut self,
-        op_type: WalOpType,
-        timestamp: u64,
-        payload: Vec<u8>,
-        transaction_id: Option<graphdb_core::types::TransactionId>,
-        mutation_sequence: Option<u64>,
-    ) -> WalResult<()> {
-        let entry_len = payload.len() + std::mem::size_of::<WalOpType>() + 8;
-        let new_total = self.buffered_bytes.load(Ordering::Relaxed) + entry_len;
-        if self.config.max_buffer_bytes != 0 && new_total > self.config.max_buffer_bytes {
-            log::warn!(
-                "LocalWAL buffer exceeds limit: {} > {} (entries={}, intents={})",
-                new_total,
-                self.config.max_buffer_bytes,
-                self.entries.len(),
-                self.intents.len()
-            );
-        }
-        self.entries.push(TransactionWalEntry {
-            op_type,
-            timestamp,
-            payload,
-            transaction_id,
-            mutation_sequence,
-        });
-        self.buffered_bytes.store(new_total, Ordering::Relaxed);
-        Ok(())
-    }
-
     pub fn append_full_entry(&mut self, entry: TransactionWalEntry) -> WalResult<()> {
         let entry_len = entry.payload.len() + std::mem::size_of::<WalOpType>() + 8;
         let new_total = self.buffered_bytes.load(Ordering::Relaxed) + entry_len;
@@ -176,23 +136,6 @@ impl LocalWalBuffer {
         self.entries.clear();
         self.intents.clear();
         self.buffered_bytes.store(0, Ordering::Relaxed);
-    }
-
-    /// Truncate to a previous length (savepoint rollback support).
-    pub fn truncate(&mut self, entry_len: usize, intent_len: usize) {
-        self.entries.truncate(entry_len);
-        self.intents.truncate(intent_len);
-        let bytes: usize = self
-            .entries
-            .iter()
-            .map(|e| e.payload.len() + 16)
-            .sum::<usize>()
-            + self
-                .intents
-                .iter()
-                .map(|i| i.mutation.document_or_vector.len() + 64)
-                .sum::<usize>();
-        self.buffered_bytes.store(bytes, Ordering::Relaxed);
     }
 
     /// Flush the buffered entries to the global WAL atomically.
@@ -350,7 +293,11 @@ mod tests {
 
         let mut buffer = LocalWalBuffer::new();
         buffer
-            .append_entry(WalOpType::InsertVertex, 1, b"hello".to_vec())
+            .append_full_entry(TransactionWalEntry::new(
+                WalOpType::InsertVertex,
+                1,
+                b"hello".to_vec(),
+            ))
             .unwrap();
         buffer.append_intent(make_intent(42, 0)).unwrap();
         assert_eq!(buffer.entry_count(), 1);
@@ -387,8 +334,12 @@ mod tests {
         writer.open().unwrap();
 
         let mut buf = LocalWalBuffer::new();
-        buf.append_entry(WalOpType::InsertVertex, 2, b"payload".to_vec())
-            .unwrap();
+        buf.append_full_entry(TransactionWalEntry::new(
+            WalOpType::InsertVertex,
+            2,
+            b"payload".to_vec(),
+        ))
+        .unwrap();
         let lsn = buf
             .flush_no_wait(&mut writer, TransactionId::new(7))
             .unwrap();
@@ -398,24 +349,14 @@ mod tests {
     }
 
     #[test]
-    fn local_buffer_truncate_restores_state() {
-        let mut buf = LocalWalBuffer::new();
-        buf.append_entry(WalOpType::InsertVertex, 1, b"a".to_vec())
-            .unwrap();
-        buf.append_entry(WalOpType::InsertEdge, 2, b"b".to_vec())
-            .unwrap();
-        buf.append_intent(make_intent(1, 0)).unwrap();
-        assert_eq!(buf.entry_count(), 2);
-        buf.truncate(1, 0);
-        assert_eq!(buf.entry_count(), 1);
-        assert_eq!(buf.intent_count(), 0);
-    }
-
-    #[test]
     fn local_buffer_build_entries_includes_commit() {
         let mut buf = LocalWalBuffer::new();
-        buf.append_entry(WalOpType::InsertVertex, 10, b"data".to_vec())
-            .unwrap();
+        buf.append_full_entry(TransactionWalEntry::new(
+            WalOpType::InsertVertex,
+            10,
+            b"data".to_vec(),
+        ))
+        .unwrap();
         let entries = buf
             .build_transaction_entries(TransactionId::new(99))
             .unwrap();
