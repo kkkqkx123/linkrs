@@ -170,7 +170,7 @@ pub(super) fn next_window_function(
         while accumulating {
             match input.advance()? {
                 Some(mut chunk) => {
-                    chunk.materialize_selection_by("WindowFunction");
+                    chunk.normalize_for_opaque("WindowFunction");
                     if let Some(rt) = ctx.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -412,7 +412,7 @@ pub(super) fn next_window(
         while accumulating {
             match input.advance()? {
                 Some(mut chunk) => {
-                    chunk.materialize_selection_by("Window");
+                    chunk.normalize_for_opaque("Window");
                     if let Some(rt) = ctx.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }

@@ -46,7 +46,7 @@ pub(super) fn next_sort(
 ) -> Result<Option<crate::executor::streaming::chunk::DataChunk>, QueryError> {
     if state.merge_state.is_none() && state.row_iter.is_none() {
         while let Some(mut chunk) = input.advance()? {
-            chunk.materialize_selection_by("Sort");
+            chunk.normalize_for_opaque("Sort");
             if let Some(rt) = ctx.runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -208,7 +208,7 @@ pub(super) fn next_topn(
         let limit = n as usize;
 
         while let Some(mut chunk) = input.advance()? {
-            chunk.materialize_selection_by("TopN");
+            chunk.normalize_for_opaque("TopN");
             if let Some(rt) = ctx.runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }

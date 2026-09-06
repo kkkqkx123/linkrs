@@ -1,5 +1,5 @@
 use super::collector::LocalChunkCollector;
-use super::{DataChunk, TypedColumn, TypedKind};
+use super::{DataChunk, TypedColumn};
 use crate::executor::streaming::slot::SlotLayout;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::BinaryOperator;

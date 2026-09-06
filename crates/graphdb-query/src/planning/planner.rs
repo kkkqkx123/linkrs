@@ -11,7 +11,6 @@ use std::sync::Arc;
 use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
 use crate::planning::context::PlanContext;
-use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::SubPlan;
 use crate::QueryContext;
 

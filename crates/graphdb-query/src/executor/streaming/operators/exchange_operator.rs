@@ -380,7 +380,7 @@ impl ExchangeOperator {
                         }
                         match advance_input(children, &mut self.handle, 0)? {
                             Some(mut chunk) => {
-                                chunk.materialize_selection_by("Exchange");
+                                chunk.normalize_for_opaque("Exchange");
                                 if col_names.is_none() {
                                     col_names = Some(chunk.col_names());
                                 }
@@ -415,7 +415,7 @@ impl ExchangeOperator {
                             }
                             match advance_input(children, &mut self.handle, i)? {
                                 Some(mut chunk) => {
-                                    chunk.materialize_selection_by("Exchange");
+                                    chunk.normalize_for_opaque("Exchange");
                                     if col_names.is_none() {
                                         *col_names = Some(chunk.col_names());
                                     }
@@ -482,7 +482,7 @@ fn drain_and_partition(
             }
             match advance_input(children, handle, i)? {
                 Some(mut chunk) => {
-                    chunk.materialize_selection_by("Exchange");
+                    chunk.normalize_for_opaque("Exchange");
                     if col_names.is_none() {
                         *col_names = Some(chunk.col_names());
                     }
@@ -629,7 +629,7 @@ fn fill_input(
         match advance_input(children, handle, index)? {
             Some(chunk) if chunk.is_empty() => continue,
             Some(mut chunk) => {
-                chunk.materialize_selection_by("Exchange");
+                chunk.normalize_for_opaque("Exchange");
                 validate_schema(index, &chunk, col_names)?;
                 inputs[index] = MergeInputState::Buffered {
                     chunk,

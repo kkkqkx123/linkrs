@@ -36,7 +36,7 @@ pub mod stream_result;
 pub mod subquery;
 pub mod transaction_scope;
 
-pub use chunk::{DataChunk, LocalChunkCollector};
+pub use chunk::{DataChunk, LocalChunkCollector, RowBufferPool};
 pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;

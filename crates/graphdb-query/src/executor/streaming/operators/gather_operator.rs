@@ -431,7 +431,7 @@ fn fill_input(
         match advance_input(children, handle, index)? {
             Some(chunk) if chunk.is_empty() => continue,
             Some(mut chunk) => {
-                chunk.materialize_selection_by("Gather");
+                chunk.normalize_for_opaque("Gather");
                 validate_schema(index, &chunk, col_names)?;
                 inputs[index] = MergeInputState::Buffered {
                     chunk,
@@ -560,7 +560,7 @@ mod tests {
         let mut values = Vec::new();
         let mut columns = Vec::new();
         while let Some(mut chunk) = executor.advance()? {
-            chunk.materialize_selection_by("Gather");
+            chunk.normalize_for_opaque("Gather");
             if columns.is_empty() {
                 columns = chunk.col_names();
             }

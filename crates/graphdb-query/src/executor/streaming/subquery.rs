@@ -370,7 +370,7 @@ impl SubqueryExecutor {
             .advance()
             .map_err(|e| ExpressionError::type_error(format!("Subquery execution failed: {}", e)))?
         {
-            chunk.materialize_selection_by("Subquery");
+            chunk.normalize_for_opaque("Subquery");
             for row in chunk.rows {
                 if row.len() <= spec.key_columns {
                     continue;
@@ -443,7 +443,7 @@ impl SubqueryExecutor {
         runner.with_executor(&self.runtime, &self.bindings, layout, row, |exec| {
             let mut values = Vec::new();
             while let Some(mut chunk) = exec.advance()? {
-                chunk.materialize_selection_by("Subquery");
+                chunk.normalize_for_opaque("Subquery");
                 for chunk_row in chunk.rows {
                     if let Some(value) = chunk_row.first() {
                         values.push(value.clone());

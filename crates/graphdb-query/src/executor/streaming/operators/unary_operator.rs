@@ -521,7 +521,7 @@ impl UnaryOperator {
             }
             UnaryOperatorKind::Dedup { seen_rows } => {
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Dedup");
+                    chunk.normalize_for_opaque("Dedup");
                     let mut result_rows = vec![];
                     for row in chunk.rows {
                         if seen_rows.insert(row.clone()) {

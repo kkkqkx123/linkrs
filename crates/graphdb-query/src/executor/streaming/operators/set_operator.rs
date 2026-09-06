@@ -159,7 +159,7 @@ impl SetOperator {
                 }
                 if !*left_consumed {
                     if let Some(mut chunk) = left.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -182,7 +182,7 @@ impl SetOperator {
                 }
 
                 if let Some(mut chunk) = right.advance()? {
-                    chunk.materialize_selection_by("Set");
+                    chunk.normalize_for_opaque("Set");
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
@@ -206,7 +206,7 @@ impl SetOperator {
             SetOperatorKind::UnionAll { left_consumed, .. } => loop {
                 if !*left_consumed {
                     if let Some(mut chunk) = left.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         if !chunk.is_empty() {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk.rows,
@@ -219,7 +219,7 @@ impl SetOperator {
                 }
 
                 if let Some(mut chunk) = right.advance()? {
-                    chunk.materialize_selection_by("Set");
+                    chunk.normalize_for_opaque("Set");
                     if !chunk.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
@@ -245,7 +245,7 @@ impl SetOperator {
                 }
                 if !*left_buffered {
                     while let Some(mut chunk) = left.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         if let Some(rt) = self.runtime.as_ref() {
                             rt.ensure_not_cancelled()?;
                         }
@@ -259,7 +259,7 @@ impl SetOperator {
 
                 if !*right_buffered {
                     while let Some(mut chunk) = right.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         if let Some(rt) = self.runtime.as_ref() {
                             rt.ensure_not_cancelled()?;
                         }
@@ -300,7 +300,7 @@ impl SetOperator {
                 }
                 if !*right_buffered {
                     while let Some(mut chunk) = right.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
@@ -311,7 +311,7 @@ impl SetOperator {
                 }
 
                 if let Some(mut chunk) = left.advance()? {
-                    chunk.materialize_selection_by("Set");
+                    chunk.normalize_for_opaque("Set");
                     let result_rows: Vec<Vec<Value>> = chunk
                         .rows
                         .into_iter()
@@ -337,7 +337,7 @@ impl SetOperator {
             } => {
                 if !*right_buffered {
                     while let Some(mut chunk) = right.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         if let Some(rt) = self.runtime.as_ref() {
                             rt.ensure_not_cancelled()?;
                         }
@@ -355,7 +355,7 @@ impl SetOperator {
                         rt.ensure_not_cancelled()?;
                     }
                     if let Some(mut chunk) = left.advance()? {
-                        chunk.materialize_selection_by("Set");
+                        chunk.normalize_for_opaque("Set");
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);

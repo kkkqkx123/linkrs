@@ -34,7 +34,9 @@ fn build_side_loop(
         }
         // The build side hashes every visible row once. `insert_chunk`
         // consumes the selection in place, so there is no benefit in
-        // compacting the chunk beforehand.
+        // compacting the chunk beforehand; only the symbolic multiplicity
+        // must be expanded (opaque consumer, see `normalize_for_opaque`).
+        let _ = chunk.expand_multiplicity_in_place();
         let col_names = chunk.col_names();
         if right_col_names.is_empty() {
             *right_col_names = col_names.clone();
@@ -85,6 +87,10 @@ pub(super) fn next_hash_join(
     }
 
     while let Some(mut probe_chunk) = probe_input.advance()? {
+        // Opaque consumer: expand symbolic multiplicity so each logical row
+        // probes once. The selection vector is kept in place (consumed via
+        // `visible_indices` below with no compaction benefit).
+        let _ = probe_chunk.expand_multiplicity_in_place();
         let probe_col_names = probe_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -190,6 +196,10 @@ pub(super) fn next_hash_left_join(
     }
 
     while let Some(mut probe_chunk) = probe_input.advance()? {
+        // Opaque consumer: expand symbolic multiplicity so each logical row
+        // probes once. The selection vector is kept in place (consumed via
+        // `visible_indices` below with no compaction benefit).
+        let _ = probe_chunk.expand_multiplicity_in_place();
         let probe_col_names = probe_chunk.col_names();
         let mut result_rows = Vec::new();
 

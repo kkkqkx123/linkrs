@@ -361,6 +361,21 @@ impl DataChunk {
         &self.rows[i]
     }
 
+    /// Take the physical rows out for buffer reuse, resetting selection,
+    /// multiplicity, and derived column caches.
+    ///
+    /// Unlike [`Clone`](Self::clone) (documented deep copy), this moves the
+    /// allocation out so the caller can return the drained buffers to
+    /// [`super::pool::RowBufferPool`] via `release_rows` instead of dropping
+    /// them. Prefer move-first construction plus this pool over cloning.
+    pub fn take_rows_for_reuse(&mut self) -> Vec<Vec<Value>> {
+        self.selection = None;
+        self.columns = None;
+        self.typed_columns = None;
+        self.multiplicity = 1;
+        std::mem::take(&mut self.rows)
+    }
+
     // ── Typed column layout ──
 
     /// Build the typed column layout for this chunk.

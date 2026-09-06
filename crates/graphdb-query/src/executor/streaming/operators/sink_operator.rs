@@ -487,7 +487,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -573,7 +573,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -648,7 +648,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -768,7 +768,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -869,7 +869,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -916,7 +916,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -973,7 +973,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -1028,7 +1028,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Sink");
+                    chunk.normalize_for_opaque("Sink");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -1127,7 +1127,7 @@ impl SinkOperator {
                 }
                 // Drain input (dummy single row)
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("CopyFrom");
+                    chunk.normalize_for_opaque("CopyFrom");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -1174,7 +1174,7 @@ impl SinkOperator {
                 }
                 // Drain input (dummy single row)
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("CopyTo");
+                    chunk.normalize_for_opaque("CopyTo");
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }

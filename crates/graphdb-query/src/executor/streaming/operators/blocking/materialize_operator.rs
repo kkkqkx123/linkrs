@@ -132,7 +132,7 @@ pub(super) fn next_distinct(
     while accumulating {
         match input.advance()? {
             Some(mut chunk) => {
-                chunk.materialize_selection_by("Distinct");
+                chunk.normalize_for_opaque("Distinct");
                 if let Some(rt) = ctx.runtime.as_ref() {
                     rt.ensure_not_cancelled()?;
                 }
@@ -179,7 +179,7 @@ pub(super) fn next_distinct(
     // Spill consumption phase
     if let Some(ref mut spiller) = state.partition_spiller {
         while let Some(mut chunk) = input.advance()? {
-            chunk.materialize_selection_by("Distinct");
+            chunk.normalize_for_opaque("Distinct");
             if let Some(rt) = ctx.runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -230,7 +230,7 @@ pub(super) fn next_materialize(
 ) -> Result<Option<DataChunk>, QueryError> {
     if !state.materialized {
         while let Some(mut chunk) = input.advance()? {
-            chunk.materialize_selection_by("Materialize");
+            chunk.normalize_for_opaque("Materialize");
             if let Some(rt) = ctx.runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -289,7 +289,7 @@ pub(super) fn next_data_collect(
     }
 
     while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection_by("DataCollect");
+        chunk.normalize_for_opaque("DataCollect");
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
@@ -352,7 +352,7 @@ pub(super) fn next_rollup_apply(
 
     let mut col_names: Vec<String> = Vec::new();
     while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection_by("RollUpApply");
+        chunk.normalize_for_opaque("RollUpApply");
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }

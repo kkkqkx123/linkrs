@@ -31,7 +31,7 @@ pub(super) fn handle(
     let direction = *direction;
     let edge_types = &*edge_types;
     while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection_by("Subgraph");
+        chunk.normalize_for_opaque("Subgraph");
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let col_names = chunk.col_names();

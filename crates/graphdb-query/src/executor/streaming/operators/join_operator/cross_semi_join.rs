@@ -32,7 +32,7 @@ pub(super) fn next_cross_join(
     }
     if !*left_consumed {
         while let Some(mut chunk) = left.advance()? {
-            chunk.materialize_selection_by("CrossSemiJoin");
+            chunk.normalize_for_opaque("CrossSemiJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -47,7 +47,7 @@ pub(super) fn next_cross_join(
     if !*right_consumed {
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection_by("CrossSemiJoin");
+            chunk.normalize_for_opaque("CrossSemiJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -106,7 +106,7 @@ pub(super) fn next_semi_join(
 ) -> Result<Option<DataChunk>, QueryError> {
     if !*right_consumed {
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection_by("CrossSemiJoin");
+            chunk.normalize_for_opaque("CrossSemiJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -122,7 +122,7 @@ pub(super) fn next_semi_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection_by("CrossSemiJoin");
+        left_chunk.normalize_for_opaque("CrossSemiJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 

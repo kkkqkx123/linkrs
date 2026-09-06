@@ -40,6 +40,7 @@ mod core;
 mod eval;
 mod kind;
 mod policy;
+mod pool;
 mod schema;
 mod selection;
 mod typed;
@@ -48,10 +49,11 @@ mod typed;
 mod tests;
 
 // Re-export public API
-pub use collector::LocalChunkCollector;
+pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
 pub use policy::ColumnarPolicy;
+pub use pool::{RowBufferPool, MAX_POOLED_ROWS, MAX_POOLED_ROW_CAPACITY};
 pub use schema::{ColumnInfo, Schema};
 pub(crate) use typed::gather_typed_column;
 pub use typed::{TypedColumn, TypedKind};

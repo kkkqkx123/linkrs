@@ -231,57 +231,6 @@ pub struct CteCacheStatsSnapshot {
     pub memory_usage_ratio: f64,
 }
 
-/// Global cache statistics combining all cache types
-#[derive(Debug, Clone, Default)]
-pub struct GlobalCacheStatsSnapshot {
-    pub plan_cache: PlanCacheStatsSnapshot,
-    pub cte_cache: CteCacheStatsSnapshot,
-    pub total_hits: u64,
-    pub total_misses: u64,
-    pub total_memory: usize,
-    pub total_budget: usize,
-    pub evictions: u64,
-}
-
-impl GlobalCacheStatsSnapshot {
-    pub fn global_hit_rate(&self) -> f64 {
-        let total = self.total_hits + self.total_misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.total_hits as f64 / total as f64
-        }
-    }
-
-    pub fn global_memory_usage_ratio(&self) -> f64 {
-        if self.total_budget == 0 {
-            0.0
-        } else {
-            self.total_memory as f64 / self.total_budget as f64
-        }
-    }
-
-    pub fn format(&self) -> String {
-        format!(
-            "Global Cache Statistics:\n\
-             - Hit Rate: {:.2}%\n\
-             - Memory Usage: {:.2} MB / {:.2} MB ({:.1}%)\n\
-             - Evictions: {}\n\
-             - Plan Cache: {} entries, {:.2}% hit rate\n\
-             - CTE Cache: {} entries, {:.2}% hit rate",
-            self.global_hit_rate() * 100.0,
-            self.total_memory as f64 / 1024.0 / 1024.0,
-            self.total_budget as f64 / 1024.0 / 1024.0,
-            self.global_memory_usage_ratio() * 100.0,
-            self.evictions,
-            self.plan_cache.entry_count,
-            self.plan_cache.hit_rate * 100.0,
-            self.cte_cache.entry_count,
-            self.cte_cache.hit_rate * 100.0
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,34 +296,5 @@ mod tests {
         assert_eq!(snapshot.hits, 2);
         assert_eq!(snapshot.entry_count, 3);
         assert!((snapshot.hit_rate - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_global_stats_snapshot_format() {
-        let snapshot = GlobalCacheStatsSnapshot {
-            plan_cache: PlanCacheStatsSnapshot {
-                hits: 600,
-                misses: 100,
-                entry_count: 100,
-                hit_rate: 0.857,
-                ..Default::default()
-            },
-            cte_cache: CteCacheStatsSnapshot {
-                hits: 250,
-                misses: 50,
-                entry_count: 50,
-                hit_rate: 0.833,
-                ..Default::default()
-            },
-            total_hits: 850,
-            total_misses: 150,
-            total_memory: 50 * 1024 * 1024,
-            total_budget: 100 * 1024 * 1024,
-            evictions: 10,
-        };
-
-        let formatted = snapshot.format();
-        assert!(formatted.contains("Hit Rate: 85.00%"));
-        assert!(formatted.contains("Plan Cache: 100 entries"));
     }
 }

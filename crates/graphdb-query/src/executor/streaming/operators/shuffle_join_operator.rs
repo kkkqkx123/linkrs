@@ -156,7 +156,7 @@ impl HashShuffleJoinOperator {
     ) -> Result<(), QueryError> {
         for tree in left_trees.iter_mut() {
             while let Some(mut chunk) = tree.advance()? {
-                chunk.materialize_selection_by("ShuffleJoin");
+                chunk.normalize_for_opaque("ShuffleJoin");
                 if let Some(rt) = &self.runtime {
                     rt.ensure_not_cancelled()?;
                 }
@@ -175,7 +175,7 @@ impl HashShuffleJoinOperator {
         }
         for tree in right_trees.iter_mut() {
             while let Some(mut chunk) = tree.advance()? {
-                chunk.materialize_selection_by("ShuffleJoin");
+                chunk.normalize_for_opaque("ShuffleJoin");
                 if let Some(rt) = &self.runtime {
                     rt.ensure_not_cancelled()?;
                 }

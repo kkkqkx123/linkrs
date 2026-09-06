@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use super::chunk::{ColumnInfo, DataChunk, LocalChunkCollector, Schema};
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use graphdb_core::DataSet;
 use crate::executor::base::ExecutionResult;
 use graphdb_core::error::QueryError;
+use graphdb_core::DataSet;
 
 /// Thread-safe (Send + Sync) streaming result handle.
 ///

@@ -209,7 +209,7 @@ impl WcoIntersectOperator {
                 if let Some(rt) = self.runtime.as_ref() {
                     rt.ensure_not_cancelled()?;
                 }
-                chunk.materialize_selection_by("WcoBuild");
+                chunk.normalize_for_opaque("WcoBuild");
                 if col_names.is_empty() {
                     col_names = chunk.col_names();
                     layout = self.resolve_build_layout(side, &col_names)?;

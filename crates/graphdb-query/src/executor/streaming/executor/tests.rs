@@ -921,3 +921,96 @@ fn correlation_frames_are_isolated_per_executor_instance() {
     let again = first.advance().expect("pull").expect("third frame row");
     assert_eq!(again.rows, vec![vec![Value::BigInt(30)]]);
 }
+
+// ── Opaque-boundary regression: aggregate drains must honor selection ──
+
+fn filter_over_scan(rows: Vec<Vec<Value>>, predicate_gt: i64) -> Box<StreamingExecutor> {
+    use graphdb_core::types::expr::Expression;
+    use graphdb_core::types::operators::BinaryOperator;
+
+    let scan = Box::new(scan_executor(rows, vec!["v".to_string()]));
+    let predicate = Expression::binary(
+        Expression::variable("v"),
+        BinaryOperator::GreaterThan,
+        Expression::literal(Value::BigInt(predicate_gt)),
+    );
+    Box::new(StreamingExecutor::Unary(
+        OperatorBase::new(0),
+        scan,
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate,
+                state: Default::default(),
+            },
+            empty_layout(),
+        ),
+    ))
+}
+
+fn blocking_over(
+    input: Box<StreamingExecutor>,
+    spec: &crate::executor::streaming::operators::spec::BlockingSpec,
+) -> StreamingExecutor {
+    use crate::executor::base::MemoryBudget;
+
+    let output_layout = Arc::new(SlotLayout::new(vec![]));
+    StreamingExecutor::Blocking(
+        OperatorBase::new(11).with_output_layout(output_layout.clone()),
+        input,
+        BlockingOperator::from_spec(spec, &MemoryBudget::new(64 * 1024 * 1024), output_layout),
+    )
+}
+
+fn pull_first_bigints(executor: &mut StreamingExecutor) -> Vec<i64> {
+    let mut values = Vec::new();
+    while let Some(chunk) = executor.advance().expect("advance should succeed") {
+        for row in &chunk.rows {
+            match row.first() {
+                Some(Value::BigInt(v)) => values.push(*v),
+                other => panic!("unexpected row {:?}", other),
+            }
+        }
+    }
+    values.sort_unstable();
+    values
+}
+
+#[test]
+fn groupby_drain_ignores_hidden_rows() {
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+    use graphdb_core::types::expr::Expression;
+
+    let input = filter_over_scan((1..=4).map(|v| vec![Value::BigInt(v)]).collect(), 2);
+    let mut executor = blocking_over(
+        input,
+        &BlockingSpec::GroupBy {
+            group_by_expressions: vec![Expression::variable("v")],
+        },
+    );
+
+    executor.open().expect("open should succeed");
+    let values = pull_first_bigints(&mut executor);
+    executor.close().expect("close should succeed");
+    assert_eq!(values, vec![3, 4]);
+}
+
+#[test]
+fn final_aggregate_drain_ignores_hidden_rows() {
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+    use graphdb_core::types::expr::Expression;
+
+    let input = filter_over_scan((1..=3).map(|v| vec![Value::BigInt(v)]).collect(), 1);
+    let mut executor = blocking_over(
+        input,
+        &BlockingSpec::FinalAggregate {
+            group_by_expressions: vec![Expression::variable("v")],
+            aggregate_functions: vec![],
+            output_col_names: vec![],
+        },
+    );
+
+    executor.open().expect("open should succeed");
+    let values = pull_first_bigints(&mut executor);
+    executor.close().expect("close should succeed");
+    assert_eq!(values, vec![2, 3]);
+}

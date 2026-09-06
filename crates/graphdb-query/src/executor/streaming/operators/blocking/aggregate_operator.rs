@@ -204,6 +204,10 @@ pub(super) fn next_aggregate(
                     if let Some(rt) = ctx.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
+                    // Opaque consumer: expand symbolic multiplicity so each logical row
+                    // accumulates once. The selection vector stays in place (consumed via
+                    // `visible_indices` below with no compaction benefit).
+                    let _ = chunk.expand_multiplicity_in_place();
                     if state.col_names.is_empty() {
                         state.col_names = chunk.col_names();
                     }
@@ -520,10 +524,13 @@ pub(super) fn next_groupby(
         let mut accumulating = true;
         while accumulating {
             match input.advance()? {
-                Some(chunk) => {
+                Some(mut chunk) => {
                     if let Some(rt) = ctx.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
+                    // Opaque consumer: expand symbolic multiplicity and compact the
+                    // selection so every logical row enters `all_rows` exactly once.
+                    chunk.normalize_for_opaque("GroupBy");
                     if state.col_names.is_empty() {
                         state.col_names = match chunk.col_names() {
                             names if !names.is_empty() => names,
@@ -653,6 +660,10 @@ pub(super) fn next_partial_aggregate(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
+        // Opaque consumer: expand symbolic multiplicity so each logical row
+        // accumulates once. The selection vector stays in place (consumed via
+        // `visible_indices` below with no compaction benefit).
+        let _ = chunk.expand_multiplicity_in_place();
         if col_names.is_empty() {
             col_names = chunk.col_names();
         }
@@ -779,10 +790,13 @@ pub(super) fn next_final_aggregate(
     }
 
     let mut col_names: Vec<String> = vec![];
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
+        // Opaque consumer: expand symbolic multiplicity and compact the
+        // selection so every logical row merges exactly once.
+        chunk.normalize_for_opaque("Aggregate");
         if col_names.is_empty() {
             col_names = chunk.col_names();
         }

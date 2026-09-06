@@ -253,7 +253,6 @@ impl std::fmt::Debug for SequenceManager {
 mod tests {
     use super::*;
 
-
     struct MockStorage {
         data: RwLock<HashMap<String, Vec<u8>>>,
     }

@@ -28,7 +28,7 @@ fn drain_build_side(
 ) -> Result<(), QueryError> {
     let mut captured_right_names = Vec::new();
     while let Some(mut chunk) = right.advance()? {
-        chunk.materialize_selection_by("MergeJoin");
+        chunk.normalize_for_opaque("MergeJoin");
         if let Some(rt) = runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
@@ -69,7 +69,7 @@ pub(super) fn next_inner_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection_by("MergeJoin");
+        left_chunk.normalize_for_opaque("MergeJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -132,7 +132,7 @@ pub(super) fn next_left_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection_by("MergeJoin");
+        left_chunk.normalize_for_opaque("MergeJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -206,7 +206,7 @@ pub(super) fn next_right_join(
     if !*right_consumed {
         let mut captured_left_names = Vec::new();
         while let Some(mut chunk) = left.advance()? {
-            chunk.materialize_selection_by("MergeJoin");
+            chunk.normalize_for_opaque("MergeJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -223,7 +223,7 @@ pub(super) fn next_right_join(
     }
 
     while let Some(mut right_chunk) = right.advance()? {
-        right_chunk.materialize_selection_by("MergeJoin");
+        right_chunk.normalize_for_opaque("MergeJoin");
         let right_cols = right_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -302,7 +302,7 @@ pub(super) fn next_full_outer_join(
             FullOuterJoinPhase::BuildingRight => {
                 let mut captured_right_names = Vec::new();
                 while let Some(mut chunk) = left.advance()? {
-                    chunk.materialize_selection_by("MergeJoin");
+                    chunk.normalize_for_opaque("MergeJoin");
                     if let Some(rt) = runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
@@ -312,7 +312,7 @@ pub(super) fn next_full_outer_join(
                     left_rows.extend(chunk.rows);
                 }
                 while let Some(mut chunk) = right.advance()? {
-                    chunk.materialize_selection_by("MergeJoin");
+                    chunk.normalize_for_opaque("MergeJoin");
                     if let Some(rt) = runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }

@@ -4,8 +4,8 @@ use super::chunk::DataChunk;
 use super::chunk::LocalChunkCollector;
 use super::engine::StreamingExecutionEngine;
 use super::runtime::ExecutionRuntime;
-use graphdb_core::DataSet;
 use graphdb_core::error::QueryError;
+use graphdb_core::DataSet;
 
 /// Streaming result handle for pull-based chunk consumption.
 ///

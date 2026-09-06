@@ -488,10 +488,12 @@ impl StreamingExecutionEngine {
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
         let mut chunk = executor.advance()?;
-        // Materialize any propagated selection before the chunk leaves the
-        // executor tree (the API layer consumes full rows).
+        // Every chunk leaving the executor tree is physical: expand any
+        // symbolic multiplicity and materialize any propagated selection.
+        // Chunk-at-a-time API consumers (server/CLI pagination) read rows
+        // directly and do not honor `multiplicity`, so it must not escape.
         if let Some(chunk) = chunk.as_mut() {
-            chunk.materialize_selection_by("Root");
+            chunk.normalize_for_opaque("Root");
         }
         Ok(chunk)
     }
@@ -631,7 +633,8 @@ impl StreamingExecutionEngine {
             executor.open()?;
             let loop_result = (|| -> Result<(), QueryError> {
                 while let Some(mut chunk) = executor.advance()? {
-                    chunk.materialize_selection_by("Engine");
+                    // Tree exit: chunks must be physical (see `next_chunk_from_root`).
+                    chunk.normalize_for_opaque("Engine");
                     all_chunks.push(chunk);
                 }
                 Ok(())
@@ -661,7 +664,8 @@ impl StreamingExecutionEngine {
         executor.open()?;
         let loop_result = (|| -> Result<(), QueryError> {
             while let Some(mut chunk) = executor.advance()? {
-                chunk.materialize_selection_by("Engine");
+                // Tree exit: chunks must be physical (see `next_chunk_from_root`).
+                chunk.normalize_for_opaque("Engine");
                 output_chunks.push(chunk);
             }
             Ok(())

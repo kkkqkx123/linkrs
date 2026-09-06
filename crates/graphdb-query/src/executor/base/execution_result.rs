@@ -2,9 +2,9 @@
 //!
 //! Defines the data structure of the actuator's execution result, supporting multiple result types.
 
-use graphdb_core::DataSet;
 use graphdb_core::error::DBError;
 use graphdb_core::types::{SpaceStatus, SpaceSummary};
+use graphdb_core::DataSet;
 
 /// Type of execution result
 ///

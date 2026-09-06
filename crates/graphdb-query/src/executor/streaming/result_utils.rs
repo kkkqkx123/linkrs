@@ -2,9 +2,9 @@
 
 use super::chunk::DataChunk;
 use super::chunk::LocalChunkCollector;
-use graphdb_core::DataSet;
 use crate::executor::base::ExecutionResult;
 use graphdb_core::error::QueryError;
+use graphdb_core::DataSet;
 
 /// Convert a Vec of DataChunks to a single DataSet
 ///

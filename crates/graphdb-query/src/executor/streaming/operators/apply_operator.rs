@@ -194,7 +194,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection_by("Apply");
+                    left_chunk.normalize_for_opaque("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         if let Some(rt) = &self.runtime {
@@ -277,7 +277,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection_by("Apply");
+                    left_chunk.normalize_for_opaque("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         if let Some(rt) = &self.runtime {
@@ -323,7 +323,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection_by("CorrelatedApply");
+                    left_chunk.normalize_for_opaque("CorrelatedApply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         if let Some(rt) = &self.runtime {
@@ -350,7 +350,7 @@ impl ApplyOperator {
                         exec.reset()?;
                         let mut exists = false;
                         while let Some(mut sub_chunk) = exec.advance()? {
-                            sub_chunk.materialize_selection_by("CorrelatedApply");
+                            sub_chunk.normalize_for_opaque("CorrelatedApply");
                             if !sub_chunk.rows.is_empty() {
                                 exists = true;
                                 break;
@@ -402,7 +402,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection_by("Apply");
+                    left_chunk.normalize_for_opaque("Apply");
                     let mut output = Vec::with_capacity(left_chunk.rows.len());
                     for left_row in left_chunk.rows {
                         if let Some(rt) = &self.runtime {
@@ -545,7 +545,7 @@ fn materialize_right(
     }
     let mut materialized = Vec::new();
     while let Some(mut chunk) = right.advance()? {
-        chunk.materialize_selection_by("Apply");
+        chunk.normalize_for_opaque("Apply");
         if let Some(rt) = runtime {
             rt.ensure_not_cancelled()?;
         }
@@ -647,7 +647,7 @@ mod tests {
         executor.open()?;
         let mut rows = Vec::new();
         while let Some(mut chunk) = executor.advance()? {
-            chunk.materialize_selection_by("Apply");
+            chunk.normalize_for_opaque("Apply");
             rows.extend(chunk.rows);
         }
         executor.close()?;
@@ -829,7 +829,7 @@ mod tests {
         executor.open()?;
         let mut rows = Vec::new();
         while let Some(mut chunk) = executor.advance()? {
-            chunk.materialize_selection_by("CorrelatedApply");
+            chunk.normalize_for_opaque("CorrelatedApply");
             rows.extend(chunk.rows);
         }
         executor.close()?;

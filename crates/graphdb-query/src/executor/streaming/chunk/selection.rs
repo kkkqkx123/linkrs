@@ -23,10 +23,12 @@
 //!   grouping, so `multiplicity` resets to 1 (the constructor default).
 //! - Opaque order-preserving operators (`Sort`/`TopN`/`Window`/join probe)
 //!   merge chunks whose uniform factors cannot be represented after the
-//!   merge; they assume `multiplicity == 1` and document it. A future
-//!   multiplicity producer must expand at those boundaries with
-//!   [`DataChunk::expand_visible_rows`] first.
+//!   merge; they must enter through [`DataChunk::normalize_for_opaque`],
+//!   which expands `multiplicity` and materializes the selection together.
+//!   Calling [`DataChunk::materialize_selection_by`] alone is not enough:
+//!   it leaves `multiplicity > 1` behind and downstream row counts shrink.
 
+use super::pool::RowBufferPool;
 use super::typed::gather_typed_column;
 use crate::executor::streaming::chunk::core::DataChunk;
 
@@ -95,18 +97,19 @@ impl DataChunk {
         self.columns = None;
         self.typed_columns = None;
         self.multiplicity = 1;
+        debug_assert!(
+            self.selection.is_none() && self.multiplicity == 1,
+            "expand_visible_rows must leave a flat chunk: \
+             selection consumed, multiplicity reset to 1"
+        );
         if multiplicity <= 1 || out.is_empty() {
             return out;
         }
         let total = (out.len() as u64).saturating_mul(multiplicity) as usize;
-        let mut expanded = Vec::with_capacity(total.min(1 << 22));
-        for _ in 0..multiplicity {
-            expanded.extend(out.iter().cloned());
-            if expanded.len() >= (1 << 22) {
-                expanded.reserve(total.saturating_sub(expanded.len()).min(1 << 22));
-            }
+        if let Some(stats) = &self.columnar_stats {
+            stats.record_multiplicity_expanded(total as u64);
         }
-        expanded
+        expand_rows_reusing_buffers(out, multiplicity, total)
     }
 
     // ── Selection vectors ──
@@ -147,8 +150,70 @@ impl DataChunk {
         self.selection.take()
     }
 
+    /// Expand a symbolic `multiplicity > 1` into physical rows in place.
+    ///
+    /// Opaque operators (sort/window/join/aggregate) cannot carry the factor
+    /// symbolically, so they must call this (directly or via
+    /// [`DataChunk::normalize_for_opaque`]) before consuming rows.
+    /// Returns `true` when an expansion happened. Visible selection is
+    /// preserved: only visible rows are replicated, hidden rows are dropped.
+    /// Derived column caches are cleared, matching `expand_visible_rows`.
+    pub fn expand_multiplicity_in_place(&mut self) -> bool {
+        if self.multiplicity <= 1 {
+            return false;
+        }
+        let multiplicity = self.multiplicity;
+        // Take visible rows once (same ownership discipline as
+        // `expand_visible_rows`); hidden rows are dropped.
+        let taken: Vec<Vec<graphdb_core::Value>> = match self.selection.take() {
+            Some(indices) => {
+                let mut selected = Vec::with_capacity(indices.len());
+                for &i in &indices {
+                    selected.push(std::mem::take(&mut self.rows[i]));
+                }
+                self.rows.clear();
+                selected
+            }
+            None => std::mem::take(&mut self.rows),
+        };
+        self.columns = None;
+        self.typed_columns = None;
+        self.multiplicity = 1;
+        debug_assert!(
+            self.selection.is_none() && self.multiplicity == 1,
+            "expand_multiplicity_in_place must leave a flat chunk: \
+             selection consumed, multiplicity reset to 1"
+        );
+        if taken.is_empty() {
+            return true;
+        }
+        let total = (taken.len() as u64).saturating_mul(multiplicity) as usize;
+        self.rows = expand_rows_reusing_buffers(taken, multiplicity, total);
+        if let Some(stats) = &self.columnar_stats {
+            stats.record_multiplicity_expanded(total as u64);
+        }
+        true
+    }
+
+    /// Unified opaque-operator boundary: expand `multiplicity`, then
+    /// materialize any attached selection. Returns `true` when either step
+    /// changed the chunk. `op` must be one of `SELECTION_BOUNDARY_OPS`.
+    ///
+    /// This is the single entry point opaque operators should use instead of
+    /// calling [`DataChunk::materialize_selection_by`] directly.
+    pub fn normalize_for_opaque(&mut self, op: &'static str) -> bool {
+        let expanded = self.expand_multiplicity_in_place();
+        let materialized = self.materialize_selection_by(op);
+        expanded || materialized
+    }
+
     /// Contract: materialize any attached selection (opaque-operator
     /// boundary). Returns `true` when a selection was actually materialized.
+    ///
+    /// Prefer [`DataChunk::normalize_for_opaque`]: this method alone does not
+    /// expand `multiplicity`, so opaque operators calling it directly must
+    /// guarantee `multiplicity == 1` (debug-asserted by callers via the
+    /// normalize path).
     ///
     /// This is the single boundary-materialization entry point; `op` must be
     /// one of `SELECTION_BOUNDARY_OPS` so per-operator counters stay exact
@@ -240,6 +305,41 @@ impl DataChunk {
     }
 }
 
+/// Physically repeat `source` rows `multiplicity` times, reusing pooled
+/// row buffers for the copies.
+///
+/// The first repetition moves the source buffers (no per-Value clone); each
+/// further repetition clones into a recycled buffer from
+/// [`RowBufferPool`] (falling back to a fresh allocation when the pool is
+/// dry). Repetition order matches the old `extend`-loop: all visible rows,
+/// then the same sequence again. Callers pass the already-computed expanded
+/// `total` for capacity planning; growth past `1 << 22` rows reserves in
+/// bounded steps, mirroring the previous behavior.
+fn expand_rows_reusing_buffers(
+    source: Vec<Vec<graphdb_core::Value>>,
+    multiplicity: u64,
+    total: usize,
+) -> Vec<Vec<graphdb_core::Value>> {
+    debug_assert!(multiplicity > 1, "pool path is only for real expansion");
+    debug_assert!(!source.is_empty(), "empty source needs no expansion");
+    let round = source.len();
+    let mut expanded = Vec::with_capacity(total.min(1 << 22));
+    expanded.extend(source);
+    // One pool lock per expansion: grab every buffer the clone rounds need.
+    let mut recycled = RowBufferPool::acquire_rows(total.saturating_sub(round));
+    for _ in 1..multiplicity {
+        for i in 0..round {
+            let mut buf = recycled.pop().unwrap_or_default();
+            buf.extend(expanded[i].iter().cloned());
+            expanded.push(buf);
+        }
+        if expanded.len() >= (1 << 22) {
+            expanded.reserve(total.saturating_sub(expanded.len()).min(1 << 22));
+        }
+    }
+    expanded
+}
+
 enum VisibleRows<'a> {
     All {
         rows: &'a [Vec<graphdb_core::Value>],
@@ -280,3 +380,99 @@ impl<'a> Iterator for VisibleRows<'a> {
 }
 
 impl ExactSizeIterator for VisibleRows<'_> {}
+
+#[cfg(test)]
+mod tests {
+    use super::super::core::DataChunk;
+    use crate::executor::streaming::slot::SlotLayout;
+    use graphdb_core::Value;
+    use std::sync::Arc;
+
+    fn layout1() -> Arc<SlotLayout> {
+        Arc::new(SlotLayout::from_names(&["a".to_string()]))
+    }
+
+    #[test]
+    fn opaque_boundary_expands_multiplicity() {
+        let rows = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
+        let mut chunk = DataChunk::new_with_layout(rows, layout1()).with_selection(vec![0, 1]);
+        chunk.set_multiplicity(3);
+        assert_eq!(chunk.logical_len(), 6);
+        assert!(chunk.normalize_for_opaque("Sort"));
+        assert_eq!(chunk.multiplicity(), 1);
+        assert!(chunk.selection().is_none());
+        assert_eq!(chunk.rows.len(), 6);
+        assert_eq!(
+            chunk.rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn opaque_boundary_noop_when_flat() {
+        let rows = vec![vec![Value::Int(1)]];
+        let mut chunk = DataChunk::new_with_layout(rows, layout1());
+        assert!(!chunk.normalize_for_opaque("Sort"));
+        assert_eq!(chunk.rows.len(), 1);
+    }
+
+    #[test]
+    fn expand_multiplicity_drops_hidden_rows() {
+        let rows = vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+            vec![Value::Int(3)],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout1()).with_selection(vec![0, 2]);
+        chunk.set_multiplicity(2);
+        assert!(chunk.expand_multiplicity_in_place());
+        assert_eq!(chunk.rows.len(), 4);
+        assert_eq!(
+            chunk.rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(3)],
+                vec![Value::Int(1)],
+                vec![Value::Int(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn multiplicity_expansion_runs_on_pooled_buffers() {
+        use super::super::pool::{RowBufferPool, MAX_POOLED_ROWS};
+        // Pre-fill the pool past its bound: only MAX buffers are retained.
+        // The pool is process-global, so this test only asserts the upper
+        // bound (concurrent tests may also touch the pool) plus the
+        // deterministic expanded contents.
+        RowBufferPool::clear_for_test();
+        let mut spare: Vec<Vec<Value>> = (0..(MAX_POOLED_ROWS + 8))
+            .map(|i| vec![Value::Int(i as i32)])
+            .collect();
+        RowBufferPool::release_rows(&mut spare);
+        let rows = vec![vec![Value::Int(7)], vec![Value::Int(8)]];
+        let mut chunk = DataChunk::new_with_layout(rows, layout1());
+        chunk.set_multiplicity(3);
+        assert!(chunk.expand_multiplicity_in_place());
+        assert_eq!(
+            chunk.rows,
+            vec![
+                vec![Value::Int(7)],
+                vec![Value::Int(8)],
+                vec![Value::Int(7)],
+                vec![Value::Int(8)],
+                vec![Value::Int(7)],
+                vec![Value::Int(8)],
+            ]
+        );
+        assert!(RowBufferPool::pool_len() <= MAX_POOLED_ROWS);
+        RowBufferPool::clear_for_test();
+    }
+}

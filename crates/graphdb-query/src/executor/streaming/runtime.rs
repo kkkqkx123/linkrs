@@ -63,19 +63,25 @@ pub const SELECTION_BOUNDARY_OPS: &[&str] = &[
     "Window",
     "TopN",
     "Distinct",
+    "Aggregate",
+    "GroupBy",
     "Materialize",
     "DataCollect",
     "RollUpApply",
     "Sink",
+    "CopyFrom",
+    "CopyTo",
     "Exchange",
     "CrossSemiJoin",
     "NestedLoopJoin",
     "HashJoin",
     "MergeJoin",
     "Apply",
+    "CorrelatedApply",
     "ShuffleJoin",
     "Set",
     "VectorSearch",
+    "WcoBuild",
     "RecursiveFragment",
     "Fulltext",
     "Subgraph",
@@ -122,6 +128,10 @@ pub struct ColumnarStats {
     selection_materialized_by_op: [AtomicU64; N_BOUNDARY_OPS],
     /// Chunks produced by a source via the storage column-block path (A1).
     pub column_block_hits: AtomicU64,
+    /// Logical rows produced by expanding `DataChunk::multiplicity` at opaque
+    /// boundaries (`normalize_for_opaque`). Compared against stored rows it
+    /// yields the expanded/stored ratio for PROFILE observability.
+    pub multiplicity_expanded: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -135,6 +145,7 @@ impl Default for ColumnarStats {
             selection_pushed: AtomicU64::new(0),
             selection_materialized_by_op: [const { AtomicU64::new(0) }; N_BOUNDARY_OPS],
             column_block_hits: AtomicU64::new(0),
+            multiplicity_expanded: AtomicU64::new(0),
         }
     }
 }
@@ -199,6 +210,13 @@ impl ColumnarStats {
     /// Record a chunk produced via the storage column-block path (A1).
     pub fn record_column_block_hit(&self) {
         self.column_block_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record `n` logical rows produced by multiplicity expansion.
+    pub fn record_multiplicity_expanded(&self, n: u64) {
+        if n > 0 {
+            self.multiplicity_expanded.fetch_add(n, Ordering::Relaxed);
+        }
     }
 
     /// Fraction of evaluation calls that hit the columnar fast path.
@@ -458,6 +476,7 @@ pub struct ColumnarStatsSnapshot {
     pub selection_materialized: u64,
     pub selection_pushed: u64,
     pub column_block_hits: u64,
+    pub multiplicity_expanded: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -470,6 +489,7 @@ impl ColumnarStatsSnapshot {
             selection_materialized: stats.selection_materialized.load(Ordering::Relaxed),
             selection_pushed: stats.selection_pushed.load(Ordering::Relaxed),
             column_block_hits: stats.column_block_hits.load(Ordering::Relaxed),
+            multiplicity_expanded: stats.multiplicity_expanded.load(Ordering::Relaxed),
         }
     }
 
@@ -495,7 +515,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -504,6 +524,7 @@ impl ColumnarStatsSnapshot {
             self.selection_materialized,
             self.selection_pushed,
             self.column_block_hits,
+            self.multiplicity_expanded,
         )
     }
 }
