@@ -65,38 +65,48 @@ impl SequenceDef {
         self.current_value.load(Ordering::SeqCst)
     }
 
-    /// Get the next value with atomic increment
+    /// Get the next value with atomic increment.
     ///
-    /// Returns `Err` if the value would exceed bounds and `cycle` is false.
+    /// Uses a compare-exchange retry loop so concurrent callers never lose
+    /// increments. Returns `Err` if the value would exceed bounds and
+    /// `cycle` is false.
     pub fn next_value(&self) -> Result<i64, StorageError> {
-        let current = self.current_value.load(Ordering::SeqCst);
-        let next = current + self.increment;
+        loop {
+            let current = self.current_value.load(Ordering::SeqCst);
+            let next = current + self.increment;
 
-        if next > self.max_value {
-            if self.cycle {
-                let new_value = self.min_value;
-                self.current_value.store(new_value, Ordering::SeqCst);
-                Ok(new_value)
+            let new_value = if next > self.max_value {
+                if self.cycle {
+                    self.min_value
+                } else {
+                    return Err(StorageError::db_error(format!(
+                        "Sequence '{}' overflow: value {} would exceed max_value {}",
+                        self.name, next, self.max_value
+                    )));
+                }
+            } else if next < self.min_value {
+                if self.cycle {
+                    self.max_value
+                } else {
+                    return Err(StorageError::db_error(format!(
+                        "Sequence '{}' underflow: value {} would go below min_value {}",
+                        self.name, next, self.min_value
+                    )));
+                }
             } else {
-                Err(StorageError::db_error(format!(
-                    "Sequence '{}' overflow: value {} would exceed max_value {}",
-                    self.name, next, self.max_value
-                )))
+                next
+            };
+
+            match self.current_value.compare_exchange(
+                current,
+                new_value,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(new_value),
+                // Lost the race to another increment; retry with fresh state.
+                Err(_) => continue,
             }
-        } else if next < self.min_value {
-            if self.cycle {
-                let new_value = self.max_value;
-                self.current_value.store(new_value, Ordering::SeqCst);
-                Ok(new_value)
-            } else {
-                Err(StorageError::db_error(format!(
-                    "Sequence '{}' underflow: value {} would go below min_value {}",
-                    self.name, next, self.min_value
-                )))
-            }
-        } else {
-            self.current_value.store(next, Ordering::SeqCst);
-            Ok(next)
         }
     }
 

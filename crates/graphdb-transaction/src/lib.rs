@@ -53,8 +53,8 @@ pub use self::mutation_journal::{
     MutationJournal, MutationJournalPosition, MutationResource, TransactionMutationRecord,
 };
 pub use self::mvcc::{
-    InsertTimestampGuard, ReadTimestampGuard, VersionManager, VersionManagerConfig,
-    VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
+    ReadTimestampGuard, VersionManager, VersionManagerConfig, VersionManagerError,
+    VersionManagerResult, RELEASED_TIMESTAMP,
 };
 pub use self::mvcc_watermarks::{capture_watermarks, MvccWatermarks, NO_ACTIVE_SNAPSHOT};
 pub use self::snapshot_tracker::SnapshotTracker;

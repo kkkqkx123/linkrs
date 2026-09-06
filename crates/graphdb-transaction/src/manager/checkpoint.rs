@@ -137,6 +137,11 @@ impl TransactionManager {
     /// Unlike `coordinated_checkpoint`, this does not run a callback — it
     /// gives the caller full control over the checkpoint lifecycle.
     ///
+    /// In-memory mode semantics: the checkpoint is a no-op for durability
+    /// (no WAL, no write gate), but the transaction still captures a snapshot
+    /// timestamp and is recorded in monitoring, so observability stays
+    /// consistent across modes.
+    ///
     /// # Errors
     /// Returns `Err(TransactionError::CheckpointTimeout)` if active writes
     /// do not drain within `timeout`.
@@ -153,6 +158,7 @@ impl TransactionManager {
             return Err(TransactionError::too_many_transactions());
         }
 
+        self.reset_checkpoint_commit_counter();
         if !self.config.in_memory {
             self.checkpoint_gate.pause_writes_and_drain(timeout)?;
         }

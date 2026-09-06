@@ -252,7 +252,7 @@ impl std::fmt::Debug for SequenceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicI64;
+
 
     struct MockStorage {
         data: RwLock<HashMap<String, Vec<u8>>>,

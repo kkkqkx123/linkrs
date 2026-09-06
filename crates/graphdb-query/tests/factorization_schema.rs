@@ -230,7 +230,7 @@ fn e2e_filter_needs_flatten() {
             column_types: vec![],
         },
     );
-    let mut root = filter_node;
+    let root = filter_node;
     // Simulate bottom-up: scan produces 1 flat group, we artificially inject unflat into child schema
     // Instead, test that factorization rewriter does not panic and produces valid schema
     let mut tmp_filter = root.clone();
@@ -283,7 +283,7 @@ fn e2e_union_flattens() {
     assert!(out.is_flat_schema(), "Union should flatten all inputs");
     out.validate_at_most_one_unflat();
     // Verify that RemoveFactorizationRewriter can strip Flatten and restore flat schema.
-    let mut with_flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(1, scan()));
+    let with_flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(1, scan()));
     assert!(explain_contains_flatten(&with_flatten));
     let mut without = with_flatten.clone();
     RemoveFactorizationRewriter::new().rewrite(&mut without);

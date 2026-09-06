@@ -23,7 +23,7 @@ impl LayoutVersion {
     }
 
     pub(crate) fn bump(&self) {
-        // Version is locked to 1 - no increment.
+        self.value.fetch_add(1, Ordering::Relaxed);
     }
 }
 

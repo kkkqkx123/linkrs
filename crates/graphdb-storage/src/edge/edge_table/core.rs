@@ -1016,7 +1016,7 @@ impl TimeTravelEdgeStore {
             .lock()
             .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
 
-        let next_version = 1;
+        let next_version = history_guard.latest_version() + 1;
         self.schema.schema_version = next_version;
 
         let change = PropertyChange::new(

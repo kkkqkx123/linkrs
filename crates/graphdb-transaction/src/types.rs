@@ -115,6 +115,8 @@ pub enum TransactionState {
     Committing,
     /// Abort in progress
     Aborting,
+    /// Committed (terminal)
+    Committed,
     /// Aborted (terminal)
     Aborted,
 }
@@ -190,6 +192,9 @@ impl TransactionState {
     }
 
     /// Check if can abort
+    ///
+    /// A `Committed` transaction can never be aborted; a durable commit whose
+    /// storage finalization failed stays `Committing` (recoverable) instead.
     pub fn can_abort(&self) -> bool {
         matches!(
             self,
@@ -199,7 +204,10 @@ impl TransactionState {
 
     /// Check if has reached a terminal state
     pub fn is_terminal(&self) -> bool {
-        matches!(self, TransactionState::Aborted)
+        matches!(
+            self,
+            TransactionState::Committed | TransactionState::Aborted
+        )
     }
 }
 
@@ -209,6 +217,7 @@ impl fmt::Display for TransactionState {
             TransactionState::Active => write!(f, "Active"),
             TransactionState::Committing => write!(f, "Committing"),
             TransactionState::Aborting => write!(f, "Aborting"),
+            TransactionState::Committed => write!(f, "Committed"),
             TransactionState::Aborted => write!(f, "Aborted"),
         }
     }
@@ -238,6 +247,11 @@ mod tests {
         assert!(!TransactionState::Aborting.can_commit());
         assert!(TransactionState::Aborting.can_abort());
         assert!(!TransactionState::Aborting.is_terminal());
+
+        assert!(!TransactionState::Committed.can_execute());
+        assert!(!TransactionState::Committed.can_commit());
+        assert!(!TransactionState::Committed.can_abort());
+        assert!(TransactionState::Committed.is_terminal());
 
         assert!(!TransactionState::Aborted.can_execute());
         assert!(!TransactionState::Aborted.can_commit());

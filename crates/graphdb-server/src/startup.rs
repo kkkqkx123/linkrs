@@ -349,6 +349,29 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     let _cleanup_task = transaction_manager.start_auto_cleanup_task();
     info!("Transaction manager initialized with StatsManager");
 
+    // Re-drive durable-but-unfinalized commits left by a previous process.
+    // Storage WAL replay already ran during `GraphStorage::open...` above,
+    // so page-level redo is complete; this completes the transaction-level
+    // half (storage finalization + commit-timestamp allocation) from the
+    // sidecar file next to the WAL directory. A failure is logged without
+    // blocking startup: recovery is re-runnable on demand.
+    transaction_manager.set_recovery_sidecar_path(
+        PathBuf::from(config.storage_path())
+            .join("wal")
+            .join("pending.sidecar"),
+    );
+    match transaction_manager.startup_recovery() {
+        Ok(0) => {}
+        Ok(recovered) => info!(
+            "Transaction startup recovery completed {} commit(s)",
+            recovered
+        ),
+        Err(error) => log::warn!(
+            "Transaction startup recovery reported an error: {}; continuing startup",
+            error
+        ),
+    }
+
     // Create GraphService with shared VectorBackend to avoid duplicate initialization
     #[cfg(feature = "vector")]
     let graph_service = if let Some(backend) = &vector_backend {

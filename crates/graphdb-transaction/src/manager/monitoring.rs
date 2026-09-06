@@ -40,9 +40,37 @@ impl TransactionManager {
     /// Called once at startup (after WAL replay) and can also be invoked
     /// on demand by an administrator.
     ///
+    /// Recovery runs in two stages: first, same-process pendings that still
+    /// have a live transaction context are re-driven through
+    /// `recover_pending_finalization` (retrying storage finalization,
+    /// allocating the commit timestamp, and completing the commit); then the
+    /// remaining queue plus any sidecar records are accounted for at the
+    /// storage level via `RecoveryManager::recover`.
+    ///
     /// Returns the number of recovered commits.
     pub fn startup_recovery(&self) -> Result<usize, TransactionError> {
-        self.recovery.recover(self.commit_sink.as_deref())
+        let mut recovered = 0usize;
+        for txn_id in self.recovery.pending_txn_ids() {
+            match self.recover_pending_finalization(txn_id) {
+                Ok(()) => recovered += 1,
+                Err(error) => {
+                    log::warn!(
+                        "startup recovery could not re-drive transaction {}: {}; \
+                         left queued for the next attempt",
+                        txn_id,
+                        error
+                    );
+                }
+            }
+        }
+        recovered += self.recovery.recover(self.commit_sink.as_deref())?;
+        Ok(recovered)
+    }
+
+    /// Mirror the recovery pending queue to a sidecar file so
+    /// unfinalized-commit intent survives a process crash.
+    pub fn set_recovery_sidecar_path(&self, path: impl Into<std::path::PathBuf>) {
+        self.recovery.set_sidecar_path(path);
     }
 
     /// Get statistics

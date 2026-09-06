@@ -252,7 +252,6 @@ impl RewriteRule for ExtractEquiJoinKeysRule {
 mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-    use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 

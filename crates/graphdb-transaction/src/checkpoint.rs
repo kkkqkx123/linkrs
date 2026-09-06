@@ -36,6 +36,12 @@ pub struct CheckpointGate {
     in_storage_phase: AtomicBool,
     /// Number of active write transactions currently in-flight.
     /// Used to determine when the gate has fully drained.
+    ///
+    /// Deliberately separate from the `active_transactions` table: gate
+    /// acquire/release and table insert/remove cannot be atomic under
+    /// concurrent commit/abort, so the two counters are only comparable at
+    /// quiescence (see `TransactionManager::active_write_count`). The gate
+    /// counter drives drain wakeups; the table drives ownership and GC.
     active_writes: AtomicU64,
     /// Condvar for checkpoint thread to wait on until active_writes reaches 0.
     condvar: Condvar,
@@ -352,6 +358,92 @@ mod tests {
         // Drain with short timeout should fail.
         let result = gate.pause_writes_and_drain(Duration::from_millis(50));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn checkpoint_gate_timeout_resumes_write_gate() {
+        let gate = CheckpointGate::new();
+        gate.acquire_write().expect("acquire should succeed");
+
+        let result = gate.pause_writes_and_drain(Duration::from_millis(50));
+        assert!(result.is_err());
+
+        // The timed-out drain must resume writes instead of deadlocking them.
+        assert!(!gate.is_paused());
+        gate.release_write();
+        assert!(gate.acquire_write().is_ok());
+        assert_eq!(gate.active_write_count(), 1);
+    }
+
+    #[test]
+    fn write_gate_lease_is_not_leaked_by_begin_commit_abort() {
+        use crate::types::{TransactionManagerConfig, TransactionOptions};
+
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        for _ in 0..5 {
+            let txn_id = manager
+                .begin_insert_transaction(TransactionOptions::default())
+                .expect("begin should succeed");
+            manager
+                .commit_transaction(txn_id)
+                .expect("commit should succeed");
+
+            let aborted = manager
+                .begin_insert_transaction(TransactionOptions::default())
+                .expect("begin should succeed");
+            manager
+                .abort_transaction(aborted)
+                .expect("abort should succeed");
+        }
+
+        // At quiescence the gate counter and the active-write table agree.
+        assert_eq!(manager.checkpoint_gate().active_write_count(), 0);
+        assert_eq!(manager.active_write_count(), 0);
+    }
+
+    #[test]
+    fn failed_begin_does_not_leak_write_gate_lease() {
+        use crate::types::{TransactionManagerConfig, TransactionOptions};
+
+        let config = TransactionManagerConfig {
+            max_concurrent_transactions: 1,
+            ..Default::default()
+        };
+        let manager = TransactionManager::new(config);
+        let first = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("first begin should succeed");
+
+        // The second begin fails admission and must release its gate lease.
+        assert!(manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .is_err());
+        assert_eq!(manager.checkpoint_gate().active_write_count(), 1);
+
+        manager
+            .commit_transaction(first)
+            .expect("commit should succeed");
+        assert_eq!(manager.checkpoint_gate().active_write_count(), 0);
+        assert_eq!(manager.active_write_count(), 0);
+    }
+
+    #[test]
+    fn in_memory_mode_bypasses_write_gate() {
+        use crate::types::{TransactionManagerConfig, TransactionOptions};
+
+        let config = TransactionManagerConfig {
+            in_memory: true,
+            ..Default::default()
+        };
+        let manager = TransactionManager::new(config);
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("begin should succeed");
+        manager
+            .commit_transaction(txn_id)
+            .expect("commit should succeed");
+
+        assert_eq!(manager.checkpoint_gate().active_write_count(), 0);
     }
 
     #[test]

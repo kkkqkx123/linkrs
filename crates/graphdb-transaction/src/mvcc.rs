@@ -359,16 +359,54 @@ impl VersionManager {
         Ok(ts)
     }
 
-    pub fn acquire_insert_timestamp_with_timeout(&self, _timeout: Duration) -> Option<Timestamp> {
-        self.acquire_insert_timestamp().ok()
-    }
-
     pub fn commit_write_timestamp(&self, ts: Timestamp) {
+        // System/internal use only (storage background tasks such as
+        // compaction and GC leases that own no transaction context and bypass
+        // transaction certification). User transactions MUST go through
+        // `TransactionManager::commit_transaction`, which allocates a commit
+        // timestamp via `allocate_commit_timestamp` after WAL durability and
+        // storage finalization. Calling this directly for a user write would
+        // publish visibility ordered by start time instead of commit time.
         self.finish_write_timestamp(ts, WriteTimestampState::Committed);
     }
 
     pub fn abort_write_timestamp(&self, ts: Timestamp) {
         self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
+    }
+
+    /// Allocate a commit timestamp at commit time and retire the start slot.
+    ///
+    /// This restores Ladybug semantics (`commitTS = ++lastTimestamp`): read
+    /// visibility is ordered by commit time, not by transaction start time.
+    /// The start slot is retired as `Committed` (releasing its snapshot and
+    /// pending count) and the freshly allocated commit timestamp is inserted
+    /// as `Committed`, so the read frontier advances over both in one step.
+    /// Out-of-order commits therefore never pin the frontier behind a
+    /// still-pending start timestamp: every allocated timestamp reaches a
+    /// terminal state exactly once, at commit time.
+    ///
+    /// Must only be called after the commit is durable (WAL) and storage
+    /// finalization succeeded; otherwise unfinalized writes would become
+    /// visible to new readers.
+    pub fn allocate_commit_timestamp(
+        &self,
+        start_ts: Timestamp,
+    ) -> VersionManagerResult<Timestamp> {
+        let _guard = self.write_lock.lock();
+        let commit_ts = self.reserve_timestamp()?;
+        let mut states = self.write_states.lock();
+        if let Some((_, entry)) = states.get_mut(&start_ts) {
+            if *entry == WriteTimestampState::Pending {
+                *entry = WriteTimestampState::Committed;
+                let _ = self.snapshot_tracker.release_snapshot(start_ts);
+                self.write_pending.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        states.insert(commit_ts, (Instant::now(), WriteTimestampState::Committed));
+        self.advance_read_frontier(&mut states);
+        drop(states);
+        self.write_condvar.notify_all();
+        Ok(commit_ts)
     }
 
     fn finish_write_timestamp(&self, ts: Timestamp, state: WriteTimestampState) {
@@ -528,45 +566,6 @@ impl Drop for ReadTimestampGuard {
     }
 }
 
-pub struct InsertTimestampGuard {
-    version_manager: Arc<VersionManager>,
-    timestamp: Option<Timestamp>,
-}
-
-impl InsertTimestampGuard {
-    pub fn new(version_manager: Arc<VersionManager>) -> VersionManagerResult<Self> {
-        let timestamp = version_manager.acquire_insert_timestamp()?;
-        Ok(Self {
-            version_manager,
-            timestamp: Some(timestamp),
-        })
-    }
-
-    pub fn timestamp(&self) -> Timestamp {
-        self.timestamp.unwrap_or(0)
-    }
-
-    pub fn commit(mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.commit_write_timestamp(ts);
-        }
-    }
-
-    pub fn abort(mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.abort_write_timestamp(ts);
-        }
-    }
-}
-
-impl Drop for InsertTimestampGuard {
-    fn drop(&mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.abort_write_timestamp(ts);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,15 +599,22 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_timestamp_guard() {
+    fn test_insert_timestamp_acquire_commit_abort() {
         let vm = Arc::new(VersionManager::new());
 
-        {
-            let guard = InsertTimestampGuard::new(vm.clone()).expect("guard should be created");
-            let ts = guard.timestamp();
-            assert!(ts >= 1);
-        }
+        // Committed system write leaves no pending slot.
+        let ts = vm
+            .acquire_insert_timestamp()
+            .expect("acquire should succeed");
+        assert!(ts >= 1);
+        vm.commit_write_timestamp(ts);
+        assert_eq!(vm.pending_count(), 0);
 
+        // Aborted system write (drop without commit) leaves no pending slot.
+        let ts = vm
+            .acquire_insert_timestamp()
+            .expect("acquire should succeed");
+        vm.abort_write_timestamp(ts);
         assert_eq!(vm.pending_count(), 0);
     }
 
@@ -638,9 +644,11 @@ mod tests {
         for _ in 0..10 {
             let vm_clone = vm.clone();
             handles.push(thread::spawn(move || {
-                let guard = InsertTimestampGuard::new(vm_clone).expect("guard should be created");
-                let ts = guard.timestamp();
+                let ts = vm_clone
+                    .acquire_insert_timestamp()
+                    .expect("acquire should succeed");
                 thread::sleep(Duration::from_millis(10));
+                vm_clone.commit_write_timestamp(ts);
                 ts
             }));
         }

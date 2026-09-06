@@ -221,10 +221,28 @@ impl ConnectionManager {
         self.connections.len()
     }
 
+    /// Canonical owner string for transactions bound to a connection.
+    ///
+    /// The transaction-level `owner` field carries this projection of the
+    /// `ConnectionId`, so manager-level ownership checks
+    /// (`check_transaction_owner`) and connection binding share one source
+    /// instead of two parallel mechanisms. The `conn:` prefix namespaces
+    /// connection owners away from session-id owners used by the HTTP/gRPC
+    /// APIs (`begin_transaction_with_owner`), so a session id that happens
+    /// to equal a connection id can never claim another connection's
+    /// transaction.
+    pub fn owner_for_connection(conn_id: ConnectionId) -> String {
+        format!("conn:{conn_id}")
+    }
+
     /// Begin a transaction for the given connection.
     ///
     /// In AUTO mode this is used internally by `execute_auto_commit`.
     /// In MANUAL mode the caller must explicitly commit/abort.
+    ///
+    /// The transaction is stamped with this connection as its owner, so a
+    /// different connection cannot commit or abort it through the
+    /// owner-checked manager APIs.
     pub fn begin_for_connection(
         &self,
         manager: &TransactionManager,
@@ -242,11 +260,20 @@ impl ConnectionManager {
             )));
         }
         let txn_id = manager.begin_transaction(options)?;
+        if let Err(error) =
+            manager.set_transaction_owner(txn_id, Self::owner_for_connection(conn_id))
+        {
+            let _ = manager.abort_transaction(txn_id);
+            return Err(error);
+        }
         conn.bind_transaction(txn_id);
         Ok(txn_id)
     }
 
     /// Commit the connection's current transaction.
+    ///
+    /// Ownership is verified before committing: a transaction bound to
+    /// another connection is rejected with `transaction_not_owner`.
     pub fn commit_for_connection(
         &self,
         manager: &TransactionManager,
@@ -258,12 +285,16 @@ impl ConnectionManager {
         let txn_id = conn.current_transaction().ok_or_else(|| {
             TransactionError::internal(format!("Connection {} has no active transaction", conn_id))
         })?;
+        manager.check_transaction_owner(txn_id, Some(&Self::owner_for_connection(conn_id)))?;
         manager.commit_transaction(txn_id)?;
         conn.unbind_transaction();
         Ok(())
     }
 
     /// Abort the connection's current transaction.
+    ///
+    /// Ownership is verified before aborting: a transaction bound to
+    /// another connection is rejected with `transaction_not_owner`.
     pub fn abort_for_connection(
         &self,
         manager: &TransactionManager,
@@ -275,6 +306,7 @@ impl ConnectionManager {
         let txn_id = conn.current_transaction().ok_or_else(|| {
             TransactionError::internal(format!("Connection {} has no active transaction", conn_id))
         })?;
+        manager.check_transaction_owner(txn_id, Some(&Self::owner_for_connection(conn_id)))?;
         manager.abort_transaction(txn_id)?;
         conn.unbind_transaction();
         Ok(())
@@ -285,7 +317,9 @@ impl ConnectionManager {
     /// If the connection is in AUTO mode, a transaction is begun, the closure
     /// is executed, and the transaction is committed (or aborted on error).
     /// If in MANUAL mode and a transaction is already active, the closure runs
-    /// inside that transaction without auto-commit.
+    /// inside that transaction without auto-commit. A MANUAL connection
+    /// without an active transaction is an explicit error instead of an
+    /// implicit one-shot transaction.
     pub fn execute_auto_commit<F, T, E>(
         &self,
         manager: &TransactionManager,
@@ -307,9 +341,14 @@ impl ConnectionManager {
                 let ctx = manager.get_context(txn_id)?;
                 return operation(&ctx).map_err(Into::into);
             }
+            return Err(TransactionError::internal(format!(
+                "Connection {} in MANUAL mode has no active transaction",
+                conn_id
+            )));
         }
 
-        // AUTO mode or MANUAL without active txn: one-shot transaction
+        // AUTO mode: one-shot transaction (MANUAL without an active
+        // transaction was rejected above).
         let txn_id = manager.begin_transaction(options)?;
         // Only bind if MANUAL mode expects to keep it (but for auto-commit helper we commit immediately,
         // so we don't bind to connection; we just use the txn directly)
@@ -474,6 +513,93 @@ mod tests {
                 .current_transaction(),
             None
         );
+    }
+
+    #[test]
+    fn test_read_only_transaction_rejects_journal_writes() {
+        use crate::{TransactionErrorKind, TransactionManagerConfig};
+
+        let txn_mgr = TransactionManager::new(TransactionManagerConfig::default());
+        let reader = txn_mgr
+            .begin_read_transaction(crate::TransactionOptions::default().read_only())
+            .expect("reader should begin");
+
+        // Statement entry is intent-free and succeeds for reads.
+        let (context, start) = txn_mgr
+            .begin_statement(reader)
+            .expect("begin should succeed");
+        txn_mgr
+            .finish_statement(&context, start)
+            .expect("finish should succeed");
+        txn_mgr
+            .refresh_statement_snapshot(reader)
+            .expect("refresh should succeed");
+
+        // But the journal itself rejects writes on read-only transactions, so
+        // a write that slips past the query-layer plan check fails fast here
+        // instead of being silently dropped at commit.
+        let context = txn_mgr.get_context(reader).expect("context should exist");
+        let error = context
+            .record_mutation(crate::types::MutationResult::new(
+                crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+            ))
+            .expect_err("journal write on a read-only transaction must be rejected");
+        assert_eq!(error.kind(), TransactionErrorKind::ReadOnlyTransaction);
+    }
+
+    #[test]
+    fn test_connection_ownership_is_enforced_across_connections() {
+        use crate::{TransactionErrorKind, TransactionManagerConfig};
+
+        let txn_mgr = TransactionManager::new(TransactionManagerConfig::default());
+        let conn_mgr = ConnectionManager::new();
+        let conn_a = conn_mgr.create_connection_with_mode(TransactionMode::Manual);
+        let conn_b = conn_mgr.create_connection_with_mode(TransactionMode::Manual);
+
+        let txn_id = conn_mgr
+            .begin_for_connection(&txn_mgr, conn_a, crate::TransactionOptions::default())
+            .expect("begin should succeed");
+
+        // The transaction carries connection A's ownership.
+        let context = txn_mgr.get_context(txn_id).expect("context should exist");
+        assert_eq!(
+            context.owner().as_deref(),
+            Some(ConnectionManager::owner_for_connection(conn_a).as_str())
+        );
+
+        // Connection B cannot take over through the owner-checked manager API.
+        let error = txn_mgr
+            .commit_transaction_as_owner(
+                txn_id,
+                Some(&ConnectionManager::owner_for_connection(conn_b)),
+            )
+            .expect_err("cross-connection commit must be rejected");
+        assert_eq!(error.kind(), TransactionErrorKind::TransactionNotOwner);
+
+        // Connection B has no transaction of its own either.
+        assert!(conn_mgr.commit_for_connection(&txn_mgr, conn_b).is_err());
+
+        // The owning connection commits normally.
+        conn_mgr
+            .commit_for_connection(&txn_mgr, conn_a)
+            .expect("owner commit should succeed");
+    }
+
+    #[test]
+    fn test_execute_auto_commit_in_manual_without_txn_fails() {
+        use crate::{TransactionError, TransactionManagerConfig};
+
+        let txn_mgr = TransactionManager::new(TransactionManagerConfig::default());
+        let conn_mgr = ConnectionManager::new();
+        let conn_id = conn_mgr.create_connection_with_mode(TransactionMode::Manual);
+
+        let result: Result<(), TransactionError> = conn_mgr.execute_auto_commit(
+            &txn_mgr,
+            conn_id,
+            crate::TransactionOptions::default(),
+            |_| Ok::<(), TransactionError>(()),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

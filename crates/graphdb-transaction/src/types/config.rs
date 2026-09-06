@@ -12,6 +12,13 @@ pub use graphdb_core::types::DurabilityLevel;
 pub use graphdb_core::types::TransactionIsolationLevel as IsolationLevel;
 
 /// Concurrency mode for write transactions.
+///
+/// `Optimistic` stays the default: the global certification lock in
+/// `Certifier` already serializes the check-then-publish critical section,
+/// so multi-write OCC is correct without forcing single-writer
+/// serialization. `SingleWriter`
+/// remains an explicit opt-in for workloads that prefer exclusive write
+/// leases over commit-time conflict retries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConcurrencyMode {
     /// Standard optimistic concurrency — conflict detection at commit time.
@@ -282,14 +289,16 @@ pub struct TransactionManagerConfig {
     pub group_commit_enabled: bool,
     /// Timeout for group commit follower wait.
     pub group_commit_timeout: Duration,
-    /// Number of certification shards for write-set conflict detection.
-    /// Must be a power of two. Default 64.
-    pub cert_shard_count: usize,
     /// Whether to automatically trigger a checkpoint after a successful write
     /// transaction commit when WAL thresholds are exceeded. The checkpoint is
     /// initiated via the [`TransactionCommitSink::auto_checkpoint_if_needed`]
     /// method, which is non-blocking and delegated to the storage layer.
     pub auto_checkpoint_after_commit: bool,
+    /// Number of committed write transactions since the last checkpoint that
+    /// triggers an auto-checkpoint offer. 1 preserves the legacy behavior
+    /// (offer after every write commit); higher values batch the offers.
+    /// Evaluated by `TransactionManager::should_auto_checkpoint`.
+    pub auto_checkpoint_commit_threshold: u64,
 }
 
 impl Default for TransactionManagerConfig {
@@ -304,8 +313,8 @@ impl Default for TransactionManagerConfig {
             in_memory: false,
             group_commit_enabled: true,
             group_commit_timeout: Duration::from_secs(30),
-            cert_shard_count: 64,
             auto_checkpoint_after_commit: true,
+            auto_checkpoint_commit_threshold: 1,
         }
     }
 }
@@ -327,21 +336,13 @@ impl TransactionManagerConfig {
         self
     }
 
-    pub fn with_cert_shard_count(mut self, count: usize) -> Self {
-        assert!(
-            count.is_power_of_two(),
-            "cert_shard_count must be power of two"
-        );
-        assert!(
-            count > 0 && count <= 256,
-            "cert_shard_count must be 1..=256"
-        );
-        self.cert_shard_count = count;
+    pub fn with_auto_checkpoint_after_commit(mut self, enabled: bool) -> Self {
+        self.auto_checkpoint_after_commit = enabled;
         self
     }
 
-    pub fn with_auto_checkpoint_after_commit(mut self, enabled: bool) -> Self {
-        self.auto_checkpoint_after_commit = enabled;
+    pub fn with_auto_checkpoint_commit_threshold(mut self, threshold: u64) -> Self {
+        self.auto_checkpoint_commit_threshold = threshold;
         self
     }
 

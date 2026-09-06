@@ -73,6 +73,9 @@ pub struct TransactionManager {
     pub(super) recovery: RecoveryManager,
     /// Cleanup of expired and idle transactions.
     pub(super) cleaner: TransactionCleaner,
+    /// Committed write transactions since the last checkpoint. Compared
+    /// against `auto_checkpoint_commit_threshold` by `should_auto_checkpoint`.
+    commits_since_checkpoint: AtomicU64,
 }
 
 impl TransactionManager {
@@ -83,18 +86,13 @@ impl TransactionManager {
     ) -> Self {
         let monitor = TransactionMonitor::new(Arc::clone(&stats));
         let checkpoint_gate = Arc::new(CheckpointGate::new());
-        let cleaner = TransactionCleaner::new(
-            None,
-            Arc::clone(&version_manager),
-            Arc::clone(&checkpoint_gate),
-            Arc::clone(&stats),
-        );
-        let cert_shard_count = config.cert_shard_count;
+        let cleaner = TransactionCleaner::new(Arc::clone(&version_manager), Arc::clone(&stats));
         let manager = Self {
             version_manager,
             config: config.clone(),
             active_transactions: DashMap::new(),
             id_generator: AtomicU64::new(1),
+            commits_since_checkpoint: AtomicU64::new(0),
             stats,
             commit_callbacks: RwLock::new(Arc::from(Vec::new())),
             rollback_callbacks: RwLock::new(Arc::from(Vec::new())),
@@ -103,7 +101,7 @@ impl TransactionManager {
             sync_manager: None,
             commit_sink: None,
             checkpoint_gate,
-            certifier: Certifier::with_shard_count(cert_shard_count),
+            certifier: Certifier::new(),
             write_exclusion_owner: AtomicU64::new(0),
             recovery: RecoveryManager::new(),
             cleaner,
@@ -143,26 +141,32 @@ impl TransactionManager {
 
     pub(super) fn emit_commit_event(&self, event: TransactionEvent) {
         let callbacks = Arc::clone(&self.commit_callbacks.read());
-        for callback in callbacks.iter() {
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for (index, callback) in callbacks.iter().enumerate() {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 callback(&event);
-            }))
-            .is_err()
-            {
-                log::warn!("commit callback panicked; continuing dispatch");
+            })) {
+                log::error!(
+                    "commit callback #{} panicked: {}; continuing dispatch",
+                    index,
+                    panic_payload_message(&payload)
+                );
+                self.stats.increment_cleanup_failure();
             }
         }
     }
 
     pub(super) fn emit_rollback_event(&self, event: TransactionEvent) {
         let callbacks = Arc::clone(&self.rollback_callbacks.read());
-        for callback in callbacks.iter() {
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for (index, callback) in callbacks.iter().enumerate() {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 callback(&event);
-            }))
-            .is_err()
-            {
-                log::warn!("rollback callback panicked; continuing dispatch");
+            })) {
+                log::error!(
+                    "rollback callback #{} panicked: {}; continuing dispatch",
+                    index,
+                    panic_payload_message(&payload)
+                );
+                self.stats.increment_cleanup_failure();
             }
         }
     }
@@ -207,8 +211,7 @@ impl TransactionManager {
 
     /// Attach a sync manager after construction.
     pub fn set_sync_manager(&mut self, sync_manager: Arc<SyncManager>) {
-        self.sync_manager = Some(sync_manager.clone());
-        self.cleaner.set_sync_manager(Some(sync_manager));
+        self.sync_manager = Some(sync_manager);
     }
 
     /// Attach a sync manager so transaction completion can clean up index buffers.
@@ -443,12 +446,19 @@ impl TransactionManager {
         let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
 
         if context.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
-            let prev = self.write_exclusion_owner.swap(txn_id.0, Ordering::SeqCst);
-            if prev != 0 {
+            // Use compare_exchange so a failed contender does not overwrite the
+            // legitimate owner's id (swap would corrupt ownership tracking).
+            // The timestamp acquired above must be released on contention,
+            // otherwise the write frontier stays pinned by an orphaned Pending slot.
+            if self
+                .write_exclusion_owner
+                .compare_exchange(0, txn_id.0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                self.version_manager.abort_write_timestamp(timestamp);
                 if !self.config.in_memory {
                     self.checkpoint_gate.release_write();
                 }
-                self.active_transactions.remove(&txn_id);
                 return Err(TransactionError::write_transaction_conflict());
             }
             context.set_pessimistic_lock();
@@ -545,6 +555,15 @@ impl TransactionManager {
 
     /// Begin a statement in a transaction and refresh a READ COMMITTED
     /// snapshot. Repeatable-read transactions keep their original snapshot.
+    ///
+    /// Single entry point (no statement-kind flag): the statement kind is not
+    /// knowable here — the query is planned after the statement scope opens —
+    /// so read-only enforcement lives downstream instead of an intent
+    /// parameter: the query layer rejects write operators in read-only scopes
+    /// before execution (`reject_writes_outside_transaction_scope`),
+    /// `TransactionContext::record_mutation` rejects journal writes on
+    /// read-only transactions if they ever reach the journal, and commit
+    /// certification rejects them at commit time.
     pub fn begin_statement(
         &self,
         txn_id: TransactionId,
@@ -562,6 +581,10 @@ impl TransactionManager {
 
     /// Refresh a transaction's statement snapshot without opening a
     /// materialized statement scope. This is used by lazy result streams.
+    ///
+    /// Same single-entry contract as `begin_statement`: no statement-kind
+    /// flag, read-only enforcement lives in the query layer, the mutation
+    /// recorder, and commit certification.
     pub fn refresh_statement_snapshot(
         &self,
         txn_id: TransactionId,
@@ -658,6 +681,78 @@ impl TransactionManager {
         &self.checkpoint_gate
     }
 
+    /// Release a write transaction's manager-owned leases exactly once.
+    ///
+    /// Single release point shared by the commit path (lease released before
+    /// storage finalization so checkpoints do not wait for it) and every
+    /// abort path. The one-way `mark_resources_released` flag makes a second
+    /// call a no-op: without it, a commit that released the gate and then
+    /// failed finalization (or commit-timestamp allocation) would release the
+    /// gate a second time when the still-`Committing` transaction is aborted,
+    /// underflowing the gate counter and wedging checkpoint drain until
+    /// timeout. Timestamp retirement needs no such guard — retiring an
+    /// already-terminal slot is a no-op by state check.
+    ///
+    /// Returns true if this call performed the release.
+    pub(super) fn release_write_lease(&self, context: &Arc<TransactionContext>) -> bool {
+        if !context.mark_resources_released() {
+            return false;
+        }
+        if context.txn_type != TransactionType::Write {
+            return true;
+        }
+        if context.has_pessimistic_lock() {
+            self.write_exclusion_owner.store(0, Ordering::SeqCst);
+        }
+        if !self.config.in_memory {
+            self.checkpoint_gate.release_write();
+        }
+        true
+    }
+
+    /// Whether a checkpoint should be triggered after the latest commit.
+    ///
+    /// Threshold-based (commit count since the last checkpoint) instead of a
+    /// plain boolean: with the default threshold of 1 the behavior matches
+    /// the legacy `auto_checkpoint_after_commit` flag (checkpoint offered
+    /// after every write commit); higher thresholds batch the offers. The
+    /// decision is only an offer — the commit sink decides via
+    /// `auto_checkpoint_if_needed` whether its WAL pressure warrants one.
+    /// WAL-byte pressure itself lives in the storage layer
+    /// (`should_checkpoint` on WAL size), not here: this counter only
+    /// throttles how often the offer is made. In-memory mode never checkpoints.
+    pub fn should_auto_checkpoint(&self) -> bool {
+        if !self.config.auto_checkpoint_after_commit || self.config.in_memory {
+            return false;
+        }
+        let threshold = self.config.auto_checkpoint_commit_threshold.max(1);
+        self.commits_since_checkpoint.load(Ordering::Relaxed) >= threshold
+    }
+
+    /// Reset the commits-since-checkpoint counter (called when a checkpoint
+    /// begins).
+    pub(super) fn reset_checkpoint_commit_counter(&self) {
+        self.commits_since_checkpoint.store(0, Ordering::Relaxed);
+    }
+
+    /// Number of `Active` write transactions currently in the table.
+    ///
+    /// Together with `CheckpointGate::active_write_count` this is the
+    /// observable pair for lease-leak tests: at quiescence (no in-flight
+    /// lifecycle transitions) both must be zero. They are intentionally not
+    /// asserted against each other on lifecycle paths because acquire and
+    /// table insertion (or state transition and release) cannot be atomic
+    /// under concurrent commits.
+    pub fn active_write_count(&self) -> usize {
+        self.active_transactions
+            .iter()
+            .filter(|entry| {
+                entry.value().txn_type == TransactionType::Write
+                    && entry.value().state() == TransactionState::Active
+            })
+            .count()
+    }
+
     /// Get configuration
     pub fn config(&self) -> TransactionManagerConfig {
         self.config.clone()
@@ -683,6 +778,13 @@ impl TransactionManager {
         };
 
         for txn_id in txn_ids {
+            // Committed transactions are terminal and must never be aborted;
+            // they normally leave the table on commit, this is defense in depth.
+            if let Some(entry) = self.active_transactions.get(&txn_id) {
+                if entry.value().state() == TransactionState::Committed {
+                    continue;
+                }
+            }
             if let Err(error) = self.abort_transaction(txn_id) {
                 log::error!(
                     "Abort failed for transaction {} during shutdown: {}",
@@ -708,6 +810,16 @@ pub(super) fn rollback_context_timestamp(
         }
         TransactionType::Write => version_manager.abort_write_timestamp(context.timestamp()),
         _ => {}
+    }
+}
+
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        message.to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
     }
 }
 

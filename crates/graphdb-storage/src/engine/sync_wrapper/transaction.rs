@@ -98,4 +98,13 @@ impl<S: StorageClient + graphdb_transaction::UndoTarget + 'static>
             .map_err(|error| error.to_string())?;
         Ok(())
     }
+
+    fn recover_unfinalized_commits(&self) -> Result<usize, String> {
+        // Page-level redo belongs to storage WAL replay on open; fact-table
+        // post-commit finalization (`finalize_commit_fact`) is idempotent, so
+        // same-process re-drive happens through the manager's pending queue
+        // (`recover_pending_finalization`). Nothing extra is durable here yet,
+        // report zero rather than silently inheriting the default no-op.
+        Ok(0)
+    }
 }

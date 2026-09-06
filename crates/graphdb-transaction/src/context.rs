@@ -33,6 +33,11 @@ pub struct TransactionContext {
     state: AtomicCell<TransactionState>,
     /// Start timestamp (MVCC)
     pub start_timestamp: Timestamp,
+    /// Commit timestamp allocated at commit time (0 = not yet committed).
+    ///
+    /// Read visibility is ordered by this timestamp, never by
+    /// `start_timestamp`: see `VersionManager::allocate_commit_timestamp`.
+    commit_timestamp: AtomicU64,
     /// Snapshot timestamp for time-travel reads (None = use start_timestamp)
     snapshot_timestamp: RwLock<Option<Timestamp>>,
     /// Start time (for timeout tracking)
@@ -69,9 +74,12 @@ pub struct TransactionContext {
     write_set: Mutex<WriteSet>,
     /// Read set for Serializable certification.
     read_set: Mutex<WriteSet>,
-    /// Redo metadata retained for savepoint and certification boundaries.
-    redo_entries: RwLock<Vec<crate::wal::TransactionWalEntry>>,
-    /// Two-tier WAL: in-memory local buffer flushed at commit.
+    /// Materialized WAL cache derived from the mutation journal.
+    ///
+    /// The journal is the single source of truth; this buffer only holds a
+    /// commit-time materialization (see `materialize_wal_buffer`) so the
+    /// flush path can hand entries to the global WAL writer. It is never
+    /// written in parallel with the journal.
     local_wal: Mutex<LocalWalBuffer>,
     /// Whether this transaction has passed write set conflict validation
     write_validated: AtomicCell<bool>,
@@ -162,9 +170,6 @@ impl SavepointManager {
             sync_sequence: params.sync_sequence,
             write_set: params.write_set,
             read_set: params.read_set,
-            redo_log_index: params.redo_log_index,
-            local_wal_entry_len: params.local_wal_entry_len,
-            local_wal_intent_len: params.local_wal_intent_len,
             modified_tables: params.modified_tables,
             journal_len: params.journal_len,
             journal_next_sequence: params.journal_next_sequence,
@@ -203,6 +208,7 @@ impl TransactionContext {
             txn_type: TransactionType::Write,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
+            commit_timestamp: AtomicU64::new(0),
             snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
@@ -221,7 +227,6 @@ impl TransactionContext {
             undo_logs: RwLock::new(UndoLogManager::new()),
             write_set: Mutex::new(WriteSet::new()),
             read_set: Mutex::new(WriteSet::new()),
-            redo_entries: RwLock::new(Vec::new()),
             local_wal: Mutex::new(LocalWalBuffer::new()),
             write_validated: AtomicCell::new(false),
             rollback_only: AtomicCell::new(false),
@@ -258,6 +263,7 @@ impl TransactionContext {
             txn_type: TransactionType::ReadOnly,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
+            commit_timestamp: AtomicU64::new(0),
             snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
@@ -276,7 +282,6 @@ impl TransactionContext {
             undo_logs: RwLock::new(UndoLogManager::new()),
             write_set: Mutex::new(WriteSet::new()),
             read_set: Mutex::new(WriteSet::new()),
-            redo_entries: RwLock::new(Vec::new()),
             local_wal: Mutex::new(LocalWalBuffer::new()),
             write_validated: AtomicCell::new(false),
             rollback_only: AtomicCell::new(false),
@@ -328,6 +333,17 @@ impl TransactionContext {
     /// Get the MVCC timestamp
     pub fn timestamp(&self) -> Timestamp {
         self.start_timestamp
+    }
+
+    /// Get the commit timestamp allocated at commit time (0 = not committed).
+    pub fn commit_timestamp(&self) -> Timestamp {
+        self.commit_timestamp.load(Ordering::Relaxed)
+    }
+
+    /// Record the commit timestamp allocated by
+    /// `VersionManager::allocate_commit_timestamp`.
+    pub fn set_commit_timestamp(&self, commit_ts: Timestamp) {
+        self.commit_timestamp.store(commit_ts, Ordering::Relaxed);
     }
 
     /// Get the effective snapshot timestamp for reads
@@ -441,6 +457,14 @@ impl TransactionContext {
         }
     }
 
+    /// One-way flag guarding the manager-owned write leases (checkpoint gate
+    /// slot, single-writer exclusion owner).
+    ///
+    /// Claimed exactly once per transaction by
+    /// `TransactionManager::release_write_lease`, which is shared by the
+    /// commit path and every abort path. Timestamp retirement is NOT covered
+    /// by this flag (retiring an already-terminal slot is a no-op by state
+    /// check) and always runs on abort.
     pub fn mark_resources_released(&self) -> bool {
         self.resources_released
             .compare_exchange(false, true)
@@ -551,8 +575,12 @@ impl TransactionContext {
     ///
     /// Valid transitions form a DAG:
     ///   Active → Committing | Aborting
-    ///   Committing → Aborting | Aborted
+    ///   Committing → Committed | Aborting | Aborted
     ///   Aborting → Aborted
+    ///
+    /// `Committed` is terminal: a transaction that reached it can never be
+    /// aborted. A durable commit whose storage finalization failed stays
+    /// `Committing` so recovery can re-drive finalization.
     pub fn transition_to(&self, new_state: TransactionState) -> Result<(), TransactionError> {
         loop {
             let current = self.state.load();
@@ -564,7 +592,9 @@ impl TransactionContext {
                     TransactionState::Committing | TransactionState::Aborting
                 ) | (
                     TransactionState::Committing,
-                    TransactionState::Aborting | TransactionState::Aborted
+                    TransactionState::Committed
+                        | TransactionState::Aborting
+                        | TransactionState::Aborted
                 ) | (TransactionState::Aborting, TransactionState::Aborted)
             );
 
@@ -637,17 +667,54 @@ impl TransactionContext {
         self.read_set.lock().record_read_range(range);
     }
 
+    /// Number of redo entries staged by this transaction, derived from the
+    /// canonical journal. This is a read-only view; see `materialize_redo`.
     pub fn redo_log_len(&self) -> usize {
-        self.redo_entries.read().len()
+        self.mutation_journal.read().total_redo_entries()
     }
 
-    pub fn truncate_redo_log(&self, index: usize) {
-        self.redo_entries.write().truncate(index);
+    /// Materialize every redo entry held by the journal, in sequence order.
+    ///
+    /// Used by the commit path and savepoint export; the journal remains the
+    /// single source of truth and no parallel redo log is maintained.
+    pub fn materialize_redo(&self) -> Vec<crate::wal::TransactionWalEntry> {
+        self.mutation_journal.read().redo_entries()
     }
 
-    /// Access the two-tier local WAL buffer for direct manipulation.
+    /// Materialize every outbox intent held by the journal, in sequence order.
+    pub fn materialize_wal_intents(&self) -> Vec<graphdb_core::wal::OutboxIntent> {
+        self.mutation_journal.read().wal_intents()
+    }
+
+    /// Rebuild the local WAL cache from the journal.
+    ///
+    /// Called after journal truncation (savepoint rollback, clear) and before
+    /// the commit flush path so the buffer always mirrors the journal.
+    pub fn rebuild_derived_logs(&self) {
+        let journal = self.mutation_journal.read();
+        let mut local = self.local_wal.lock();
+        local.clear();
+        for entry in journal.redo_entries() {
+            let _ = local.append_full_entry(entry);
+        }
+        for intent in journal.wal_intents() {
+            let _ = local.append_intent(intent);
+        }
+    }
+
+    /// Direct access to the derived local WAL cache for tests.
+    ///
+    /// Production code must treat the journal as the single source of truth
+    /// and use `rebuild_derived_logs` / `flush_local_wal` / `clear_derived_wal`
+    /// instead of hand-editing the buffer.
+    #[cfg(test)]
     pub fn local_wal_buffer(&self) -> parking_lot::MutexGuard<'_, LocalWalBuffer> {
         self.local_wal.lock()
+    }
+
+    /// Clear the derived WAL cache (mirrors journal truncation).
+    pub fn clear_derived_wal(&self) {
+        self.local_wal.lock().clear();
     }
 
     /// Number of buffered local WAL bytes (for metrics / backpressure).
@@ -660,16 +727,10 @@ impl TransactionContext {
         self.local_wal.lock().is_empty()
     }
 
-    /// Append a redo entry to both the canonical redo log and the local WAL buffer.
-    pub fn append_local_wal_entry(&self, entry: crate::wal::TransactionWalEntry) {
-        self.redo_entries.write().push(entry.clone());
-        let _ = self
-            .local_wal
-            .lock()
-            .append_entry(entry.op_type, entry.timestamp, entry.payload);
-    }
-
-    /// Flush the local WAL buffer to a global writer (used by storage commit path).
+    /// Flush the materialized local WAL cache to a global writer.
+    ///
+    /// Callers must invoke `rebuild_derived_logs` first so the cache mirrors
+    /// the journal; the flush itself only drains the cache.
     pub fn flush_local_wal(
         &self,
         writer: &mut crate::wal::LocalWalWriter,
@@ -677,6 +738,18 @@ impl TransactionContext {
         let mut buf = self.local_wal.lock();
         buf.flush_to_writer(writer, self.id, self.durability)
             .map_err(|e| TransactionError::internal(e.to_string()))
+    }
+
+    /// Reject write operations on read-only transactions up front.
+    ///
+    /// This is the `validateManualTransaction` equivalent: callers that know
+    /// the statement kind fail fast here instead of wasting execution
+    /// resources only to be rejected at commit certification.
+    pub fn validate_write_allowed(&self) -> Result<(), TransactionError> {
+        if self.read_only {
+            return Err(TransactionError::read_only_transaction());
+        }
+        Ok(())
     }
 
     /// Check if operation can be executed
@@ -753,10 +826,21 @@ impl TransactionContext {
     }
 
     /// Publish a complete mutation result in the canonical metadata order.
-    /// The journal assigns the sequence and is the single source of truth;
-    /// all derived logs are populated from that entry in a fixed order.
+    ///
+    /// The journal is the single source of truth: this method appends exactly
+    /// one journal record and updates the write set, undo log and table
+    /// markers. Redo entries and the local WAL buffer are not written here;
+    /// they are materialized from the journal on demand via
+    /// `materialize_redo` / `rebuild_derived_logs`.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
         self.can_execute()?;
+        // Manager-level fail-fast for read-only transactions. Statement entry
+        // points cannot know the statement kind up front (the query is parsed
+        // after the statement scope opens), so the guard lives on the actual
+        // write path instead of an intent flag: the query layer still rejects
+        // write plans before execution, this rejects them if they ever reach
+        // the journal, and commit certification rejects them at commit time.
+        self.validate_write_allowed()?;
         let new_count = self.mutation_count.fetch_add(1, Ordering::Relaxed) + 1;
         if self.max_mutation_count > 0 && new_count > self.max_mutation_count {
             return Err(TransactionError::transaction_budget_exceeded(
@@ -831,7 +915,7 @@ impl TransactionContext {
             entity_keys: entity_keys.clone(),
             resource,
             undo: mutation.undo_entry.clone(),
-            redo: redo_with_seq.clone(),
+            redo: redo_with_seq,
             index_intents: mutation.index_intents.clone(),
             modified_table: mutation.modified_table.clone(),
             write_timestamp: self.start_timestamp,
@@ -867,17 +951,6 @@ impl TransactionContext {
         }
         if let Some(entry) = mutation.undo_entry {
             self.add_undo_log(entry)?;
-        }
-        if let Some(entry) = redo_with_seq {
-            let cloned = entry.clone();
-            self.redo_entries.write().push(entry);
-            let _ = self.local_wal.lock().append_full_entry(cloned);
-        }
-        {
-            let mut local = self.local_wal.lock();
-            for intent in mutation.index_intents {
-                let _ = local.append_intent(intent);
-            }
         }
         if let Some(table) = mutation.modified_table {
             self.record_table_modification(&table);
@@ -961,11 +1034,11 @@ impl TransactionContext {
     }
 
     /// Create savepoint
+    ///
+    /// The savepoint boundary is the canonical journal length; derived views
+    /// (redo cache, local WAL buffer) are rebuilt from the journal on
+    /// rollback, so no derived offsets are captured here.
     pub fn create_savepoint(&self, name: Option<String>, sync_sequence: u64) -> SavepointId {
-        let (local_entry_len, local_intent_len) = {
-            let buf = self.local_wal.lock();
-            (buf.entry_count(), buf.intent_count())
-        };
         let (journal_len, journal_next) = {
             let j = self.mutation_journal.read();
             (j.len(), j.next_sequence())
@@ -976,9 +1049,6 @@ impl TransactionContext {
             sync_sequence,
             write_set: self.get_write_set(),
             read_set: self.get_read_set(),
-            redo_log_index: self.redo_log_len(),
-            local_wal_entry_len: local_entry_len,
-            local_wal_intent_len: local_intent_len,
             modified_tables: self.get_modified_tables(),
             journal_len,
             journal_next_sequence: journal_next,
@@ -1049,9 +1119,6 @@ impl TransactionContext {
                 journal_len: savepoint_info.journal_len,
                 next_sequence: savepoint_info.journal_next_sequence,
                 undo_log_index: savepoint_info.undo_log_index,
-                redo_log_index: savepoint_info.redo_log_index,
-                local_wal_entry_len: savepoint_info.local_wal_entry_len,
-                local_wal_intent_len: savepoint_info.local_wal_intent_len,
                 modified_tables: savepoint_info.modified_tables.clone(),
                 write_set_snapshot: savepoint_info.write_set.clone(),
                 read_set_snapshot: savepoint_info.read_set.clone(),
@@ -1091,11 +1158,6 @@ impl TransactionContext {
 
         self.restore_write_set(savepoint_info.write_set);
         self.restore_read_set(savepoint_info.read_set);
-        self.truncate_redo_log(savepoint_info.redo_log_index);
-        self.local_wal.lock().truncate(
-            savepoint_info.local_wal_entry_len,
-            savepoint_info.local_wal_intent_len,
-        );
         {
             let mut tables = self.modified_tables.lock();
             *tables = savepoint_info.modified_tables.clone();
@@ -1114,6 +1176,8 @@ impl TransactionContext {
                 }
             }
         }
+        // Derived views mirror the truncated journal.
+        self.rebuild_derived_logs();
         // Recompute mutation count and undo bytes from remaining journal to keep
         // budgets consistent after truncation.
         {
@@ -1192,10 +1256,9 @@ impl TransactionContext {
             let mut manager = self.savepoint_manager.write();
             manager.clear();
         }
-        self.truncate_redo_log(0);
+        self.mutation_journal.write().truncate(0);
         self.local_wal.lock().clear();
         self.restore_read_set(WriteSet::new());
-        self.mutation_journal.write().truncate(0);
         self.mutation_count.store(0, Ordering::Relaxed);
         self.undo_bytes.store(0, Ordering::Relaxed);
         Ok(())

@@ -92,11 +92,7 @@ impl FactorizationRewriter {
                         );
                         if !to_flatten.is_empty() {
                             if let Some(child) = n.input.as_mut() {
-                                self.replace_child_and_flatten(
-                                    child,
-                                    &to_flatten,
-                                    &child_schema,
-                                );
+                                self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                             }
                             for pos in &to_flatten {
                                 child_schema.flatten_group(*pos);

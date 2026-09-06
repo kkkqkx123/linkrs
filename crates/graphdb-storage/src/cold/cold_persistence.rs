@@ -460,9 +460,11 @@ fn encode_snapshot(
         buf.extend_from_slice(&word.to_le_bytes());
     }
 
-    // Edge property map section: write empty section for backward compat.
-    // New files no longer need this section since properties are in CsrWithProperties.
-    write_section(&mut buf, &[]);
+    // NOTE: an older writer revision appended an empty trailing
+    // "edge property map" section here for backward compat, but the reader
+    // never consumed it, so it shifted the CRC offset and every roundtrip
+    // failed verification. The section is dropped; properties live in
+    // CsrWithProperties. (Project rule: no on-disk backward compat.)
 
     let checksum = crc32fast::hash(&buf);
     buf.extend_from_slice(&checksum.to_le_bytes());

@@ -223,6 +223,22 @@ impl MutationJournal {
         self.records.iter().map(|r| r.index_intents.len()).sum()
     }
 
+    /// Materialize every redo entry held by the journal, in sequence order.
+    ///
+    /// The journal is the single source of truth; per-transaction redo caches
+    /// are derived from this view instead of being written in parallel.
+    pub fn redo_entries(&self) -> Vec<TransactionWalEntry> {
+        self.records.iter().filter_map(|r| r.redo.clone()).collect()
+    }
+
+    /// Materialize every outbox intent held by the journal, in sequence order.
+    pub fn wal_intents(&self) -> Vec<OutboxIntent> {
+        self.records
+            .iter()
+            .flat_map(|r| r.index_intents.iter().cloned())
+            .collect()
+    }
+
     /// Publish `commit_ts` to all pending records. Called once the transaction's
     /// commit timestamp has been allocated and the WAL durability boundary has
     /// been crossed. Earlier records retain `None` until publish; after publish
@@ -254,11 +270,11 @@ impl MutationJournal {
 
 /// Unified savepoint position derived from the mutation journal.
 ///
-/// The journal is the single source of truth; derived indices (operation
-/// log, undo, redo, WAL buffer, write/read sets) are captured alongside the
-/// journal offset so a rollback can atomically truncate all of them.
-/// The struct still stores physical offsets for O(1) truncation while the
-/// journal position is the logical authority that is validated by invariants.
+/// The journal is the single source of truth: a savepoint is fully described
+/// by the journal length (and next sequence) at creation time. Redo caches,
+/// the local WAL buffer, undo logs, write/read sets and table markers are all
+/// truncated or restored from that single boundary; no derived offsets are
+/// stored here so the views cannot diverge.
 #[derive(Debug, Clone)]
 pub struct MutationJournalPosition {
     /// Logical journal length at savepoint creation (authoritative).
@@ -266,9 +282,6 @@ pub struct MutationJournalPosition {
     /// Next sequence that will be assigned (journal_len).
     pub next_sequence: u64,
     pub undo_log_index: usize,
-    pub redo_log_index: usize,
-    pub local_wal_entry_len: usize,
-    pub local_wal_intent_len: usize,
     pub modified_tables: Vec<String>,
     pub write_set_snapshot: crate::types::WriteSet,
     pub read_set_snapshot: crate::types::WriteSet,
@@ -279,8 +292,12 @@ pub struct MutationJournalPosition {
 
 impl MutationJournalPosition {
     pub fn validate_against(&self, journal: &MutationJournal) -> Result<(), String> {
-        if self.journal_len != journal.len() - (journal.len() - self.journal_len) {
-            // Journal truncated beyond savepoint — caller error.
+        if self.journal_len > journal.len() {
+            return Err(format!(
+                "journal truncated beyond savepoint: savepoint len {} > current len {}",
+                self.journal_len,
+                journal.len()
+            ));
         }
         if self.next_sequence != self.journal_len as u64 {
             return Err(format!(

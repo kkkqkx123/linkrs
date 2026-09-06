@@ -44,9 +44,6 @@ impl std::fmt::Display for ConflictType {
     }
 }
 
-/// Default certification shard count.
-const DEFAULT_CERT_SHARD_COUNT: usize = 64;
-
 /// Maps a resource reference to its committed write timestamps + transaction IDs.
 type ConflictMap<V> = HashMap<V, Vec<(Timestamp, TransactionId)>>;
 
@@ -96,17 +93,19 @@ impl SsiTracker {
 
 /// Certifier for write-set conflict detection.
 ///
-/// Maintains sharded certification locks plus committed write-set spatial
-/// indices (O(1) per-resource conflict lookup) and the SSI tracker. Sharded
-/// locks serialize certification + committed-write-set publication per
-/// transaction ID so non-conflicting transactions certify in parallel.
+/// Maintains a global commit lock plus committed write-set spatial indices
+/// (O(1) per-resource conflict lookup) and the SSI tracker. The global lock
+/// serializes the check-then-publish critical section across ALL
+/// transactions: per-transaction shard locks cannot close the window in
+/// which two conflicting transactions in different shards both pass the
+/// check, so certification is intentionally unsharded.
+///
+/// Lock order wherever multiple locks are held: `commit_lock` →
+/// `committed_write_sets` → spatial indices → `ssi_tracker`.
 pub struct Certifier {
-    /// Sharded certification locks. Each shard serializes certification +
-    /// committed_write_sets push for a single transaction. Shard selection
-    /// is by `txn_id % shard_count`, so non-conflicting transactions
-    /// can certify in parallel.
-    certification_shards: Vec<Mutex<()>>,
-    shard_count: usize,
+    /// Global certification lock. Held across the whole
+    /// check-then-publish critical section.
+    commit_lock: Mutex<()>,
     /// Committed write sets retained until no transaction can have started
     /// before the corresponding commit timestamp.
     committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
@@ -126,21 +125,8 @@ pub struct Certifier {
 
 impl Certifier {
     pub fn new() -> Self {
-        Self::with_shard_count(DEFAULT_CERT_SHARD_COUNT)
-    }
-
-    pub fn with_shard_count(shard_count: usize) -> Self {
-        assert!(
-            shard_count.is_power_of_two(),
-            "shard_count must be power of two"
-        );
-        assert!(
-            (1..=256).contains(&shard_count),
-            "shard_count must be 1..=256"
-        );
         Self {
-            certification_shards: (0..shard_count).map(|_| Mutex::new(())).collect(),
-            shard_count,
+            commit_lock: Mutex::new(()),
             committed_write_sets: Mutex::new(Vec::new()),
             committed_vertex_writes: Mutex::new(HashMap::new()),
             committed_edge_writes: Mutex::new(HashMap::new()),
@@ -150,34 +136,27 @@ impl Certifier {
         }
     }
 
-    pub fn shard_count(&self) -> usize {
-        self.shard_count
-    }
-
-    fn cert_shard(&self, txn_id: TransactionId) -> &Mutex<()> {
-        &self.certification_shards[txn_id.0 as usize % self.shard_count]
-    }
-
     /// Check for write-set based conflicts with active transactions.
     ///
     /// This method checks if a transaction's write set conflicts with any other
     /// write transactions that have already passed validation.
     /// After a successful check, the transaction is marked as validated.
     ///
-    /// Fast paths (lock-free, no shard acquisition):
+    /// Fast paths (lock-free, no commit-lock acquisition):
     /// - Read-only transactions never conflict.
     /// - SingleWriter mode bypasses certification (exclusive write lease).
     /// - Empty write sets (and empty read sets for Serializable) bypass certification.
     ///
-    /// Only transactions that need certification acquire the shard lock.
-    /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
+    /// Only transactions that need certification acquire the global
+    /// commit lock. Returns Ok(()) if no conflicts, or Err if conflicts
+    /// are detected.
     pub fn check_write_set_conflict(
         &self,
         txn_id: TransactionId,
         active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
         stats: &TransactionStats,
     ) -> Result<(), TransactionError> {
-        // Lock-free fast path: cheap checks before acquiring shard.
+        // Lock-free fast path: cheap checks before acquiring the global lock.
         let ctx = active_transactions
             .get(&txn_id)
             .ok_or_else(|| TransactionError::transaction_not_found(txn_id))?;
@@ -205,8 +184,12 @@ impl Certifier {
             }
         }
 
-        // Only acquire shard lock for transactions that require certification.
-        let _certification_guard = self.cert_shard(txn_id).lock();
+        // Only acquire the global commit lock for transactions that require
+        // certification. The check and the later publish both run under this
+        // same lock, which closes the race where two conflicting
+        // transactions each observed the other as not-yet-validated and both
+        // passed.
+        let _certification_guard = self.commit_lock.lock();
         // Re-fetch context after acquiring lock to ensure consistency (context may have been removed)
         let ctx = active_transactions
             .get(&txn_id)
@@ -591,10 +574,11 @@ impl Certifier {
 
     /// Publish a committed write set into the conflict indices.
     ///
-    /// Runs under the certification shard lock to close the window between
-    /// certification and committed_write_sets publication. Re-checks all
-    /// active (validated) transactions and all committed entries since
-    /// `start_timestamp` to catch cross-shard certification races.
+    /// Runs under the global commit lock (the same lock as the
+    /// certification check) to close the window between certification and
+    /// committed_write_sets publication. Re-checks all active (validated)
+    /// transactions and all committed entries since `start_timestamp` as a
+    /// final review.
     ///
     /// On conflict, returns `Err` and publishes nothing.
     /// Lock-free bypass for empty write sets or in-memory read-only transactions.
@@ -612,20 +596,15 @@ impl Certifier {
             self.ssi_tracker.unregister_reads(txn_id);
             return Ok(());
         }
-        // Lock order: cert_shard → committed_write_sets → *
-        let _cert_guard = self.cert_shard(txn_id).lock();
+        // Lock order: commit_lock → committed_write_sets → *
+        let _cert_guard = self.commit_lock.lock();
         let mut committed = self.committed_write_sets.lock();
 
-        // Final review: cross-shard certification race prevention.
-        //
-        // check_write_set_conflict() only serializes via cert_shard,
-        // so two conflicting transactions in different shards can
-        // both pass because each reads the other's
-        // is_write_validated() == false and skips it.
-        //
-        // This re-check under cert_shard catches the race by
-        // scanning all active (validated) transactions and all
-        // committed entries since our start_timestamp.
+        // Final review under the global commit lock: because the
+        // certification check ran under this same lock, no conflicting
+        // transaction can slip between our check and this publication.
+        // The re-scan of active (validated) transactions and committed
+        // entries since our start_timestamp is defense in depth.
         for entry in active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();
             if *other_id == txn_id {
@@ -800,6 +779,44 @@ mod tests {
         assert!(certifier
             .check_write_set_conflict(TransactionId(3), &active, &stats)
             .is_ok());
+    }
+
+    #[test]
+    fn test_publish_then_check_detects_committed_conflict_concurrent() {
+        // Transaction IDs 10 and 2 commit concurrently; the global commit
+        // lock must still serialize them so the second committer observes
+        // the first. A commits after B started, so B must fail.
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        let ctx_a = make_context(10, false, ConcurrencyMode::Optimistic);
+        let ctx_b = make_context(2, false, ConcurrencyMode::Optimistic);
+        let vid = graphdb_core::types::VertexId::from_int64(7);
+        ctx_a.record_vertex_write(vid);
+        ctx_b.record_vertex_write(vid);
+        active.insert(TransactionId(10), Arc::clone(&ctx_a));
+        active.insert(TransactionId(2), Arc::clone(&ctx_b));
+
+        certifier
+            .check_write_set_conflict(TransactionId(10), &active, &stats)
+            .expect("first check should pass");
+        certifier
+            .publish(
+                TransactionId(10),
+                ctx_a.timestamp(),
+                ctx_a.start_timestamp,
+                &ctx_a.get_write_set(),
+                &active,
+                &stats,
+            )
+            .expect("publish should succeed");
+        active.remove(&TransactionId(10));
+
+        let result = certifier.check_write_set_conflict(TransactionId(2), &active, &stats);
+        assert!(
+            result.is_err(),
+            "second committer must see the published write"
+        );
     }
 
     #[test]

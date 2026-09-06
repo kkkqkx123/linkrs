@@ -452,6 +452,52 @@ fn test_savepoint_rollback_preserves_prefix_state() {
 }
 
 #[test]
+fn test_savepoint_rollback_rebuilds_derived_redo_view() {
+    use crate::types::MutationEntityKey;
+    use crate::wal::TransactionWalEntry;
+    use graphdb_core::wal::WalOpType;
+
+    let ctx = TransactionContext::new(
+        TransactionId(1),
+        1,
+        create_default_config(Duration::from_secs(30)),
+    );
+
+    let redo = |payload: &[u8]| {
+        crate::types::MutationResult::new(MutationEntityKey::Vertex(crate::VertexId::from_int64(1)))
+            .with_redo(TransactionWalEntry::new(
+                WalOpType::InsertVertex,
+                1,
+                payload.to_vec(),
+            ))
+    };
+
+    ctx.record_mutation(redo(b"a"))
+        .expect("record mutation should succeed");
+    let sp = ctx.create_savepoint(Some("sp".to_string()), 0);
+    ctx.record_mutation(redo(b"b"))
+        .expect("record mutation should succeed");
+
+    assert_eq!(ctx.mutation_journal_len(), 2);
+    assert_eq!(ctx.redo_log_len(), 2);
+    assert_eq!(ctx.materialize_redo().len(), 2);
+
+    let mock_target = MockUndoTarget;
+    ctx.rollback_to_savepoint(sp, &mock_target)
+        .expect("rollback should succeed");
+
+    // The journal is authoritative; the derived redo view mirrors it without
+    // any separate truncation bookkeeping.
+    assert_eq!(ctx.mutation_journal_len(), 1);
+    assert_eq!(ctx.redo_log_len(), 1);
+    let redo_entries = ctx.materialize_redo();
+    assert_eq!(redo_entries.len(), 1);
+    assert_eq!(redo_entries[0].payload, b"a");
+    ctx.rebuild_derived_logs();
+    assert_eq!(ctx.local_wal_buffer().entry_count(), 1);
+}
+
+#[test]
 fn test_find_savepoint_by_name() {
     let txn_id = TransactionId(1);
     let timeout = Duration::from_secs(30);

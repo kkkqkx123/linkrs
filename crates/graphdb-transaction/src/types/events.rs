@@ -12,6 +12,7 @@ pub enum TransactionEvent {
     Committed {
         txn_id: TransactionId,
         write_timestamp: Timestamp,
+        commit_timestamp: Timestamp,
         write_set: Box<WriteSet>,
         schema_catalog_version: u64,
     },

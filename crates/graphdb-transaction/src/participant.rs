@@ -10,10 +10,16 @@ use super::types::{MutationResult, WriteSet};
 use super::undo_log::UndoLogEntry;
 
 /// The immutable information required by a commit participant.
+///
+/// `write_timestamp` is the transaction's start timestamp (used for conflict
+/// certification); `commit_timestamp` is allocated at commit time and orders
+/// read visibility. It is 0 until the commit timestamp has been allocated,
+/// i.e. while the commit is durable but not yet finalized.
 #[derive(Debug, Clone)]
 pub struct TransactionCommitDescriptor {
     pub transaction_id: TransactionId,
     pub write_timestamp: Timestamp,
+    pub commit_timestamp: Timestamp,
     pub durability: DurabilityLevel,
     pub write_set: WriteSet,
     pub read_set: WriteSet,
@@ -33,6 +39,7 @@ impl TransactionCommitDescriptor {
         Self {
             transaction_id,
             write_timestamp,
+            commit_timestamp: 0,
             durability,
             write_set,
             read_set: WriteSet::new(),
@@ -85,6 +92,23 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
     fn record_index_read(&self, _resource: &str) {}
 }
 
+/// Three-phase commit contract for [`TransactionCommitSink`] implementors.
+///
+/// 1. `commit` (WAL durability point): append the transaction's payload to
+///    durable storage and return its LSN. May be retried on transient
+///    errors; implementations must tolerate duplicate payloads for the same
+///    transaction idempotently or rely on the manager's retry budget.
+/// 2. `finalize` (storage visibility point): make the durable payload
+///    visible to readers. MUST be idempotent: recovery re-drives it after
+///    crashes and partial failures, so applying it twice must be equivalent
+///    to applying it once.
+/// 3. `recover_unfinalized_commits` (startup replay): re-run pending
+///    finalizations for LSNs that appear durable but were never finalized.
+///    MUST also be idempotent and return the number of recovered commits.
+///
+/// The transaction manager guarantees ordering: visibility (commit-timestamp
+/// allocation and read-frontier advance) only happens after `finalize`
+/// succeeds, so readers never observe unfinalized writes.
 pub trait TransactionCommitSink: Send + Sync {
     fn commit_transaction(&self, transaction_id: TransactionId) -> Result<CommitLsn, String>;
 
