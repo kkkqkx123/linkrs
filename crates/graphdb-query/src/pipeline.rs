@@ -3,14 +3,13 @@ mod diagnostics;
 mod execution;
 mod frontend;
 mod prepared;
-pub mod stage;
 
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
 use crate::executor::streaming::SessionTransactionController;
 use crate::optimizer::OptimizerEngine;
-use crate::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
+use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
 use crate::storage::QueryStorage;
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::metadata::SchemaManager;

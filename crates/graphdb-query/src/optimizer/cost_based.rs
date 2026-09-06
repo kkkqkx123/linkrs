@@ -93,9 +93,3 @@ pub use expression_precomputation::{
     ExpressionPrecomputationOptimizer, NoPrecomputeReason, PrecomputationCandidate,
     PrecomputationDecision, PrecomputeReason,
 };
-
-// Re-export the CTE cache type from the cache module (for backward compatibility)
-pub use crate::cache::{
-    CteCacheConfig, CteCacheDecision, CteCacheDecisionMaker, CteCacheEntry, CteCacheManager,
-    CteCacheStats,
-};

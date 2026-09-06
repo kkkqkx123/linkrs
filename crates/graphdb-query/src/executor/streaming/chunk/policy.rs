@@ -5,8 +5,7 @@
 //! The policy learns from per-query [`crate::executor::streaming::runtime::ColumnarStats`]:
 //! each query's columnar hit/miss counters are merged into the shared policy
 //! at query completion, and the policy decides whether the typed columnar
-//! path is worth building for subsequent queries.  The global runtime switch
-//! `typed_columns_enabled()` remains a forced override.
+//! path is worth building for subsequent queries.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

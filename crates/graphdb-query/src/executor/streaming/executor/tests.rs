@@ -79,7 +79,7 @@ fn test_limit_executor() {
     while let Some(mut chunk) = executor.advance().unwrap() {
         // Limit is selection-aware — materialize to count the rows
         // an API consumer would observe (engine does this at the root).
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Test");
         total += chunk.len();
     }
     executor.close().unwrap();
@@ -111,7 +111,7 @@ fn test_limit_executor_honors_offset() {
     while let Some(mut chunk) = executor.advance().expect("limit should advance") {
         // materialize the selection to observe the rows an API
         // consumer would see (engine does this at the root).
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Test");
         values.extend(chunk.rows.into_iter().filter_map(|row| match row.first() {
             Some(Value::BigInt(value)) => Some(*value),
             _ => None,
@@ -746,7 +746,7 @@ fn test_window_spill_matches_in_memory() {
 fn pull_all(executor: &mut StreamingExecutor) -> Vec<Vec<Value>> {
     let mut rows = Vec::new();
     while let Some(mut chunk) = executor.advance().expect("advance should succeed") {
-        chunk.materialize_selection_by("reset-test");
+        chunk.materialize_selection_by("Test");
         rows.extend(chunk.rows);
     }
     rows

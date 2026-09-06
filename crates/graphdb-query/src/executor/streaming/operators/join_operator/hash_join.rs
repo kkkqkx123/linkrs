@@ -32,15 +32,14 @@ fn build_side_loop(
         if let Some(rt) = runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
-        // The build side materializes any propagated selection — it must
-        // hash every (visible) build row once, so there is no benefit in
-        // carrying a selection into the build store.
-        chunk.materialize_selection_by("HashJoin");
+        // The build side hashes every visible row once. `insert_chunk`
+        // consumes the selection in place, so there is no benefit in
+        // compacting the chunk beforehand.
         let col_names = chunk.col_names();
         if right_col_names.is_empty() {
             *right_col_names = col_names.clone();
         }
-        for row in chunk.rows.iter() {
+        for row in chunk.visible_rows() {
             memory_tracker.try_reserve_row(row)?;
         }
         build_side.insert_chunk(&mut chunk, &col_names, hash_keys)?;
@@ -131,9 +130,12 @@ pub(super) fn next_hash_join(
                     }
                 } else {
                     for &right_idx in right_indices {
-                        let right_row = build_side.row_at(right_idx);
-                        let mut joined_row = probe_row.clone();
-                        joined_row.extend(right_row);
+                        // Direct append into the output row: avoids the
+                        // intermediate `Vec` allocated by `row_at()`.
+                        let mut joined_row =
+                            Vec::with_capacity(probe_row.len() + build_side.row_count().min(16));
+                        joined_row.extend_from_slice(probe_row);
+                        build_side.append_row_to(&mut joined_row, right_idx);
                         result_rows.push(joined_row);
                     }
                 }
@@ -240,9 +242,10 @@ pub(super) fn next_hash_left_join(
                     }
                 } else {
                     for &right_idx in right_indices {
-                        let right_row = build_side.row_at(right_idx);
-                        let mut joined_row = probe_row.clone();
-                        joined_row.extend(right_row);
+                        let mut joined_row =
+                            Vec::with_capacity(probe_row.len() + build_side.row_count().min(16));
+                        joined_row.extend_from_slice(probe_row);
+                        build_side.append_row_to(&mut joined_row, right_idx);
                         result_rows.push(joined_row);
                     }
                 }

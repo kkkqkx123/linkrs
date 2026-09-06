@@ -277,11 +277,10 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
     group.finish();
 }
 
-/// End-to-end Filter→Project chain with selection-vector propagation
-/// vs. the materialized path (1% selectivity).
+/// End-to-end Filter→Project chain: materialized (`take_indices`) vs.
+/// selection-vector propagation (1% selectivity).
 fn bench_selection_chain(c: &mut Criterion) {
     use graphdb_core::types::expr::Expression;
-    use graphdb_query::executor::streaming::chunk::set_selection_propagation_enabled;
 
     let mut group = c.benchmark_group("selection_propagation_chain");
     group.measurement_time(Duration::from_secs(2));
@@ -359,35 +358,6 @@ fn bench_selection_chain(c: &mut Criterion) {
         )
     });
 
-    group.bench_function("materialized_chain_disabled", |b| {
-        set_selection_propagation_enabled(false);
-        b.iter_batched(
-            || {
-                let mut chunk = create_wide_chunk(n);
-                chunk.build_typed_columns(true);
-                chunk
-            },
-            |mut chunk| {
-                let results = chunk.evaluate_expression(&predicate, None).unwrap();
-                let selected: Vec<usize> = results
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, v)| {
-                        if matches!(v, Value::Bool(true)) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let mut filtered = chunk.take_indices(&selected);
-                let _ = filtered.evaluate_expression(&project, None).unwrap();
-                black_box(filtered.len());
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
-    set_selection_propagation_enabled(true);
     group.finish();
 }
 

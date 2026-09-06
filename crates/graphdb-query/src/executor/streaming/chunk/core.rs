@@ -2,7 +2,6 @@
 
 use super::schema::{ColumnInfo, Schema};
 use super::typed::TypedColumn;
-use super::view::ChunkView;
 use crate::executor::base::MemoryReservation;
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
@@ -20,6 +19,12 @@ pub struct DataChunk {
     pub typed_columns: Option<Vec<TypedColumn>>,
     /// Selection vector.
     pub selection: Option<Vec<usize>>,
+    /// Symbolic row multiplicity (Ladybug `ResultSet::multiplicity` analogue).
+    ///
+    /// Transparent operators may bump this instead of physically duplicating
+    /// rows. `1` means every visible row appears once. The expanded
+    /// (flat) row count is `visible_count * multiplicity`.
+    pub multiplicity: u64,
     /// Schema information (column names and types)
     pub schema: Arc<Schema>,
     /// Slot layout for slot-based value access.
@@ -37,6 +42,7 @@ impl Clone for DataChunk {
             columns: self.columns.clone(),
             typed_columns: self.typed_columns.clone(),
             selection: self.selection.clone(),
+            multiplicity: self.multiplicity,
             schema: self.schema.clone(),
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
@@ -61,6 +67,7 @@ impl DataChunk {
             columns: None,
             typed_columns: None,
             selection: None,
+            multiplicity: 1,
             schema,
             layout,
             memory_reservation: None,
@@ -119,6 +126,7 @@ impl DataChunk {
             columns: None,
             typed_columns: None,
             selection: None,
+            multiplicity: 1,
             schema,
             layout,
             memory_reservation: None,
@@ -193,6 +201,7 @@ impl DataChunk {
             columns: None,
             typed_columns: None,
             selection: None,
+            multiplicity: 1,
             schema,
             layout,
             memory_reservation: None,
@@ -241,6 +250,7 @@ impl DataChunk {
             columns: Some(columns),
             typed_columns: None,
             selection: None,
+            multiplicity: 1,
             schema,
             layout,
             memory_reservation: None,
@@ -257,6 +267,24 @@ impl DataChunk {
         }
         self.columns = Some(columns);
         self
+    }
+
+    /// Memory estimate for the *visible expanded* rows
+    /// (`visible_count * multiplicity`), used for pool/tracker accounting.
+    pub fn estimated_bytes(&self) -> usize {
+        let base = crate::executor::base::MemoryBudget::estimate_rows_memory(&self.rows);
+        if self.rows.is_empty() || base == 0 {
+            return 0;
+        }
+        let visible = self.visible_count();
+        if visible == self.rows.len() && self.multiplicity <= 1 {
+            return base;
+        }
+        let per_row = base.saturating_div(self.rows.len().max(1));
+        (visible as u64)
+            .saturating_mul(self.multiplicity)
+            .saturating_mul(per_row as u64)
+            .min(usize::MAX as u64) as usize
     }
 
     // ── Basic access ──
@@ -333,20 +361,17 @@ impl DataChunk {
         &self.rows[i]
     }
 
-    pub fn view(&self) -> ChunkView<'_> {
-        ChunkView { rows: &self.rows }
-    }
-
     // ── Typed column layout ──
 
     /// Build the typed column layout for this chunk.
     ///
     /// `use_columnar` carries the adaptive [`ColumnarPolicy`] decision from
     /// the producing operator: when the learned hit rate falls below the
-    /// threshold (or the global switch is off), the chunk stays row-based.
+    /// threshold the chunk stays row-based. The typed layout is otherwise
+    /// always attempted (there is no global off switch).
     /// Returns the number of extra typed bytes allocated.
     pub fn build_typed_columns(&mut self, use_columnar: bool) -> usize {
-        if !use_columnar || !super::typed_columns_enabled() || self.typed_columns.is_some() {
+        if !use_columnar || self.typed_columns.is_some() {
             return 0;
         }
         // Global memory pressure: skip building new acceleration caches and

@@ -138,9 +138,13 @@ impl HashJoinBuildSide {
         }
     }
 
-    /// Append one input chunk: join keys are evaluated per row using the
-    /// column fast path, chunk columns are moved into the column store, and
-    /// each row is indexed by its key.
+    /// Append one input chunk: join keys are evaluated per visible row using
+    /// the column fast path, chunk columns are moved into the column store,
+    /// and each visible row is indexed by its key.
+    ///
+    /// This is the single build-side entry point: an attached selection is
+    /// consumed in place (only visible column values move), so callers must
+    /// not `materialize_selection` beforehand.
     pub fn insert_chunk(
         &mut self,
         chunk: &mut DataChunk,
@@ -148,25 +152,33 @@ impl HashJoinBuildSide {
         key_expressions: &[Expression],
     ) -> Result<(), QueryError> {
         chunk.materialize_columns();
-        let cols = chunk.columns.as_deref().unwrap();
+        let cols = chunk.columns.as_deref().ok_or_else(|| {
+            QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string())
+        })?;
         debug_assert_eq!(
             chunk.rows.len(),
             cols.first().map_or(0, Vec::len),
             "row/column count mismatch: chunk has rows without columnar data"
         );
-        let base = self.columns.first().map_or(0, |c| c.len());
-        for (row_idx, row) in chunk.rows.iter().enumerate() {
-            let key = evaluate_join_key(row, col_names, key_expressions, Some((cols, row_idx)))?;
-            self.index
-                .entry(key)
-                .or_default()
-                .push((base + row_idx) as u32);
+        let visible = chunk.visible_indices();
+        let base = self.row_count();
+        for (pos, row_idx) in visible.iter().enumerate() {
+            let row = &chunk.rows[*row_idx];
+            let key = evaluate_join_key(row, col_names, key_expressions, Some((cols, *row_idx)))?;
+            self.index.entry(key).or_default().push((base + pos) as u32);
         }
         let chunk_cols = chunk.columns.take().ok_or_else(|| {
             QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string())
         })?;
         if self.columns.is_empty() {
-            self.columns = chunk_cols;
+            self.columns = if chunk.selection().is_none() {
+                chunk_cols
+            } else {
+                chunk_cols
+                    .into_iter()
+                    .map(|col| visible.iter().map(|&i| col[i].clone()).collect())
+                    .collect()
+            };
         } else {
             if self.columns.len() != chunk_cols.len() {
                 return Err(QueryError::execution(format!(
@@ -175,10 +187,21 @@ impl HashJoinBuildSide {
                     self.columns.len()
                 )));
             }
-            for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
-                target.extend(src);
+            if chunk.selection().is_none() {
+                for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
+                    target.extend(src);
+                }
+            } else {
+                for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
+                    target.extend(visible.iter().map(|&i| src[i].clone()));
+                }
             }
         }
+        // The build chunk is fully consumed; drop rows/selection without a
+        // second compaction pass.
+        chunk.take_selection();
+        chunk.rows.clear();
+        chunk.typed_columns = None;
         Ok(())
     }
 
@@ -187,12 +210,26 @@ impl HashJoinBuildSide {
         self.index.get(key).map(|v| v.as_slice())
     }
 
+    /// Number of rows held in the columnar build store.
+    pub fn row_count(&self) -> usize {
+        self.columns.first().map_or(0, Vec::len)
+    }
+
+    /// Append the build row at `row_idx` directly into `target`.
+    ///
+    /// Avoids the intermediate `Vec` allocation of [`Self::row_at`] on the
+    /// hot equi-join probe path: the caller pre-reserves capacity once and
+    /// extends column values in place.
+    pub fn append_row_to(&self, target: &mut Vec<Value>, row_idx: u32) {
+        let idx = row_idx as usize;
+        target.extend(self.columns.iter().map(|col| col[idx].clone()));
+    }
+
     /// Materialize the row at the given index by cloning column values.
     pub fn row_at(&self, row_idx: u32) -> Vec<Value> {
-        self.columns
-            .iter()
-            .map(|col| col[row_idx as usize].clone())
-            .collect()
+        let mut out = Vec::with_capacity(self.columns.len());
+        self.append_row_to(&mut out, row_idx);
+        out
     }
 
     pub fn clear(&mut self) {
@@ -850,6 +887,25 @@ mod tests {
         assert!(err.to_string().contains("column count"));
         assert_eq!(side.columns.len(), 2);
         assert_eq!(side.columns[0], vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn insert_chunk_consumes_selection_in_place() {
+        // Single entry point: an attached selection is consumed without a
+        // prior materialization, and only visible rows land in the store.
+        let mut side = HashJoinBuildSide::new();
+        let mut chunk = chunk_from_columns(vec![
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+            vec![Value::string("a"), Value::string("b"), Value::string("c")],
+        ])
+        .with_selection(vec![0, 2]);
+        side.insert_chunk(&mut chunk, &[], &[]).unwrap();
+        assert_eq!(side.row_count(), 2);
+        assert_eq!(side.columns[0], vec![Value::Int(1), Value::Int(3)]);
+        assert!(chunk.selection().is_none());
+        assert!(chunk.rows.is_empty());
+        let indexed_rows: usize = side.index.values().map(|v| v.len()).sum();
+        assert_eq!(indexed_rows, 2);
     }
 
     #[test]

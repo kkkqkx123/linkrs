@@ -38,12 +38,6 @@ pub use plan::execution_plan::{ExecutionPlan, SubPlan};
 pub use planner::{Planner, PlannerConfig, PlannerError};
 pub use template_extractor::{ParameterizedResult, ParameterizingTransformer, TemplateExtractor};
 
-// Re-export the planned cache types from the cache module (for backward compatibility)
-pub use crate::cache::{
-    CachedPlan, ParamPosition, ParameterizedQueryHandler, PlanCacheConfig, PlanCacheKey,
-    PlanCacheStats, QueryPlanCache,
-};
-
 // Re-export the JoinType from the core module.
 pub use graphdb_core::types::JoinType;
 pub use statements::MatchStatementPlanner;

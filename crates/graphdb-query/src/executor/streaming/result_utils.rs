@@ -1,7 +1,8 @@
 //! Utility functions for converting streaming results to standard formats.
 
 use super::chunk::DataChunk;
-use crate::data_set::DataSet;
+use super::chunk::LocalChunkCollector;
+use graphdb_core::DataSet;
 use crate::executor::base::ExecutionResult;
 use graphdb_core::error::QueryError;
 
@@ -30,25 +31,21 @@ pub fn convert_chunks_to_dataset(
         _ => chunks[0].col_names(),
     };
 
+    let mut collector = LocalChunkCollector::new(col_names.clone());
     let expected_cols = col_names.len();
-    for (i, chunk) in chunks.iter().enumerate() {
+    for mut chunk in chunks {
         if chunk.num_columns() != expected_cols {
             return Err(QueryError::execution(format!(
-                "Chunk {} has {} columns, expected {}",
-                i,
+                "Chunk has {} columns, expected {}",
                 chunk.num_columns(),
                 expected_cols
             )));
         }
+        // Single terminal expansion point (selection + multiplicity aware).
+        collector.push_chunk(&mut chunk);
     }
 
-    let mut all_rows = Vec::new();
-    for chunk in chunks {
-        for row in chunk.rows {
-            all_rows.push(row);
-        }
-    }
-
+    let (all_rows, _) = collector.into_rows();
     Ok(DataSet::from_rows(all_rows, col_names))
 }
 

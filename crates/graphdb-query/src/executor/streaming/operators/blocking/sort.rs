@@ -1,15 +1,15 @@
-use std::hash::Hasher;
-
 use std::sync::Arc;
 
-use crate::executor::base::MemoryTracker;
+use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::ColumnarBatch;
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::executor::SortDirection;
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::slot::SlotLayout;
-use crate::executor::streaming::spill::{RunReader, SpillManager, SpilledFile, SpilledRun};
+use crate::executor::streaming::spill::{
+    schema_fingerprint, RunReader, SpillManager, SpilledFile, SpilledRun,
+};
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::value::NullType;
@@ -20,8 +20,10 @@ pub struct SortState {
     pub col_names: Vec<String>,
     pub input_layout: Option<Arc<SlotLayout>>,
     /// Columnar accumulation of the in-memory prefix (below the spill
-    /// boundary). Once spilled, remaining rows are materialized and handed
-    /// to the row-based `spill_sorted_run`/merge machinery.
+    /// boundary). This is the primary in-memory store: rows stay columnar
+    /// until sort/merge forces a `to_rows()` conversion. Once spilled,
+    /// remaining rows are materialized and handed to the row-based
+    /// `spill_sorted_run`/merge machinery.
     pub columnar_batch: Option<ColumnarBatch>,
     /// Row-mode fallback buffer (used once a spill occurred).
     pub all_rows: Vec<Vec<Value>>,
@@ -30,6 +32,14 @@ pub struct SortState {
     pub runs: Vec<SpilledRun>,
     pub has_spilled: bool,
     pub merge_state: Option<MergeState>,
+}
+
+impl SortState {
+    /// In-memory buffered row count without materializing the columnar batch.
+    pub fn buffered_rows(&self) -> usize {
+        let columnar = self.columnar_batch.as_ref().map_or(0, |b| b.num_rows());
+        columnar + self.all_rows.len()
+    }
 }
 
 #[derive(Debug)]
@@ -70,9 +80,9 @@ pub(crate) fn spill_sorted_run(
 
     sort_rows(buffer, col_names, sort_expressions, sort_directions);
 
-    let fp = compute_schema_fingerprint(col_names);
+    let fp = schema_fingerprint(col_names);
 
-    let estimated_bytes = estimate_run_size(buffer, col_names);
+    let estimated_bytes = estimate_run_size(buffer);
     sm.disk_quota().try_reserve(estimated_bytes)?;
 
     let mut writer = sm.create_run_writer(fp)?;
@@ -330,22 +340,10 @@ fn radix_sort_i64(keys: &[i64]) -> Vec<usize> {
     indices
 }
 
-fn compute_schema_fingerprint(col_names: &[String]) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for name in col_names {
-        hasher.write(name.as_bytes());
-        hasher.write_u8(0);
-    }
-    hasher.finish()
-}
-
-fn estimate_run_size(buffer: &[Vec<Value>], _col_names: &[String]) -> u64 {
-    let per_row_overhead: u64 = 8;
-    let data_bytes: u64 = buffer
-        .iter()
-        .map(|r| r.iter().map(|v| v.estimated_size() as u64 + 1).sum::<u64>())
-        .sum();
-    40 + data_bytes + per_row_overhead * buffer.len() as u64
+// Row-encoded spill bytes for disk-quota reservation, not columnar heap size.
+fn estimate_run_size(buffer: &[Vec<Value>]) -> u64 {
+    let framing: u64 = buffer.iter().map(|row| row.len() as u64).sum();
+    40 + MemoryBudget::estimate_rows_memory(buffer) as u64 + framing + 8 * buffer.len() as u64
 }
 
 pub(crate) fn find_min_run(

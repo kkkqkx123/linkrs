@@ -10,8 +10,6 @@
 pub mod binder;
 pub mod cache;
 pub mod context;
-pub mod data_set;
-pub mod error;
 pub mod executor;
 pub mod metadata;
 pub mod optimizer;
@@ -22,7 +20,7 @@ pub mod query_core;
 pub mod query_manager;
 
 // Re-export DataSet for convenience
-pub use data_set::DataSet;
+pub use graphdb_core::DataSet;
 // Re-export error types from core module
 pub use graphdb_core::{DBResult, QueryError};
 // Re-export execution result from executor module

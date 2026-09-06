@@ -473,7 +473,7 @@ impl TransactionCommandResult {
             graphdb_core::Value::string(self.message),
         ];
         let col_names = vec!["command".to_string(), "result".to_string()];
-        let dataset = crate::data_set::DataSet::from_rows(vec![row], col_names);
+        let dataset = graphdb_core::DataSet::from_rows(vec![row], col_names);
         ExecutionResult::DataSet { data: dataset }
     }
 }

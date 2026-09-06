@@ -2,7 +2,7 @@
 //!
 //! Defines the data structure of the actuator's execution result, supporting multiple result types.
 
-use crate::data_set::DataSet;
+use graphdb_core::DataSet;
 use graphdb_core::error::DBError;
 use graphdb_core::types::{SpaceStatus, SpaceSummary};
 

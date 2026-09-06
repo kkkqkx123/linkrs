@@ -83,14 +83,19 @@ pub use context::OptimizationContext;
 // Re-export cost_based types (formerly strategy)
 pub use cost_based::{
     AggregateContext, AggregateSelectionReason, AggregateStrategy, AggregateStrategyDecision,
-    AggregateStrategySelector, CandidateStart, CteCacheConfig, CteCacheDecision,
-    CteCacheDecisionMaker, CteCacheEntry, CteCacheManager, CteCacheStats, DegreeInfo,
-    DirectionContext, DirectionSelectionReason, IndexSelection, IndexSelector, JoinCondition,
-    JoinOrderOptimizer, JoinOrderResult, KeepReason, OptimizationMethod, PredicateOperator,
-    PropertyPredicate, SortContext, SortEliminationDecision, SortEliminationOptimizer,
-    SortKeepReason, SubqueryUnnestingOptimizer, TableInfo, TopNConversionReason,
-    TraversalDirection, TraversalDirectionDecision, TraversalDirectionOptimizer,
-    TraversalSelectionReason, TraversalStartSelector, UnnestDecision, UnnestReason,
+    AggregateStrategySelector, CandidateStart, DegreeInfo, DirectionContext,
+    DirectionSelectionReason, IndexSelection, IndexSelector, JoinCondition, JoinOrderOptimizer,
+    JoinOrderResult, KeepReason, OptimizationMethod, PredicateOperator, PropertyPredicate,
+    SortContext, SortEliminationDecision, SortEliminationOptimizer, SortKeepReason,
+    SubqueryUnnestingOptimizer, TableInfo, TopNConversionReason, TraversalDirection,
+    TraversalDirectionDecision, TraversalDirectionOptimizer, TraversalSelectionReason,
+    TraversalStartSelector, UnnestDecision, UnnestReason,
+};
+
+// Re-export the CTE cache types from the cache module.
+pub use crate::cache::{
+    CteCacheConfig, CteCacheDecision, CteCacheDecisionMaker, CteCacheEntry, CteCacheManager,
+    CteCacheStats,
 };
 
 // Re-export heuristic types

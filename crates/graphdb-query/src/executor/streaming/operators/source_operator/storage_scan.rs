@@ -277,14 +277,10 @@ where
 /// Whether the typed columnar layout should be used for this operator's
 /// chunks.
 ///
-/// The global runtime switch remains a forced override; the shared
-/// [`ColumnarPolicy`] provides the adaptive decision.  The policy is only
-/// mutated between queries (stats merge at query completion), so the
+/// The shared [`ColumnarPolicy`] provides the adaptive decision. The policy
+/// is only mutated between queries (stats merge at query completion), so the
 /// decision is stable for the whole query even though it is read per chunk.
 fn use_columnar_path(runtime: &Option<Arc<ExecutionRuntime>>) -> bool {
-    if !crate::executor::streaming::chunk::typed_columns_enabled() {
-        return false;
-    }
     runtime
         .as_ref()
         .and_then(|runtime| runtime.columnar_policy())

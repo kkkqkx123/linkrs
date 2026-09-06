@@ -93,19 +93,6 @@ pub trait Planner: std::fmt::Debug {
     /// Check whether this planner can handle the given sentence.
     fn match_planner(&self, stmt: &Stmt) -> bool;
 
-    /// Use the verified statements to complete the translation.
-    fn transform_with_full_context(
-        &mut self,
-        qctx: Arc<QueryContext>,
-        validated: &ValidatedStatement,
-    ) -> Result<ExecutionPlan, PlannerError> {
-        let sub_plan = self.transform(validated, qctx)?;
-        let plan = ExecutionPlan::new(sub_plan.root().clone());
-
-        // Note: Plan optimization is handled by QueryPipelineManager
-        Ok(plan)
-    }
-
     /// Translate a bound statement directly into a plan sub-tree.
     ///
     /// The unified [`PlanContext`] bundles all inputs needed during

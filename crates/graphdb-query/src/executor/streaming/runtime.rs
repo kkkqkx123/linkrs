@@ -80,6 +80,7 @@ pub const SELECTION_BOUNDARY_OPS: &[&str] = &[
     "Fulltext",
     "Subgraph",
     "Gather",
+    "Subquery",
 ];
 
 /// Number of distinct opaque-boundary operator labels.
@@ -1262,18 +1263,14 @@ mod tests {
 
     #[test]
     fn test_columnar_policy_gates_typed_columns() {
-        use crate::executor::streaming::chunk::{set_typed_columns_enabled, ColumnarPolicy};
+        use crate::executor::streaming::chunk::ColumnarPolicy;
 
         let policy = Arc::new(ColumnarPolicy::new(0.8, 100));
         let mut rt = ExecutionRuntime::default_budget();
         rt.set_columnar_policy(Some(policy.clone()));
 
         // Below the sample floor the columnar path is chosen.
-        set_typed_columns_enabled(true);
-        let decide = || {
-            rt.columnar_policy().is_none_or(|p| p.should_use_columnar())
-                && crate::executor::streaming::chunk::typed_columns_enabled()
-        };
+        let decide = || rt.columnar_policy().is_none_or(|p| p.should_use_columnar());
         assert!(decide());
 
         // Simulate a fallback-heavy workload: merge 90% misses across
@@ -1283,11 +1280,6 @@ mod tests {
             policy.merge(3, 30);
         }
         assert!(!decide());
-
-        // The global switch remains a forced override.
-        set_typed_columns_enabled(false);
-        assert!(!decide());
-        set_typed_columns_enabled(true);
 
         // Recovery: sustained hits flip the decision back.
         for _ in 0..10 {

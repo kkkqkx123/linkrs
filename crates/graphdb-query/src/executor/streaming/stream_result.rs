@@ -2,10 +2,10 @@ use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
-use super::chunk::{ColumnInfo, DataChunk, Schema};
+use super::chunk::{ColumnInfo, DataChunk, LocalChunkCollector, Schema};
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
-use crate::data_set::DataSet;
+use graphdb_core::DataSet;
 use crate::executor::base::ExecutionResult;
 use graphdb_core::error::QueryError;
 
@@ -243,19 +243,24 @@ impl StreamingQueryResult {
     }
 
     /// Consume all remaining chunks and materialise into a `DataSet`.
+    ///
+    /// Routes through `LocalChunkCollector`, the single terminal collection
+    /// logic shared with `convert_chunks_to_dataset` and `ResultStream::collect`.
     pub fn collect(&self) -> Result<DataSet, QueryError> {
-        let mut all_rows = Vec::new();
-        let mut col_names: Option<Vec<String>> = None;
+        let mut collector: Option<LocalChunkCollector> = None;
 
-        while let Some(chunk) = self.next_chunk()? {
-            if col_names.is_none() {
-                col_names = Some(chunk.col_names());
-            }
-            all_rows.extend(chunk.rows);
+        while let Some(mut chunk) = self.next_chunk()? {
+            let collector = match collector {
+                Some(ref mut c) => c,
+                None => collector.insert(LocalChunkCollector::new(chunk.col_names())),
+            };
+            collector.push_chunk(&mut chunk);
         }
 
-        let names = col_names.unwrap_or_default();
-        Ok(DataSet::from_rows(all_rows, names))
+        let (all_rows, col_names) = collector
+            .map(LocalChunkCollector::into_rows)
+            .unwrap_or_default();
+        Ok(DataSet::from_rows(all_rows, col_names))
     }
 
     /// Return column names if known.

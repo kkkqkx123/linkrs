@@ -36,7 +36,7 @@ pub mod stream_result;
 pub mod subquery;
 pub mod transaction_scope;
 
-pub use chunk::{ChunkView, DataChunk, RowPool};
+pub use chunk::{DataChunk, LocalChunkCollector};
 pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
@@ -68,8 +68,8 @@ pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTie
 // ── Spill types ──
 pub use spill::{
     cleanup_orphan_spill_dirs, hash_row_partition, DiskQuota, HashPartitionConfig,
-    HashPartitionSpiller, RowBuffer, RunHeader, RunReader, RunWriter, SpillConfig, SpillManager,
-    SpillReader, SpillWriter, SpilledFile, SpilledRun,
+    HashPartitionSpiller, RunHeader, RunReader, RunWriter, SpillConfig, SpillManager, SpilledFile,
+    SpilledRun,
 };
 
 // ── New types ──

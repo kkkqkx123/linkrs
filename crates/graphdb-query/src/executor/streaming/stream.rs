@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use super::chunk::DataChunk;
+use super::chunk::LocalChunkCollector;
 use super::engine::StreamingExecutionEngine;
 use super::runtime::ExecutionRuntime;
-use crate::data_set::DataSet;
+use graphdb_core::DataSet;
 use graphdb_core::error::QueryError;
 
 /// Streaming result handle for pull-based chunk consumption.
@@ -90,10 +91,17 @@ impl ResultStream {
         }
 
         // Serve from buffered chunks first (partitioned fallback).
+        // Move the whole chunk out instead of cloning it: schema/layout
+        // are Arc-shared, and the single move preserves the selection
+        // vector, multiplicity, column caches, reservation, and stats.
+        // A valid empty chunk is left in the slot (slots are consumed once
+        // via the monotonically advancing `buffered_idx`).
         if self.buffered_idx < self.buffered.len() {
-            let chunk = &self.buffered[self.buffered_idx];
+            let layout = self.buffered[self.buffered_idx].get_layout();
+            let empty = DataChunk::new_with_layout(Vec::new(), layout);
+            let chunk = std::mem::replace(&mut self.buffered[self.buffered_idx], empty);
             self.buffered_idx += 1;
-            return Ok(Some(chunk.clone()));
+            return Ok(Some(chunk));
         }
 
         self.ensure_opened()?;
@@ -167,21 +175,24 @@ impl ResultStream {
     }
 
     /// Consume the stream and materialise all remaining chunks into a `DataSet`.
+    ///
+    /// Routes through `LocalChunkCollector`, the single terminal collection
+    /// logic shared with `convert_chunks_to_dataset`.
     pub fn collect(mut self) -> Result<DataSet, QueryError> {
-        let mut all_rows = Vec::new();
-        let mut col_names: Option<Vec<String>> = None;
+        let mut collector: Option<LocalChunkCollector> = None;
 
-        while let Some(chunk) = self.next_chunk()? {
-            if col_names.is_none() {
-                col_names = Some(chunk.col_names());
-            }
-            for row in chunk.rows {
-                all_rows.push(row);
-            }
+        while let Some(mut chunk) = self.next_chunk()? {
+            let collector = match collector {
+                Some(ref mut c) => c,
+                None => collector.insert(LocalChunkCollector::new(chunk.col_names())),
+            };
+            collector.push_chunk(&mut chunk);
         }
 
-        let names = col_names.unwrap_or_default();
-        Ok(DataSet::from_rows(all_rows, names))
+        let (all_rows, col_names) = collector
+            .map(LocalChunkCollector::into_rows)
+            .unwrap_or_default();
+        Ok(DataSet::from_rows(all_rows, col_names))
     }
 }
 

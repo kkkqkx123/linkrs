@@ -6,18 +6,109 @@
 //! - **Transparent**: `Filter`, `Project` (via `evaluate_expression_visible`),
 //!   `Limit`/`Offset`, and stateless unary operators. They consume the
 //!   selection vector without moving rows, so chunks stay compact.
-//!   [`DataChunk::try_pass_through`] hands the visible indices to such
-//!   consumers.
+//!   [`DataChunk::selection`] hands the visible indices to such consumers.
 //! - **Opaque**: blocking operators (aggregate/sort) and join builds (hash
 //!   join). They own the rows and must call
-//!   [`DataChunk::materialize_selection`] (or
-//!   [`DataChunk::materialize_when_needed`]) — the selection degenerates into
+//!   [`DataChunk::materialize_selection_by`] — the selection degenerates into
 //!   a compact row batch at the boundary.
+//!
+//! # Multiplicity propagation contract
+//!
+//! `multiplicity` is a symbolic per-chunk row factor carried alongside the
+//! selection vector:
+//! - Row-preserving rebuilds (`Project`/`Assign`/`Remove`/`AppendVertices`/
+//!   `Sample`/`Unwind`) must carry it with `with_multiplicity(source)`,
+//!   because every output row still occurs `multiplicity` times.
+//! - Row-collapsing operators (`Dedup`/`Distinct`/aggregates/sets) start a new
+//!   grouping, so `multiplicity` resets to 1 (the constructor default).
+//! - Opaque order-preserving operators (`Sort`/`TopN`/`Window`/join probe)
+//!   merge chunks whose uniform factors cannot be represented after the
+//!   merge; they assume `multiplicity == 1` and document it. A future
+//!   multiplicity producer must expand at those boundaries with
+//!   [`DataChunk::expand_visible_rows`] first.
 
 use super::typed::gather_typed_column;
 use crate::executor::streaming::chunk::core::DataChunk;
 
 impl DataChunk {
+    // ── Multiplicity (symbolic row duplication) ──
+
+    /// Symbolic multiplicity: how many times each visible row occurs.
+    pub fn multiplicity(&self) -> u64 {
+        self.multiplicity
+    }
+
+    pub fn set_multiplicity(&mut self, multiplicity: u64) {
+        debug_assert!(multiplicity >= 1, "multiplicity must be >= 1");
+        self.multiplicity = multiplicity.max(1);
+    }
+
+    pub fn with_multiplicity(mut self, multiplicity: u64) -> Self {
+        self.set_multiplicity(multiplicity);
+        self
+    }
+
+    /// Expanded (flat) visible row count: `visible_count * multiplicity`.
+    /// Saturates instead of overflowing so metrics paths stay total.
+    pub fn logical_len(&self) -> u64 {
+        (self.visible_count() as u64).saturating_mul(self.multiplicity)
+    }
+
+    /// Borrow visible rows in upstream order (respects `selection`).
+    pub fn visible_rows(&self) -> impl Iterator<Item = &Vec<graphdb_core::Value>> {
+        match &self.selection {
+            Some(indices) => VisibleRows::Selected {
+                rows: &self.rows,
+                indices,
+                pos: 0,
+            },
+            None => VisibleRows::All {
+                rows: &self.rows,
+                pos: 0,
+            },
+        }
+    }
+
+    /// Move visible rows out, repeating each row `multiplicity` times.
+    ///
+    /// This is the single terminal move: rows are moved out with `mem::take`
+    /// with no per-Value clone on the move itself (`multiplicity == 1` returns the moved rows
+    /// directly; larger factors repeat them). After the call the chunk is
+    /// empty with `selection=None` and derived column caches cleared.
+    ///
+    /// Opaque order-preserving operators assume `multiplicity == 1`; a future
+    /// multiplicity producer must expand at those boundaries with this call
+    /// first (see the module-level multiplicity contract).
+    pub fn expand_visible_rows(&mut self) -> Vec<Vec<graphdb_core::Value>> {
+        let multiplicity = self.multiplicity;
+        let out = match self.selection.take() {
+            Some(indices) => {
+                let mut selected = Vec::with_capacity(indices.len());
+                for &i in &indices {
+                    selected.push(std::mem::take(&mut self.rows[i]));
+                }
+                self.rows.clear();
+                selected
+            }
+            None => std::mem::take(&mut self.rows),
+        };
+        self.columns = None;
+        self.typed_columns = None;
+        self.multiplicity = 1;
+        if multiplicity <= 1 || out.is_empty() {
+            return out;
+        }
+        let total = (out.len() as u64).saturating_mul(multiplicity) as usize;
+        let mut expanded = Vec::with_capacity(total.min(1 << 22));
+        for _ in 0..multiplicity {
+            expanded.extend(out.iter().cloned());
+            if expanded.len() >= (1 << 22) {
+                expanded.reserve(total.saturating_sub(expanded.len()).min(1 << 22));
+            }
+        }
+        expanded
+    }
+
     // ── Selection vectors ──
 
     pub fn with_selection(mut self, indices: Vec<usize>) -> Self {
@@ -29,23 +120,6 @@ impl DataChunk {
 
     pub fn selection(&self) -> Option<&[usize]> {
         self.selection.as_deref()
-    }
-
-    /// Contract: pass the selection vector through to a selection-aware
-    /// consumer without moving any rows. Returns the visible row indices in
-    /// upstream order, or `None` when no selection is attached (all rows
-    /// visible). Transparent operators call this instead of materializing.
-    pub fn try_pass_through(&self) -> Option<&[usize]> {
-        self.selection()
-    }
-
-    /// Contract: materialize any attached selection (opaque-operator
-    /// boundary). Returns `true` when a selection was actually materialized.
-    ///
-    /// This is the same operation as [`Self::materialize_selection`]; the
-    /// name documents the call-site intent (opaque blocking / join build).
-    pub fn materialize_when_needed(&mut self) -> bool {
-        self.materialize_selection()
     }
 
     pub fn visible_count(&self) -> usize {
@@ -73,19 +147,12 @@ impl DataChunk {
         self.selection.take()
     }
 
-    /// Record the materialization into the global columnar counters.
-    pub fn materialize_selection(&mut self) -> bool {
-        let did = self.materialize_selection_inner();
-        if did {
-            if let Some(stats) = &self.columnar_stats {
-                stats.record_selection_materialized();
-            }
-        }
-        did
-    }
-
-    /// Observability: materialize and attribute the boundary to a named
-    /// operator (`materialize_selection` + per-operator counting).
+    /// Contract: materialize any attached selection (opaque-operator
+    /// boundary). Returns `true` when a selection was actually materialized.
+    ///
+    /// This is the single boundary-materialization entry point; `op` must be
+    /// one of `SELECTION_BOUNDARY_OPS` so per-operator counters stay exact
+    /// (ad-hoc names fall back to the unattributed counter).
     pub fn materialize_selection_by(&mut self, op: &'static str) -> bool {
         let did = self.materialize_selection_inner();
         if did {
@@ -137,6 +204,7 @@ impl DataChunk {
             columns: None,
             typed_columns,
             selection: None,
+            multiplicity: self.multiplicity,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
@@ -163,6 +231,7 @@ impl DataChunk {
             columns: None,
             typed_columns,
             selection: None,
+            multiplicity: self.multiplicity,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
@@ -170,3 +239,44 @@ impl DataChunk {
         }
     }
 }
+
+enum VisibleRows<'a> {
+    All {
+        rows: &'a [Vec<graphdb_core::Value>],
+        pos: usize,
+    },
+    Selected {
+        rows: &'a [Vec<graphdb_core::Value>],
+        indices: &'a [usize],
+        pos: usize,
+    },
+}
+
+impl<'a> Iterator for VisibleRows<'a> {
+    type Item = &'a Vec<graphdb_core::Value>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            VisibleRows::All { rows, pos } => {
+                let row = rows.get(*pos)?;
+                *pos += 1;
+                Some(row)
+            }
+            VisibleRows::Selected { rows, indices, pos } => {
+                let &i = indices.get(*pos)?;
+                *pos += 1;
+                rows.get(i)
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = match self {
+            VisibleRows::All { rows, pos } => rows.len().saturating_sub(*pos),
+            VisibleRows::Selected { indices, pos, .. } => indices.len().saturating_sub(*pos),
+        };
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for VisibleRows<'_> {}

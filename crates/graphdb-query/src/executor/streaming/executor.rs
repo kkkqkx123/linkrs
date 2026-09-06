@@ -763,7 +763,8 @@ impl StreamingExecutor {
         let result = dispatch_next!(self);
         let elapsed = start.elapsed().as_micros() as u64;
         if let Ok(Some(ref chunk)) = result {
-            self.record_profile_rows(chunk.len() as u64);
+            // Logical rows (visible * multiplicity), not physical length.
+            self.record_profile_rows(chunk.logical_len());
         }
         if matches!(&result, Ok(None)) || (one_shot && matches!(&result, Ok(Some(_)))) {
             self.base_mut().lifecycle.mark_exhausted();

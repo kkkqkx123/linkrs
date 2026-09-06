@@ -370,7 +370,7 @@ impl SubqueryExecutor {
             .advance()
             .map_err(|e| ExpressionError::type_error(format!("Subquery execution failed: {}", e)))?
         {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("Subquery");
             for row in chunk.rows {
                 if row.len() <= spec.key_columns {
                     continue;
@@ -396,8 +396,10 @@ impl SubqueryExecutor {
     ) -> Result<bool, ExpressionError> {
         runner.with_executor(&self.runtime, &self.bindings, layout, row, |exec| loop {
             match exec.advance()? {
+                // Visible rows only: an attached selection may leave
+                // non-visible physical rows behind.
                 Some(chunk) => {
-                    if !chunk.rows.is_empty() {
+                    if chunk.visible_count() > 0 {
                         return Ok(true);
                     }
                 }
@@ -418,7 +420,7 @@ impl SubqueryExecutor {
         runner.with_executor(&self.runtime, &self.bindings, layout, row, |exec| loop {
             match exec.advance()? {
                 Some(chunk) => {
-                    for chunk_row in &chunk.rows {
+                    for chunk_row in chunk.visible_rows() {
                         if let Some(candidate) = chunk_row.first() {
                             if !candidate.is_null() && candidate == value {
                                 return Ok(true);
@@ -441,7 +443,7 @@ impl SubqueryExecutor {
         runner.with_executor(&self.runtime, &self.bindings, layout, row, |exec| {
             let mut values = Vec::new();
             while let Some(mut chunk) = exec.advance()? {
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("Subquery");
                 for chunk_row in chunk.rows {
                     if let Some(value) = chunk_row.first() {
                         values.push(value.clone());

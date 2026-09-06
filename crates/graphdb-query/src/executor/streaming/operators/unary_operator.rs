@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::executor::expression::evaluator::compiled::{compiled_eval_enabled, CompiledExpr};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::{selection_propagation_enabled, DataChunk};
+use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::executor::ValueRowContext;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
@@ -56,6 +56,9 @@ pub enum UnaryOperatorKind {
         col_index: Option<usize>,
         layout: Option<Arc<SlotLayout>>,
         all_rows: Vec<Vec<Value>>,
+        /// Multiplicity of the chunk `all_rows` was taken from: every
+        /// emitted unwound row still occurs this many times.
+        input_multiplicity: u64,
         current_row_index: usize,
         current_unwind_index: usize,
         input_done: bool,
@@ -156,6 +159,7 @@ impl UnaryOperator {
                 col_index: None,
                 layout: None,
                 all_rows: Vec::new(),
+                input_multiplicity: 1,
                 current_row_index: 0,
                 current_unwind_index: 0,
                 input_done: false,
@@ -412,16 +416,7 @@ impl UnaryOperator {
                         // All visible rows selected — hand the chunk through
                         // as-is, keeping any existing selection.
                         if selected.len() == chunk.visible_count() {
-                            if selection_propagation_enabled() {
-                                return Ok(Some(chunk));
-                            }
-                            // Rollback mode: never hand a selection downstream.
-                            chunk.materialize_selection_by("Filter"); // rollback path
                             return Ok(Some(chunk));
-                        }
-                        if !selection_propagation_enabled() {
-                            let selected_chunk = chunk.take_indices(&selected);
-                            return Ok(Some(selected_chunk));
                         }
                         // Attach the selection vector instead of moving rows;
                         // the columnar/typed caches stay valid for the downstream
@@ -458,20 +453,24 @@ impl UnaryOperator {
                             columns.push(col);
                         }
                         if !columns.is_empty() && !columns[0].is_empty() {
-                            return Ok(Some(DataChunk::from_columns(
-                                columns,
-                                Arc::clone(output_layout),
-                            )));
+                            // 1:1 row-preserving rebuild: carry the input
+                            // multiplicity (each output row occurs that often).
+                            let multiplicity = chunk.multiplicity();
+                            return Ok(Some(
+                                DataChunk::from_columns(columns, Arc::clone(output_layout))
+                                    .with_multiplicity(multiplicity),
+                            ));
                         }
                         continue;
                     }
                     let columns =
                         Self::evaluate_project_expressions(&mut chunk, output_expressions, state)?;
                     if !columns.is_empty() && !columns[0].is_empty() {
-                        return Ok(Some(DataChunk::from_columns(
-                            columns,
-                            Arc::clone(output_layout),
-                        )));
+                        let multiplicity = chunk.multiplicity();
+                        return Ok(Some(
+                            DataChunk::from_columns(columns, Arc::clone(output_layout))
+                                .with_multiplicity(multiplicity),
+                        ));
                     }
                 } else {
                     return Ok(None);
@@ -530,6 +529,8 @@ impl UnaryOperator {
                         }
                     }
                     if !result_rows.is_empty() {
+                        // Row-collapsing: a new grouping is born, so the
+                        // rebuilt chunk keeps the default multiplicity of 1.
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
                             Arc::clone(output_layout),
@@ -541,6 +542,8 @@ impl UnaryOperator {
             UnaryOperatorKind::Assign { assignments, state } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Assign");
+                    // 1:1 row-preserving rebuild: carry the input multiplicity.
+                    let multiplicity = chunk.multiplicity();
                     // Batch-evaluate all assignment expressions first
                     let mut new_cols: Vec<Vec<Value>> = Vec::with_capacity(assignments.len());
                     for (_col_name, expr) in assignments.iter() {
@@ -562,10 +565,10 @@ impl UnaryOperator {
                         // Invalidate columnar caches since rows changed
                         chunk.columns = None;
                         chunk.typed_columns = None;
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk.rows,
-                            Arc::clone(output_layout),
-                        )));
+                        return Ok(Some(
+                            DataChunk::new_with_layout(chunk.rows, Arc::clone(output_layout))
+                                .with_multiplicity(multiplicity),
+                        ));
                     }
                 } else {
                     return Ok(None);
@@ -574,6 +577,8 @@ impl UnaryOperator {
             UnaryOperatorKind::Remove { columns_to_remove } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Remove");
+                    // 1:1 row-preserving rebuild: carry the input multiplicity.
+                    let multiplicity = chunk.multiplicity();
                     let col_names = chunk.col_names();
                     let mut indices_to_keep = vec![];
                     for (idx, col_name) in col_names.iter().enumerate() {
@@ -592,10 +597,10 @@ impl UnaryOperator {
                         result_rows.push(new_row);
                     }
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            result_rows,
-                            Arc::clone(output_layout),
-                        )));
+                        return Ok(Some(
+                            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout))
+                                .with_multiplicity(multiplicity),
+                        ));
                     }
                 } else {
                     return Ok(None);
@@ -607,6 +612,7 @@ impl UnaryOperator {
                 col_index,
                 layout,
                 all_rows,
+                input_multiplicity,
                 current_row_index,
                 current_unwind_index,
                 input_done,
@@ -622,6 +628,7 @@ impl UnaryOperator {
                             let col_names = chunk.col_names();
                             *col_index = col_names.iter().position(|c| c == unwind_column.as_str());
                             *layout = Some(chunk.get_layout());
+                            *input_multiplicity = chunk.multiplicity();
                             *all_rows = chunk.rows;
                             *current_row_index = 0;
                             *current_unwind_index = 0;
@@ -664,10 +671,10 @@ impl UnaryOperator {
                     _ => None,
                 };
                 if let Some(result_row) = result_row {
-                    return Ok(Some(DataChunk::new_with_layout(
-                        vec![result_row],
-                        Arc::clone(output_layout),
-                    )));
+                    return Ok(Some(
+                        DataChunk::new_with_layout(vec![result_row], Arc::clone(output_layout))
+                            .with_multiplicity(*input_multiplicity),
+                    ));
                 }
                 *current_row_index += 1;
                 *current_unwind_index = 0;
@@ -682,6 +689,8 @@ impl UnaryOperator {
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("AppendVertices");
+                    // 1:1 row-preserving rebuild: carry the input multiplicity.
+                    let multiplicity = chunk.multiplicity();
                     let layout = chunk.get_layout();
                     let storage_ref = storage.as_ref().ok_or_else(|| {
                         QueryError::execution("AppendVertices requires storage".to_string())
@@ -741,10 +750,10 @@ impl UnaryOperator {
                         result_rows.push(new_row);
                     }
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            result_rows,
-                            Arc::clone(output_layout),
-                        )));
+                        return Ok(Some(
+                            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout))
+                                .with_multiplicity(multiplicity),
+                        ));
                     }
                 } else {
                     return Ok(None);
@@ -759,16 +768,18 @@ impl UnaryOperator {
                         Some(mut chunk) => {
                             // boundary materialization.
                             chunk.materialize_selection_by("Sample");
+                            // 1:1 row-preserving rebuild: carry the input multiplicity.
+                            let multiplicity = chunk.multiplicity();
                             let remaining = (*count - *consumed) as usize;
                             let take_count = chunk.rows.len().min(remaining);
                             let rows: Vec<Vec<Value>> =
                                 chunk.rows.into_iter().take(take_count).collect();
                             *consumed += take_count as u64;
                             if !rows.is_empty() {
-                                return Ok(Some(DataChunk::new_with_layout(
-                                    rows,
-                                    Arc::clone(output_layout),
-                                )));
+                                return Ok(Some(
+                                    DataChunk::new_with_layout(rows, Arc::clone(output_layout))
+                                        .with_multiplicity(multiplicity),
+                                ));
                             } else {
                                 continue;
                             }
@@ -839,6 +850,7 @@ impl UnaryOperator {
                 col_index,
                 layout,
                 all_rows,
+                input_multiplicity,
                 current_row_index,
                 current_unwind_index,
                 input_done,
@@ -847,6 +859,7 @@ impl UnaryOperator {
                 *col_index = None;
                 *layout = None;
                 all_rows.clear();
+                *input_multiplicity = 1;
                 *current_row_index = 0;
                 *current_unwind_index = 0;
                 *input_done = false;

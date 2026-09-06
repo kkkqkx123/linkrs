@@ -463,8 +463,10 @@ impl PoolHandle {
     /// Returns a [`PooledChunk`] whose reservation is released on drop.
     /// Schema and layout are shared (cheap `Arc::clone`).
     pub fn copy_chunk(&self, chunk: &DataChunk) -> Result<PooledChunk, QueryError> {
-        use crate::executor::base::MemoryBudget;
-        let estimated = MemoryBudget::estimate_rows_memory(&chunk.rows);
+        // Account visible expanded rows (selection + multiplicity), not just
+        // the physical row buffer, so pooled copies of filtered/duplicated
+        // chunks reserve proportionally to what they logically hold.
+        let estimated = chunk.estimated_bytes();
         let reservation = self
             .reserve(estimated)
             .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -472,7 +474,8 @@ impl PoolHandle {
             rows: chunk.rows.clone(),
             columns: None,
             typed_columns: None,
-            selection: None,
+            selection: chunk.selection.clone(),
+            multiplicity: chunk.multiplicity,
             schema: std::sync::Arc::clone(&chunk.schema),
             layout: std::sync::Arc::clone(&chunk.layout),
             memory_reservation: None,

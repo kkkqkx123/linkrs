@@ -484,8 +484,14 @@ impl SetOperator {
                         .iter()
                         .map(|s| vec![graphdb_core::Value::string(s.clone())])
                         .collect();
-                    let mut writer = sm.create_writer()?;
+                    // Single spill format: versioned run file (fire-and-forget,
+                    // same lifecycle as the legacy writer before it).
+                    let fp = crate::executor::streaming::spill::schema_fingerprint(
+                        &self.output_layout.names(),
+                    );
+                    let mut writer = sm.create_run_writer(fp)?;
                     writer.write_rows(&rows)?;
+                    let _run = writer.finalize()?;
                     seen_rows.clear();
                     memory_tracker.reset();
                 }
@@ -498,8 +504,12 @@ impl SetOperator {
                 ..
             } => {
                 if !left_rows.is_empty() {
-                    let mut writer = sm.create_writer()?;
+                    let fp = crate::executor::streaming::spill::schema_fingerprint(
+                        &self.output_layout.names(),
+                    );
+                    let mut writer = sm.create_run_writer(fp)?;
                     writer.write_rows(left_rows)?;
+                    let _run = writer.finalize()?;
                     left_rows.clear();
                     memory_tracker.reset();
                 }

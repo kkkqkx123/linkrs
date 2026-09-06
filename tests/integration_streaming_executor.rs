@@ -820,17 +820,15 @@ mod storage_backed {
         assert_eq!(sorted, vec!["Alice", "Bob", "Charlie", "Diana"]);
     }
 
-    /// Differential test: selection propagation on/off.
+    /// Single-path selection propagation test.
     ///
-    /// The selection propagation feature allows chunks to be handed downstream
-    /// with a selection vector attached, avoiding materialization at
-    /// transparent operator boundaries (Filter/Project/Limit/Offset). This
-    /// test verifies that results are identical with propagation enabled vs.
-    /// disabled.
+    /// Selection vectors are always propagated (no opt-out exists): chunks
+    /// may carry a selection downstream, so consumers must observe visible
+    /// rows rather than physical `chunk.rows`. This test runs representative
+    /// Filter/Project/Limit queries twice and asserts deterministic visible
+    /// output plus exact row counts.
     #[test]
-    fn test_selection_propagation_differential() {
-        use graphdb::query::executor::streaming::chunk::set_selection_propagation_enabled;
-
+    fn test_selection_propagation_visible_rows() {
         let test_storage = TestStorage::new().expect("Failed to create test storage");
         let storage = test_storage.storage();
         setup_test_data(&storage);
@@ -846,77 +844,67 @@ mod storage_backed {
             store.get_space("test").unwrap()
         };
 
-        // Queries that exercise selection propagation: scan + filter with
-        // select vectors flowing through Filter/Project/Limit boundaries.
+        // (query, expected visible row count)
         let queries = [
-            "MATCH (n:Person) WHERE n.age > 25 RETURN n.name",
-            "MATCH (n:Person) WHERE n.age > 25 RETURN n.name LIMIT 2",
-            "MATCH (n:Person) WHERE n.age > 10 AND n.age < 40 RETURN n.name, n.age ORDER BY n.age LIMIT 3",
-            "MATCH (n:Person) WHERE n.name > 'B' RETURN count(n)",
+            ("MATCH (n:Person) WHERE n.age > 25 RETURN n.name", 3),
+            (
+                "MATCH (n:Person) WHERE n.age > 25 RETURN n.name LIMIT 2",
+                2,
+            ),
+            (
+                "MATCH (n:Person) WHERE n.age > 10 AND n.age < 40 RETURN n.name, n.age ORDER BY n.age LIMIT 3",
+                3,
+            ),
+            ("MATCH (n:Person) WHERE n.name > 'B' RETURN count(n)", 1),
         ];
 
-        // Run with propagation ON (default)
         let mut pipeline_on = QueryPipelineManager::with_optimizer(
-            storage.clone(),
-            stats_manager.clone(),
-            Arc::new(OptimizerEngine::default()),
-        )
-        .with_schema_manager(schema_manager.clone());
-        let on_results: Vec<Vec<String>> = queries
-            .iter()
-            .map(|sql| {
-                let rctx = Arc::new(QueryRequestContext::new(sql.to_string()));
-                let result: StreamingQueryResult = pipeline_on
-                    .execute_query_stream_with_request(sql, rctx, space_info.clone())
-                    .expect("query should succeed");
-                let mut rows = Vec::new();
-                while let Ok(Some(chunk)) = result.next_chunk() {
-                    for row in &chunk.rows {
-                        rows.push(format!("{:?}", row));
-                    }
-                }
-                rows
-            })
-            .collect();
-
-        // Run with propagation OFF
-        set_selection_propagation_enabled(false);
-        let mut pipeline_off = QueryPipelineManager::with_optimizer(
             storage.clone(),
             stats_manager,
             Arc::new(OptimizerEngine::default()),
         )
         .with_schema_manager(schema_manager);
-        let off_results: Vec<Vec<String>> = queries
-            .iter()
-            .map(|sql| {
+        let collect_visible =
+            |pipeline: &mut QueryPipelineManager<graphdb::storage::GraphStorage>,
+             sql: &str|
+             -> Vec<Vec<Value>> {
                 let rctx = Arc::new(QueryRequestContext::new(sql.to_string()));
-                let result: StreamingQueryResult = pipeline_off
+                let result: StreamingQueryResult = pipeline
                     .execute_query_stream_with_request(sql, rctx, space_info.clone())
                     .expect("query should succeed");
                 let mut rows = Vec::new();
                 while let Ok(Some(chunk)) = result.next_chunk() {
-                    for row in &chunk.rows {
-                        rows.push(format!("{:?}", row));
-                    }
+                    rows.extend(chunk.visible_rows().cloned());
                 }
                 rows
-            })
-            .collect();
-        set_selection_propagation_enabled(true);
+            };
 
-        // Assert equality
-        for (sql, (on, off)) in queries
-            .iter()
-            .zip(on_results.iter().zip(off_results.iter()))
-        {
-            assert_eq!(on.len(), off.len(), "row count diverge for query: {}", sql);
+        for (sql, expected) in queries {
+            let first = collect_visible(&mut pipeline_on, sql);
             assert_eq!(
-                on, off,
-                "selection propagation changes results for query: {}",
+                first.len(),
+                expected,
+                "visible row count for query: {}",
                 sql
             );
+            // Deterministic across runs on the single propagation path.
+            let second = collect_visible(&mut pipeline_on, sql);
+            assert_eq!(first, second, "non-deterministic output for query: {}", sql);
         }
+
+        // Spot-check values through the Filter -> Project -> Sort -> Limit chain.
+        let ordered = collect_visible(
+            &mut pipeline_on,
+            "MATCH (n:Person) WHERE n.age > 10 AND n.age < 40 RETURN n.name, n.age ORDER BY n.age LIMIT 3",
+        );
+        let names: Vec<String> = ordered
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::String(name)) => Some(name.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["Bob", "Diana", "Alice"]);
     }
 }
 

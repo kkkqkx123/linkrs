@@ -1,4 +1,5 @@
-use super::{set_typed_columns_enabled, DataChunk, RowPool, TypedColumn, TypedKind};
+use super::collector::LocalChunkCollector;
+use super::{DataChunk, TypedColumn, TypedKind};
 use crate::executor::streaming::slot::SlotLayout;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::BinaryOperator;
@@ -735,27 +736,13 @@ fn typed_eval_cross_kind_nan_matches_value_semantics() {
 }
 
 #[test]
-fn typed_columns_disabled_falls_back() {
+fn typed_columns_built_for_homogeneous_column() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i as i64)]).collect();
-    set_typed_columns_enabled(false);
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     let bytes = chunk.build_typed_columns(true);
-    assert_eq!(bytes, 0);
-    assert!(chunk.typed_column(0).is_none());
-    set_typed_columns_enabled(true);
-}
-
-#[test]
-fn row_pool_recycles_typed_columns() {
-    let pool = RowPool::new(64, 1);
-    let col = pool.acquire_typed(TypedKind::I64);
-    pool.release_typed(col);
-    let col = pool.acquire_typed(TypedKind::I64);
-    match col {
-        TypedColumn::I64(v) => assert!(v.capacity() >= 64, "recycled capacity"),
-        _ => panic!("expected I64 column"),
-    }
+    assert!(bytes > 0);
+    assert!(chunk.typed_column(0).is_some());
 }
 
 #[test]
@@ -772,7 +759,7 @@ fn selection_attachment_and_materialization() {
     assert!(!chunk.is_visible(1));
 
     let mut chunk = chunk;
-    assert!(chunk.materialize_selection());
+    assert!(chunk.materialize_selection_by("Test"));
     assert_eq!(chunk.visible_count(), 3);
     assert!(chunk.selection().is_none());
     let col = chunk.get_column(0).expect("column");
@@ -780,7 +767,30 @@ fn selection_attachment_and_materialization() {
         col,
         vec![Value::BigInt(0), Value::BigInt(2), Value::BigInt(4)]
     );
-    assert!(!chunk.materialize_selection());
+    assert!(!chunk.materialize_selection_by("Test"));
+}
+
+#[test]
+fn rebuild_carries_multiplicity_to_collector() {
+    // Simulates a 1:1 row-preserving rebuild (Project/Assign/Remove): the
+    // rebuilt chunk carries the source multiplicity, so the terminal
+    // collector expands every output row that many times.
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows = vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]];
+    let chunk = DataChunk::new_with_layout(rows, layout).with_multiplicity(2);
+
+    let rebuilt = DataChunk::from_columns(
+        vec![vec![Value::BigInt(1), Value::BigInt(2)]],
+        chunk.get_layout(),
+    )
+    .with_multiplicity(chunk.multiplicity());
+    assert_eq!(rebuilt.logical_len(), 4);
+
+    let mut collector = LocalChunkCollector::new(vec!["a".to_string()]);
+    let mut rebuilt = rebuilt;
+    collector.push_chunk(&mut rebuilt);
+    assert_eq!(collector.total_logical_rows(), 4);
+    assert_eq!(collector.len(), 4);
 }
 
 #[test]
@@ -791,7 +801,7 @@ fn selection_preserves_typed_columns_until_materialized() {
     chunk.build_typed_columns(true);
     let mut chunk = chunk.with_selection(vec![1, 3]);
     assert!(chunk.typed_column(0).is_some(), "typed layout kept");
-    chunk.materialize_selection();
+    chunk.materialize_selection_by("Test");
     let typed = chunk.typed_column(0).expect("typed layout gathered");
     assert_eq!(typed.to_values(), vec![Value::BigInt(1), Value::BigInt(3)]);
 }
