@@ -412,7 +412,7 @@ fn encode_snapshot(
 ) -> StorageResult<Vec<u8>> {
     let out_data = encode_csr_section(out_csr);
     let in_data = encode_csr_section(in_csr);
-    let prop_data = properties.dump();
+    let prop_data = properties.clone().dump();
     // zstd-compress the property section when it actually shrinks.
     let compressed_prop = zstd::encode_all(&prop_data[..], ZSTD_LEVEL)
         .map_err(|e| StorageError::serialize_error(format!("zstd compress failed: {}", e)))?;

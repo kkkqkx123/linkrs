@@ -931,7 +931,7 @@ impl core::TimeTravelEdgeStore {
         )?;
 
         let mut props_payload = Vec::new();
-        persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
+        persistence::serialize_csr_properties(&mut self.properties, &mut props_payload)?;
         let edge_count = self.next_edge_id.0 as u32;
         persistence::write_pages_to_file(
             &path.join("properties.bin"),

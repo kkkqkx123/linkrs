@@ -16,6 +16,7 @@ pub mod fixed_width;
 pub mod mvcc;
 pub mod variable_width;
 pub mod zone_map;
+pub mod chunk;
 
 #[cfg(test)]
 mod tests;

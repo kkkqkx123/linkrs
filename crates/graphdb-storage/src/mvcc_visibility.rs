@@ -2,9 +2,9 @@
 //!
 //! Centralizes the `is_visible(snapshot, create_ts, delete_ts)` check that was
 //! previously duplicated across column, edge and CSR layers. The helper
-//! enforces the Phase-4 invariant that uncommitted writes are only visible to
-//! their owning transaction; other transactions observe the read frontier
-//! captured in `snapshot`.
+//! enforces timestamp-based visibility: callers pass the effective snapshot
+//! timestamp, and transaction layers are responsible for advancing it only to
+//! committed timestamps.
 
 use graphdb_core::types::Timestamp;
 

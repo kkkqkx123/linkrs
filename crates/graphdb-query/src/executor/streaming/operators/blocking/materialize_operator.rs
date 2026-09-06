@@ -9,9 +9,11 @@ use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
-use crate::executor::streaming::spill::{HashPartitionConfig, HashPartitionSpiller, SpillManager};
+use crate::executor::streaming::spill::{
+    finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
+};
 
-use super::helpers::{reject_spill_replay, spill_not_supported, BlockingContext};
+use super::helpers::{spill_not_supported, BlockingContext};
 use super::materialize::{DataCollectState, DistinctState, MaterializeState, RollUpApplyState};
 
 pub(super) fn open_distinct(state: &mut Option<DistinctState>) {
@@ -19,7 +21,6 @@ pub(super) fn open_distinct(state: &mut Option<DistinctState>) {
         seen_rows: std::collections::HashSet::new(),
         col_names: Vec::new(),
         input_layout: None,
-        spill_files: vec![],
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -34,7 +35,6 @@ pub(super) fn open_materialize(state: &mut Option<MaterializeState>) {
         materialized_rows: vec![],
         result_iter: None,
         materialized: false,
-        spill_files: vec![],
         input_layout: None,
     });
 }
@@ -43,7 +43,6 @@ pub(super) fn open_data_collect(state: &mut Option<DataCollectState>) {
     *state = Some(DataCollectState {
         all_rows: vec![],
         emitted: false,
-        spill_files: vec![],
         input_layout: None,
     });
 }
@@ -52,7 +51,6 @@ pub(super) fn open_rollup_apply(state: &mut Option<RollUpApplyState>) {
     *state = Some(RollUpApplyState {
         all_rows: vec![],
         result_iter: None,
-        spill_files: vec![],
     });
 }
 
@@ -193,7 +191,10 @@ pub(super) fn next_distinct(
             }
         }
 
-        let runs = state.partition_spiller.take().unwrap().finalize()?;
+        let runs = finalize_partitions_with_runtime(
+            state.partition_spiller.take().unwrap(),
+            ctx.runtime.as_ref(),
+        )?;
         state.spilled_runs = runs;
         state.current_partition = 0;
         state.partition_seen.clear();
@@ -240,12 +241,7 @@ pub(super) fn next_materialize(
             for row in chunk.rows {
                 if let Err(e) = memory_tracker.try_reserve_row(&row) {
                     if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                        spill_not_supported(
-                            &mut state.materialized_rows,
-                            &sm,
-                            &mut state.spill_files,
-                            memory_tracker,
-                        )?;
+                        spill_not_supported(&mut state.materialized_rows, &sm, memory_tracker)?;
                         memory_tracker.try_reserve_row(&row)?;
                     } else {
                         return Err(e);
@@ -253,10 +249,6 @@ pub(super) fn next_materialize(
                 }
                 state.materialized_rows.push(row);
             }
-        }
-
-        if !state.spill_files.is_empty() {
-            return reject_spill_replay(&state.spill_files).map(|_| None);
         }
 
         state.materialized = true;
@@ -299,12 +291,7 @@ pub(super) fn next_data_collect(
         for row in chunk.rows {
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                    spill_not_supported(
-                        &mut state.all_rows,
-                        &sm,
-                        &mut state.spill_files,
-                        memory_tracker,
-                    )?;
+                    spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
                     memory_tracker.try_reserve_row(&row)?;
                 } else {
                     return Err(e);
@@ -312,10 +299,6 @@ pub(super) fn next_data_collect(
             }
             state.all_rows.push(row);
         }
-    }
-
-    if !state.spill_files.is_empty() {
-        return reject_spill_replay(&state.spill_files).map(|_| None);
     }
 
     if !state.all_rows.is_empty() {
@@ -362,12 +345,7 @@ pub(super) fn next_rollup_apply(
         for row in chunk.rows {
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                    spill_not_supported(
-                        &mut state.all_rows,
-                        &sm,
-                        &mut state.spill_files,
-                        memory_tracker,
-                    )?;
+                    spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
                     memory_tracker.try_reserve_row(&row)?;
                 } else {
                     return Err(e);
@@ -383,10 +361,6 @@ pub(super) fn next_rollup_apply(
             }
             state.all_rows.push(aggregated);
         }
-    }
-
-    if !state.spill_files.is_empty() {
-        return reject_spill_replay(&state.spill_files).map(|_| None);
     }
 
     state.result_iter = Some(std::mem::take(&mut state.all_rows).into_iter());
@@ -448,12 +422,7 @@ pub(super) fn spill_materialize(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(
-        &mut state.materialized_rows,
-        sm,
-        &mut state.spill_files,
-        memory_tracker,
-    )
+    spill_not_supported(&mut state.materialized_rows, sm, memory_tracker)
 }
 
 pub(super) fn spill_data_collect(
@@ -461,12 +430,7 @@ pub(super) fn spill_data_collect(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(
-        &mut state.all_rows,
-        sm,
-        &mut state.spill_files,
-        memory_tracker,
-    )
+    spill_not_supported(&mut state.all_rows, sm, memory_tracker)
 }
 
 pub(super) fn spill_rollup_apply(
@@ -474,10 +438,5 @@ pub(super) fn spill_rollup_apply(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(
-        &mut state.all_rows,
-        sm,
-        &mut state.spill_files,
-        memory_tracker,
-    )
+    spill_not_supported(&mut state.all_rows, sm, memory_tracker)
 }

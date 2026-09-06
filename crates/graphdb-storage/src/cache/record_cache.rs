@@ -76,6 +76,10 @@ impl RecordCache {
 
         let vertex_pool = Arc::new(BufferPool::new(vertex_memory));
         let id_index_pool = Arc::new(BufferPool::new(id_index_memory));
+        vertex_pool.set_ttl(config.ttl);
+        vertex_pool.set_tti(config.tti);
+        id_index_pool.set_ttl(config.ttl);
+        id_index_pool.set_tti(config.tti);
 
         Self {
             vertex_pool,
@@ -230,6 +234,12 @@ impl RecordCache {
             vertex_weighted_size: self.vertex_pool.current_usage(),
             id_index_weighted_size: self.id_index_pool.current_usage(),
         }
+    }
+
+    /// Drop all entries that have exceeded their TTL/TTI.
+    /// Returns the number of entries removed.
+    pub fn prune_expired(&self) -> usize {
+        self.vertex_pool.prune_expired() + self.id_index_pool.prune_expired()
     }
 }
 

@@ -78,7 +78,22 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
         let profile = if let Some(ref profiles) = node.profiles {
             profiles
                 .iter()
-                .map(|p| format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us))
+                .map(|p| {
+                    let base = format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us);
+                    match (
+                        p.other_stats.get("spilled_bytes"),
+                        p.other_stats.get("spill_count"),
+                        p.other_stats.get("spilled_rows"),
+                    ) {
+                        (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
+                            format!(
+                                "{},spilled_rows:{},spilled_bytes:{},spill_count:{}",
+                                base, r, b, c
+                            )
+                        }
+                        _ => base,
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(";")
         } else {
@@ -342,6 +357,18 @@ fn format_plan_node_label(node: &PlanNodeDescription) -> String {
         for profile in profiles {
             lines.push(format!("rows: {}", profile.rows));
             lines.push(format!("time: {}us", profile.exec_duration_in_us));
+            match (
+                profile.other_stats.get("spilled_bytes"),
+                profile.other_stats.get("spill_count"),
+                profile.other_stats.get("spilled_rows"),
+            ) {
+                (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
+                    lines.push(format!("spilled_rows: {}", r));
+                    lines.push(format!("spilled_bytes: {}", b));
+                    lines.push(format!("spill_count: {}", c));
+                }
+                _ => {}
+            }
         }
     }
 
@@ -436,7 +463,22 @@ pub fn format_plan_with_output_table(
             let profile = if let Some(ref profiles) = node.profiles {
                 profiles
                     .iter()
-                    .map(|p| format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us))
+                    .map(|p| {
+                        let base = format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us);
+                        match (
+                            p.other_stats.get("spilled_bytes"),
+                            p.other_stats.get("spill_count"),
+                            p.other_stats.get("spilled_rows"),
+                        ) {
+                            (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
+                                format!(
+                                    "{},spilled_rows:{},spilled_bytes:{},spill_count:{}",
+                                    base, r, b, c
+                                )
+                            }
+                            _ => base,
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(";")
             } else {
@@ -558,6 +600,9 @@ pub fn format_plan_as_json(
         rows: i64,
         exec_duration_in_us: i64,
         total_duration_in_us: i64,
+        spilled_rows: u64,
+        spilled_bytes: u64,
+        spill_count: u64,
     }
 
     #[derive(Serialize)]
@@ -580,6 +625,21 @@ pub fn format_plan_as_json(
                         rows: p.rows,
                         exec_duration_in_us: p.exec_duration_in_us,
                         total_duration_in_us: p.total_duration_in_us,
+                        spilled_rows: p
+                            .other_stats
+                            .get("spilled_rows")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0),
+                        spilled_bytes: p
+                            .other_stats
+                            .get("spilled_bytes")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0),
+                        spill_count: p
+                            .other_stats
+                            .get("spill_count")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0),
                     })
                     .collect()
             }),

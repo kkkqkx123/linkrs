@@ -132,6 +132,12 @@ pub struct ColumnarStats {
     /// boundaries (`normalize_for_opaque`). Compared against stored rows it
     /// yields the expanded/stored ratio for PROFILE observability.
     pub multiplicity_expanded: AtomicU64,
+    /// Rows written to spill runs (all operators, incl. terminal collector).
+    pub spill_rows: AtomicU64,
+    /// Bytes written to spill runs (on-disk file sizes).
+    pub spill_bytes: AtomicU64,
+    /// Number of spill runs finalized.
+    pub spill_runs: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -146,6 +152,9 @@ impl Default for ColumnarStats {
             selection_materialized_by_op: [const { AtomicU64::new(0) }; N_BOUNDARY_OPS],
             column_block_hits: AtomicU64::new(0),
             multiplicity_expanded: AtomicU64::new(0),
+            spill_rows: AtomicU64::new(0),
+            spill_bytes: AtomicU64::new(0),
+            spill_runs: AtomicU64::new(0),
         }
     }
 }
@@ -219,6 +228,21 @@ impl ColumnarStats {
         }
     }
 
+    /// Record one finalized spill run.
+    pub fn record_spill(&self, rows: u64, bytes: u64) {
+        self.record_spill_with_runs(rows, bytes, 1);
+    }
+
+    /// Record aggregated spill output covering `runs` finalized runs.
+    ///
+    /// Terminal collector paths finalize N runs but report once; passing the
+    /// run count keeps `spill_runs` exact instead of undercounting to 1.
+    pub fn record_spill_with_runs(&self, rows: u64, bytes: u64, runs: u64) {
+        self.spill_rows.fetch_add(rows, Ordering::Relaxed);
+        self.spill_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.spill_runs.fetch_add(runs, Ordering::Relaxed);
+    }
+
     /// Fraction of evaluation calls that hit the columnar fast path.
     /// Returns 1.0 when nothing was evaluated (vacuous).
     pub fn hit_rate(&self) -> f64 {
@@ -275,6 +299,9 @@ pub struct OperatorProfile {
     pub peak_memory_bytes: u64,
     pub spilled_bytes: u64,
     pub spill_count: u64,
+    /// Logical rows written to spill runs. Displayed next to the static
+    /// `spill_threshold` config so PROFILE shows configured vs actual.
+    pub spilled_rows: u64,
 }
 
 /// Identifies an operator instance in a partitioned executor tree.
@@ -319,6 +346,7 @@ pub struct ProfileEntry {
     pub peak_memory_bytes: AtomicU64,
     pub spilled_bytes: AtomicU64,
     pub spill_count: AtomicU64,
+    pub spilled_rows: AtomicU64,
 }
 
 impl ProfileEntry {
@@ -336,6 +364,7 @@ impl ProfileEntry {
             peak_memory_bytes: AtomicU64::new(profile.peak_memory_bytes),
             spilled_bytes: AtomicU64::new(profile.spilled_bytes),
             spill_count: AtomicU64::new(profile.spill_count),
+            spilled_rows: AtomicU64::new(profile.spilled_rows),
         }
     }
 
@@ -355,6 +384,7 @@ impl ProfileEntry {
             peak_memory_bytes: self.peak_memory_bytes.load(Ordering::Relaxed),
             spilled_bytes: self.spilled_bytes.load(Ordering::Relaxed),
             spill_count: self.spill_count.load(Ordering::Relaxed),
+            spilled_rows: self.spilled_rows.load(Ordering::Relaxed),
         }
     }
 }
@@ -477,6 +507,9 @@ pub struct ColumnarStatsSnapshot {
     pub selection_pushed: u64,
     pub column_block_hits: u64,
     pub multiplicity_expanded: u64,
+    pub spill_rows: u64,
+    pub spill_bytes: u64,
+    pub spill_runs: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -490,6 +523,9 @@ impl ColumnarStatsSnapshot {
             selection_pushed: stats.selection_pushed.load(Ordering::Relaxed),
             column_block_hits: stats.column_block_hits.load(Ordering::Relaxed),
             multiplicity_expanded: stats.multiplicity_expanded.load(Ordering::Relaxed),
+            spill_rows: stats.spill_rows.load(Ordering::Relaxed),
+            spill_bytes: stats.spill_bytes.load(Ordering::Relaxed),
+            spill_runs: stats.spill_runs.load(Ordering::Relaxed),
         }
     }
 
@@ -512,10 +548,23 @@ impl ColumnarStatsSnapshot {
         }
     }
 
+    /// Spilled rows per stored row for a caller-supplied stored-row count.
+    ///
+    /// Placed next to the expanded/stored ratio in PROFILE output so a large
+    /// query shows spilled/stored at a glance. Returns 0.0 when there are no
+    /// stored rows rather than dividing by zero.
+    pub fn spilled_stored_ratio(&self, stored_rows: u64) -> f64 {
+        if stored_rows == 0 {
+            0.0
+        } else {
+            self.spill_rows as f64 / stored_rows as f64
+        }
+    }
+
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -525,6 +574,9 @@ impl ColumnarStatsSnapshot {
             self.selection_pushed,
             self.column_block_hits,
             self.multiplicity_expanded,
+            self.spill_rows,
+            self.spill_bytes,
+            self.spill_runs,
         )
     }
 }
@@ -611,6 +663,7 @@ impl ProfileCollector {
                 entry.peak_memory_bytes = entry.peak_memory_bytes.max(op.peak_memory_bytes);
                 entry.spill_count += op.spill_count;
                 entry.spilled_bytes += op.spilled_bytes;
+                entry.spilled_rows += op.spilled_rows;
             }
             self.total_rows += pp.total_rows;
         }
@@ -1364,5 +1417,57 @@ mod tests {
         }));
         owner.release_all();
         assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_spilled_stored_ratio() {
+        let stats = ColumnarStats::new();
+        stats.record_spill_with_runs(200, 4096, 2);
+        let snapshot = ColumnarStatsSnapshot::from_stats(&stats);
+        assert_eq!(snapshot.spill_rows, 200);
+        assert_eq!(snapshot.spill_bytes, 4096);
+        assert_eq!(snapshot.spill_runs, 2);
+        assert!((snapshot.spilled_stored_ratio(100) - 2.0).abs() < f64::EPSILON);
+        assert_eq!(snapshot.spilled_stored_ratio(0), 0.0);
+        assert!(snapshot.summary().contains("spill_rows=200"));
+    }
+
+    #[test]
+    fn test_partition_profile_aggregation_sums_spill_rows() {
+        let mut first = ProfileCollector::new();
+        first.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(9),
+            node_id: 9,
+            partition_id: Some(0),
+            name: "Sort".to_string(),
+            spilled_rows: 100,
+            spilled_bytes: 2048,
+            spill_count: 1,
+            ..OperatorProfile::default()
+        });
+        let mut second = ProfileCollector::new();
+        second.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(9),
+            node_id: 9,
+            partition_id: Some(1),
+            name: "Sort".to_string(),
+            spilled_rows: 50,
+            spilled_bytes: 1024,
+            spill_count: 1,
+            ..OperatorProfile::default()
+        });
+
+        let mut aggregate = ProfileCollector::new();
+        aggregate.aggregate_partition_profiles(&[first, second]);
+        let entry = aggregate
+            .operators
+            .get(&OperatorProfileKey::new(PhysicalOperatorId(9), Some(0)))
+            .expect("partition zero profile");
+        assert_eq!(entry.spilled_rows, 100);
+        let entry = aggregate
+            .operators
+            .get(&OperatorProfileKey::new(PhysicalOperatorId(9), Some(1)))
+            .expect("partition one profile");
+        assert_eq!(entry.spilled_rows, 50);
     }
 }

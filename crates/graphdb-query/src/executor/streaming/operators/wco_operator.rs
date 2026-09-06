@@ -197,6 +197,10 @@ impl WcoIntersectOperator {
         0
     }
 
+    pub fn spilled_rows(&self) -> u64 {
+        0
+    }
+
     /// Drain every build input into its sorted adjacency table.
     fn drain_builds(&mut self, builds: &mut [StreamingExecutor]) -> Result<(), QueryError> {
         self.builds = Vec::with_capacity(builds.len());

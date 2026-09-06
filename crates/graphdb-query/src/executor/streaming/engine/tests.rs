@@ -205,6 +205,7 @@ fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 right_col_names: Vec::new(),
                 build_side_select: BuildSide::default(),
+                grace: crate::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             Arc::new(SlotLayout::from_names(&[
                 "left_id".to_string(),
@@ -802,6 +803,7 @@ fn partitioned_hash_join_matches_rows_across_partition_boundaries() {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 right_col_names: Vec::new(),
                 build_side_select: BuildSide::default(),
+                grace: crate::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             join_layout,
         ),
@@ -914,4 +916,241 @@ fn test_register_partition_replaces_root() {
     engine.register_partition_executors(vec![]);
     assert!(engine.root_executor.is_none());
     assert_eq!(engine.partition_count(), 0);
+}
+
+// ── Grace Hash Join spill tests ──
+
+fn grace_join_engine(
+    build_rows: Vec<Vec<Value>>,
+    probe_rows: Vec<Vec<Value>>,
+    tracker_budget: crate::executor::base::MemoryBudget,
+    left_join: bool,
+    runtime: Arc<ExecutionRuntime>,
+    query_id: u64,
+) -> StreamingExecutionEngine {
+    use crate::executor::streaming::operators::join_operator::JoinOperator as JoinOp;
+    use crate::executor::streaming::operators::spec::JoinSpec;
+    use crate::executor::streaming::spill::{SpillConfig, SpillManager};
+    use graphdb_core::types::expr::Expression;
+
+    let sm = Arc::new(SpillManager::new(SpillConfig::default(), query_id).unwrap());
+    runtime.set_spill_manager(Some(sm));
+
+    let build = scan_executor(build_rows, vec!["id".to_string(), "payload".to_string()]);
+    let probe = scan_executor(probe_rows, vec!["id".to_string(), "tag".to_string()]);
+    let spec = if left_join {
+        JoinSpec::HashLeftJoin {
+            join_condition: None,
+            hash_keys: vec![Expression::Variable("id".to_string())],
+            probe_keys: vec![Expression::Variable("id".to_string())],
+            build_side: BuildSide::Right,
+        }
+    } else {
+        JoinSpec::HashJoin {
+            join_condition: None,
+            hash_keys: vec![Expression::Variable("id".to_string())],
+            probe_keys: vec![Expression::Variable("id".to_string())],
+            build_side: BuildSide::Right,
+        }
+    };
+    let output_layout = Arc::new(SlotLayout::from_names(&[
+        "id".to_string(),
+        "tag".to_string(),
+        "id".to_string(),
+        "payload".to_string(),
+    ]));
+    let op = JoinOp::from_spec(&spec, &tracker_budget, output_layout);
+    let join = StreamingExecutor::Join(
+        operator_base(
+            3,
+            &[
+                "id".to_string(),
+                "tag".to_string(),
+                "id".to_string(),
+                "payload".to_string(),
+            ],
+        ),
+        Box::new(probe),
+        Box::new(build),
+        op,
+    );
+    let mut engine = StreamingExecutionEngine::new();
+    engine.set_runtime(runtime);
+    engine.register_executor(0, join);
+    engine
+}
+
+fn sorted_row_strings(chunks: &[DataChunk]) -> Vec<String> {
+    let mut rows: Vec<String> = chunks
+        .iter()
+        .flat_map(|c| c.rows.iter().map(|r| format!("{:?}", r)))
+        .collect();
+    rows.sort();
+    rows
+}
+
+fn grace_build_rows(n: i64) -> Vec<Vec<Value>> {
+    (0..n)
+        .map(|i| vec![Value::BigInt(i), Value::string(format!("payload_{i:05}"))])
+        .collect()
+}
+
+#[test]
+fn grace_hash_join_matches_memory_path() {
+    use crate::executor::base::MemoryBudget;
+
+    let build_rows = grace_build_rows(200);
+    let mut probe_rows: Vec<Vec<Value>> = (0..200)
+        .map(|i| vec![Value::BigInt(i), Value::string(format!("tag_{i:05}"))])
+        .collect();
+    // Unmatched probe rows contribute nothing to an inner join.
+    for i in 200..220 {
+        probe_rows.push(vec![Value::BigInt(i), Value::string(format!("tag_{i:05}"))]);
+    }
+
+    // Memory path: generous budget, spill manager attached but never triggered.
+    let mem_rt = Arc::new(ExecutionRuntime::new(
+        crate::executor::streaming::runtime::QueryIdentity {
+            query_id: 4311,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(512 * 1024 * 1024),
+        None,
+        crate::executor::base::SearchContext::default(),
+    ));
+    let mut mem_engine = grace_join_engine(
+        build_rows.clone(),
+        probe_rows.clone(),
+        MemoryBudget::new(512 * 1024 * 1024),
+        false,
+        mem_rt,
+        4311,
+    );
+    let mem_chunks = mem_engine.execute_collected().expect("memory join");
+    assert_eq!(
+        mem_chunks.iter().map(|c| c.len()).sum::<usize>(),
+        200,
+        "memory path must match all 200 shared keys"
+    );
+
+    // Spill path: tiny tracker budget forces Grace partitioning.
+    let spill_rt = Arc::new(ExecutionRuntime::new(
+        crate::executor::streaming::runtime::QueryIdentity {
+            query_id: 4312,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(512 * 1024 * 1024),
+        None,
+        crate::executor::base::SearchContext::default(),
+    ));
+    let mut spill_engine = grace_join_engine(
+        build_rows,
+        probe_rows,
+        MemoryBudget::new(8192),
+        false,
+        spill_rt.clone(),
+        4312,
+    );
+    let spill_chunks = spill_engine.execute_collected().expect("spill join");
+    assert_eq!(
+        sorted_row_strings(&spill_chunks),
+        sorted_row_strings(&mem_chunks),
+        "Grace join must match the memory path row-for-row"
+    );
+    let stats = crate::executor::streaming::runtime::ColumnarStatsSnapshot::from_stats(
+        &spill_rt.columnar_stats(),
+    );
+    assert!(stats.spill_rows > 0, "expected spilled rows to be recorded");
+    assert!(stats.spill_runs > 0, "expected spilled runs to be recorded");
+}
+
+#[test]
+fn grace_hash_left_join_preserves_unmatched() {
+    use crate::executor::base::MemoryBudget;
+
+    let build_rows = grace_build_rows(100);
+    let mut probe_rows: Vec<Vec<Value>> = (0..100)
+        .map(|i| vec![Value::BigInt(i), Value::string(format!("tag_{i:05}"))])
+        .collect();
+    for i in 100..120 {
+        probe_rows.push(vec![Value::BigInt(i), Value::string(format!("tag_{i:05}"))]);
+    }
+
+    let mem_rt = Arc::new(ExecutionRuntime::new(
+        crate::executor::streaming::runtime::QueryIdentity {
+            query_id: 4313,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(512 * 1024 * 1024),
+        None,
+        crate::executor::base::SearchContext::default(),
+    ));
+    let mut mem_engine = grace_join_engine(
+        build_rows.clone(),
+        probe_rows.clone(),
+        MemoryBudget::new(512 * 1024 * 1024),
+        true,
+        mem_rt,
+        4313,
+    );
+    let mem_chunks = mem_engine.execute_collected().expect("memory left join");
+    assert_eq!(
+        mem_chunks.iter().map(|c| c.len()).sum::<usize>(),
+        120,
+        "left join must preserve all probe rows"
+    );
+
+    let spill_rt = Arc::new(ExecutionRuntime::new(
+        crate::executor::streaming::runtime::QueryIdentity {
+            query_id: 4314,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(512 * 1024 * 1024),
+        None,
+        crate::executor::base::SearchContext::default(),
+    ));
+    let mut spill_engine = grace_join_engine(
+        build_rows,
+        probe_rows,
+        MemoryBudget::new(2048),
+        true,
+        spill_rt,
+        4314,
+    );
+    let spill_chunks = spill_engine.execute_collected().expect("spill left join");
+    assert_eq!(
+        sorted_row_strings(&spill_chunks),
+        sorted_row_strings(&mem_chunks),
+        "Grace left join must match the memory path row-for-row"
+    );
+}
+
+#[test]
+fn grace_hash_join_empty_probe_yields_no_rows() {
+    use crate::executor::base::MemoryBudget;
+
+    let spill_rt = Arc::new(ExecutionRuntime::new(
+        crate::executor::streaming::runtime::QueryIdentity {
+            query_id: 4315,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(512 * 1024 * 1024),
+        None,
+        crate::executor::base::SearchContext::default(),
+    ));
+    let mut engine = grace_join_engine(
+        grace_build_rows(50),
+        Vec::new(),
+        MemoryBudget::new(2048),
+        false,
+        spill_rt,
+        4315,
+    );
+    let chunks = engine.execute_collected().expect("empty probe join");
+    assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), 0);
 }

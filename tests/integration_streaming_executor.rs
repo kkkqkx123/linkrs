@@ -437,6 +437,7 @@ fn test_hash_join_in_chain() {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 right_col_names: vec![],
                 build_side_select: BuildSide::Left,
+                grace: graphdb::query::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             empty_layout(),
         ),

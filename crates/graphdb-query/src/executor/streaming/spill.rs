@@ -5,8 +5,6 @@
 //! - `SpilledRun / RunWriter / RunReader`: the single spill file format —
 //!   versioned header, schema fingerprint, checksum, optional zstd body
 //!   (rows are length-prefixed postcard-encoded bytes)
-//! - `SpilledFile`: passive metadata carried by operator state for legacy
-//!   spill-replay guards
 //! - `HashPartitionSpiller`: per-partition run writers
 //! - `DiskQuota`: separate disk usage tracking for spill operations
 
@@ -27,6 +25,9 @@ pub struct SpillConfig {
     pub temp_dir: Option<PathBuf>,
     /// Maximum number of spill files per operator instance.
     pub max_spill_files: usize,
+    /// Terminal collector spill threshold in logical rows.
+    /// `None` → default threshold; `Some(0)` → collector never spills.
+    pub collect_spill_rows: Option<u64>,
 }
 
 impl Default for SpillConfig {
@@ -34,9 +35,23 @@ impl Default for SpillConfig {
         Self {
             temp_dir: None,
             max_spill_files: 64,
+            collect_spill_rows: None,
         }
     }
 }
+
+/// Default terminal-collector spill threshold in logical rows.
+pub const COLLECTOR_SPILL_ROWS_DEFAULT: u64 = 200_000;
+
+/// Maximum rows per terminal-collector run file. Bounds both the writer-side
+/// body buffer and the reader-side full-run load peak.
+pub const COLLECTOR_RUN_ROWS_MAX: u64 = 65_536;
+
+/// Default Grace Hash Join partition count.
+pub const HASH_JOIN_PARTITIONS_DEFAULT: u64 = 32;
+
+/// Maximum Grace Hash Join repartition depth.
+pub const HASH_JOIN_MAX_DEPTH: u32 = 3;
 
 // ── Run file format constants ───────────────────────────────────────────────
 
@@ -172,7 +187,7 @@ pub struct SpilledRun {
 ///
 /// Single implementation shared by every run writer (sort runs, set-operator
 /// spill); readers validate it against the recorded fingerprint on open.
-pub(crate) fn schema_fingerprint(col_names: &[String]) -> u64 {
+pub fn schema_fingerprint(col_names: &[String]) -> u64 {
     use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for name in col_names {
@@ -180,14 +195,6 @@ pub(crate) fn schema_fingerprint(col_names: &[String]) -> u64 {
         hasher.write_u8(0);
     }
     hasher.finish()
-}
-
-/// Metadata for a simple spill file (unsorted format).
-#[derive(Debug, Clone)]
-pub struct SpilledFile {
-    pub path: PathBuf,
-    pub row_count: u64,
-    pub byte_size: u64,
 }
 
 // ── DiskQuota (separate from memory budget) ──────────────────────────────────
@@ -325,6 +332,11 @@ impl RunWriter {
 
     /// Finalize the run: optionally compress body, write header + body, flush.
     /// Returns `SpilledRun` metadata.
+    ///
+    /// Low-level primitive: production spill paths should route through
+    /// [`SpillManager::finalize_run`] instead so disk quota is enforced and
+    /// manager byte counters stay exact. Direct use remains for tests and the
+    /// no-manager fallback.
     pub fn finalize(mut self) -> Result<SpilledRun, QueryError> {
         use std::io::Seek;
 
@@ -605,6 +617,17 @@ pub fn hash_row_partition(row: &[Value], num_partitions: u64) -> u64 {
     hash % num_partitions
 }
 
+/// Compute the partition index for pre-serialized key bytes.
+///
+/// Shared primitive behind [`hash_row_partition`] and join-key partitioning
+/// so both sides of a Grace Hash Join agree on partition assignment.
+pub fn hash_bytes_partition(bytes: &[u8], num_partitions: u64) -> u64 {
+    if num_partitions == 0 {
+        return 0;
+    }
+    fnv1a_64_update(HASH_PARTITION_SEED, bytes) % num_partitions
+}
+
 /// Configuration for hash-based partition spill.
 #[derive(Debug, Clone)]
 pub struct HashPartitionConfig {
@@ -690,6 +713,14 @@ impl HashPartitionSpiller {
     }
 
     /// Finalize all partitions and return the metadata for each.
+    ///
+    /// Direct writer finalization without disk-quota enforcement. Deprecated
+    /// for production paths: prefer [`Self::finalize_with_manager`] so every
+    /// spill path is quota-checked. Retained for the no-manager fallback and
+    /// tests.
+    #[deprecated(
+        note = "bypasses disk-quota enforcement; use `finalize_with_manager` or `finalize_partitions_with_runtime` for production spill paths"
+    )]
     pub fn finalize(mut self) -> Result<Vec<Option<SpilledRun>>, QueryError> {
         let mut runs = Vec::with_capacity(self.writers.len());
         for writer in self.writers.drain(..) {
@@ -701,17 +732,34 @@ impl HashPartitionSpiller {
         Ok(runs)
     }
 
+    /// Finalize all partitions through the manager so disk quota is enforced.
+    pub fn finalize_with_manager(
+        mut self,
+        manager: &SpillManager,
+    ) -> Result<Vec<Option<SpilledRun>>, QueryError> {
+        let mut runs = Vec::with_capacity(self.writers.len());
+        for writer in self.writers.drain(..) {
+            match writer {
+                Some(w) => runs.push(Some(manager.finalize_run(w)?)),
+                None => runs.push(None),
+            }
+        }
+        Ok(runs)
+    }
+
     /// Recursively repartition when skew is detected.
     ///
     /// This splits the overflowing partition into sub-partitions by
-    /// re-hashing with an increased partition count.
+    /// re-hashing with an increased partition count. Intermediate runs go
+    /// through [`SpillManager::finalize_run`] so disk quota applies; replaced
+    /// files are unlinked and their reservations released.
     fn repartition(&mut self, manager: &SpillManager) -> Result<(), QueryError> {
         self.recursion_depth += 1;
         let _old_count = self.config.num_partitions;
         self.config.num_partitions = self.config.num_partitions.saturating_mul(2);
 
-        // Finalize current writers to get run files
-        let old_runs = self.finalize_current()?;
+        // Finalize current writers to get run files (quota-checked).
+        let old_runs = self.finalize_current(manager)?;
 
         // Create new writers for doubled partitions
         let mut new_writers = Vec::with_capacity(self.config.num_partitions as usize);
@@ -722,6 +770,7 @@ impl HashPartitionSpiller {
 
         // Read back and rehash all old partitions into new partitions
         for old_run in old_runs.into_iter().flatten() {
+            let byte_size = old_run.byte_size;
             let mut reader = RunReader::open(&old_run)?;
             while let Some(row) = reader.read_row()? {
                 let partition = hash_row_partition(&row, self.config.num_partitions) as usize;
@@ -730,8 +779,10 @@ impl HashPartitionSpiller {
                     new_counts[partition] += 1;
                 }
             }
-            // Delete old partition file
+            // Delete old partition file and release its quota reservation:
+            // the data now lives in the new partitions.
             let _ = std::fs::remove_file(&old_run.path);
+            manager.disk_quota().release(byte_size);
         }
 
         self.writers = new_writers;
@@ -740,11 +791,17 @@ impl HashPartitionSpiller {
     }
 
     /// Finalize all current partition writers and return the run metadata.
-    fn finalize_current(&mut self) -> Result<Vec<Option<SpilledRun>>, QueryError> {
+    ///
+    /// Quota-checked via [`SpillManager::finalize_run`]; intermediate
+    /// repartition files are accounted exactly like final runs.
+    fn finalize_current(
+        &mut self,
+        manager: &SpillManager,
+    ) -> Result<Vec<Option<SpilledRun>>, QueryError> {
         let mut runs = Vec::with_capacity(self.writers.len());
         for writer in self.writers.drain(..) {
             match writer {
-                Some(w) => runs.push(Some(w.finalize()?)),
+                Some(w) => runs.push(Some(manager.finalize_run(w)?)),
                 None => runs.push(None),
             }
         }
@@ -770,10 +827,10 @@ impl HashPartitionSpiller {
 /// it (including all spill files) on drop.
 #[derive(Debug)]
 pub struct SpillManager {
-    pub(crate) _config: SpillConfig,
+    pub(crate) config: SpillConfig,
     pub(crate) base_dir: PathBuf,
     pub(crate) file_counter: AtomicU64,
-    pub(crate) _spill_bytes: Arc<AtomicU64>,
+    pub(crate) spill_bytes: Arc<AtomicU64>,
     pub(crate) disk_quota: DiskQuota,
 }
 
@@ -796,18 +853,27 @@ impl SpillManager {
         std::fs::create_dir_all(&base)
             .map_err(|e| QueryError::execution(format!("Failed to create spill dir: {}", e)))?;
         Ok(Self {
-            _config: config,
+            config,
             base_dir: base,
             file_counter: AtomicU64::new(0),
-            _spill_bytes: Arc::new(AtomicU64::new(0)),
+            spill_bytes: Arc::new(AtomicU64::new(0)),
             disk_quota,
         })
     }
 
     /// Create a run writer for spill data (versioned format with
     /// header/checksum). This is the single spill file format.
+    ///
+    /// Enforces `max_spill_files`: once the file budget is exhausted no new
+    /// run can be created and a structured error is returned.
     pub fn create_run_writer(&self, schema_fingerprint: u64) -> Result<RunWriter, QueryError> {
         let id = self.file_counter.fetch_add(1, Ordering::Relaxed);
+        if id >= self.config.max_spill_files as u64 {
+            return Err(QueryError::execution(format!(
+                "spill run: too many spill files (limit {})",
+                self.config.max_spill_files,
+            )));
+        }
         let path = self.base_dir.join(format!("run_{:016x}.run", id));
         let file = std::fs::File::create(&path)
             .map_err(|e| QueryError::execution(format!("create run file: {}", e)))?;
@@ -826,6 +892,46 @@ impl SpillManager {
         &self.base_dir
     }
 
+    /// Access the spill configuration.
+    pub fn config(&self) -> &SpillConfig {
+        &self.config
+    }
+
+    /// Total spilled bytes finalized through this manager.
+    pub fn spilled_bytes(&self) -> u64 {
+        self.spill_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Effective terminal-collector spill threshold in logical rows.
+    ///
+    /// `SpillConfig::collect_spill_rows`: `None` selects the default,
+    /// `Some(0)` disables collector spill.
+    pub fn collector_spill_threshold(&self) -> u64 {
+        match self.config.collect_spill_rows {
+            None => COLLECTOR_SPILL_ROWS_DEFAULT,
+            Some(0) => u64::MAX,
+            Some(v) => v,
+        }
+    }
+
+    /// Finalize a run while enforcing disk quota.
+    ///
+    /// Single choke point for all spill paths: the run is finalized first
+    /// (its exact on-disk size is only known then), quota is reserved, and
+    /// on quota failure the file is removed so no orphaned run is left
+    /// behind. Callers must route new `RunWriter::finalize` uses through
+    /// here; direct `finalize` remains for tests and legacy paths.
+    pub fn finalize_run(&self, writer: RunWriter) -> Result<SpilledRun, QueryError> {
+        let path = writer.path().to_path_buf();
+        let run = writer.finalize()?;
+        if let Err(e) = self.disk_quota.try_reserve(run.byte_size) {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        self.spill_bytes.fetch_add(run.byte_size, Ordering::Relaxed);
+        Ok(run)
+    }
+
     /// Access the disk quota.
     pub fn disk_quota(&self) -> &DiskQuota {
         &self.disk_quota
@@ -840,6 +946,33 @@ impl SpillManager {
         runtime.on_cleanup(move || {
             let _ = std::fs::remove_dir_all(&base);
         });
+    }
+}
+
+/// Finalize a partition spiller through the runtime's spill manager.
+///
+/// Quota-enforcing choke point for partition spill paths (aggregate, window,
+/// group-by, distinct/materialize, join): when a manager is present each run
+/// goes through [`SpillManager::finalize_run`] and the run sizes are recorded
+/// into the runtime [`ColumnarStats`](crate::executor::streaming::runtime::ColumnarStats).
+/// Without a manager it falls back to plain finalization.
+#[allow(deprecated)]
+pub fn finalize_partitions_with_runtime(
+    spiller: HashPartitionSpiller,
+    runtime: Option<&Arc<crate::executor::streaming::runtime::ExecutionRuntime>>,
+) -> Result<Vec<Option<SpilledRun>>, QueryError> {
+    match runtime.and_then(|rt| rt.get_spill_manager()) {
+        Some(sm) => {
+            let runs = spiller.finalize_with_manager(&sm)?;
+            if let Some(rt) = runtime {
+                let stats = rt.columnar_stats();
+                for run in runs.iter().flatten() {
+                    stats.record_spill(run.row_count, run.byte_size);
+                }
+            }
+            Ok(runs)
+        }
+        None => spiller.finalize(),
     }
 }
 
@@ -1023,5 +1156,63 @@ mod tests {
         let mut reader = RunReader::open(&run).unwrap();
         assert_eq!(reader.read_all().unwrap(), rows);
         assert_eq!(reader.header().compression_type, RunCompression::None);
+    }
+
+    #[test]
+    fn test_finalize_run_enforces_quota_and_removes_file() {
+        let quota = DiskQuota::new(1);
+        let manager = SpillManager::new_with_quota(SpillConfig::default(), 208, quota).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        writer.write_rows(&sample_rows(10)).unwrap();
+        let path = writer.path().to_path_buf();
+        let err = manager.finalize_run(writer).unwrap_err();
+        assert!(err.to_string().contains("Disk quota exceeded"));
+        assert!(
+            !path.exists(),
+            "quota failure must not leave an orphaned run file"
+        );
+        assert_eq!(manager.spilled_bytes(), 0);
+    }
+
+    #[test]
+    fn test_finalize_run_tracks_bytes() {
+        let manager = SpillManager::new(SpillConfig::default(), 209).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        writer.write_rows(&sample_rows(10)).unwrap();
+        let run = manager.finalize_run(writer).unwrap();
+        assert_eq!(manager.spilled_bytes(), run.byte_size);
+    }
+
+    #[test]
+    fn test_create_run_writer_enforces_max_spill_files() {
+        let config = SpillConfig {
+            temp_dir: None,
+            max_spill_files: 2,
+            collect_spill_rows: None,
+        };
+        let manager = SpillManager::new(config, 210).unwrap();
+        let _first = manager.create_run_writer(0).unwrap();
+        let _second = manager.create_run_writer(0).unwrap();
+        let err = manager.create_run_writer(0).unwrap_err();
+        assert!(err.to_string().contains("too many spill files"));
+    }
+
+    #[test]
+    fn test_collect_spill_threshold_defaults_and_disables() {
+        let manager = SpillManager::new(SpillConfig::default(), 211).unwrap();
+        assert_eq!(
+            manager.collector_spill_threshold(),
+            COLLECTOR_SPILL_ROWS_DEFAULT
+        );
+        let disabled = SpillManager::new(
+            SpillConfig {
+                temp_dir: None,
+                max_spill_files: 64,
+                collect_spill_rows: Some(0),
+            },
+            212,
+        )
+        .unwrap();
+        assert_eq!(disabled.collector_spill_threshold(), u64::MAX);
     }
 }

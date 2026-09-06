@@ -10,7 +10,9 @@ use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::{SortDirection, StreamingExecutor, ValueRowContext};
-use crate::executor::streaming::spill::{HashPartitionConfig, HashPartitionSpiller, SpillManager};
+use crate::executor::streaming::spill::{
+    finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
+};
 
 use super::helpers::BlockingContext;
 use super::window::{
@@ -22,7 +24,6 @@ pub(super) fn open_window_function(state: &mut Option<WindowFunctionState>) {
         all_rows: vec![],
         col_names: vec![],
         result_iter: None,
-        spill_files: vec![],
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -36,7 +37,6 @@ pub(super) fn open_window(state: &mut Option<WindowState>) {
         all_rows: vec![],
         col_names: vec![],
         result_iter: None,
-        spill_files: vec![],
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -239,7 +239,10 @@ pub(super) fn next_window_function(
 
         // Finalize spilled runs
         if state.partition_spiller.is_some() {
-            let runs = state.partition_spiller.take().unwrap().finalize()?;
+            let runs = finalize_partitions_with_runtime(
+                state.partition_spiller.take().unwrap(),
+                ctx.runtime.as_ref(),
+            )?;
             state.spilled_runs = runs;
             state.current_partition = 0;
             continue;
@@ -481,7 +484,10 @@ pub(super) fn next_window(
 
         // Finalize spilled runs
         if state.partition_spiller.is_some() {
-            let runs = state.partition_spiller.take().unwrap().finalize()?;
+            let runs = finalize_partitions_with_runtime(
+                state.partition_spiller.take().unwrap(),
+                ctx.runtime.as_ref(),
+            )?;
             state.spilled_runs = runs;
             state.current_partition = 0;
             continue;

@@ -153,12 +153,12 @@ pub fn serialize_csr(
 }
 
 pub fn serialize_csr_properties(
-    properties: &CsrWithProperties,
+    properties: &mut CsrWithProperties,
     buf: &mut Vec<u8>,
 ) -> StorageResult<()> {
     write_header_to(buf, section::EDGE_PROPERTIES)
         .map_err(|e| StorageError::io_error(format!("Failed to write properties header: {}", e)))?;
-    let data = properties.dump();
+    let data = properties.clone().dump();
     buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
     buf.extend_from_slice(&data);
     Ok(())

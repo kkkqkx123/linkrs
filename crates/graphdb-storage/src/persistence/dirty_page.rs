@@ -155,16 +155,16 @@ impl Default for DirtyPageTracker {
 pub struct PageHeader {
     pub page_id: u32,
     pub checksum: u32,
-    pub size: u16,
+    pub size: u32,
     pub flags: u16,
 }
 
 impl PageHeader {
     pub const FLAG_DIRTY: u16 = 0b01;
     pub const FLAG_COMPRESSED: u16 = 0b10;
-    pub const SERIALIZED_SIZE: usize = 12;
+    pub const SERIALIZED_SIZE: usize = 14;
 
-    pub fn new(page_id: u32, size: u16, is_dirty: bool, is_compressed: bool) -> Self {
+    pub fn new(page_id: u32, size: u32, is_dirty: bool, is_compressed: bool) -> Self {
         let mut flags = 0u16;
         if is_dirty {
             flags |= Self::FLAG_DIRTY;
@@ -186,8 +186,8 @@ impl PageHeader {
         }
         let page_id = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let checksum = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        let size = u16::from_le_bytes([data[8], data[9]]);
-        let flags = u16::from_le_bytes([data[10], data[11]]);
+        let size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let flags = u16::from_le_bytes([data[12], data[13]]);
         Some(Self {
             page_id,
             checksum,
@@ -205,9 +205,8 @@ pub struct PageData {
 
 impl PageData {
     pub fn new(page_id: u32, data: Vec<u8>, is_compressed: bool) -> Self {
-        let size = data.len().min(u16::MAX as usize) as u16;
         let checksum = crc32fast::hash(&data);
-        let mut header = PageHeader::new(page_id, size, true, is_compressed);
+        let mut header = PageHeader::new(page_id, data.len() as u32, true, is_compressed);
         header.checksum = checksum;
         Self { header, data }
     }
@@ -228,6 +227,12 @@ impl PageData {
         }
         let header = PageHeader::deserialize(&data[..PageHeader::SERIALIZED_SIZE])?;
         let payload = data[PageHeader::SERIALIZED_SIZE..].to_vec();
+        // Validate the declared size matches the actual payload so a truncated
+        // or corrupt record is rejected even when the checksum would be
+        // recomputable from the (wrong) remainder.
+        if header.size as usize != payload.len() {
+            return None;
+        }
         let expected = crc32fast::hash(&payload);
         if expected != header.checksum {
             return None;
@@ -343,6 +348,43 @@ mod tests {
         let serialized = page.serialize();
         let decoded = PageData::deserialize(&serialized).unwrap();
         assert_eq!(decoded.data, data);
+    }
+
+    #[test]
+    fn test_clear_page() {
+        let mut tracker = DirtyPageTracker::new(10);
+        tracker.mark_page(1);
+        tracker.mark_page(3);
+        assert!(tracker.clear_page(1));
+        assert!(!tracker.clear_page(1));
+        assert_eq!(tracker.dirty_pages(), vec![3]);
+        assert_eq!(tracker.dirty_count(), 1);
+    }
+
+    #[test]
+    fn test_page_data_accepts_large_payloads() {
+        let data = vec![7u8; 70_000];
+        let page = PageData::new(9, data.clone(), false);
+        assert_eq!(page.header.size as usize, data.len());
+
+        let decoded = PageData::deserialize(&page.serialize()).expect("large page roundtrip");
+        assert_eq!(decoded.header.size as usize, data.len());
+        assert_eq!(decoded.data, data);
+    }
+
+    #[test]
+    fn test_page_data_rejects_size_mismatch() {
+        let mut bytes = PageData::new(3, b"payload".to_vec(), false).serialize();
+        bytes[8..12].copy_from_slice(&3u32.to_le_bytes());
+        assert!(PageData::deserialize(&bytes).is_none());
+    }
+
+    #[test]
+    fn test_page_data_rejects_corrupt_payload() {
+        let mut bytes = PageData::new(4, b"payload".to_vec(), false).serialize();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        assert!(PageData::deserialize(&bytes).is_none());
     }
 
     #[test]

@@ -54,6 +54,11 @@ impl RowVisibility {
 pub struct CsrWithProperties {
     offsets: Vec<u32>,
     lengths: Vec<u32>,
+    /// Current append position per vertex (`offsets[v] + lengths[v]`), kept
+    /// exact on every insert so `offsets` can be rebuilt lazily.
+    heads: Vec<u32>,
+    /// Whether `offsets` is stale (inserts happened since the last rebuild).
+    offsets_dirty: bool,
     total_edges: u64,
     vertex_capacity: usize,
     property_schema: Vec<PropertySchema>,
@@ -82,6 +87,8 @@ impl CsrWithProperties {
         Self {
             offsets: vec![0; vc + 1],
             lengths: vec![0; vc],
+            heads: vec![0; vc],
+            offsets_dirty: false,
             total_edges: 0,
             vertex_capacity: vc,
             property_schema,
@@ -126,13 +133,32 @@ impl CsrWithProperties {
         let new_cap = (min as f64 * 1.25).ceil() as usize;
         self.offsets.resize(new_cap + 1, 0);
         self.lengths.resize(new_cap, 0);
+        self.heads.resize(new_cap, 0);
         self.vertex_capacity = new_cap;
     }
 
+    /// Rebuild the materialized `offsets` prefix array from `lengths` and
+    /// refresh the per-vertex append heads. Called lazily at freeze/checkpoint
+    /// boundaries (and serialization) instead of after every insert.
     fn rebuild_offsets(&mut self) {
+        if self.offsets.len() < self.lengths.len() + 1 {
+            self.offsets.resize(self.lengths.len() + 1, 0);
+        }
+        if self.heads.len() < self.lengths.len() {
+            self.heads.resize(self.lengths.len(), 0);
+        }
         self.offsets[0] = 0;
         for i in 0..self.lengths.len() {
             self.offsets[i + 1] = self.offsets[i] + self.lengths[i];
+            self.heads[i] = self.offsets[i + 1];
+        }
+        self.offsets_dirty = false;
+    }
+
+    /// Ensure the materialized offsets array reflects all inserts so far.
+    pub fn ensure_offsets(&mut self) {
+        if self.offsets_dirty {
+            self.rebuild_offsets();
         }
     }
 
@@ -201,7 +227,9 @@ impl CsrWithProperties {
         ts: Timestamp,
     ) -> StorageResult<u32> {
         self.ensure_vertex_capacity(src as usize + 1);
-        let pos = (self.offsets[src as usize] + self.lengths[src as usize]) as usize;
+        // The append head is kept exact on every insert, so the materialized
+        // offsets array can stay stale until the next rebuild.
+        let pos = self.heads[src as usize] as usize;
         if pos >= self.visibility.len() {
             self.visibility.resize(pos + 1, RowVisibility::new(0));
         }
@@ -231,8 +259,9 @@ impl CsrWithProperties {
 
         self.edge_to_row.insert(edge_id, pos as u32);
         self.lengths[src as usize] += 1;
+        self.heads[src as usize] += 1;
         self.total_edges += 1;
-        self.rebuild_offsets();
+        self.offsets_dirty = true;
         Ok(pos as u32)
     }
 
@@ -243,7 +272,7 @@ impl CsrWithProperties {
         edge_index: usize,
         query_ts: Timestamp,
     ) -> Option<Vec<(String, Option<Value>)>> {
-        let start = *self.offsets.get(src as usize)? as usize;
+        let start = self.positional_start(src)?;
         let len = *self.lengths.get(src as usize)? as usize;
         if edge_index >= len {
             return None;
@@ -263,6 +292,14 @@ impl CsrWithProperties {
                 })
                 .collect(),
         )
+    }
+
+    /// Start CSR row position for `src`, derived from the always-exact heads
+    /// and lengths arrays so it stays correct while offsets are stale.
+    fn positional_start(&self, src: u32) -> Option<usize> {
+        let head = *self.heads.get(src as usize)? as usize;
+        let len = *self.lengths.get(src as usize)? as usize;
+        Some(head - len)
     }
 
     /// Lookup by `EdgeId`.
@@ -445,8 +482,8 @@ impl CsrWithProperties {
     }
 
     pub fn delete_edge(&mut self, src: u32, edge_index: usize, ts: Timestamp) -> bool {
-        let start = match self.offsets.get(src as usize) {
-            Some(v) => *v as usize,
+        let start = match self.positional_start(src) {
+            Some(v) => v,
             None => return false,
         };
         let len = match self.lengths.get(src as usize) {
@@ -672,7 +709,8 @@ impl CsrWithProperties {
         total
     }
 
-    pub fn dump(&self) -> Vec<u8> {
+    pub fn dump(&mut self) -> Vec<u8> {
+        self.ensure_offsets();
         let mut buf = Vec::new();
         buf.push(1u8); // version
         buf.extend_from_slice(&(self.visibility.len() as u32).to_le_bytes());
@@ -929,7 +967,15 @@ impl CsrWithProperties {
                 }
             }
         }
+        self.recompute_heads();
         Ok(())
+    }
+
+    /// Re-derive the append heads from the loaded offsets/lengths arrays.
+    pub fn recompute_heads(&mut self) {
+        self.heads.clear();
+        self.heads.resize(self.lengths.len(), 0);
+        self.rebuild_offsets();
     }
 
     pub fn gc_versions_with_watermarks(
@@ -1063,6 +1109,41 @@ mod tests {
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
         let ne = csr.get_by_edge_id(eid, 250).unwrap();
         assert!(ne
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+    }
+
+    #[test]
+    fn lazy_offsets_roundtrip() {
+        let mut csr = CsrWithProperties::new(3, schema());
+        let eid0 = EdgeId(10);
+        let eid1 = EdgeId(11);
+
+        csr.insert_properties(2, eid0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        csr.insert_properties(2, eid1, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+
+        // Inserts keep the append heads exact but avoid rebuilding offsets.
+        assert_eq!(csr.offsets(), &[0, 0, 0, 0]);
+        assert!(csr
+            .get_properties(2, 1, 100)
+            .unwrap()
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+
+        csr.ensure_offsets();
+        assert_eq!(csr.offsets(), &[0, 0, 0, 2]);
+
+        let bytes = csr.dump();
+        let mut loaded = CsrWithProperties::new(3, schema());
+        loaded.load(&bytes).unwrap();
+
+        assert_eq!(loaded.offsets(), &[0, 0, 0, 2]);
+        assert_eq!(loaded.edge_count(), 2);
+        assert!(loaded
+            .get_properties(2, 1, 100)
+            .unwrap()
             .iter()
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
     }

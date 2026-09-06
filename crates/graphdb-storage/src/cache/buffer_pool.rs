@@ -21,17 +21,20 @@ pub(crate) struct CachedItem<T: Clone + Send + Sync> {
     pub(crate) dirty: Arc<AtomicBool>,
     clock_flag: Arc<AtomicBool>,
     last_access: Arc<AtomicU64>,
+    created_at: Arc<AtomicU64>,
     size: usize,
 }
 
 impl<T: Clone + Send + Sync> CachedItem<T> {
     pub(crate) fn new(item: T, size: usize) -> Self {
+        let now = timestamp_nanos();
         Self {
             item,
             pin_count: Arc::new(AtomicU64::new(0)),
             dirty: Arc::new(AtomicBool::new(false)),
             clock_flag: Arc::new(AtomicBool::new(true)),
-            last_access: Arc::new(AtomicU64::new(timestamp_nanos())),
+            last_access: Arc::new(AtomicU64::new(now)),
+            created_at: Arc::new(AtomicU64::new(now)),
             size,
         }
     }
@@ -47,6 +50,14 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
 
     pub(crate) fn is_pinned(&self) -> bool {
         self.pin_count.load(Ordering::Acquire) > 0
+    }
+
+    /// Whether the entry has expired under the given TTL (since insertion) or
+    /// TTI (since last access) policies. `0` disables the respective policy.
+    fn is_expired(&self, now_nanos: u64, ttl_nanos: u64, tti_nanos: u64) -> bool {
+        (ttl_nanos != 0 && now_nanos.saturating_sub(self.created_at.load(Ordering::Relaxed)) >= ttl_nanos)
+            || (tti_nanos != 0
+                && now_nanos.saturating_sub(self.last_access.load(Ordering::Relaxed)) >= tti_nanos)
     }
 }
 
@@ -76,6 +87,10 @@ struct BufferPoolInner<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Syn
     /// Total weighted size of the cached items. Maintained incrementally so
     /// `current_usage` is O(1) instead of scanning all shards on every insert.
     usage: AtomicU64,
+    /// Time-to-live in nanoseconds since insertion (0 = disabled).
+    ttl_nanos: AtomicU64,
+    /// Time-to-idle in nanoseconds since last access (0 = disabled).
+    tti_nanos: AtomicU64,
 }
 
 impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T> {
@@ -93,8 +108,26 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
                 writer: Mutex::new(None),
                 memory_accounting: Mutex::new(None),
                 usage: AtomicU64::new(0),
+                ttl_nanos: AtomicU64::new(0),
+                tti_nanos: AtomicU64::new(0),
             }),
         }
+    }
+
+    /// Enable TTL (expire entries this long after insertion).
+    pub(crate) fn set_ttl(&self, ttl: Option<std::time::Duration>) {
+        self.inner.ttl_nanos.store(
+            ttl.map_or(0, |d| d.as_nanos() as u64),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Enable TTI (expire entries this long after their last access).
+    pub(crate) fn set_tti(&self, tti: Option<std::time::Duration>) {
+        self.inner.tti_nanos.store(
+            tti.map_or(0, |d| d.as_nanos() as u64),
+            Ordering::Relaxed,
+        );
     }
 
     fn shard_for(&self, key: &K) -> usize {
@@ -109,9 +142,59 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
 
     /// Look up a cached item, touching only the shard that owns `key`.
     /// Concurrent hits on different keys proceed in parallel.
+    /// Entries whose TTL/TTI has elapsed are removed and treated as misses.
     pub(crate) fn get(&self, key: &K) -> Option<Arc<CachedItem<T>>> {
-        let shard = self.inner.shards[self.shard_for(key)].lock();
-        shard.get(key).cloned()
+        let mut shard = self.inner.shards[self.shard_for(key)].lock();
+        let cached = shard.get(key)?;
+        let now = timestamp_nanos();
+        let ttl = self.inner.ttl_nanos.load(Ordering::Relaxed);
+        let tti = self.inner.tti_nanos.load(Ordering::Relaxed);
+        if cached.is_expired(now, ttl, tti) {
+            let item_size = cached.size as u64;
+            shard.remove(key);
+            self.inner.usage.fetch_sub(item_size, Ordering::Relaxed);
+            if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+                accounting.release_category(MemoryCategory::Cache, item_size);
+            }
+            return None;
+        }
+        if tti != 0 {
+            cached.last_access.store(now, Ordering::Relaxed);
+        }
+        Some(cached.clone())
+    }
+
+    /// Proactively drop all entries that have exceeded TTL/TTI, returning the
+    /// number removed. Designed for background expiry sweeps; lazy eviction on
+    /// `get` remains the correctness backstop.
+    pub(crate) fn prune_expired(&self) -> usize {
+        let now = timestamp_nanos();
+        let ttl = self.inner.ttl_nanos.load(Ordering::Relaxed);
+        let tti = self.inner.tti_nanos.load(Ordering::Relaxed);
+        if ttl == 0 && tti == 0 {
+            return 0;
+        }
+        let mut removed = 0usize;
+        let mut removed_bytes = 0u64;
+        for shard_mutex in &self.inner.shards {
+            let mut shard = shard_mutex.lock();
+            shard.retain(|_, cached| {
+                if cached.is_expired(now, ttl, tti) {
+                    removed_bytes += cached.size as u64;
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if removed > 0 {
+            self.inner.usage.fetch_sub(removed_bytes, Ordering::Relaxed);
+            if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+                accounting.release_category(MemoryCategory::Cache, removed_bytes);
+            }
+        }
+        removed
     }
 
     pub(crate) fn set_loader<F>(&self, loader: F)
@@ -529,5 +612,42 @@ mod tests {
             written.load(Ordering::SeqCst) >= 1,
             "dirty item written back"
         );
+    }
+
+    #[test]
+    fn ttl_expires_entries_on_get() {
+        let pool = BufferPool::<u32, &str>::new(10_000);
+        pool.set_ttl(Some(std::time::Duration::from_millis(1)));
+        pool.insert(1, "a", 8);
+        assert!(pool.get(&1).is_some(), "fresh entry is a hit");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(pool.get(&1).is_none(), "entry expired under TTL");
+        assert_eq!(pool.current_usage(), 0, "expired entry frees usage");
+    }
+
+    #[test]
+    fn tti_refreshes_on_access_and_expires_when_idle() {
+        let pool = BufferPool::<u32, &str>::new(10_000);
+        pool.set_tti(Some(std::time::Duration::from_millis(2)));
+        pool.insert(1, "a", 8);
+        assert!(pool.get(&1).is_some());
+        // Access keeps the entry alive (refreshes idle clock).
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(pool.get(&1).is_some(), "access refreshes TTI");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(pool.get(&1).is_none(), "idle entry expires under TTI");
+    }
+
+    #[test]
+    fn prune_expired_removes_stale_entries() {
+        let pool = BufferPool::<u32, &str>::new(10_000);
+        pool.set_ttl(Some(std::time::Duration::from_millis(1)));
+        pool.insert(1, "a", 8);
+        pool.insert(2, "b", 8);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let removed = pool.prune_expired();
+        assert_eq!(removed, 2);
+        assert_eq!(pool.len(), 0);
+        assert_eq!(pool.current_usage(), 0);
     }
 }

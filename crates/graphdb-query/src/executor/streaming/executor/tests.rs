@@ -315,7 +315,13 @@ fn run_sort(
         crate::executor::base::SearchContext::default(),
     ));
     if spill_budget_bytes.is_some() {
-        let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4243).unwrap());
+        // The tiny tracker budget spills nearly every row; allow enough run
+        // files for the workload (the default 64-file cap would reject it).
+        let config = SpillConfig {
+            max_spill_files: 1024,
+            ..SpillConfig::default()
+        };
+        let sm = Arc::new(SpillManager::new(config, 4243).unwrap());
         rt.set_spill_manager(Some(sm));
     }
 

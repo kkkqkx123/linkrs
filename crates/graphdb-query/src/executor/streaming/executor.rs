@@ -503,8 +503,8 @@ impl StreamingExecutor {
         }
     }
 
-    /// Record spilled bytes and spill count in profile for this operator.
-    pub fn record_profile_spill(&self, spilled_bytes: u64, spill_count: u64) {
+    /// Record spilled rows, bytes and spill count in profile for this operator.
+    pub fn record_profile_spill(&self, spilled_bytes: u64, spill_count: u64, spilled_rows: u64) {
         let Some(rt) = &self.base().runtime else {
             return;
         };
@@ -517,6 +517,9 @@ impl StreamingExecutor {
         entry
             .spill_count
             .fetch_add(spill_count, std::sync::atomic::Ordering::Relaxed);
+        entry
+            .spilled_rows
+            .fetch_add(spilled_rows, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a resource cleanup callback with the attached runtime.
@@ -809,6 +812,7 @@ impl StreamingExecutor {
         let peak = self.peak_memory_bytes();
         let spilled = self.spilled_size();
         let sc = self.spill_count();
+        let rows = self.spilled_rows();
         let start = Instant::now();
         let result = dispatch_close!(self);
         let elapsed = start.elapsed().as_micros() as u64;
@@ -816,8 +820,8 @@ impl StreamingExecutor {
         if peak > 0 {
             self.record_profile_peak_memory(peak);
         }
-        if spilled > 0 || sc > 0 {
-            self.record_profile_spill(spilled, sc);
+        if spilled > 0 || sc > 0 || rows > 0 {
+            self.record_profile_spill(spilled, sc, rows);
         }
         if result.is_ok() {
             self.base_mut().lifecycle.mark_closed();
@@ -914,9 +918,19 @@ impl Spillable for StreamingExecutor {
     fn spill_count(&self) -> u64 {
         match self {
             Self::Blocking(_, _, op) => op.spill_count(),
-            Self::Join(_, _, _, _op) => 0,
+            Self::Join(_, _, _, op) => op.spill_count(),
             Self::Set(_, _, _, _op) => 0,
             Self::Wco(_, _, _, _op) => 0,
+            _ => 0,
+        }
+    }
+
+    fn spilled_rows(&self) -> u64 {
+        match self {
+            Self::Blocking(_, _, op) => op.spilled_rows(),
+            Self::Join(_, _, _, op) => op.spilled_rows(),
+            Self::Set(_, _, _, op) => op.spilled_rows(),
+            Self::Wco(_, _, _, op) => op.spilled_rows(),
             _ => 0,
         }
     }

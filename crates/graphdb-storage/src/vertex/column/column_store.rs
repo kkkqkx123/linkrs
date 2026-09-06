@@ -533,6 +533,16 @@ impl ColumnStore {
         }
     }
 
+    /// Clear the dirty mark only for the given `(column_name, page_id)` pairs,
+    /// leaving other dirty pages tracked for a later flush.
+    pub fn clear_pages(&mut self, pages: &[(String, usize)]) {
+        for (name, page_id) in pages {
+            if let Some(col) = self.get_column_mut(name) {
+                col.clear_page_dirty(*page_id);
+            }
+        }
+    }
+
     pub fn total_dirty_pages(&self) -> usize {
         self.columns.iter().map(|c| c.dirty_count()).sum()
     }

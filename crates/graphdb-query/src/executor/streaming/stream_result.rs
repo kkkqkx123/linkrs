@@ -247,19 +247,35 @@ impl StreamingQueryResult {
     /// Routes through `LocalChunkCollector`, the single terminal collection
     /// logic shared with `convert_chunks_to_dataset` and `ResultStream::collect`.
     pub fn collect(&self) -> Result<DataSet, QueryError> {
+        let spill_manager = self.runtime.get_spill_manager();
         let mut collector: Option<LocalChunkCollector> = None;
 
         while let Some(mut chunk) = self.next_chunk()? {
             let collector = match collector {
                 Some(ref mut c) => c,
-                None => collector.insert(LocalChunkCollector::new(chunk.col_names())),
+                None => {
+                    let mut fresh = LocalChunkCollector::new(chunk.col_names());
+                    if let Some(ref manager) = spill_manager {
+                        fresh.attach_spill_manager(manager.clone());
+                    }
+                    collector.insert(fresh)
+                }
             };
-            collector.push_chunk(&mut chunk);
+            collector.push_chunk(&mut chunk)?;
         }
 
-        let (all_rows, col_names) = collector
-            .map(LocalChunkCollector::into_rows)
-            .unwrap_or_default();
+        let Some(mut collector) = collector else {
+            return Ok(DataSet::with_columns(Vec::new()));
+        };
+        collector.finish_spill()?;
+        let stats = self.runtime.columnar_stats();
+        let spilled_rows = collector.spilled_rows();
+        let spilled_bytes = collector.spilled_bytes();
+        let spilled_runs = collector.spilled_run_count() as u64;
+        let (all_rows, col_names) = collector.into_rows()?;
+        if spilled_rows > 0 {
+            stats.record_spill_with_runs(spilled_rows, spilled_bytes, spilled_runs);
+        }
         Ok(DataSet::from_rows(all_rows, col_names))
     }
 

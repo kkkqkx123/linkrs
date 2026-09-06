@@ -30,8 +30,9 @@ pub struct VertexTableConfig {
     /// Maximum version chain length per row before folding oldest entries.
     /// Set to 0 to disable folding (unlimited chain growth).
     pub version_chain_cap: usize,
-    /// Retention horizon for version chain folding. Entries older than this
-    /// timestamp may be folded. Use `Timestamp::MAX` to fold regardless of age.
+    /// Retention horizon for version chain folding. Entries fully older than
+    /// this timestamp may be folded while keeping the newest value. Use
+    /// `Timestamp::MAX` to disable lossy folding (the safe default).
     pub retention_horizon: Timestamp,
 }
 
@@ -520,8 +521,9 @@ impl VertexTable {
                     deleted_count += 1;
                 }
                 Err(e) => {
-                    // Skip this vertex and continue with others
-                    eprintln!("Failed to delete vertex {}: {}", external_id, e);
+                    // Skip this vertex and continue with others; the failure is
+                    // logged through the standard log facade instead of stderr.
+                    log::warn!("batch_delete skipped vertex {}: {}", external_id, e);
                 }
             }
         }
@@ -548,7 +550,9 @@ impl VertexTable {
                     deleted_count += 1;
                 }
                 Err(e) => {
-                    eprintln!("Failed to delete vertex {}: {}", external_id, e);
+                    // Skip this vertex and continue with others; the failure is
+                    // logged through the standard log facade instead of stderr.
+                    log::warn!("batch_delete_i64 skipped vertex {}: {}", external_id, e);
                 }
             }
         }

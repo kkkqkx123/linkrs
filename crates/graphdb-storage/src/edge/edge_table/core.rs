@@ -574,13 +574,8 @@ impl TimeTravelEdgeStore {
 
         let edge_id = self.next_edge_id.fetch_add();
 
-        // Record edge creation in the centralized MVCC store.
-        // This is the authoritative source for edge visibility; the inline
-        // timestamps in Nbr are a local cache for MutableCsr operations.
-        // Owner is set to None here; the transaction context marks the edge
-        // as pending via mark_pending after creation.
-        self.mvcc.record_creation(edge_id, ts, None);
-
+        // Pre-flight duplicate check before touching any shared state so a
+        // failed insert leaves no partial MVCC/CSR record behind.
         if self.has_edge(src, dst, rank, ts) {
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {}@{}",
@@ -588,14 +583,32 @@ impl TimeTravelEdgeStore {
             )));
         }
 
+        // Record edge creation in the centralized MVCC store. The inline
+        // timestamps in Nbr drive CSR-local filtering, while transaction
+        // isolation comes from the global write-timestamp frontier: readers
+        // capture a committed snapshot before this `ts` is published.
+        self.mvcc.record_creation(edge_id, ts, None);
+
+        // Insert property rows and the out-direction CSR entry. Each fallible
+        // step rolls back everything it already touched on failure so a failed
+        // insert leaves no half-visible edge behind.
         if !converted_values.is_empty() {
-            self.properties
-                .insert_for_edge(edge_id, &converted_values, ts)?;
+            if let Err(e) = self
+                .properties
+                .insert_for_edge(edge_id, &converted_values, ts)
+            {
+                self.mvcc.remove_edge_timestamps(edge_id);
+                return Err(e);
+            }
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        self.out_csr.insert_edge(src, dst_key, edge_id, ts)?;
+        if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
+            self.properties.remove_edge_mapping(edge_id);
+            self.mvcc.remove_edge_timestamps(edge_id);
+            return Err(e);
+        }
 
         if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
             // Roll back the out-direction insertion physically so no
@@ -606,6 +619,9 @@ impl TimeTravelEdgeStore {
             }
             self.properties.remove_edge_mapping(edge_id);
             let _ = self.properties.mark_deleted(edge_id, ts);
+            // Remove the centralized MVCC creation record so the failed edge
+            // does not survive as a phantom entry in timestamp lookups.
+            self.mvcc.remove_edge_timestamps(edge_id);
             return Err(e);
         }
 

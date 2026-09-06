@@ -7,6 +7,7 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use crate::executor::streaming::spill::COLLECTOR_RUN_ROWS_MAX;
 use graphdb_core::error::QueryError;
 use graphdb_core::Value;
 
@@ -485,13 +486,22 @@ impl SetOperator {
                         .map(|s| vec![graphdb_core::Value::string(s.clone())])
                         .collect();
                     // Single spill format: versioned run file (fire-and-forget,
-                    // same lifecycle as the legacy writer before it).
+                    // same lifecycle as the legacy writer before it). Writers
+                    // rotate every COLLECTOR_RUN_ROWS_MAX rows so neither the
+                    // writer-side body buffer nor the reader-side full-run
+                    // load grows without bound.
                     let fp = crate::executor::streaming::spill::schema_fingerprint(
                         &self.output_layout.names(),
                     );
-                    let mut writer = sm.create_run_writer(fp)?;
-                    writer.write_rows(&rows)?;
-                    let _run = writer.finalize()?;
+                    for chunk in rows.chunks(COLLECTOR_RUN_ROWS_MAX as usize) {
+                        let mut writer = sm.create_run_writer(fp)?;
+                        writer.write_rows(chunk)?;
+                        let run = sm.finalize_run(writer)?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.columnar_stats()
+                                .record_spill(run.row_count, run.byte_size);
+                        }
+                    }
                     seen_rows.clear();
                     memory_tracker.reset();
                 }
@@ -507,10 +517,18 @@ impl SetOperator {
                     let fp = crate::executor::streaming::spill::schema_fingerprint(
                         &self.output_layout.names(),
                     );
-                    let mut writer = sm.create_run_writer(fp)?;
-                    writer.write_rows(left_rows)?;
-                    let _run = writer.finalize()?;
-                    left_rows.clear();
+                    while !left_rows.is_empty() {
+                        let take = (COLLECTOR_RUN_ROWS_MAX as usize).min(left_rows.len());
+                        let chunk: Vec<Vec<graphdb_core::Value>> =
+                            left_rows.drain(..take).collect();
+                        let mut writer = sm.create_run_writer(fp)?;
+                        writer.write_rows(&chunk)?;
+                        let run = sm.finalize_run(writer)?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.columnar_stats()
+                                .record_spill(run.row_count, run.byte_size);
+                        }
+                    }
                     memory_tracker.reset();
                 }
                 if !right_rows.is_empty() {
@@ -539,6 +557,10 @@ impl SetOperator {
     }
 
     pub fn spilled_bytes(&self) -> u64 {
+        0
+    }
+
+    pub fn spilled_rows(&self) -> u64 {
         0
     }
 }

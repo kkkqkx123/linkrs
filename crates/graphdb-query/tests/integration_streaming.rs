@@ -12,7 +12,7 @@ use graphdb_query::executor::streaming::operators::blocking::{
     BlockingOperator, BlockingOperatorKind,
 };
 use graphdb_query::executor::streaming::operators::join_operator::{
-    HashJoinBuildSide, JoinOperator, JoinOperatorKind,
+    grace_join::GraceJoinState, HashJoinBuildSide, JoinOperator, JoinOperatorKind,
 };
 use graphdb_query::executor::streaming::operators::set_operator::{SetOperator, SetOperatorKind};
 use graphdb_query::executor::streaming::operators::source_operator::{
@@ -174,6 +174,7 @@ fn test_join_with_small_inputs() {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 right_col_names: vec![],
                 build_side_select: BuildSide::Left,
+                grace: GraceJoinState::default(),
             },
             empty_layout(),
         ),

@@ -2,7 +2,7 @@ use crate::executor::base::MemoryTracker;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
-use crate::executor::streaming::spill::{SpillManager, SpilledFile};
+use crate::executor::streaming::spill::SpillManager;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
@@ -37,21 +37,10 @@ pub(crate) fn aggregate_arg_field_name(
 pub(crate) fn spill_not_supported(
     _buffer: &mut Vec<Vec<Value>>,
     _sm: &SpillManager,
-    _spill_files: &mut Vec<SpilledFile>,
     _memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
     Err(QueryError::execution(
         "Spill is not implemented for this blocking operator; query memory budget exceeded"
-            .to_string(),
-    ))
-}
-
-/// Reject replay of spilled files for operators that cannot stream from disk.
-pub(crate) fn reject_spill_replay(
-    _spill_files: &[SpilledFile],
-) -> Result<Vec<Vec<Value>>, QueryError> {
-    Err(QueryError::execution(
-        "This blocking operator cannot replay spilled data within the query memory budget"
             .to_string(),
     ))
 }

@@ -49,12 +49,22 @@ impl CacheManager {
     }
 
     pub fn refresh_memory_usage(&self) -> Option<RecordCacheStats> {
+        // Opportunistically sweep expired TTL/TTI entries before reporting.
+        self.prune_expired_cache();
         let stats = self.record_cache.as_ref().map(|cache| cache.stats())?;
         let bytes = stats
             .vertex_weighted_size
             .saturating_add(stats.id_index_weighted_size);
         self.accounting.report_usage(MemoryCategory::Cache, bytes);
         Some(stats)
+    }
+
+    /// Remove cached entries that have exceeded their TTL/TTI.
+    /// No-op when the record cache is disabled or no expiry is configured.
+    pub fn prune_expired_cache(&self) {
+        if let Some(ref record_cache) = self.record_cache {
+            record_cache.prune_expired();
+        }
     }
 
     pub fn clear_cache(&self) {

@@ -157,6 +157,12 @@ impl Column {
         self.dirty_tracker.clear();
     }
 
+    /// Clear the dirty mark for a single row-page (keeps other dirty pages).
+    #[inline]
+    pub fn clear_page_dirty(&mut self, page_id: usize) {
+        self.dirty_tracker.clear_page(page_id);
+    }
+
     /// Serialize a single page for incremental checkpoint.
     /// Returns `PageData` serialized bytes including header + payload.
     pub fn serialize_page(&self, page_id: usize) -> StorageResult<Vec<u8>> {

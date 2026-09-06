@@ -39,6 +39,9 @@ struct LabelRange {
 /// Labeled Mutable CSR supporting multiple edge labels per vertex.
 pub struct LabeledMutableCsr {
     nbr_list: Vec<Nbr>,
+    /// Source vertex of each entry in `nbr_list` (parallel, enables range
+    /// rebuild after compaction).
+    nbr_sources: Vec<u32>,
     /// Label ranges per vertex: nbr_list indices are divided by label
     label_ranges: Vec<Vec<LabelRange>>,
     degrees: Vec<u32>,
@@ -49,6 +52,7 @@ impl Clone for LabeledMutableCsr {
     fn clone(&self) -> Self {
         Self {
             nbr_list: self.nbr_list.clone(),
+            nbr_sources: self.nbr_sources.clone(),
             label_ranges: self.label_ranges.clone(),
             degrees: self.degrees.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
@@ -80,6 +84,7 @@ impl LabeledMutableCsr {
         let vertex_cap = vertex_capacity.max(1);
         Self {
             nbr_list: Vec::new(),
+            nbr_sources: Vec::new(),
             label_ranges: vec![Vec::new(); vertex_cap],
             degrees: vec![0u32; vertex_cap],
             edge_count: AtomicU64::new(0),
@@ -96,6 +101,7 @@ impl LabeledMutableCsr {
 
     pub fn clear(&mut self) {
         self.nbr_list.clear();
+        self.nbr_sources.clear();
         self.label_ranges.iter_mut().for_each(|v| v.clear());
         self.degrees.iter_mut().for_each(|d| *d = 0);
         self.edge_count.store(0, Ordering::Relaxed);
@@ -157,6 +163,7 @@ impl LabeledMutableCsr {
                 edge_id,
                 ts,
             ));
+            self.nbr_sources.push(src_vid);
             ranges[idx].count += 1;
         } else {
             // Create new label range
@@ -168,6 +175,7 @@ impl LabeledMutableCsr {
                 edge_id,
                 ts,
             ));
+            self.nbr_sources.push(src_vid);
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -202,6 +210,12 @@ impl CsrBase for LabeledMutableCsr {
             data.extend(nbr.to_vertex_id().as_bytes());
             data.extend(nbr.edge_id.0.to_le_bytes());
             data.extend(nbr.delete_ts.to_le_bytes());
+        }
+
+        // Write nbr_sources (parallel owner map)
+        data.extend((self.nbr_sources.len() as u64).to_le_bytes());
+        for src in &self.nbr_sources {
+            data.extend(src.to_le_bytes());
         }
 
         // Write label_ranges
@@ -260,6 +274,13 @@ impl CsrBase for LabeledMutableCsr {
                 create_ts: 0,
                 delete_ts,
             });
+        }
+
+        // Read nbr_sources (parallel owner map)
+        let sources_count = read_u64_le(data, &mut offset)? as usize;
+        self.nbr_sources.clear();
+        for _ in 0..sources_count {
+            self.nbr_sources.push(read_u32_le(data, &mut offset)?);
         }
 
         // Read label_ranges
@@ -442,37 +463,34 @@ impl MutableCsrTrait for LabeledMutableCsr {
 
     fn compact_with_ts(&mut self, ts: Timestamp, _reserve_ratio: f32) -> usize {
         let mut removed = 0;
-        self.nbr_list.retain(|nbr| {
+        let mut kept: Vec<Nbr> = Vec::with_capacity(self.nbr_list.len());
+        let mut kept_sources: Vec<u32> = Vec::with_capacity(self.nbr_list.len());
+        for (idx, nbr) in self.nbr_list.drain(..).enumerate() {
             if nbr.delete_ts <= ts {
                 removed += 1;
-                false
             } else {
-                true
+                kept.push(nbr);
+                kept_sources.push(self.nbr_sources[idx]);
             }
-        });
+        }
+        self.nbr_list = kept;
+        self.nbr_sources = kept_sources;
 
         // Update edge count
         self.edge_count.fetch_sub(removed as u64, Ordering::Relaxed);
 
-        // Rebuild label_ranges after compaction
+        // Rebuild label_ranges after compaction using the tracked owners.
         for ranges in &mut self.label_ranges {
             ranges.clear();
         }
 
         for idx in 0..self.nbr_list.len() {
-            if let Some(src_vid) = self.find_vertex_for_edge(idx as u32) {
-                if (src_vid as usize) < self.vertex_capacity() {
-                    let ranges = &mut self.label_ranges[src_vid as usize];
-                    if let Some(lr) = ranges.last_mut() {
-                        if lr.label == 0 {
-                            lr.count += 1;
-                        } else {
-                            ranges.push(LabelRange {
-                                label: 0,
-                                offset: idx as u32,
-                                count: 1,
-                            });
-                        }
+            let src_vid = self.nbr_sources[idx];
+            if (src_vid as usize) < self.vertex_capacity() {
+                let ranges = &mut self.label_ranges[src_vid as usize];
+                if let Some(lr) = ranges.last_mut() {
+                    if lr.label == 0 {
+                        lr.count += 1;
                     } else {
                         ranges.push(LabelRange {
                             label: 0,
@@ -480,6 +498,12 @@ impl MutableCsrTrait for LabeledMutableCsr {
                             count: 1,
                         });
                     }
+                } else {
+                    ranges.push(LabelRange {
+                        label: 0,
+                        offset: idx as u32,
+                        count: 1,
+                    });
                 }
             }
         }
@@ -516,11 +540,6 @@ impl MutableCsrTrait for LabeledMutableCsr {
 }
 
 impl LabeledMutableCsr {
-    fn find_vertex_for_edge(&self, _edge_idx: u32) -> Option<u32> {
-        // This is a placeholder; in a real implementation, we'd need to track vertex->edge mapping
-        None
-    }
-
     pub fn iter(&self, ts: Timestamp) -> LabeledMutableCsrIterator<'_> {
         LabeledMutableCsrIterator::new(self, ts)
     }
@@ -699,5 +718,24 @@ mod tests {
             let edges = csr.edges_of(src, 999);
             assert_eq!(edges.len(), 3);
         }
+    }
+
+    #[test]
+    fn test_labeled_compact_uses_owner_map() {
+        let mut csr = LabeledMutableCsr::with_capacity(10, 100);
+
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(10), 1)
+            .unwrap();
+        csr.insert_edge(1, VertexId::from_int64(2), EdgeId(11), 1)
+            .unwrap();
+
+        csr.delete_edge(0, EdgeId(10), 50).unwrap();
+        assert_eq!(csr.compact_with_ts(100, 0.0), 1);
+        assert_eq!(csr.edge_count(), 1);
+
+        let remaining: Vec<_> = csr.iter(200).collect();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].0, VertexId::from_int64(1));
+        assert_eq!(remaining[0].1.edge_id, EdgeId(11));
     }
 }

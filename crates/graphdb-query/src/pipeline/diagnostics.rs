@@ -195,7 +195,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let profile_str = if let Some(ref profiles) = node_desc.profiles {
                 profiles
                     .iter()
-                    .map(|p| format!("rows: {}, exec_time: {}us", p.rows, p.exec_duration_in_us))
+                    .map(|p| {
+                        let base =
+                            format!("rows: {}, exec_time: {}us", p.rows, p.exec_duration_in_us);
+                        let spilled = p.other_stats.get("spilled_bytes").map(String::as_str);
+                        let count = p.other_stats.get("spill_count").map(String::as_str);
+                        let rows = p.other_stats.get("spilled_rows").map(String::as_str);
+                        match (spilled, count, rows) {
+                            (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
+                                format!(
+                                    "{}, spilled_rows: {}, spilled_bytes: {}, spill_count: {}",
+                                    base, r, b, c
+                                )
+                            }
+                            _ => base,
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("; ")
             } else {
@@ -346,10 +361,27 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                                 "spill_count".to_string(),
                                 op_profile.spill_count.to_string(),
                             );
+                            map.insert(
+                                "spilled_rows".to_string(),
+                                op_profile.spilled_rows.to_string(),
+                            );
                             map
                         },
                     };
                     node_desc.add_profile(profiling);
+                    // Surface actual spill next to the static `spill_threshold`
+                    // config pair so PROFILE shows configured vs actual together.
+                    if op_profile.spilled_bytes > 0
+                        || op_profile.spill_count > 0
+                        || op_profile.spilled_rows > 0
+                    {
+                        node_desc
+                            .add_description("spilled_rows", op_profile.spilled_rows.to_string());
+                        node_desc
+                            .add_description("spilled_bytes", op_profile.spilled_bytes.to_string());
+                        node_desc
+                            .add_description("spill_count", op_profile.spill_count.to_string());
+                    }
                 }
             }
             (

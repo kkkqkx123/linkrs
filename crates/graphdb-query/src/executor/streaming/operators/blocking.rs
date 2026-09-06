@@ -735,82 +735,62 @@ impl BlockingOperator {
     }
 
     pub fn spilled_bytes(&self) -> u64 {
-        macro_rules! sum_spill {
+        macro_rules! sum_runs {
             ($state:expr) => {
                 $state.as_ref().map_or(0, |s| {
-                    s.spill_files.iter().map(|f| f.byte_size).sum::<u64>()
+                    s.spilled_runs
+                        .iter()
+                        .filter_map(|r| r.as_ref())
+                        .map(|r| r.byte_size)
+                        .sum::<u64>()
                 })
             };
         }
         match &self.kind {
-            BlockingOperatorKind::Sort { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state
-                    .as_ref()
-                    .map_or(0, |s| s.runs.iter().map(|r| r.byte_size).sum::<u64>());
-                base + run_bytes
-            }
-            BlockingOperatorKind::Aggregate { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
-                    s.spilled_runs
-                        .iter()
-                        .filter_map(|r| r.as_ref())
-                        .map(|r| r.byte_size)
-                        .sum::<u64>()
-                });
-                base + run_bytes
-            }
-            BlockingOperatorKind::GroupBy { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
-                    s.spilled_runs
-                        .iter()
-                        .filter_map(|r| r.as_ref())
-                        .map(|r| r.byte_size)
-                        .sum::<u64>()
-                });
-                base + run_bytes
-            }
-            BlockingOperatorKind::WindowFunction { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
-                    s.spilled_runs
-                        .iter()
-                        .filter_map(|r| r.as_ref())
-                        .map(|r| r.byte_size)
-                        .sum::<u64>()
-                });
-                base + run_bytes
-            }
-            BlockingOperatorKind::Window { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
-                    s.spilled_runs
-                        .iter()
-                        .filter_map(|r| r.as_ref())
-                        .map(|r| r.byte_size)
-                        .sum::<u64>()
-                });
-                base + run_bytes
-            }
+            BlockingOperatorKind::Sort { state, .. } => state
+                .as_ref()
+                .map_or(0, |s| s.runs.iter().map(|r| r.byte_size).sum::<u64>()),
+            BlockingOperatorKind::Aggregate { state, .. } => sum_runs!(state),
+            BlockingOperatorKind::GroupBy { state, .. } => sum_runs!(state),
+            BlockingOperatorKind::WindowFunction { state, .. } => sum_runs!(state),
+            BlockingOperatorKind::Window { state, .. } => sum_runs!(state),
             BlockingOperatorKind::TopN { .. } => 0,
-            BlockingOperatorKind::Distinct { state, .. } => {
-                let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
+            BlockingOperatorKind::Distinct { state, .. } => sum_runs!(state),
+            BlockingOperatorKind::Materialize { .. } => 0,
+            BlockingOperatorKind::DataCollect { .. } => 0,
+            BlockingOperatorKind::RollUpApply { .. } => 0,
+            BlockingOperatorKind::PartialAggregate { .. } => 0,
+            BlockingOperatorKind::FinalAggregate { .. } => 0,
+        }
+    }
+
+    pub fn spilled_rows(&self) -> u64 {
+        macro_rules! sum_rows {
+            ($state:expr) => {
+                $state.as_ref().map_or(0, |s| {
                     s.spilled_runs
                         .iter()
                         .filter_map(|r| r.as_ref())
-                        .map(|r| r.byte_size)
+                        .map(|r| r.row_count)
                         .sum::<u64>()
-                });
-                base + run_bytes
-            }
-            BlockingOperatorKind::Materialize { state, .. } => sum_spill!(state),
-            BlockingOperatorKind::DataCollect { state, .. } => sum_spill!(state),
-            BlockingOperatorKind::RollUpApply { state, .. } => sum_spill!(state),
-            BlockingOperatorKind::PartialAggregate { state, .. } => sum_spill!(state),
-            BlockingOperatorKind::FinalAggregate { state, .. } => sum_spill!(state),
+                })
+            };
+        }
+        match &self.kind {
+            BlockingOperatorKind::Sort { state, .. } => state
+                .as_ref()
+                .map_or(0, |s| s.runs.iter().map(|r| r.row_count).sum::<u64>()),
+            BlockingOperatorKind::Aggregate { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::GroupBy { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::WindowFunction { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::Window { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::TopN { .. } => 0,
+            BlockingOperatorKind::Distinct { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::Materialize { .. } => 0,
+            BlockingOperatorKind::DataCollect { .. } => 0,
+            BlockingOperatorKind::RollUpApply { .. } => 0,
+            BlockingOperatorKind::PartialAggregate { .. } => 0,
+            BlockingOperatorKind::FinalAggregate { .. } => 0,
         }
     }
 }

@@ -2,6 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
+    use graphdb_core::types::Timestamp;
     use graphdb_core::{ArrayTypeInfo, StructTypeInfo};
     use graphdb_core::{DataType, Value};
 
@@ -576,6 +577,42 @@ mod tests {
     }
 
     #[test]
+    fn test_fold_oldest_keeps_newest_value_within_horizon() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+
+        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
+        col.set_versioned(0, Some(&Value::Int(4)), 40).unwrap();
+
+        // Fold to cap=2 with a horizon past the two oldest intervals. The
+        // folded range must resolve to the NEWEST retained value (not the
+        // oldest before-image the old implementation kept).
+        col.fold_oldest(0, 2, 25);
+        assert_eq!(
+            col.get_at_ts(0, 15),
+            Some(Value::Int(2)),
+            "folded range resolves to newer value"
+        );
+        assert_eq!(col.get_at_ts(0, 25), Some(Value::Int(2)));
+        assert_eq!(col.get_at_ts(0, 35), Some(Value::Int(3)));
+        assert_eq!(col.get(0), Some(Value::Int(4)));
+        assert_eq!(col.version_chain_len(0), 2, "chain reduced to cap");
+
+        // Horizon = MAX disables folding entirely (safe default).
+        col.set_versioned(0, Some(&Value::Int(5)), 50).unwrap();
+        col.set_versioned(0, Some(&Value::Int(6)), 60).unwrap();
+        let before = col.version_chain_len(0);
+        col.fold_oldest(0, 1, Timestamp::MAX);
+        assert_eq!(
+            col.version_chain_len(0),
+            before,
+            "MAX horizon must not fold"
+        );
+        assert_eq!(col.get_at_ts(0, 50), Some(Value::Int(5)), "history intact");
+    }
+
+    #[test]
     fn test_versioned_null_and_string_types() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, true);
 
@@ -635,5 +672,58 @@ mod tests {
             assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
             assert_eq!(col.get_at_ts(0, 20), None);
         }
+    }
+
+    #[test]
+    fn test_clear_page_dirty_only_clears_requested_page() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let page_rows = crate::persistence::dirty_page::ROWS_PER_PAGE;
+
+        col.set(page_rows - 1, Some(&Value::Int(1))).unwrap();
+        col.set(page_rows, Some(&Value::Int(2))).unwrap();
+        col.mark_dirty(0);
+        col.mark_dirty(page_rows);
+
+        assert_eq!(col.dirty_pages(), vec![0, 1]);
+
+        col.clear_page_dirty(0);
+        assert_eq!(col.dirty_pages(), vec![1]);
+
+        col.clear_page_dirty(1);
+        assert_eq!(col.dirty_pages(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn test_column_store_clear_pages_keeps_other_pages_dirty() {
+        let mut store = ColumnStore::new();
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, true);
+
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+            )
+            .unwrap();
+
+        let pages = store.collect_dirty_pages();
+        assert!(pages.iter().all(|p| p.page_id == 0));
+
+        store.clear_pages(&[("name".to_string(), 0)]);
+        let remaining = store
+            .columns()
+            .iter()
+            .map(|col| (col.name.clone(), col.dirty_pages()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining,
+            vec![
+                ("name".to_string(), Vec::<usize>::new()),
+                ("age".to_string(), vec![0])
+            ]
+        );
     }
 }

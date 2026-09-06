@@ -5,9 +5,11 @@ use super::Column;
 
 /// One before-image of a row's value, valid on `[start_ts, end_ts)`.
 ///
-/// The version chain per row stores the newest entry first. The current value
-/// lives in the column storage and is valid from `visibility.create_ts` onward;
-/// each write pushes the previous current value here with its lifetime.
+/// The per-row version chain stores entries ordered by `start_ts` ascending
+/// (oldest first); the last entry is the most recent before-image, adjacent to
+/// the current value that lives in the column storage and is valid from
+/// `visibility.create_ts` onward. Each write pushes the previous current value
+/// here with its lifetime.
 #[derive(Debug, Clone)]
 pub struct VersionEntry {
     /// First timestamp at which this version is visible.
@@ -380,28 +382,32 @@ impl Column {
             let Some(chain) = chains.get_mut(row_idx) else {
                 return;
             };
-            // Fold from the front: merge the second-newest entry into the newest,
-            // preserving the most recent value while extending its visible time
-            // range. This maintains the expected interval-merge semantics where
-            // recent history stays exact and oldest intervals are folded.
-            while chain.len() > cap {
-                if chain.len() < 2 {
-                    break;
-                }
-                let can_fold_horizon = if horizon == Timestamp::MAX {
-                    true
-                } else {
-                    chain[1].end_ts <= horizon
-                };
-                if !can_fold_horizon {
-                    break;
-                }
-                let second = chain.remove(1);
-                if chain[0].end_ts < second.end_ts {
-                    chain[0].end_ts = second.end_ts;
-                }
-                let _ = second;
+            if chain.len() <= cap {
+                return;
             }
+            // Fold from the oldest end: while over capacity and the oldest
+            // retained entry is fully older than the retention horizon (i.e. no
+            // active snapshot can still read it), merge it into its successor —
+            // keeping the NEWER value while extending the successor's range
+            // backward over the expired one. This preserves the most recent
+            // history instead of keeping the older value.
+            // Timestamp::MAX disables folding entirely (safe default).
+            let mut entries: Vec<VersionEntry> = chain.drain(..).collect();
+            let mut fold_count = 0usize;
+            while entries.len() - fold_count > cap
+                && fold_count + 1 < entries.len()
+                && horizon != Timestamp::MAX
+                && entries[fold_count].end_ts <= horizon
+            {
+                if entries[fold_count + 1].start_ts > entries[fold_count].start_ts {
+                    entries[fold_count + 1].start_ts = entries[fold_count].start_ts;
+                }
+                fold_count += 1;
+            }
+            if fold_count > 0 {
+                entries.drain(..fold_count);
+            }
+            *chain = entries;
         });
     }
 

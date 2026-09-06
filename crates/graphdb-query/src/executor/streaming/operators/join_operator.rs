@@ -16,6 +16,7 @@ use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
 mod cross_semi_join;
+pub mod grace_join;
 mod hash_join;
 mod merge_join;
 mod nested_loop_join;
@@ -38,12 +39,25 @@ fn build_combined_names(
 
 /// Specialized hash join key that avoids `Vec<Value>` allocation for
 /// single-column i64/string keys.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum JoinKeyValue {
     I32(i32),
     I64(i64),
     String(String),
     Multi(Vec<Value>),
+}
+
+impl JoinKeyValue {
+    /// Whether this key is NULL (or all-NULL composite). NULL keys are pinned
+    /// to Grace partition 0 so both sides agree on placement.
+    pub fn is_nullish(&self) -> bool {
+        match self {
+            JoinKeyValue::Multi(values) => {
+                !values.is_empty() && values.iter().all(|v| matches!(v, Value::Null(_)))
+            }
+            _ => false,
+        }
+    }
 }
 
 impl From<Value> for JoinKeyValue {
@@ -225,6 +239,64 @@ impl HashJoinBuildSide {
         target.extend(self.columns.iter().map(|col| col[idx].clone()));
     }
 
+    /// Insert one fully materialized row under a precomputed key.
+    ///
+    /// Used when rebuilding a Grace partition from spilled rows: keys come
+    /// from re-evaluation, values move straight into the column store.
+    pub fn insert_keyed_row(&mut self, key: JoinKeyValue, row: &[Value]) -> Result<(), QueryError> {
+        let width = self.columns.len();
+        if width == 0 {
+            self.columns = row.iter().map(|v| vec![v.clone()]).collect();
+        } else {
+            if row.len() != width {
+                return Err(QueryError::execution(format!(
+                    "HashJoinBuildSide: spilled row width {} differs from build width {}",
+                    row.len(),
+                    width,
+                )));
+            }
+            for (target, value) in self.columns.iter_mut().zip(row.iter()) {
+                target.push(value.clone());
+            }
+        }
+        let idx = (self.row_count() - 1) as u32;
+        self.index.entry(key).or_default().push(idx);
+        Ok(())
+    }
+
+    /// Drain all indexed rows with their join keys, freeing build memory.
+    ///
+    /// Grace spill entry point: existing in-memory rows are re-partitioned to
+    /// disk without re-evaluating key expressions.
+    pub fn take_indexed_rows(&mut self) -> Vec<(JoinKeyValue, Vec<Value>)> {
+        let index = std::mem::take(&mut self.index);
+        let columns = std::mem::take(&mut self.columns);
+        let row_count = columns.first().map_or(0, Vec::len);
+        if row_count == 0 {
+            return Vec::new();
+        }
+        let mut keys: Vec<Option<JoinKeyValue>> = (0..row_count).map(|_| None).collect();
+        for (key, indices) in index {
+            for idx in indices {
+                let slot = keys
+                    .get_mut(idx as usize)
+                    .expect("build index out of range");
+                debug_assert!(slot.is_none(), "duplicate build row index");
+                *slot = Some(key.clone());
+            }
+        }
+        let mut out = Vec::with_capacity(row_count);
+        for (idx, key) in keys.into_iter().enumerate() {
+            let key = key.expect("build row without a join key");
+            let mut row = Vec::with_capacity(columns.len());
+            for col in &columns {
+                row.push(col[idx].clone());
+            }
+            out.push((key, row));
+        }
+        out
+    }
+
     /// Materialize the row at the given index by cloning column values.
     pub fn row_at(&self, row_idx: u32) -> Vec<Value> {
         let mut out = Vec::with_capacity(self.columns.len());
@@ -249,6 +321,7 @@ pub enum JoinOperatorKind {
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
         build_side_select: super::spec::BuildSide,
+        grace: grace_join::GraceJoinState,
     },
     HashLeftJoin {
         join_condition: Option<Expression>,
@@ -259,6 +332,7 @@ pub enum JoinOperatorKind {
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
         build_side_select: super::spec::BuildSide,
+        grace: grace_join::GraceJoinState,
     },
     NestedLoopJoin {
         join_condition: Option<Expression>,
@@ -374,6 +448,7 @@ impl JoinOperator {
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
+                grace: grace_join::GraceJoinState::default(),
             },
             super::spec::JoinSpec::HashLeftJoin {
                 join_condition,
@@ -389,6 +464,7 @@ impl JoinOperator {
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
+                grace: grace_join::GraceJoinState::default(),
             },
             super::spec::JoinSpec::NestedLoopJoin { join_condition } => {
                 JoinOperatorKind::NestedLoopJoin {
@@ -501,6 +577,7 @@ impl JoinOperator {
                 memory_tracker,
                 right_col_names,
                 build_side_select,
+                grace,
             } => hash_join::next_hash_join(
                 join_condition,
                 hash_keys,
@@ -510,6 +587,7 @@ impl JoinOperator {
                 memory_tracker,
                 right_col_names,
                 *build_side_select,
+                grace,
                 left,
                 right,
                 runtime,
@@ -524,6 +602,7 @@ impl JoinOperator {
                 memory_tracker,
                 right_col_names,
                 build_side_select,
+                grace,
             } => hash_join::next_hash_left_join(
                 join_condition,
                 hash_keys,
@@ -533,6 +612,7 @@ impl JoinOperator {
                 memory_tracker,
                 right_col_names,
                 *build_side_select,
+                grace,
                 left,
                 right,
                 runtime,
@@ -688,17 +768,24 @@ impl JoinOperator {
                 build_side,
                 build_done,
                 right_col_names,
+                grace,
+                memory_tracker,
                 ..
             }
             | JoinOperatorKind::HashLeftJoin {
                 build_side,
                 build_done,
                 right_col_names,
+                grace,
+                memory_tracker,
                 ..
             } => {
+                grace.cleanup_files();
+                *grace = grace_join::GraceJoinState::default();
                 *build_side = HashJoinBuildSide::new();
                 *build_done = false;
                 right_col_names.clear();
+                memory_tracker.reset();
             }
             JoinOperatorKind::NestedLoopJoin {
                 build_side_tuples,
@@ -785,13 +872,21 @@ impl JoinOperator {
             JoinOperatorKind::HashJoin {
                 build_side,
                 memory_tracker,
+                grace,
                 ..
-            } => hash_join::close(memory_tracker, build_side),
+            } => {
+                grace.cleanup_files();
+                hash_join::close(memory_tracker, build_side)
+            }
             JoinOperatorKind::HashLeftJoin {
                 build_side,
                 memory_tracker,
+                grace,
                 ..
-            } => hash_join::close(memory_tracker, build_side),
+            } => {
+                grace.cleanup_files();
+                hash_join::close(memory_tracker, build_side)
+            }
             JoinOperatorKind::NestedLoopJoin {
                 build_side_tuples,
                 memory_tracker,
@@ -832,15 +927,80 @@ impl JoinOperator {
         }
     }
 
+    /// Spill the hash join build side to partitioned runs.
+    ///
+    /// Only effective during the build phase (before `build_done`): buffered
+    /// build rows are re-partitioned to disk and the remaining build input is
+    /// routed straight to the spill writers by the build loop. Once the probe
+    /// phase has started the in-memory table must stay resident and this is a
+    /// no-op; other join kinds keep their budget-failure semantics.
     pub fn spill_with_manager(
         &mut self,
-        _sm: &crate::executor::streaming::spill::SpillManager,
+        sm: &Arc<crate::executor::streaming::spill::SpillManager>,
     ) -> Result<(), graphdb_core::error::QueryError> {
-        Ok(())
+        let (build_side, build_done, memory_tracker, right_col_names, grace) = match &mut self.kind
+        {
+            JoinOperatorKind::HashJoin {
+                build_side,
+                build_done,
+                memory_tracker,
+                right_col_names,
+                grace,
+                ..
+            }
+            | JoinOperatorKind::HashLeftJoin {
+                build_side,
+                build_done,
+                memory_tracker,
+                right_col_names,
+                grace,
+                ..
+            } => (
+                build_side,
+                build_done,
+                memory_tracker,
+                right_col_names,
+                grace,
+            ),
+            _ => return Ok(()),
+        };
+        if *build_done || grace.partitioned.is_some() {
+            return Ok(());
+        }
+        if build_side.row_count() == 0 && grace.pending_build.is_none() {
+            return Ok(());
+        }
+        grace_join::spill_build_side(
+            Arc::clone(sm),
+            build_side,
+            memory_tracker,
+            right_col_names,
+            grace,
+        )
     }
 
     pub fn spilled_bytes(&self) -> u64 {
-        0
+        match &self.kind {
+            JoinOperatorKind::HashJoin { grace, .. }
+            | JoinOperatorKind::HashLeftJoin { grace, .. } => grace.spilled_bytes,
+            _ => 0,
+        }
+    }
+
+    pub fn spill_count(&self) -> u64 {
+        match &self.kind {
+            JoinOperatorKind::HashJoin { grace, .. }
+            | JoinOperatorKind::HashLeftJoin { grace, .. } => grace.spill_runs,
+            _ => 0,
+        }
+    }
+
+    pub fn spilled_rows(&self) -> u64 {
+        match &self.kind {
+            JoinOperatorKind::HashJoin { grace, .. }
+            | JoinOperatorKind::HashLeftJoin { grace, .. } => grace.spilled_rows,
+            _ => 0,
+        }
     }
 }
 

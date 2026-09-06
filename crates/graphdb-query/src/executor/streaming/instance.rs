@@ -19,7 +19,7 @@ use super::engine::StreamingExecutionEngine;
 use super::plan::materializer::PhysicalPlanMaterializer;
 use super::plan::types::PhysicalPlan;
 use super::plan::validator::PhysicalPlanValidator;
-use super::result_utils::convert_chunks_to_dataset;
+use super::result_utils::convert_chunks_to_dataset_with_spill;
 use super::runtime::ExecutionRuntime;
 use super::stream_result::StreamingQueryResult;
 use crate::executor::base::{ExecutionResult, MemoryBudget};
@@ -329,8 +329,20 @@ impl QueryExecutionInstance {
         // Columnar auto-detection: merge this query's hit/miss counts into
         // the shared policy so later queries can adapt.
         self.runtime.flush_columnar_stats_to_policy();
-        let dataset =
-            convert_chunks_to_dataset(chunks, Some(self.plan.output.output_layout.names()))?;
+        let spill_manager = self.runtime.get_spill_manager();
+        let (dataset, spilled_rows, spilled_bytes, spilled_runs) =
+            convert_chunks_to_dataset_with_spill(
+                chunks,
+                Some(self.plan.output.output_layout.names()),
+                spill_manager,
+            )?;
+        if spilled_rows > 0 {
+            self.runtime.columnar_stats().record_spill_with_runs(
+                spilled_rows,
+                spilled_bytes,
+                spilled_runs,
+            );
+        }
         Ok(ExecutionResult::DataSet { data: dataset })
     }
 

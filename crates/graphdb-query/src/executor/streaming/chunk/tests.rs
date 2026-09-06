@@ -788,7 +788,7 @@ fn rebuild_carries_multiplicity_to_collector() {
 
     let mut collector = LocalChunkCollector::new(vec!["a".to_string()]);
     let mut rebuilt = rebuilt;
-    collector.push_chunk(&mut rebuilt);
+    collector.push_chunk(&mut rebuilt).unwrap();
     assert_eq!(collector.total_logical_rows(), 4);
     assert_eq!(collector.len(), 4);
 }

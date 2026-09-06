@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::executor::base::{MemoryBudget, MemoryTracker};
+use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::chunk::ColumnarBatch;
 use crate::executor::streaming::context::BorrowedRowContext;
@@ -8,7 +8,7 @@ use crate::executor::streaming::executor::SortDirection;
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::executor::streaming::spill::{
-    schema_fingerprint, RunReader, SpillManager, SpilledFile, SpilledRun,
+    schema_fingerprint, RunReader, SpillManager, SpilledRun, COLLECTOR_RUN_ROWS_MAX,
 };
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
@@ -28,7 +28,6 @@ pub struct SortState {
     /// Row-mode fallback buffer (used once a spill occurred).
     pub all_rows: Vec<Vec<Value>>,
     pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    pub spill_files: Vec<SpilledFile>,
     pub runs: Vec<SpilledRun>,
     pub has_spilled: bool,
     pub merge_state: Option<MergeState>,
@@ -82,17 +81,20 @@ pub(crate) fn spill_sorted_run(
 
     let fp = schema_fingerprint(col_names);
 
-    let estimated_bytes = estimate_run_size(buffer);
-    sm.disk_quota().try_reserve(estimated_bytes)?;
+    // Rotate writers every COLLECTOR_RUN_ROWS_MAX rows so neither the
+    // writer-side body buffer nor the reader-side full-run load grows
+    // without bound (same bound as the terminal collector and Grace join).
+    let mut count = 0u64;
+    for chunk in buffer.chunks(COLLECTOR_RUN_ROWS_MAX as usize) {
+        let mut writer = sm.create_run_writer(fp)?;
+        writer.write_rows(chunk)?;
+        let run = sm.finalize_run(writer)?;
+        count += chunk.len() as u64;
+        runs.push(run);
+    }
 
-    let mut writer = sm.create_run_writer(fp)?;
-    writer.write_rows(buffer)?;
-    let run = writer.finalize()?;
-
-    let count = buffer.len() as u64;
     buffer.clear();
     tracker.reset();
-    runs.push(run);
     Ok(count)
 }
 
@@ -338,12 +340,6 @@ fn radix_sort_i64(keys: &[i64]) -> Vec<usize> {
     }
     // After 8 even passes (64/8=8) the indices are back in `indices`.
     indices
-}
-
-// Row-encoded spill bytes for disk-quota reservation, not columnar heap size.
-fn estimate_run_size(buffer: &[Vec<Value>]) -> u64 {
-    let framing: u64 = buffer.iter().map(|row| row.len() as u64).sum();
-    40 + MemoryBudget::estimate_rows_memory(buffer) as u64 + framing + 8 * buffer.len() as u64
 }
 
 pub(crate) fn find_min_run(

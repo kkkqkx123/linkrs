@@ -20,7 +20,6 @@ pub(super) fn open_sort(state: &mut Option<SortState>) {
         columnar_batch: None,
         all_rows: vec![],
         row_iter: None,
-        spill_files: vec![],
         runs: vec![],
         has_spilled: false,
         merge_state: None,
@@ -62,6 +61,7 @@ pub(super) fn next_sort(
                 if let Err(e) = memory_tracker.try_reserve_row(row) {
                     if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
                         let mut rows = batch.to_rows();
+                        let before = state.runs.len();
                         spill_sorted_run(
                             &mut rows,
                             &state.col_names,
@@ -71,6 +71,12 @@ pub(super) fn next_sort(
                             memory_tracker,
                             &mut state.runs,
                         )?;
+                        if let Some(rt) = ctx.runtime.as_ref() {
+                            let stats = rt.columnar_stats();
+                            for run in &state.runs[before..] {
+                                stats.record_spill(run.row_count, run.byte_size);
+                            }
+                        }
                         state.has_spilled = true;
                         batch.clear();
                         memory_tracker.reset();
@@ -83,15 +89,12 @@ pub(super) fn next_sort(
             }
         }
 
-        if !state.spill_files.is_empty() {
-            return super::helpers::reject_spill_replay(&state.spill_files).map(|_| None);
-        }
-
         if state.has_spilled {
             if let Some(batch) = state.columnar_batch.take() {
                 if batch.num_rows() > 0 {
                     if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
                         let mut rows = batch.to_rows();
+                        let before = state.runs.len();
                         spill_sorted_run(
                             &mut rows,
                             &state.col_names,
@@ -101,6 +104,12 @@ pub(super) fn next_sort(
                             memory_tracker,
                             &mut state.runs,
                         )?;
+                        if let Some(rt) = ctx.runtime.as_ref() {
+                            let stats = rt.columnar_stats();
+                            for run in &state.runs[before..] {
+                                stats.record_spill(run.row_count, run.byte_size);
+                            }
+                        }
                     }
                 }
             }
@@ -266,9 +275,6 @@ pub(super) fn close_sort(state: &mut Option<SortState>) {
     if let Some(ref s) = state {
         for run in &s.runs {
             let _ = std::fs::remove_file(&run.path);
-        }
-        for sf in &s.spill_files {
-            let _ = std::fs::remove_file(&sf.path);
         }
     }
     *state = None;

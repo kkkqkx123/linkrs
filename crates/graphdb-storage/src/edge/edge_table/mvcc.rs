@@ -17,14 +17,11 @@ use std::collections::HashMap;
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
 const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
-/// Per-edge creation and deletion timestamps, managed centrally by MVCCManager.
+/// Per-edge creation, deletion, and committed-publish timestamps.
 ///
-/// This replaces the inline `create_ts`/`delete_ts` fields that were previously
-/// stored in each `Nbr` entry, eliminating the three-layer MVCC separation.
-///
-/// For uncommitted writes, `commit_ts` is set to `Timestamp::MAX` and
-/// `pending_owner` holds the owning transaction. Only the owner sees the
-/// edge until `mark_committed` publishes the commit timestamp.
+/// Current edge scans rely on transaction timestamps and tombstone state for
+/// snapshot visibility. The pending fields are kept for future per-edge
+/// publication; `commit_ts` equals `create_ts` until a publish path uses it.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
     pub create_ts: Timestamp,
@@ -46,8 +43,10 @@ impl EdgeTimestamps {
         }
     }
 
-    /// Mark this edge as pending (owned by `owner`). Other transactions
-    /// will not see it until `mark_committed` is called.
+    /// Mark this edge as pending in the per-edge timestamp table.
+    ///
+    /// This currently affects only `EdgeTimestamps::is_alive_at`; edge scan
+    /// paths use the transaction write-timestamp frontier.
     pub fn mark_pending(&mut self, owner: TransactionId) {
         self.commit_ts = Timestamp::MAX;
         self.pending_owner = Some(owner);
@@ -458,9 +457,9 @@ impl MVCCManager {
     // ── Per-edge timestamp management (centralized MVCC) ──
 
     /// Record edge creation. Called on insert_edge to register the edge's
-    /// creation timestamp in the centralized MVCC store.
-    /// When `owner` is provided, the edge is marked as pending (visible only
-    /// to that transaction until commit).
+    /// creation timestamp in the centralized MVCC store. The `owner` field is
+    /// retained for future per-edge pending publication; current snapshot
+    /// isolation is driven by transaction timestamps in the version manager.
     pub fn record_creation(
         &mut self,
         edge_id: EdgeId,
@@ -474,8 +473,8 @@ impl MVCCManager {
         self.edge_timestamps.insert(edge_id, ts);
     }
 
-    /// Publish pending edges as committed at `commit_ts`. Called after a
-    /// transaction commits to make its edges visible to all snapshots.
+    /// Publish pending edges as committed at `commit_ts` in the per-edge
+    /// timestamp table.
     pub fn publish_committed(&mut self, edge_ids: &[EdgeId], commit_ts: Timestamp) {
         for &edge_id in edge_ids {
             if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {

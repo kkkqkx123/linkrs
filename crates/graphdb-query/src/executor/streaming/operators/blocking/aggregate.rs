@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::executor::streaming::helpers::accumulator_states::{
     decode_partial_with_args, AggregateAccumulator,
 };
-use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
+use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledRun};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::Value;
@@ -22,7 +22,6 @@ pub struct AggregateState {
     /// Per-group memory-budget overhead charged for accumulator instances.
     pub accumulator_overhead: usize,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    pub spill_files: Vec<SpilledFile>,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,
@@ -37,7 +36,6 @@ pub struct GroupByState {
     pub all_rows: Vec<Vec<Value>>,
     pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    pub spill_files: Vec<SpilledFile>,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,
@@ -51,7 +49,6 @@ pub struct PartialAggregateState {
     pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
@@ -59,7 +56,6 @@ pub struct FinalAggregateState {
     pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    pub spill_files: Vec<SpilledFile>,
 }
 
 pub(crate) fn value_to_partial_accumulator(

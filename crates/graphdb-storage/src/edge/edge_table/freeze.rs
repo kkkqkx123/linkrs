@@ -716,16 +716,9 @@ impl TimeTravelEdgeStore {
                 }
             }
             if total_merged > 0 {
-                if cfg!(debug_assertions) {
-                    eprintln!(
-                        "[EdgeTable] Emergency merged {} segments (exceeded max {} per direction)",
-                        total_merged, self.config.max_segments_per_direction
-                    );
-                }
                 log::info!(
                     "Emergency merge: {} segments (exceeded max {} per direction)",
-                    total_merged,
-                    self.config.max_segments_per_direction
+                    total_merged, self.config.max_segments_per_direction
                 );
                 return total_merged;
             }
@@ -760,8 +753,8 @@ impl TimeTravelEdgeStore {
                     )
                 };
                 total_merged += merged;
-                if cfg!(debug_assertions) && merged > 0 {
-                    eprintln!(
+                if cfg!(debug_assertions) {
+                    log::debug!(
                         "[EdgeTable] Auto-merged {} segments in out direction. New count: {}",
                         merged,
                         self.out_segments.len()
@@ -799,8 +792,8 @@ impl TimeTravelEdgeStore {
                     )
                 };
                 total_merged += merged;
-                if cfg!(debug_assertions) && merged > 0 {
-                    eprintln!(
+                if cfg!(debug_assertions) {
+                    log::debug!(
                         "[EdgeTable] Auto-merged {} segments in in direction. New count: {}",
                         merged,
                         self.in_segments.len()

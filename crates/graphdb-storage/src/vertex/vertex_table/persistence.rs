@@ -170,14 +170,15 @@ impl VertexTable {
         };
 
         // Flush only dirty column pages into a delta directory.
-        if !effective_dirty.is_empty() {
-            self.flush_dirty_column_pages(path, &effective_dirty)?;
+        let flushed: Vec<(String, usize)> = if !effective_dirty.is_empty() {
+            self.flush_dirty_column_pages(path, &effective_dirty)?
         } else {
             // No dirty pages: still ensure columns.bin exists for incremental base?
             // We create an empty delta marker so checkpoint is not considered corrupt.
             let delta_dir = path.join("columns_pages");
             fs::create_dir_all(&delta_dir)?;
-        }
+            Vec::new()
+        };
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
@@ -185,9 +186,10 @@ impl VertexTable {
         let id_indexer_path = path.join("id_indexer.bin");
         self.flush_id_indexer(&id_indexer_path)?;
 
-        // Incremental flush also clears dirty marks for flushed pages.
-        // We clear all for simplicity; per-page clear would require mapping.
-        self.clear_dirty();
+        // Clear the dirty mark only for pages actually written this round, so
+        // pages skipped (e.g. filtered out of an externally supplied list) stay
+        // tracked for the next flush instead of being silently lost.
+        self.columns.clear_pages(&flushed);
 
         Ok(())
     }
@@ -196,7 +198,7 @@ impl VertexTable {
         &self,
         path: &Path,
         dirty_pages: &[crate::persistence::dirty_page::PageId],
-    ) -> StorageResult<()> {
+    ) -> StorageResult<Vec<(String, usize)>> {
         use rayon::prelude::*;
         use std::collections::HashSet;
         let delta_dir = path.join("columns_pages");
@@ -253,7 +255,10 @@ impl VertexTable {
                 crate::compression::write_shadow_file(&page_path, bytes)
             })?;
 
-        Ok(())
+        Ok(tasks
+            .into_iter()
+            .map(|(name, pid, _)| (name, pid))
+            .collect())
     }
 
     fn write_pages_to_file(

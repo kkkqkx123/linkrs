@@ -14,7 +14,9 @@ use crate::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
 use crate::executor::streaming::helpers::accumulator_states::{
     accumulator_to_value, AggregateAccumulator,
 };
-use crate::executor::streaming::spill::{HashPartitionConfig, HashPartitionSpiller, SpillManager};
+use crate::executor::streaming::spill::{
+    finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
+};
 
 use super::aggregate::{
     value_to_partial_accumulator, AggregateState, FinalAggregateState, GroupByState,
@@ -29,7 +31,6 @@ pub(super) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: 
         group_map: HashMap::new(),
         accumulator_overhead: num_agg_funcs * ACCUMULATOR_OVERHEAD_BYTES,
         result_iter: None,
-        spill_files: vec![],
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -44,7 +45,6 @@ pub(super) fn open_groupby(state: &mut Option<GroupByState>) {
         all_rows: vec![],
         col_names: vec![],
         result_iter: None,
-        spill_files: vec![],
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -58,7 +58,6 @@ pub(super) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) 
         group_map: HashMap::new(),
         col_names: vec![],
         result_iter: None,
-        spill_files: vec![],
     });
 }
 
@@ -67,7 +66,6 @@ pub(super) fn open_final_aggregate(state: &mut Option<FinalAggregateState>) {
         group_map: HashMap::new(),
         col_names: vec![],
         result_iter: None,
-        spill_files: vec![],
     });
 }
 
@@ -372,7 +370,10 @@ pub(super) fn next_aggregate(
 
         // Finalize spilled runs and replay them within the loop.
         if state.partition_spiller.is_some() {
-            let runs = state.partition_spiller.take().unwrap().finalize()?;
+            let runs = finalize_partitions_with_runtime(
+                state.partition_spiller.take().unwrap(),
+                ctx.runtime.as_ref(),
+            )?;
             state.spilled_runs = runs;
             state.current_partition = 0;
             continue;
@@ -600,7 +601,10 @@ pub(super) fn next_groupby(
 
         // Finalize spilled runs
         if state.partition_spiller.is_some() {
-            let runs = state.partition_spiller.take().unwrap().finalize()?;
+            let runs = finalize_partitions_with_runtime(
+                state.partition_spiller.take().unwrap(),
+                ctx.runtime.as_ref(),
+            )?;
             state.spilled_runs = runs;
             state.current_partition = 0;
             continue;

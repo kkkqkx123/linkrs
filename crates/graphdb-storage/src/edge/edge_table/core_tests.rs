@@ -912,6 +912,37 @@ fn test_compact_removes_expired_deletions_with_snapshot() {
 }
 
 #[test]
+fn test_duplicate_insert_error_leaves_no_partial_state() {
+    use graphdb_core::error::storage::StorageErrorKind;
+
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+
+    let out_count = table.out_csr.edge_count();
+    let in_count = table.in_csr.edge_count();
+    let mvcc_count = table.mvcc.edge_timestamps.len();
+    let prop_mappings = table.properties.edge_mappings().count();
+
+    let err = table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .expect_err("duplicate edge should fail");
+    assert_eq!(err.kind(), StorageErrorKind::EdgeAlreadyExists);
+
+    assert_eq!(table.out_csr.edge_count(), out_count);
+    assert_eq!(table.in_csr.edge_count(), in_count);
+    assert_eq!(table.mvcc.edge_timestamps.len(), mvcc_count);
+    assert_eq!(table.properties.edge_mappings().count(), prop_mappings);
+    assert_eq!(
+        table.get_edge(0, 1, 0, 100).unwrap().properties[0].1,
+        Value::Double(1.5)
+    );
+}
+
+#[test]
 fn test_insert_failure_rolls_back_physically() {
     let schema = create_test_schema();
     let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();

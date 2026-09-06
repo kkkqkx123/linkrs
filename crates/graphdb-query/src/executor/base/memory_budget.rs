@@ -282,6 +282,11 @@ pub trait Spillable {
         0
     }
 
+    /// Number of logical rows written to spill runs.
+    fn spilled_rows(&self) -> u64 {
+        0
+    }
+
     /// Whether this operator has spilled data to disk.
     fn has_spilled(&self) -> bool {
         self.spilled_size() > 0
