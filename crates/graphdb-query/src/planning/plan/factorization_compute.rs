@@ -95,7 +95,7 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
         &mut self,
         child_schemas: &[FactorizedSchema],
     ) -> FactorizedSchema {
-        match self {
+        let schema = match self {
             LogicalNodeEnum::ScanVertices(n) => access::scan_vertices(n),
             LogicalNodeEnum::ScanEdges(n) => access::scan_edges(n),
             LogicalNodeEnum::GetVertices(n) => access::get_vertices(n, child_schemas),
@@ -201,7 +201,12 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             | LogicalNodeEnum::ShortestPath(_) => flat_leaf::barrier_binary(child_schemas),
 
             _ => flat_leaf::flatten_all_from_child(child_schemas),
-        }
+        };
+        debug_assert!(
+            schema.has_at_most_one_unflat(),
+            "compute_factorized_schema: at most one unflat group invariant violated"
+        );
+        schema
     }
 
     fn compute_flat_schema(&mut self, child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
@@ -784,7 +789,8 @@ mod tests {
         let schema = node.compute_factorized_schema(&[child_schema]);
         schema.validate_at_most_one_unflat();
         let pos = schema.unflat_group_pos().expect("unflat");
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, HashMap::new());
+        let empty_store: HashMap<ExpressionId, graphdb_core::Expression> = HashMap::new();
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &empty_store);
         analyzer.visit_expression(&graphdb_core::Expression::Variable("b".to_string()));
         assert!(!analyzer.has_unresolved());
         assert!(analyzer.dependent_groups().contains(&pos));

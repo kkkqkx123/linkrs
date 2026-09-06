@@ -24,8 +24,10 @@ pub struct GroupDependencyAnalyzer<'a> {
     dependent_groups: HashSet<u32>,
     required_flat_groups: HashSet<u32>,
     dependent_exprs: HashSet<ExpressionId>,
-    /// For function handling: maps expr id to inner expression for recursion
-    expr_store: HashMap<ExpressionId, graphdb_core::Expression>,
+    /// For function handling: maps expr id to inner expression for recursion.
+    /// Borrowed so multi-column operators do not clone the whole store per
+    /// expression.
+    expr_store: Option<&'a HashMap<ExpressionId, graphdb_core::Expression>>,
     /// Descriptions of expressions that could not be resolved to any group.
     /// Unresolved expressions conservatively require every unflat group to
     /// be flattened (see `mark_unresolved`) instead of silently contributing
@@ -41,7 +43,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             dependent_groups: HashSet::new(),
             required_flat_groups: HashSet::new(),
             dependent_exprs: HashSet::new(),
-            expr_store: HashMap::new(),
+            expr_store: None,
             unresolved: Vec::new(),
         }
     }
@@ -49,7 +51,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
     pub fn with_expr_store(
         schema: &'a FactorizedSchema,
         collect_dependent_expr: bool,
-        store: HashMap<ExpressionId, graphdb_core::Expression>,
+        store: &'a HashMap<ExpressionId, graphdb_core::Expression>,
     ) -> Self {
         Self {
             schema,
@@ -57,7 +59,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             dependent_groups: HashSet::new(),
             required_flat_groups: HashSet::new(),
             dependent_exprs: HashSet::new(),
-            expr_store: store,
+            expr_store: Some(store),
             unresolved: Vec::new(),
         }
     }
@@ -126,8 +128,8 @@ impl<'a> GroupDependencyAnalyzer<'a> {
         }
 
         // Not in scope: try to expand via stored expression.
-        if let Some(expr) = self.expr_store.get(expr_id).cloned() {
-            self.visit_expression(&expr);
+        if let Some(expr) = self.expr_store.and_then(|store| store.get(expr_id)) {
+            self.visit_expression(expr);
         } else {
             self.mark_unresolved(format!("expression {expr_id:?} not in scope"));
         }
@@ -168,7 +170,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
                     if let Some(body) = list_lambda_arg_index(name).and_then(|i| args.get(i)) {
                         let mut lambda_analyzer =
                             GroupDependencyAnalyzer::new(self.schema, self.collect_dependent_expr);
-                        lambda_analyzer.expr_store = self.expr_store.clone();
+                        lambda_analyzer.expr_store = self.expr_store;
                         lambda_analyzer.visit_expression(body);
                         self.required_flat_groups
                             .extend(lambda_analyzer.dependent_groups.iter().copied());
@@ -280,7 +282,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
     pub fn analyze_ids(
         schema: &'a FactorizedSchema,
         expr_ids: &[ExpressionId],
-        store: HashMap<ExpressionId, graphdb_core::Expression>,
+        store: &'a HashMap<ExpressionId, graphdb_core::Expression>,
     ) -> GroupDependencyAnalysis {
         let mut analyzer = GroupDependencyAnalyzer::with_expr_store(schema, false, store);
         for id in expr_ids {
@@ -334,7 +336,7 @@ mod tests {
         // Simulate that id_a and id_b are the leaves but combined not in scope,
         // analyzer should walk its children when store contains mapping.
         // Here we use visit_expression directly.
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
         // Direct visit of Binary should not add groups because variable names not ids
         // So we test that visit by id works, and expression walk for property.
         analyzer.visit(&id_a);
@@ -374,7 +376,7 @@ mod tests {
         let mut store = HashMap::new();
         let fake_id = expr(999);
         store.insert(fake_id.clone(), the_expr);
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
         analyzer.visit(&fake_id);
         assert!(analyzer.dependent_groups().contains(&g0));
         assert!(analyzer.dependent_groups().contains(&g1));
@@ -389,7 +391,8 @@ mod tests {
         schema.insert_to_group_and_scope(expr(1), g0);
         schema.insert_to_group_and_scope(expr(2), g1);
 
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, HashMap::new());
+        let empty_store = HashMap::new();
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &empty_store);
         analyzer.visit(&expr(999));
         assert!(analyzer.has_unresolved());
         assert_eq!(analyzer.unresolved().len(), 1);
@@ -438,7 +441,7 @@ mod tests {
         let mut store = HashMap::new();
         let fake_id = expr(999);
         store.insert(fake_id.clone(), the_expr);
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
         analyzer.visit(&fake_id);
         assert!(analyzer.required_flat_groups().contains(&g1));
         assert!(!analyzer.has_unresolved());
@@ -487,7 +490,7 @@ mod tests {
             let mut store = HashMap::new();
             let fake_id = expr(999);
             store.insert(fake_id.clone(), the_expr);
-            let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+            let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
             analyzer.visit(&fake_id);
             assert!(
                 analyzer.required_flat_groups().contains(&g1),

@@ -37,7 +37,7 @@ pub(super) fn assign(
             crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
                 &out,
                 false,
-                expr_store.clone(),
+                &expr_store,
             );
         analyzer.visit(&alias_id);
         let dependent = analyzer.dependent_groups().clone();

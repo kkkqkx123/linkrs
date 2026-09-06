@@ -201,7 +201,7 @@ fn e2e_filter_needs_flatten() {
     // To make Variable("b") resolve, insert name mapping: add a name entry for "b" in g1
     schema.insert_to_group_and_scope_with_name(expr_id(9999), Some("b".to_string()), g1);
 
-    let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store.clone());
+    let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
     analyzer.visit(&pred_id);
     let deps = analyzer.dependent_groups().clone();
     // Property(b.age) walks to Variable("b") which should now be found via name fallback
@@ -370,7 +370,7 @@ fn variable_name_fallback() {
     let fake_id = expr_id(999);
     store.insert(fake_id.clone(), expr);
 
-    let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store);
+    let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
     analyzer.visit(&fake_id);
     let deps = analyzer.dependent_groups().clone();
     assert!(deps.contains(&g0), "Variable a should be resolved to g0");

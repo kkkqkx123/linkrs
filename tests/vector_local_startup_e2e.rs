@@ -54,7 +54,7 @@ async fn local_vector_engine_startup_e2e() {
 
     {
         let backend = vector_api.backend();
-        for p in vec![
+        for p in [
             point(1, vec![1.0, 0.0, 0.0], "item_vec"),
             point(2, vec![0.0, 1.0, 0.0], "item_vec"),
             point(3, vec![0.0, 0.0, 1.0], "item_vec"),
@@ -137,7 +137,7 @@ async fn local_vector_engine_restart_consistency_e2e() {
             .expect("create_index should succeed");
         {
             let backend = vector_api.backend();
-            for p in vec![
+            for p in [
                 point(1, vec![1.0, 0.0], "item_vec"),
                 point(2, vec![0.0, 1.0], "item_vec"),
                 point(3, vec![1.0, 1.0], "item_vec"),

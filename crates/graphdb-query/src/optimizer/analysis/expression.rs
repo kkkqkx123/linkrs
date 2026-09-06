@@ -172,6 +172,29 @@ impl NondeterministicChecker {
                 .any(|c| Self::contains_nondeterministic(c)),
         }
     }
+
+    /// Check whether the function only generates random values.
+    ///
+    /// Factorization flatten-all fallback is reserved for random functions
+    /// (`rand()`, `random()`, `randint()`): they must be evaluated
+    /// tuple-at-a-time. Other non-deterministic functions (`uuid()`,
+    /// `now()`, ...) keep the usual flatten-all-but-one path.
+    pub fn is_random(func_name: &str) -> bool {
+        matches!(func_name, "rand" | "random" | "randint")
+    }
+
+    /// Check whether an expression tree contains any random function call.
+    pub fn contains_random(expr: &Expression) -> bool {
+        match expr {
+            Expression::Function { name, args } => {
+                if Self::is_random(name) {
+                    return true;
+                }
+                args.iter().any(Self::contains_random)
+            }
+            _ => expr.children().iter().any(|c| Self::contains_random(c)),
+        }
+    }
 }
 
 /// Expression Analyzer
@@ -645,6 +668,43 @@ mod tests {
             }
         ));
         assert!(!NondeterministicChecker::contains_nondeterministic(
+            &Expression::Literal(Value::Int(1))
+        ));
+    }
+
+    #[test]
+    fn test_contains_random_only_matches_random_functions() {
+        for name in ["rand", "random", "randint"] {
+            assert!(
+                NondeterministicChecker::contains_random(&Expression::Function {
+                    name: name.to_string(),
+                    args: vec![],
+                }),
+                "{name} must count as random"
+            );
+        }
+        // Other non-deterministic functions stay on the flatten-all-but-one
+        // path: they must not trigger the random fallback.
+        for name in ["uuid", "gen_random_uuid", "now", "row_number"] {
+            assert!(
+                !NondeterministicChecker::contains_random(&Expression::Function {
+                    name: name.to_string(),
+                    args: vec![],
+                }),
+                "{name} must not count as random"
+            );
+        }
+        // Nested random call inside a deterministic outer function.
+        assert!(NondeterministicChecker::contains_random(
+            &Expression::Function {
+                name: "abs".to_string(),
+                args: vec![Expression::Function {
+                    name: "rand".to_string(),
+                    args: vec![],
+                }],
+            }
+        ));
+        assert!(!NondeterministicChecker::contains_random(
             &Expression::Literal(Value::Int(1))
         ));
     }

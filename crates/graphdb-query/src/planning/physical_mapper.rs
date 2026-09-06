@@ -301,10 +301,7 @@ fn merge_inner(
         let mapped_children = mapped.take_children();
         let physical_children = physical.take_children();
         let mut new_children = Vec::with_capacity(mapped_children.len());
-        for (mapped_child, physical_child) in mapped_children
-            .into_iter()
-            .zip(physical_children.into_iter())
-        {
+        for (mapped_child, physical_child) in mapped_children.into_iter().zip(physical_children) {
             new_children.push(merge_inner(mapped_child, physical_child, notes));
         }
         match physical.set_children(new_children) {

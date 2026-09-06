@@ -23,8 +23,7 @@ impl FlattenAllButOne {
         let mut dependent_groups = HashSet::new();
 
         for expr_id in exprs {
-            let mut analyzer =
-                GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store.clone());
+            let mut analyzer = GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store);
             analyzer.visit(expr_id);
             result.extend(analyzer.required_flat_groups().iter().copied());
             dependent_groups.extend(analyzer.dependent_groups().iter().copied());
@@ -56,8 +55,7 @@ impl FlattenAllButOne {
         let mut dependent_groups = HashSet::new();
 
         for expr_id in exprs {
-            let mut analyzer =
-                GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store.clone());
+            let mut analyzer = GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store);
             analyzer.visit(expr_id);
             result.extend(analyzer.required_flat_groups().iter().copied());
             dependent_groups.extend(analyzer.dependent_groups().iter().copied());
@@ -173,8 +171,7 @@ impl FlattenAll {
         // ignores `required_flat` (see ladybug `flatten_resolver.cpp:92-97`).
         // Callers that need lambda-body flatness use `FlattenAllButOne`,
         // which merges `required_flat` explicitly.
-        let mut analyzer =
-            GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store.clone());
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(schema, false, expr_store);
         analyzer.visit(expr_id);
         Self::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), schema)
     }
@@ -224,7 +221,7 @@ pub fn aggregate_groups_to_flatten(
         let is_distinct = aggregate_distinct.get(idx).copied().unwrap_or(false);
         for payload in args {
             let mut analyzer =
-                GroupDependencyAnalyzer::with_expr_store(child_schema, false, key_store.clone());
+                GroupDependencyAnalyzer::with_expr_store(child_schema, false, key_store);
             analyzer.visit_expression(payload);
             for pos in analyzer.required_flat_groups().iter().copied() {
                 if child_schema.get_group(pos).is_some_and(|g| !g.is_flat()) {
@@ -358,7 +355,7 @@ mod tests {
         let mut store = HashMap::new();
         let fake_id = expr(999);
         store.insert(fake_id.clone(), the_expr);
-        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, store.clone());
+        let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
         analyzer.visit(&fake_id);
         let expected =
             FlattenAll::get_groups_pos_to_flatten_for_groups(analyzer.dependent_groups(), &schema);

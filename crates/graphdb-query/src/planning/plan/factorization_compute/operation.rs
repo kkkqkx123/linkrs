@@ -47,7 +47,7 @@ pub(super) fn project(
             crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
                 &out,
                 false,
-                expr_store.clone(),
+                &expr_store,
             );
         analyzer.visit(&alias_id);
         let dependent = analyzer.dependent_groups().clone();
@@ -203,7 +203,7 @@ pub(super) fn sort(_n: &LogicalSortNode, child_schemas: &[FactorizedSchema]) -> 
     // the input nesting. Flat payloads gather into one group; unflat
     // payloads keep their group with the multiplier preserved.
     let child = child_schemas.first().cloned().unwrap_or_default();
-    let payloads: Vec<ExpressionId> = child.expressions_in_scope().to_vec();
+    let payloads: Vec<ExpressionId> = child.expressions_in_scope().iter().cloned().collect();
     if payloads.is_empty() {
         return child;
     }

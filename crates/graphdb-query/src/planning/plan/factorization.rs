@@ -19,6 +19,11 @@ pub struct FactorizationGroup {
     cardinality_multiplier: f64,
     expressions: Vec<ExpressionId>,
     expression_id_to_pos: HashMap<ExpressionId, usize>,
+    /// Group-local alias registrations (id-linked names only). This is not
+    /// redundant with the schema-level name map: bare names registered via
+    /// `FactorizedSchema::insert_name_for_group` never land here, and callers
+    /// such as projection alias shadowing need group locality, which the
+    /// schema-level name-to-group map cannot answer.
     expression_name_to_pos: HashMap<String, usize>,
 }
 
@@ -118,11 +123,6 @@ impl FactorizationGroup {
         self.expression_id_to_pos.get(expr_id).copied()
     }
 
-    #[cfg(test)]
-    pub fn get_expression_pos_by_name(&self, name: &str) -> Option<usize> {
-        self.expression_name_to_pos.get(name).copied()
-    }
-
     pub fn contains(&self, expr_id: &ExpressionId) -> bool {
         self.expression_id_to_pos.contains_key(expr_id)
     }
@@ -153,7 +153,7 @@ pub struct FactorizedSchema {
     /// operators) and to name expressions in diagnostics. Bare names
     /// registered via `insert_name_for_group` have no entry here.
     expression_id_to_name: HashMap<ExpressionId, String>,
-    expressions_in_scope: Vec<ExpressionId>,
+    expressions_in_scope: HashSet<ExpressionId>,
 }
 
 impl FactorizedSchema {
@@ -216,7 +216,7 @@ impl FactorizedSchema {
             expr_id
         );
         self.expression_to_group.insert(expr_id.clone(), group_pos);
-        self.expressions_in_scope.push(expr_id);
+        self.expressions_in_scope.insert(expr_id);
     }
 
     pub fn insert_to_scope_with_name(
@@ -263,7 +263,7 @@ impl FactorizedSchema {
             expr_id
         );
         self.expression_to_group.insert(expr_id.clone(), group_pos);
-        self.expressions_in_scope.push(expr_id);
+        self.expressions_in_scope.insert(expr_id);
     }
 
     pub fn insert_to_group_and_scope_batch(
@@ -279,9 +279,7 @@ impl FactorizedSchema {
     pub fn insert_to_scope_may_repeat(&mut self, expr_id: ExpressionId, group_pos: FGroupPos) {
         assert!((group_pos as usize) < self.groups.len());
         self.expression_to_group.insert(expr_id.clone(), group_pos);
-        if !self.expressions_in_scope.contains(&expr_id) {
-            self.expressions_in_scope.push(expr_id);
-        }
+        self.expressions_in_scope.insert(expr_id);
     }
 
     pub fn insert_to_group_and_scope_may_repeat(
@@ -294,9 +292,7 @@ impl FactorizedSchema {
             group.insert_expression(expr_id.clone());
         }
         self.expression_to_group.insert(expr_id.clone(), group_pos);
-        if !self.expressions_in_scope.contains(&expr_id) {
-            self.expressions_in_scope.push(expr_id);
-        }
+        self.expressions_in_scope.insert(expr_id);
     }
 
     pub fn get_group_pos(&self, expr_id: &ExpressionId) -> Option<FGroupPos> {
@@ -370,6 +366,7 @@ impl FactorizedSchema {
         if !group.is_flat() {
             group.set_flat();
         }
+        self.validate_at_most_one_unflat();
     }
 
     pub fn flatten_all(&mut self) {
@@ -401,7 +398,7 @@ impl FactorizedSchema {
         self.expression_name_to_group.contains_key(name)
     }
 
-    pub fn expressions_in_scope(&self) -> &[ExpressionId] {
+    pub fn expressions_in_scope(&self) -> &HashSet<ExpressionId> {
         &self.expressions_in_scope
     }
 
@@ -463,6 +460,12 @@ impl FactorizedSchema {
         );
     }
 
+    /// Boolean check variant of `validate_at_most_one_unflat` for use in
+    /// `debug_assert!` post-conditions.
+    pub fn has_at_most_one_unflat(&self) -> bool {
+        self.groups.iter().filter(|g| !g.is_flat()).count() <= 1
+    }
+
     pub fn is_flat_schema(&self) -> bool {
         self.groups.iter().all(|g| g.is_flat())
     }
@@ -492,6 +495,16 @@ impl FactorizedSchema {
         for (expr_id, name) in &other.expression_id_to_name {
             self.expression_id_to_name
                 .insert(expr_id.clone(), name.clone());
+        }
+        for (expr_id, pos) in &other.expression_to_group {
+            if let Some(new_pos) = mapping.get(pos) {
+                self.expression_to_group.insert(expr_id.clone(), *new_pos);
+            }
+        }
+        for expr_id in &other.expressions_in_scope {
+            if self.expression_to_group.contains_key(expr_id) {
+                self.expressions_in_scope.insert(expr_id.clone());
+            }
         }
         mapping
     }
@@ -776,6 +789,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "at most one unflat group")]
+    fn flatten_group_validates_invariant_at_runtime() {
+        let mut schema = FactorizedSchema::new();
+        let flat_pos = schema.create_flat_group(false);
+        let g0 = schema.create_group();
+        let g1 = schema.create_group();
+        schema.insert_to_group_and_scope(expr(1), flat_pos);
+        schema.insert_to_group_and_scope(expr(2), g0);
+        schema.insert_to_group_and_scope(expr(3), g1);
+        // Flattening an already-flat group leaves two unflat groups behind,
+        // so the runtime check inside `flatten_group` must fire.
+        schema.flatten_group(flat_pos);
+    }
+
+    #[test]
     fn schema_copy_and_flat_copy() {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
@@ -859,6 +887,28 @@ mod tests {
         // right group should be remapped to new pos 1
         assert_eq!(mapping.get(&0), Some(&1));
         assert_eq!(merged.num_groups(), 2);
+    }
+
+    #[test]
+    fn merge_groups_from_keeps_expression_id_lookup() {
+        let mut left = FactorizedSchema::new();
+        let lg = left.create_flat_group(false);
+        left.insert_to_group_and_scope(expr(1), lg);
+
+        let mut right = FactorizedSchema::new();
+        let rg = right.create_group();
+        right.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), rg);
+
+        let mut merged = left.copy();
+        merged.merge_groups_from(&right);
+        // Merged expressions stay resolvable by id without a follow-up
+        // scope insert.
+        assert_eq!(merged.get_group_pos(&expr(1)), Some(0));
+        assert_eq!(merged.get_group_pos(&expr(2)), Some(1));
+        assert!(merged.is_expression_in_scope(&expr(2)));
+        assert!(merged.expressions_in_scope().contains(&expr(2)));
+        assert_eq!(merged.get_group_pos_by_name_opt("b"), Some(1));
+        assert_eq!(merged.expression_name(&expr(2)), Some("b"));
     }
 
     #[test]

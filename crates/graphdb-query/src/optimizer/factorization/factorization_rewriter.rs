@@ -58,48 +58,56 @@ impl FactorizationRewriter {
     fn visit_operator(&mut self, node: &mut LogicalNodeEnum) -> FactorizedSchema {
         match node {
             LogicalNodeEnum::Project(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
                 };
-                let exprs = Self::expr_ids_for_project(n);
                 let store = Self::build_store_for_project(n);
-                // Non-deterministic functions (rand, uuid, now, ...) must be
-                // evaluated tuple-at-a-time: keeping any group unflat would
-                // share one generated value across rows. Fall back to
-                // flatten-all instead of the usual flatten-all-but-one.
-                let has_nondeterministic = store
+                // Random functions must be evaluated tuple-at-a-time: keeping
+                // any group unflat would share one generated value across
+                // rows. Fall back to flatten-all instead of the usual
+                // flatten-all-but-one.
+                let has_random = store
                     .values()
-                    .any(crate::optimizer::analysis::expression::NondeterministicChecker::contains_nondeterministic);
-                let to_flatten = if has_nondeterministic {
+                    .any(crate::optimizer::analysis::expression::NondeterministicChecker::contains_random);
+                if has_random {
                     let groups = child_schema.groups_pos_in_scope();
-                    FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &child_schema)
+                    let to_flatten =
+                        FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
+                    if !to_flatten.is_empty() {
+                        if let Some(child) = n.input.as_mut() {
+                            self.replace_child_and_flatten(child, &to_flatten, &child_schema);
+                        }
+                        for pos in &to_flatten {
+                            child_schema.flatten_group(*pos);
+                        }
+                    }
                 } else {
-                    FlattenAllButOne::get_groups_pos_to_flatten_for_exprs(
-                        &exprs,
-                        &child_schema,
-                        &store,
-                    )
-                };
-                if !to_flatten.is_empty() {
-                    if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                    for expr_id in Self::expr_ids_for_project(n) {
+                        let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
+                            &expr_id,
+                            &child_schema,
+                            &store,
+                        );
+                        if !to_flatten.is_empty() {
+                            if let Some(child) = n.input.as_mut() {
+                                self.replace_child_and_flatten(
+                                    child,
+                                    &to_flatten,
+                                    &child_schema,
+                                );
+                            }
+                            for pos in &to_flatten {
+                                child_schema.flatten_group(*pos);
+                            }
+                        }
                     }
-                    let mut flattened_child = child_schema.clone();
-                    for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
-                    }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Filter(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -116,22 +124,17 @@ impl FactorizationRewriter {
                 );
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Aggregate(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -156,22 +159,17 @@ impl FactorizationRewriter {
                 );
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Sort(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -181,15 +179,17 @@ impl FactorizationRewriter {
                 // table can be sorted and scanned back without changing the
                 // schema shape.
                 let to_flatten = if child_schema.num_groups() > 1 {
+                    let (expr_ids, store) = Self::sort_key_store(n, &child_schema);
                     let mut dependent = HashSet::new();
                     let mut unresolved = false;
-                    for item in &n.sort_items {
+                    for expr_id in &expr_ids {
                         let mut analyzer =
-                            super::group_dependency_analyzer::GroupDependencyAnalyzer::new(
+                            super::group_dependency_analyzer::GroupDependencyAnalyzer::with_expr_store(
                                 &child_schema,
                                 false,
+                                &store,
                             );
-                        analyzer.visit_expression(&item.expression);
+                        analyzer.visit(expr_id);
                         dependent.extend(analyzer.dependent_groups().iter().copied());
                         unresolved |= analyzer.has_unresolved();
                     }
@@ -206,22 +206,17 @@ impl FactorizationRewriter {
                 };
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Window(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -231,22 +226,17 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Limit(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -258,19 +248,14 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Skip(n) => {
                 let child_schema = if let Some(child) = n.input.as_mut() {
@@ -278,11 +263,10 @@ impl FactorizationRewriter {
                 } else {
                     FactorizedSchema::new()
                 };
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::TopN(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -292,22 +276,17 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Dedup(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -317,33 +296,26 @@ impl FactorizationRewriter {
                     FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened_child = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened_child.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened_child]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::InnerJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
                 let mut right_schema = self.visit_operator(&mut n.right);
                 self.visit_hash_join_inner(n, &mut left_schema, &mut right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::LeftJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
                 let mut right_schema = self.visit_operator(&mut n.right);
                 self.visit_hash_join_left(n, &mut left_schema, &mut right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::RightJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -356,8 +328,7 @@ impl FactorizationRewriter {
                     &mut n.left,
                     &mut n.right,
                 );
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::CrossJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -372,10 +343,10 @@ impl FactorizationRewriter {
                         &n.probe_keys,
                         &mut n.left,
                         &mut n.right,
+                        false,
                     );
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::FullOuterJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -388,8 +359,7 @@ impl FactorizationRewriter {
                     &mut n.left,
                     &mut n.right,
                 );
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::SemiJoin(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -401,70 +371,58 @@ impl FactorizationRewriter {
                     &n.probe_keys,
                     &mut n.left,
                     &mut n.right,
+                    false,
                 );
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::Traverse(n) => {
                 let effective_schema = if let Some(child) = n.input.as_mut() {
-                    let schema = self.visit_operator(child);
+                    let mut schema = self.visit_operator(child);
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &schema);
-                        **child = new_child;
-                        let mut flattened = schema.clone();
-                        flattened.flatten_group(pos);
-                        flattened
+                        self.replace_child_and_flatten(child, &to_flatten, &schema);
+                        schema.flatten_group(pos);
+                        schema
                     } else {
                         schema
                     }
                 } else {
                     FactorizedSchema::new()
                 };
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[effective_schema])
+                node.compute_factorized_schema(&[effective_schema])
             }
             LogicalNodeEnum::Expand(n) => {
-                let mut child_schemas = Vec::new();
+                let mut child_schema = FactorizedSchema::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        let new_dep = self.append_flattens(dep.clone(), &to_flatten, &schema);
-                        *dep = new_dep;
-                        let mut flattened = schema.clone();
-                        flattened.flatten_group(pos);
-                        child_schemas.push(flattened);
-                    } else {
-                        child_schemas.push(schema);
+                        self.replace_node_and_flatten(dep, &to_flatten, &schema);
+                        schema.flatten_group(pos);
+                    }
+                    if child_schema.num_groups() == 0 {
+                        child_schema = schema;
                     }
                 }
-                let child_schema = child_schemas.first().cloned().unwrap_or_default();
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::ExpandAll(n) => {
-                let mut child_schemas = Vec::new();
+                let mut child_schema = FactorizedSchema::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        let new_dep = self.append_flattens(dep.clone(), &to_flatten, &schema);
-                        *dep = new_dep;
-                        let mut flattened = schema.clone();
-                        flattened.flatten_group(pos);
-                        child_schemas.push(flattened);
-                    } else {
-                        child_schemas.push(schema);
+                        self.replace_node_and_flatten(dep, &to_flatten, &schema);
+                        schema.flatten_group(pos);
+                    }
+                    if child_schema.num_groups() == 0 {
+                        child_schema = schema;
                     }
                 }
-                let child_schema = child_schemas.first().cloned().unwrap_or_default();
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::BiExpand(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -472,21 +430,16 @@ impl FactorizationRewriter {
                 if let Some(pos) = left_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    let new_left =
-                        self.append_flattens((*n.left).clone(), &to_flatten, &left_schema);
-                    *n.left = new_left;
+                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &left_schema);
                     left_schema.flatten_group(pos);
                 }
                 if let Some(pos) = right_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    let new_right =
-                        self.append_flattens((*n.right).clone(), &to_flatten, &right_schema);
-                    *n.right = new_right;
+                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &right_schema);
                     right_schema.flatten_group(pos);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::BiTraverse(n) => {
                 let mut left_schema = self.visit_operator(&mut n.left);
@@ -494,44 +447,35 @@ impl FactorizationRewriter {
                 if let Some(pos) = left_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    let new_left =
-                        self.append_flattens((*n.left).clone(), &to_flatten, &left_schema);
-                    *n.left = new_left;
+                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &left_schema);
                     left_schema.flatten_group(pos);
                 }
                 if let Some(pos) = right_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    let new_right =
-                        self.append_flattens((*n.right).clone(), &to_flatten, &right_schema);
-                    *n.right = new_right;
+                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &right_schema);
                     right_schema.flatten_group(pos);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::AppendVertices(n) => {
-                let mut child_schemas = Vec::new();
+                let mut child_schema = FactorizedSchema::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        let new_dep = self.append_flattens(dep.clone(), &to_flatten, &schema);
-                        *dep = new_dep;
-                        let mut flattened = schema.clone();
-                        flattened.flatten_group(pos);
-                        child_schemas.push(flattened);
-                    } else {
-                        child_schemas.push(schema);
+                        self.replace_node_and_flatten(dep, &to_flatten, &schema);
+                        schema.flatten_group(pos);
+                    }
+                    if child_schema.num_groups() == 0 {
+                        child_schema = schema;
                     }
                 }
-                let child_schema = child_schemas.first().cloned().unwrap_or_default();
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Unwind(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
@@ -556,7 +500,7 @@ impl FactorizationRewriter {
                         crate::optimizer::factorization::GroupDependencyAnalyzer::with_expr_store(
                             &child_schema,
                             false,
-                            store,
+                            &store,
                         );
                     analyzer.visit(&list_id);
                     if analyzer.has_unresolved() {
@@ -572,39 +516,34 @@ impl FactorizationRewriter {
                 };
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        let new_child =
-                            self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                        **child = new_child;
+                        self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                     }
-                    let mut flattened = child_schema.clone();
                     for pos in &to_flatten {
-                        flattened.flatten_group(*pos);
+                        child_schema.flatten_group(*pos);
                     }
-                    let mut tmp = node.clone();
-                    return tmp.compute_factorized_schema(&[flattened]);
+                    return node.compute_factorized_schema(&[child_schema]);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Union(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     self.flatten_barrier_child(dep, &schema);
-                    child_schemas.push(Self::flattened_schema(&schema));
+                    schema.flatten_all();
+                    child_schemas.push(schema);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&child_schemas)
+                node.compute_factorized_schema(&child_schemas)
             }
             LogicalNodeEnum::Minus(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     self.flatten_barrier_child(dep, &schema);
-                    child_schemas.push(Self::flattened_schema(&schema));
+                    schema.flatten_all();
+                    child_schemas.push(schema);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&child_schemas)
+                node.compute_factorized_schema(&child_schemas)
             }
             LogicalNodeEnum::Intersect(n) => {
                 // Binary set-operation intersect carries no join keys (unlike
@@ -613,29 +552,30 @@ impl FactorizationRewriter {
                 // inputs must be fully flat before the set comparison.
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
-                    let schema = self.visit_operator(dep);
+                    let mut schema = self.visit_operator(dep);
                     self.flatten_barrier_child(dep, &schema);
-                    child_schemas.push(Self::flattened_schema(&schema));
+                    schema.flatten_all();
+                    child_schemas.push(schema);
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&child_schemas)
+                node.compute_factorized_schema(&child_schemas)
             }
             LogicalNodeEnum::WcoIntersect(n) => {
                 let mut child_schemas = Vec::new();
                 for dep in &mut n.deps {
                     child_schemas.push(self.visit_operator(dep));
                 }
-                if let Some(probe_schema) = child_schemas.first() {
-                    let to_flatten = n.get_groups_to_flatten_on_probe_side(probe_schema);
-                    if !to_flatten.is_empty() {
-                        let new_probe =
-                            self.append_flattens(n.deps[0].clone(), &to_flatten, probe_schema);
-                        n.deps[0] = new_probe;
-                        let mut flattened = probe_schema.clone();
-                        for pos in &to_flatten {
-                            flattened.flatten_group(*pos);
-                        }
-                        child_schemas[0] = flattened;
+                let probe_to_flatten = child_schemas
+                    .first()
+                    .map(|probe_schema| n.get_groups_to_flatten_on_probe_side(probe_schema))
+                    .unwrap_or_default();
+                if !probe_to_flatten.is_empty() {
+                    self.replace_node_and_flatten(
+                        &mut n.deps[0],
+                        &probe_to_flatten,
+                        &child_schemas[0],
+                    );
+                    for pos in &probe_to_flatten {
+                        child_schemas[0].flatten_group(*pos);
                     }
                 }
                 for build_idx in 0..n.num_builds() {
@@ -646,19 +586,17 @@ impl FactorizationRewriter {
                     let to_flatten =
                         n.get_groups_to_flatten_on_build_side(build_idx, &child_schemas[child_idx]);
                     if !to_flatten.is_empty() {
-                        let schema = child_schemas[child_idx].clone();
-                        let new_build =
-                            self.append_flattens(n.deps[child_idx].clone(), &to_flatten, &schema);
-                        n.deps[child_idx] = new_build;
-                        let mut flattened = schema;
+                        self.replace_node_and_flatten(
+                            &mut n.deps[child_idx],
+                            &to_flatten,
+                            &child_schemas[child_idx],
+                        );
                         for pos in &to_flatten {
-                            flattened.flatten_group(*pos);
+                            child_schemas[child_idx].flatten_group(*pos);
                         }
-                        child_schemas[child_idx] = flattened;
                     }
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&child_schemas)
+                node.compute_factorized_schema(&child_schemas)
             }
             LogicalNodeEnum::Flatten(n) => {
                 let child_schema = if let Some(child) = n.input.as_mut() {
@@ -666,37 +604,33 @@ impl FactorizationRewriter {
                 } else {
                     FactorizedSchema::new()
                 };
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::GetVertices(n) => {
-                let mut child_schemas = Vec::new();
-                for dep in &mut n.deps {
-                    child_schemas.push(self.visit_operator(dep));
-                }
-                let child_schema = child_schemas.first().cloned().unwrap_or_default();
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
-            }
-            LogicalNodeEnum::GetNeighbors(n) => {
-                let mut child_schemas = Vec::new();
+                let mut child_schema = FactorizedSchema::new();
                 for dep in &mut n.deps {
                     let schema = self.visit_operator(dep);
+                    if child_schema.num_groups() == 0 {
+                        child_schema = schema;
+                    }
+                }
+                node.compute_factorized_schema(&[child_schema])
+            }
+            LogicalNodeEnum::GetNeighbors(n) => {
+                let mut child_schema = FactorizedSchema::new();
+                for dep in &mut n.deps {
+                    let mut schema = self.visit_operator(dep);
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        let new_dep = self.append_flattens(dep.clone(), &to_flatten, &schema);
-                        *dep = new_dep;
-                        let mut flattened = schema.clone();
-                        flattened.flatten_group(pos);
-                        child_schemas.push(flattened);
-                    } else {
-                        child_schemas.push(schema);
+                        self.replace_node_and_flatten(dep, &to_flatten, &schema);
+                        schema.flatten_group(pos);
+                    }
+                    if child_schema.num_groups() == 0 {
+                        child_schema = schema;
                     }
                 }
-                let child_schema = child_schemas.first().cloned().unwrap_or_default();
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::GetEdges(_)
             | LogicalNodeEnum::ScanVertices(_)
@@ -720,17 +654,11 @@ impl FactorizationRewriter {
             | LogicalNodeEnum::CopyTo(_)
             | LogicalNodeEnum::FulltextSearch(_)
             | LogicalNodeEnum::FulltextLookup(_)
-            | LogicalNodeEnum::MatchFulltext(_) => {
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[])
-            }
+            | LogicalNodeEnum::MatchFulltext(_) => node.compute_factorized_schema(&[]),
             #[cfg(feature = "vector")]
             LogicalNodeEnum::VectorSearch(_)
             | LogicalNodeEnum::VectorLookup(_)
-            | LogicalNodeEnum::VectorMatch(_) => {
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[])
-            }
+            | LogicalNodeEnum::VectorMatch(_) => node.compute_factorized_schema(&[]),
             LogicalNodeEnum::Assign(n) => {
                 let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
@@ -758,61 +686,54 @@ impl FactorizationRewriter {
                     );
                     if !to_flatten.is_empty() {
                         if let Some(child) = n.input.as_mut() {
-                            let new_child =
-                                self.append_flattens((**child).clone(), &to_flatten, &child_schema);
-                            **child = new_child;
+                            self.replace_child_and_flatten(child, &to_flatten, &child_schema);
                         }
                         for pos in &to_flatten {
                             child_schema.flatten_group(*pos);
                         }
                     }
                 }
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Remove(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
                 };
                 self.flatten_barrier_single(n.input.as_mut(), &child_schema);
-                let child_schema = Self::flattened_schema(&child_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                child_schema.flatten_all();
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::DataCollect(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
                 };
                 self.flatten_barrier_single(n.input.as_mut(), &child_schema);
-                let child_schema = Self::flattened_schema(&child_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                child_schema.flatten_all();
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Materialize(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
                 };
                 self.flatten_barrier_single(n.input.as_mut(), &child_schema);
-                let child_schema = Self::flattened_schema(&child_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                child_schema.flatten_all();
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::RollUpApply(n) => {
-                let child_schema = if let Some(child) = n.input.as_mut() {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)
                 } else {
                     FactorizedSchema::new()
                 };
                 self.flatten_barrier_single(n.input.as_mut(), &child_schema);
-                let child_schema = Self::flattened_schema(&child_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                child_schema.flatten_all();
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Sample(n) => {
                 let child_schema = if let Some(child) = n.input.as_mut() {
@@ -820,8 +741,7 @@ impl FactorizationRewriter {
                 } else {
                     FactorizedSchema::new()
                 };
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::Select(n) => {
                 // Per-branch refinement: the branch condition drives
@@ -835,48 +755,39 @@ impl FactorizationRewriter {
                 }
                 let mut branch_schemas = Vec::new();
                 if let Some(branch) = n.if_branch.as_mut() {
-                    let schema = self.visit_operator(branch);
+                    let mut schema = self.visit_operator(branch);
                     let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        let new_branch =
-                            self.append_flattens((**branch).clone(), &to_flatten, &schema);
-                        **branch = new_branch;
-                        let mut flattened = schema.clone();
+                        self.replace_child_and_flatten(branch, &to_flatten, &schema);
                         for pos in &to_flatten {
-                            flattened.flatten_group(*pos);
+                            schema.flatten_group(*pos);
                         }
-                        branch_schemas.push(flattened);
+                        branch_schemas.push(schema);
                     } else {
                         branch_schemas.push(schema);
                     }
                 }
                 if let Some(branch) = n.else_branch.as_mut() {
-                    let schema = self.visit_operator(branch);
+                    let mut schema = self.visit_operator(branch);
                     let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        let new_branch =
-                            self.append_flattens((**branch).clone(), &to_flatten, &schema);
-                        **branch = new_branch;
-                        let mut flattened = schema.clone();
+                        self.replace_child_and_flatten(branch, &to_flatten, &schema);
                         for pos in &to_flatten {
-                            flattened.flatten_group(*pos);
+                            schema.flatten_group(*pos);
                         }
-                        branch_schemas.push(flattened);
+                        branch_schemas.push(schema);
                     } else {
                         branch_schemas.push(schema);
                     }
                 }
-                let effective = branch_schemas.first().cloned().unwrap_or_default();
-                if branch_schemas.is_empty() {
-                    let mut tmp = node.clone();
-                    tmp.compute_factorized_schema(&[])
+                if let Some(effective) = branch_schemas.into_iter().next() {
+                    node.compute_factorized_schema(&[effective])
                 } else {
-                    let mut tmp = node.clone();
-                    tmp.compute_factorized_schema(&[effective])
+                    node.compute_factorized_schema(&[])
                 }
             }
             LogicalNodeEnum::Loop(n) => {
@@ -888,48 +799,43 @@ impl FactorizationRewriter {
                     store.insert(cond_id.clone(), expr);
                 }
                 let child_schema = if let Some(body) = n.body.as_mut() {
-                    let schema = self.visit_operator(body);
+                    let mut schema = self.visit_operator(body);
                     let to_flatten = FlattenAllButOne::get_groups_pos_to_flatten_for_expr(
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        let new_body = self.append_flattens((**body).clone(), &to_flatten, &schema);
-                        **body = new_body;
-                        let mut flattened = schema.clone();
+                        self.replace_child_and_flatten(body, &to_flatten, &schema);
                         for pos in &to_flatten {
-                            flattened.flatten_group(*pos);
+                            schema.flatten_group(*pos);
                         }
-                        flattened
+                        schema
                     } else {
                         schema
                     }
                 } else {
                     FactorizedSchema::new()
                 };
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[child_schema])
+                node.compute_factorized_schema(&[child_schema])
             }
             LogicalNodeEnum::PatternApply(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::CorrelatedApply(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::Apply(n) => {
-                let left_schema = self.visit_operator(n.left_input_mut());
-                let right_schema = self.visit_operator(n.right_input_mut());
+                let mut left_schema = self.visit_operator(n.left_input_mut());
+                let mut right_schema = self.visit_operator(n.right_input_mut());
                 {
                     let left = n.left_input_mut();
                     self.flatten_barrier_child(left, &left_schema);
@@ -938,46 +844,41 @@ impl FactorizationRewriter {
                     let right = n.right_input_mut();
                     self.flatten_barrier_child(right, &right_schema);
                 }
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::MultiShortestPath(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::BFSShortest(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::AllPaths(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::ShortestPath(n) => {
-                let left_schema = self.visit_operator(&mut n.left);
-                let right_schema = self.visit_operator(&mut n.right);
+                let mut left_schema = self.visit_operator(&mut n.left);
+                let mut right_schema = self.visit_operator(&mut n.right);
                 self.flatten_barrier_binary(&mut n.left, &mut n.right, &left_schema, &right_schema);
-                let left_schema = Self::flattened_schema(&left_schema);
-                let right_schema = Self::flattened_schema(&right_schema);
-                let mut tmp = node.clone();
-                tmp.compute_factorized_schema(&[left_schema, right_schema])
+                left_schema.flatten_all();
+                right_schema.flatten_all();
+                node.compute_factorized_schema(&[left_schema, right_schema])
             }
         }
     }
@@ -1003,6 +904,36 @@ impl FactorizationRewriter {
             .collect()
     }
 
+    /// Sort keys carry raw expressions without ids, so they are staged into
+    /// a synthetic id store for the `FlattenAll` key-expression path. Real
+    /// ids are allocated bottom-up from zero by
+    /// `ExpressionAnalysisContext`, so synthetic ids live in the
+    /// high-bit (`1 << 63`) space and can never collide with them; a scope
+    /// membership check is kept as a backstop.
+    fn sort_key_store(
+        node: &crate::planning::plan::logical::logical_nodes::operation::LogicalSortNode,
+        schema: &FactorizedSchema,
+    ) -> (
+        Vec<graphdb_core::types::expr::ExpressionId>,
+        HashMap<ExpressionId, graphdb_core::Expression>,
+    ) {
+        let mut ids = Vec::with_capacity(node.sort_items.len());
+        let mut store = HashMap::new();
+        let mut candidate: u64 = 1 << 63;
+        for item in &node.sort_items {
+            while schema.is_expression_in_scope(&ExpressionId::new(candidate))
+                || store.contains_key(&ExpressionId::new(candidate))
+            {
+                candidate = candidate.wrapping_add(1);
+            }
+            let id = ExpressionId::new(candidate);
+            candidate = candidate.wrapping_add(1);
+            store.insert(id.clone(), item.expression.clone());
+            ids.push(id);
+        }
+        (ids, store)
+    }
+
     fn visit_hash_join_inner(
         &mut self,
         node: &mut crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode,
@@ -1016,6 +947,7 @@ impl FactorizationRewriter {
             &node.probe_keys,
             &mut node.left,
             &mut node.right,
+            true,
         );
     }
 
@@ -1025,6 +957,9 @@ impl FactorizationRewriter {
         left_schema: &mut FactorizedSchema,
         right_schema: &mut FactorizedSchema,
     ) {
+        // Left joins always flatten the probe side, mirroring
+        // `LogicalHashJoin::requireFlatProbeKeys` returning true for
+        // `JoinType::LEFT`.
         self.visit_hash_join_generic_inner(
             left_schema,
             right_schema,
@@ -1032,9 +967,11 @@ impl FactorizationRewriter {
             &node.probe_keys,
             &mut node.left,
             &mut node.right,
+            false,
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit_hash_join_generic_inner(
         &mut self,
         left_schema: &mut FactorizedSchema,
@@ -1043,27 +980,91 @@ impl FactorizationRewriter {
         probe_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
         left: &mut Box<LogicalNodeEnum>,
         right: &mut Box<LogicalNodeEnum>,
+        allow_probe_skip: bool,
     ) {
         let left_keys = Self::contextual_keys_to_groups(hash_keys, left_schema);
         let right_keys = Self::contextual_keys_to_groups(probe_keys, right_schema);
         let left_to_flatten =
-            FlattenAll::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema);
+            if allow_probe_skip && !Self::require_flat_probe_keys(hash_keys, probe_keys, right) {
+                HashSet::new()
+            } else {
+                FlattenAll::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema)
+            };
         let right_to_flatten =
             FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
         if !left_to_flatten.is_empty() {
-            let new_left = self.append_flattens((**left).clone(), &left_to_flatten, left_schema);
-            **left = new_left;
+            self.replace_child_and_flatten(left, &left_to_flatten, left_schema);
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos);
             }
         }
         if !right_to_flatten.is_empty() {
-            let new_right =
-                self.append_flattens((**right).clone(), &right_to_flatten, right_schema);
-            **right = new_right;
+            self.replace_child_and_flatten(right, &right_to_flatten, right_schema);
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos);
             }
+        }
+    }
+
+    /// Whether the probe (left) key groups must be flattened.
+    ///
+    /// Mirrors `LogicalHashJoin::requireFlatProbeKeys` in
+    /// `ref/ladybug/src/planner/operator/logical_hash_join.cpp`. Multiple
+    /// join keys always require flattening, as do non-variable keys. A
+    /// single variable key shared by both sides can skip probe-side
+    /// flattening when the build side yields unique node ids. Rust
+    /// expressions carry no `INTERNAL_ID` type, so the node-id check is
+    /// approximated by requiring both keys to name the scanned node
+    /// variable produced by a `ScanVertices` build side (possibly through
+    /// uniqueness-preserving wrappers, mirroring
+    /// `JoinNodeIDUniquenessAnalyzer`).
+    fn require_flat_probe_keys(
+        hash_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
+        probe_keys: &[graphdb_core::types::expr::contextual::ContextualExpression],
+        right: &LogicalNodeEnum,
+    ) -> bool {
+        if hash_keys.len() > 1 || probe_keys.len() > 1 {
+            return true;
+        }
+        let (Some(probe_key), Some(build_key)) = (hash_keys.first(), probe_keys.first()) else {
+            return true;
+        };
+        let (Some(probe_var), Some(build_var)) = (probe_key.as_variable(), build_key.as_variable())
+        else {
+            return true;
+        };
+        if probe_var != build_var {
+            return true;
+        }
+        !Self::build_side_yields_unique_node_id(right, &build_var)
+    }
+
+    /// Whether the build side produces at most one row per value of `var`.
+    ///
+    /// Mirrors `JoinNodeIDUniquenessAnalyzer::isUnique`: filter, flatten,
+    /// limit and projection wrappers preserve uniqueness, and a plain
+    /// vertex scan yields each node id once (filters and limits only take
+    /// subsets).
+    fn build_side_yields_unique_node_id(node: &LogicalNodeEnum, var: &str) -> bool {
+        match node {
+            LogicalNodeEnum::Filter(n) => n
+                .input
+                .as_deref()
+                .is_some_and(|child| Self::build_side_yields_unique_node_id(child, var)),
+            LogicalNodeEnum::Flatten(n) => n
+                .input
+                .as_deref()
+                .is_some_and(|child| Self::build_side_yields_unique_node_id(child, var)),
+            LogicalNodeEnum::Limit(n) => n
+                .input
+                .as_deref()
+                .is_some_and(|child| Self::build_side_yields_unique_node_id(child, var)),
+            LogicalNodeEnum::Project(n) => n
+                .input
+                .as_deref()
+                .is_some_and(|child| Self::build_side_yields_unique_node_id(child, var)),
+            LogicalNodeEnum::ScanVertices(n) => n.output_var.as_deref() == Some(var),
+            _ => false,
         }
     }
 
@@ -1083,16 +1084,13 @@ impl FactorizationRewriter {
         let right_to_flatten =
             FlattenAll::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
         if !left_to_flatten.is_empty() {
-            let new_left = self.append_flattens((**left).clone(), &left_to_flatten, left_schema);
-            **left = new_left;
+            self.replace_child_and_flatten(left, &left_to_flatten, left_schema);
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos);
             }
         }
         if !right_to_flatten.is_empty() {
-            let new_right =
-                self.append_flattens((**right).clone(), &right_to_flatten, right_schema);
-            **right = new_right;
+            self.replace_child_and_flatten(right, &right_to_flatten, right_schema);
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos);
             }
@@ -1118,16 +1116,13 @@ impl FactorizationRewriter {
         let right_to_flatten =
             FlattenAll::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
         if !left_to_flatten.is_empty() {
-            let new_left = self.append_flattens((**left).clone(), &left_to_flatten, left_schema);
-            **left = new_left;
+            self.replace_child_and_flatten(left, &left_to_flatten, left_schema);
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos);
             }
         }
         if !right_to_flatten.is_empty() {
-            let new_right =
-                self.append_flattens((**right).clone(), &right_to_flatten, right_schema);
-            **right = new_right;
+            self.replace_child_and_flatten(right, &right_to_flatten, right_schema);
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos);
             }
@@ -1151,22 +1146,13 @@ impl FactorizationRewriter {
     /// Barrier helpers: the compute path for barrier operators flattens
     /// everything, so the rewriter inserts the matching `FlattenAll` nodes
     /// explicitly instead of leaving the flattening implicit.
-    fn flattened_schema(schema: &FactorizedSchema) -> FactorizedSchema {
-        let mut out = schema.clone();
-        out.flatten_all();
-        out
-    }
-
     fn barrier_groups(schema: &FactorizedSchema) -> HashSet<FGroupPos> {
         FlattenAll::get_groups_pos_to_flatten_for_groups(&schema.groups_pos_in_scope(), schema)
     }
 
     fn flatten_barrier_child(&mut self, child: &mut LogicalNodeEnum, schema: &FactorizedSchema) {
         let to_flatten = Self::barrier_groups(schema);
-        if !to_flatten.is_empty() {
-            let new_child = self.append_flattens(child.clone(), &to_flatten, schema);
-            *child = new_child;
-        }
+        self.replace_node_and_flatten(child, &to_flatten, schema);
     }
 
     fn flatten_barrier_single(
@@ -1203,6 +1189,41 @@ impl FactorizationRewriter {
             child = self.append_flatten_if_necessary(child, pos, schema);
         }
         child
+    }
+
+    /// Move the child subtree out of its `Box`, wrap it with `Flatten` nodes,
+    /// and put the result back — avoiding a deep clone of the entire subtree.
+    ///
+    /// Equivalent to the previous pattern:
+    /// ```ignore
+    /// self.replace_child_and_flatten(child, &to_flatten, schema);
+    /// ```
+    fn replace_child_and_flatten(
+        &mut self,
+        child: &mut Box<LogicalNodeEnum>,
+        to_flatten: &HashSet<FGroupPos>,
+        schema: &FactorizedSchema,
+    ) {
+        if to_flatten.is_empty() {
+            return;
+        }
+        let old = std::mem::take(&mut **child);
+        **child = self.append_flattens(old, to_flatten, schema);
+    }
+
+    /// Like [`replace_child_and_flatten`] but for `&mut LogicalNodeEnum`
+    /// (e.g. elements of `deps: Vec<LogicalNodeEnum>`).
+    fn replace_node_and_flatten(
+        &mut self,
+        node: &mut LogicalNodeEnum,
+        to_flatten: &HashSet<FGroupPos>,
+        schema: &FactorizedSchema,
+    ) {
+        if to_flatten.is_empty() {
+            return;
+        }
+        let old = std::mem::take(node);
+        *node = self.append_flattens(old, to_flatten, schema);
     }
 
     pub fn append_flatten_if_necessary(
@@ -1797,6 +1818,40 @@ mod tests {
     }
 
     #[test]
+    fn sort_key_store_ids_never_collide_with_scope() {
+        use crate::planning::plan::core::nodes::operation::sort_node::SortItem;
+        use crate::planning::plan::logical::logical_nodes::operation::LogicalSortNode;
+        // Synthetic sort-key ids live in the high-bit space: even with more
+        // than a thousand keys they stay distinct and outside the scope.
+        let mut schema = FactorizedSchema::new();
+        let g = schema.create_flat_group(false);
+        for i in 0..64u64 {
+            schema.insert_to_group_and_scope(graphdb_core::types::expr::ExpressionId::new(i), g);
+        }
+        let sort = LogicalSortNode {
+            id: next_node_id(),
+            input: None,
+            deps: vec![],
+            sort_items: (0..1500)
+                .map(|i| SortItem::column_asc(format!("c{i}")))
+                .collect(),
+            limit: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        };
+        let (ids, store) = FactorizationRewriter::sort_key_store(&sort, &schema);
+        assert_eq!(ids.len(), 1500);
+        assert_eq!(store.len(), 1500);
+        let distinct: HashSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), 1500);
+        for id in &ids {
+            assert!(!schema.is_expression_in_scope(id));
+            assert!(id.0 >= (1 << 63));
+        }
+    }
+
+    #[test]
     fn sort_unresolved_key_falls_back_to_flatten_all() {
         use crate::optimizer::factorization::RemoveFactorizationRewriter;
         use crate::planning::plan::core::nodes::operation::sort_node::SortItem;
@@ -1861,5 +1916,177 @@ mod tests {
             !RemoveFactorizationRewriter::has_flatten_public(&assign),
             "two assignments on one unflat group must stay factorized"
         );
+    }
+
+    #[test]
+    fn require_flat_probe_keys_multiple_keys_always_flatten() {
+        // Multiple join keys always require probe-side flattening.
+        let (left_key, _) = ctx_var("lk");
+        let (right_key, _) = ctx_var("rk");
+        let right = scan();
+        assert!(FactorizationRewriter::require_flat_probe_keys(
+            &[left_key.clone(), right_key.clone()],
+            &[left_key, right_key],
+            &right,
+        ));
+    }
+
+    #[test]
+    fn require_flat_probe_keys_skips_unique_scan_build_side() {
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        // Single shared variable key with a ScanVertices build side
+        // producing that variable: node ids are unique, so the probe side
+        // keeps its unflat group.
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let probe_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let build_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let probe_key =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(probe_id, ctx.clone());
+        let build_key =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(build_id, ctx);
+        let right = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: next_node_id(),
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: None,
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: Some("b".to_string()),
+            col_names: vec!["b".to_string()],
+            column_types: vec![],
+        });
+        assert!(!FactorizationRewriter::require_flat_probe_keys(
+            &[probe_key],
+            &[build_key],
+            &right,
+        ));
+    }
+
+    #[test]
+    fn require_flat_probe_keys_rejects_mismatched_or_non_unique_build() {
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let key_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let other_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("c".to_string()),
+        ));
+        let key = graphdb_core::types::expr::contextual::ContextualExpression::new(
+            key_id.clone(),
+            ctx.clone(),
+        );
+        let other =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(other_id, ctx.clone());
+        // Build side scans a different variable: key values may repeat.
+        let scan_c = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: next_node_id(),
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: None,
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: Some("c".to_string()),
+            col_names: vec!["c".to_string()],
+            column_types: vec![],
+        });
+        assert!(FactorizationRewriter::require_flat_probe_keys(
+            &[key.clone()],
+            &[other],
+            &scan_c,
+        ));
+        // Non-scan build side never proves uniqueness.
+        let (out_expr, _) = ctx_var("b");
+        let neighbor = get_neighbors_with_output(out_expr);
+        assert!(FactorizationRewriter::require_flat_probe_keys(
+            &[key],
+            &[graphdb_core::types::expr::contextual::ContextualExpression::new(key_id, ctx)],
+            &neighbor,
+        ));
+        // Empty key lists stay conservative.
+        let right = scan();
+        assert!(FactorizationRewriter::require_flat_probe_keys(
+            &[],
+            &[],
+            &right,
+        ));
+    }
+
+    #[test]
+    fn inner_join_rewriter_skips_probe_flatten_for_unique_build() {
+        use crate::optimizer::factorization::RemoveFactorizationRewriter;
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        use crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode;
+        // Probe key shares the neighbor output id (unflat group); the build
+        // side scans the same variable, so probe-side flattening is skipped
+        // while the build side stays flat without extra nodes.
+        let ctx = std::sync::Arc::new(
+            graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let out_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        let build_id = ctx.register_expression(graphdb_core::types::expr::ExpressionMeta::new(
+            graphdb_core::Expression::Variable("b".to_string()),
+        ));
+        assert_ne!(out_id, build_id);
+        let out_expr = graphdb_core::types::expr::contextual::ContextualExpression::new(
+            out_id.clone(),
+            ctx.clone(),
+        );
+        let probe_key =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(out_id, ctx.clone());
+        let build_key =
+            graphdb_core::types::expr::contextual::ContextualExpression::new(build_id, ctx);
+        let left = get_neighbors_with_output(out_expr);
+        let right = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: next_node_id(),
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: None,
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: Some("b".to_string()),
+            col_names: vec!["b".to_string()],
+            column_types: vec![],
+        });
+        let mut join = LogicalNodeEnum::InnerJoin(LogicalInnerJoinNode {
+            id: next_node_id(),
+            left: Box::new(left),
+            right: Box::new(right),
+            hash_keys: vec![probe_key],
+            probe_keys: vec![build_key],
+            deps: vec![],
+            recommended_algorithm: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        FactorizationRewriter::new().rewrite(&mut join);
+        if let LogicalNodeEnum::InnerJoin(n) = &join {
+            assert!(
+                !RemoveFactorizationRewriter::has_flatten_public(&n.left),
+                "unique scan build side must keep the probe group factorized"
+            );
+        } else {
+            panic!("expected inner join");
+        }
     }
 }

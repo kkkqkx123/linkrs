@@ -154,6 +154,22 @@ pub enum LogicalNodeEnum {
     WcoIntersect(LogicalWcoIntersectNode),
 }
 
+/// Sentinel default: `PassThrough` with id 0. Used only by
+/// `std::mem::take` / `std::mem::replace` in the factorization rewriter
+/// to move a child subtree out of a `Box` without cloning.
+impl Default for LogicalNodeEnum {
+    fn default() -> Self {
+        Self::PassThrough(
+            super::logical_nodes::control_flow::LogicalPassThroughNode {
+                id: 0,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            },
+        )
+    }
+}
+
 impl LogicalNodeEnum {
     pub fn id(&self) -> i64 {
         match self {

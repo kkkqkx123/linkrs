@@ -13,6 +13,19 @@ use crate::define_logical_plan_node;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 
 define_logical_plan_node! {
+    /// N-way worst-case optimal intersect node.
+    ///
+    /// Always inner semantics: no join-type field is carried because
+    /// OPTIONAL never reaches this node. Optional match is excluded from
+    /// join-order enumeration at the statement level
+    /// (`MatchStatementPlanner::try_join_order_plan` returns `None` for
+    /// `optional` statements) and at the path level
+    /// (`query_graph_from_match_patterns` rejects `PathElement::Optional`
+    /// in `from_pattern.rs`); optional patterns are combined through the
+    /// binary `LeftJoin` in `plan_combiner::left_join_plans` instead.
+    /// Correlated COUNT subqueries are not planned here either (only
+    /// EXISTS, which lowers to `SemiJoin`), matching Ladybug where
+    /// `LogicalIntersect` likewise has no join type.
     pub struct LogicalWcoIntersectNode {
         intersect_key: ContextualExpression,
         bound_keys: Vec<ContextualExpression>,
