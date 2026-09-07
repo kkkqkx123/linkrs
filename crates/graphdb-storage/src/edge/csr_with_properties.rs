@@ -698,6 +698,7 @@ impl CsrWithProperties {
         let mut total = std::mem::size_of::<Self>();
         total += self.offsets.capacity() * std::mem::size_of::<u32>();
         total += self.lengths.capacity() * std::mem::size_of::<u32>();
+        total += self.heads.capacity() * std::mem::size_of::<u32>();
         total += self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
         total +=
             self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
@@ -743,10 +744,10 @@ impl CsrWithProperties {
         }
         buf.extend_from_slice(&self.total_edges.to_le_bytes());
         buf.extend_from_slice(&(self.vertex_capacity as u32).to_le_bytes());
-        // Serialize current column values (without version history) for at least basic persistence
+        // Serialize current column values (without version history).
         buf.extend_from_slice(&(self.property_columns.len() as u32).to_le_bytes());
         for col in &self.property_columns {
-            // name not needed as schema already known, but write placeholder
+            // Column name keys the payload to the schema entry on load.
             buf.extend_from_slice(&(col.name.len() as u32).to_le_bytes());
             buf.extend_from_slice(col.name.as_bytes());
             let rows = self.visibility.len();

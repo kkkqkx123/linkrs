@@ -11,7 +11,7 @@
 
 use super::super::bloom_filter::EdgeDeletionBloomFilter;
 use super::stats::TombstoneStats;
-use graphdb_core::types::{EdgeId, Timestamp, TransactionId};
+use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
@@ -20,17 +20,14 @@ const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 /// Per-edge creation, deletion, and committed-publish timestamps.
 ///
 /// Current edge scans rely on transaction timestamps and tombstone state for
-/// snapshot visibility. The pending fields are kept for future per-edge
-/// publication; `commit_ts` equals `create_ts` until a publish path uses it.
+/// snapshot visibility. `commit_ts` equals `create_ts` at creation time.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
     pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
-    /// Commit timestamp. Before commit, equals `Timestamp::MAX` (pending).
-    /// After commit, equals the commit timestamp visible to all transactions.
+    /// Commit timestamp: equals `create_ts` at creation; used by
+    /// `is_alive_at` for visibility checks.
     pub commit_ts: Timestamp,
-    /// Owner transaction while the edge is pending. `None` after commit.
-    pub pending_owner: Option<TransactionId>,
 }
 
 impl EdgeTimestamps {
@@ -39,31 +36,11 @@ impl EdgeTimestamps {
             create_ts,
             delete_ts: Timestamp::MAX,
             commit_ts: create_ts,
-            pending_owner: None,
         }
-    }
-
-    /// Mark this edge as pending in the per-edge timestamp table.
-    ///
-    /// This currently affects only `EdgeTimestamps::is_alive_at`; edge scan
-    /// paths use the transaction write-timestamp frontier.
-    pub fn mark_pending(&mut self, owner: TransactionId) {
-        self.commit_ts = Timestamp::MAX;
-        self.pending_owner = Some(owner);
-    }
-
-    /// Publish this edge as committed at `commit_ts`.
-    pub fn mark_committed(&mut self, commit_ts: Timestamp) {
-        self.commit_ts = commit_ts;
-        self.pending_owner = None;
     }
 
     pub fn is_alive_at(&self, ts: Timestamp) -> bool {
         crate::mvcc_visibility::Visibility::is_edge_visible(ts, self.commit_ts, self.delete_ts)
-    }
-
-    pub fn is_pending(&self) -> bool {
-        self.commit_ts == Timestamp::MAX
     }
 }
 
@@ -246,21 +223,11 @@ impl MVCCManager {
             }
         }
 
-        let cold_budget = remaining.min(self.cold_tombstones.len());
-        for _ in 0..cold_budget {
-            if self.cold_tombstones.is_empty() {
-                break;
-            }
-            if self.cold_gc_cursor >= self.cold_tombstones.len() {
-                self.cold_gc_cursor = 0;
-            }
-            if self.cold_tombstones[self.cold_gc_cursor].1 < min_active_snapshot_ts {
-                self.cold_tombstones.remove(self.cold_gc_cursor);
-                removed += 1;
-            } else {
-                self.cold_gc_cursor += 1;
-            }
-        }
+        let cold_before = self.cold_tombstones.len();
+        self.cold_tombstones
+            .retain(|&(_, ts)| ts >= min_active_snapshot_ts);
+        removed += (cold_before - self.cold_tombstones.len()) as usize;
+        self.cold_gc_cursor = 0;
 
         // Tombstones is the single authoritative table; no mirrored layers
         // remain to GC after the tombstone unification. `min_active_snapshot_ts`
@@ -457,30 +424,14 @@ impl MVCCManager {
     // ── Per-edge timestamp management (centralized MVCC) ──
 
     /// Record edge creation. Called on insert_edge to register the edge's
-    /// creation timestamp in the centralized MVCC store. The `owner` field is
-    /// retained for future per-edge pending publication; current snapshot
-    /// isolation is driven by transaction timestamps in the version manager.
+    /// creation timestamp in the centralized MVCC store.
     pub fn record_creation(
         &mut self,
         edge_id: EdgeId,
         create_ts: Timestamp,
-        owner: Option<TransactionId>,
     ) {
-        let mut ts = EdgeTimestamps::new(create_ts);
-        if let Some(owner) = owner {
-            ts.mark_pending(owner);
-        }
-        self.edge_timestamps.insert(edge_id, ts);
-    }
-
-    /// Publish pending edges as committed at `commit_ts` in the per-edge
-    /// timestamp table.
-    pub fn publish_committed(&mut self, edge_ids: &[EdgeId], commit_ts: Timestamp) {
-        for &edge_id in edge_ids {
-            if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {
-                ts.mark_committed(commit_ts);
-            }
-        }
+        self.edge_timestamps
+            .insert(edge_id, EdgeTimestamps::new(create_ts));
     }
 
     /// Record edge deletion (logical). Called on delete_edge to set the
@@ -859,10 +810,10 @@ mod tests {
         }
         let elapsed = start.elapsed();
 
-        // O(log n) should complete in microseconds for 10K queries over 100K items
-        // This should be well under 100ms (typical desktop: ~10-30ms for optimized binary search)
-        println!(
-            "Cold layer lookup performance: 10K queries over 100K items in {:?}",
+        // O(log n) should complete in microseconds for 10K queries over 100K items.
+        // Well under 100ms on a typical desktop.
+        log::debug!(
+            "cold layer lookup: 10K queries over 100K items in {:?}",
             elapsed
         );
         assert!(

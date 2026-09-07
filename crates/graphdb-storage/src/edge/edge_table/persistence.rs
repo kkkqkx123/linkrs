@@ -253,7 +253,6 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
                     create_ts,
                     delete_ts,
                     commit_ts,
-                    pending_owner: None,
                 },
             );
         }
@@ -495,16 +494,12 @@ pub fn load_csr_properties(path: &Path) -> StorageResult<CsrWithProperties> {
     let len = u64::from_le_bytes(len_bytes) as usize;
     let mut data = vec![0u8; len];
     cursor.read_exact(&mut data)?;
-    // We need schema to create CsrWithProperties; but caller will provide schema via TimeTravelEdgeStore.
-    // For now return empty with data to be loaded by caller.
-    // This is a placeholder that will be replaced by TimeTravelEdgeStore's load which knows schema.
-    // To avoid breaking, we create a dummy empty and load data into it; schema will be rebuilt from EdgeSchema.
+    // Schema lives with TimeTravelEdgeStore, so decode the payload into a
+    // schemaless container here; the caller overlays the live schema after load.
     let mut properties = CsrWithProperties::new(1, Vec::new());
     properties.load(&data)?;
     if total_rows > 0 && total_rows != properties.row_count() as u32 {
-        // Allow mismatch for empty column case where row_count may be 0 but total_rows is edge_count
-        // Don't error if properties is empty but total_rows >0 (property values not persisted in this minimal impl)
-        // Just log
+        // Property rows may legitimately be empty (edges without properties).
         log::warn!(
             "csr properties total_rows mismatch: header={}, actual={}",
             total_rows,

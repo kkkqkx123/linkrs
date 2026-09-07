@@ -286,6 +286,7 @@ impl TimeTravelEdgeStore {
     fn base_get_edge(
         &self,
         segments: &[CsrSegment],
+        segment_index: &[(Timestamp, usize)],
         sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         dst: VertexId,
@@ -296,25 +297,38 @@ impl TimeTravelEdgeStore {
             .and_then(|idx| idx.get(&src))
             .map(|indices| indices.iter().copied().collect());
 
-        // Scan segments in reverse (newest first), with early termination optimizations
-        for (forward_idx, segment) in segments.iter().enumerate().rev() {
+        // Binary search to find earliest relevant segment (create_ts_min <= ts)
+        let max_index_pos = if !segment_index.is_empty() {
+            match segment_index.binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater)) {
+                Ok(pos) | Err(pos) => pos.saturating_sub(1),
+            }
+        } else {
+            segments.len().saturating_sub(1)
+        };
+
+        let mut candidates: Vec<usize> = Vec::new();
+        if !segment_index.is_empty() {
+            for i in 0..=max_index_pos {
+                candidates.push(segment_index[i].1);
+            }
+        } else {
+            candidates = (0..segments.len()).rev().collect();
+        }
+        candidates.sort_by(|a, b| b.cmp(a));
+
+        for forward_idx in candidates {
+            let segment = &segments[forward_idx];
+
             // Sparse vertex index skip
             if let Some(ref set) = relevant_set {
                 if !set.contains(&forward_idx) {
                     continue;
                 }
             }
-            // Skip segments that were created after the query timestamp
             if segment.create_ts_min > ts {
                 continue;
             }
 
-            // Fast path: skip segments where every edge has been deleted at
-            // or before the query timestamp, so no entry in the segment can
-            // be visible to this query. Both conditions are required: all
-            // known deletions must predate the query AND the deleted count
-            // must cover the whole segment. Checking only all_deleted_before
-            // would drop the live edges of a partially deleted segment.
             if segment.deletion_info.all_deleted_before(ts)
                 && segment
                     .deletion_info
@@ -323,15 +337,11 @@ impl TimeTravelEdgeStore {
                 continue;
             }
 
-            // Ensure segment data is resident (reload from spill if evicted)
             if segment.is_evicted() {
                 let _ = segment.reload_from_spill();
             }
             segment.record_access(GLOBAL_ACCESS_CLOCK.tick());
 
-            // Try optimistic read first (seqlock-style, avoids RwLock contention).
-            // If the segment is locked or the state changed during the read,
-            // fall back to the RwLock read path.
             let positioned_edges = segment
                 .try_optimistic_read(|csr| csr.edges_of_with_position(src))
                 .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
@@ -354,6 +364,7 @@ impl TimeTravelEdgeStore {
     fn base_edges_of(
         &self,
         segments: &[CsrSegment],
+        segment_index: &[(Timestamp, usize)],
         sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         ts: Timestamp,
@@ -365,7 +376,40 @@ impl TimeTravelEdgeStore {
             .and_then(|idx| idx.get(&src))
             .map(|indices| indices.iter().copied().collect());
 
-        for (forward_idx, segment) in segments.iter().enumerate().rev() {
+        // Binary search on segment index to find the earliest relevant segment.
+        // Index is sorted by create_ts_min descending; find the last position
+        // where create_ts_min <= ts, then iterate from the end of the index
+        // (newest segment) up to that position.
+        let max_index_pos = if !segment_index.is_empty() {
+            match segment_index.binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater)) {
+                Ok(pos) | Err(pos) => {
+                    // pos is the first element with create_ts_min > ts.
+                    // We want elements 0..pos (create_ts_min <= ts).
+                    pos.saturating_sub(1)
+                }
+            }
+        } else {
+            // No index: fall back to scanning all segments.
+            segments.len().saturating_sub(1)
+        };
+
+        // Collect relevant segment indices from the index (those with
+        // create_ts_min <= ts), in newest-first order.
+        let mut candidates: Vec<usize> = Vec::new();
+        if !segment_index.is_empty() {
+            for i in 0..=max_index_pos {
+                candidates.push(segment_index[i].1);
+            }
+        } else {
+            candidates = (0..segments.len()).rev().collect();
+        }
+        // candidates is in descending index order (newest first), which is
+        // the correct traversal order.
+        candidates.sort_by(|a, b| b.cmp(a));
+
+        for forward_idx in candidates {
+            let segment = &segments[forward_idx];
+
             // Sparse vertex index skip: if this segment does NOT contain the vertex, skip
             if let Some(ref set) = relevant_set {
                 if !set.contains(&forward_idx) {
@@ -421,6 +465,7 @@ impl TimeTravelEdgeStore {
         &self,
         delta: &CsrVariant,
         segments: &[CsrSegment],
+        segment_index: &[(Timestamp, usize)],
         sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         ts: Timestamp,
@@ -442,7 +487,7 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        for nbr in self.base_edges_of(segments, sparse_index, src, ts) {
+        for nbr in self.base_edges_of(segments, segment_index, sparse_index, src, ts) {
             if seen.insert(nbr.edge_id) {
                 result.push(nbr);
             }
@@ -455,6 +500,7 @@ impl TimeTravelEdgeStore {
         &self,
         delta: &CsrVariant,
         segments: &[CsrSegment],
+        segment_index: &[(Timestamp, usize)],
         sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         dst: VertexId,
@@ -466,7 +512,7 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        self.base_get_edge(segments, sparse_index, src, dst, ts)
+        self.base_get_edge(segments, segment_index, sparse_index, src, dst, ts)
     }
 
     pub(crate) fn edge_record_from_nbr(
@@ -587,7 +633,7 @@ impl TimeTravelEdgeStore {
         // timestamps in Nbr drive CSR-local filtering, while transaction
         // isolation comes from the global write-timestamp frontier: readers
         // capture a committed snapshot before this `ts` is published.
-        self.mvcc.record_creation(edge_id, ts, None);
+        self.mvcc.record_creation(edge_id, ts);
 
         // Insert property rows and the out-direction CSR entry. Each fallible
         // step rolls back everything it already touched on failure so a failed
@@ -700,6 +746,7 @@ impl TimeTravelEdgeStore {
 
         if let Some(nbr) = self.base_get_edge(
             &self.out_segments,
+            &self.out_segment_index,
             Some(&self.sparse_vertex_index_out),
             src,
             dst_key,
@@ -707,6 +754,7 @@ impl TimeTravelEdgeStore {
         ) {
             let edge_id = nbr.edge_id;
             self.mvcc.record_deletion(edge_id, ts);
+            self.decrement_segment_live_count(edge_id);
             // Invalidate the cached current snapshot: it still contains this
             // edge and is only rebuilt lazily on the next maintenance pass.
             self.snapshot_dirty = true;
@@ -818,6 +866,7 @@ impl TimeTravelEdgeStore {
             _ => return Ok(false),
         }
         self.mvcc.remove_deletion(nbr.edge_id);
+        self.increment_segment_live_count(nbr.edge_id);
         // Restore edge visibility in the centralized MVCC store.
         if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&nbr.edge_id) {
             ts_info.delete_ts = Timestamp::MAX;
@@ -870,6 +919,7 @@ impl TimeTravelEdgeStore {
         let nbr = self.merged_get_edge(
             &self.out_csr,
             &self.out_segments,
+            &self.out_segment_index,
             Some(&self.sparse_vertex_index_out),
             src,
             dst_key,
@@ -919,6 +969,7 @@ impl TimeTravelEdgeStore {
             self.merged_edges_of(
                 &self.out_csr,
                 &self.out_segments,
+                &self.out_segment_index,
                 Some(&self.sparse_vertex_index_out),
                 src,
                 ts,
@@ -959,6 +1010,7 @@ impl TimeTravelEdgeStore {
             self.merged_edges_of(
                 &self.in_csr,
                 &self.in_segments,
+                &self.in_segment_index,
                 Some(&self.sparse_vertex_index_in),
                 dst,
                 ts,
@@ -975,6 +1027,7 @@ impl TimeTravelEdgeStore {
         self.merged_get_edge(
             &self.out_csr,
             &self.out_segments,
+            &self.out_segment_index,
             Some(&self.sparse_vertex_index_out),
             src,
             dst_key,
@@ -985,18 +1038,7 @@ impl TimeTravelEdgeStore {
 
     pub fn edge_count(&self) -> u64 {
         self.out_csr.edge_count()
-            + self
-                .out_segments
-                .iter()
-                .map(|segment| {
-                    segment
-                        .csr
-                        .read()
-                        .iter()
-                        .filter(|(_, edge)| !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX))
-                        .count() as u64
-                })
-                .sum::<u64>()
+            + self.out_segments.iter().map(|s| s.live_count).sum::<u64>()
     }
 
     pub fn delta_edge_count(&self) -> u64 {
@@ -1185,6 +1227,7 @@ impl TimeTravelEdgeStore {
         if let Some(nbr) = self.merged_get_edge(
             &self.out_csr,
             &self.out_segments,
+            &self.out_segment_index,
             Some(&self.sparse_vertex_index_out),
             src,
             dst_key,
@@ -1212,6 +1255,7 @@ impl TimeTravelEdgeStore {
         if let Some(nbr) = self.merged_get_edge(
             &self.out_csr,
             &self.out_segments,
+            &self.out_segment_index,
             Some(&self.sparse_vertex_index_out),
             params.src,
             dst_key,
@@ -1232,6 +1276,7 @@ impl TimeTravelEdgeStore {
             if let Some(ie_nbr) = self.merged_get_edge(
                 &self.in_csr,
                 &self.in_segments,
+                &self.in_segment_index,
                 Some(&self.sparse_vertex_index_in),
                 params.dst,
                 src_key,
@@ -1365,6 +1410,47 @@ impl TimeTravelEdgeStore {
         }
 
         estimated
+    }
+
+    /// Decrement `live_count` of the segment containing `edge_id`.
+    ///
+    /// Called after `mvcc.record_deletion` to maintain O(1) edge counting.
+    /// Scans segments newest-first (same order as `base_get_edge`) to find
+    /// the segment; once found the scan terminates.
+    fn decrement_segment_live_count(&mut self, edge_id: EdgeId) {
+        for segment in self.out_segments.iter().rev() {
+            if segment.is_evicted() {
+                let _ = segment.reload_from_spill();
+            }
+            let csr = segment.csr.read();
+            for (_, nbr) in csr.iter() {
+                if nbr.edge_id == edge_id {
+                    drop(csr);
+                    segment.live_count = segment.live_count.saturating_sub(1);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Increment `live_count` of the segment containing `edge_id`.
+    ///
+    /// Called when a post-freeze deletion tombstone is removed (rollback) to
+    /// keep `live_count` consistent.
+    fn increment_segment_live_count(&mut self, edge_id: EdgeId) {
+        for segment in self.out_segments.iter().rev() {
+            if segment.is_evicted() {
+                let _ = segment.reload_from_spill();
+            }
+            let csr = segment.csr.read();
+            for (_, nbr) in csr.iter() {
+                if nbr.edge_id == edge_id {
+                    drop(csr);
+                    segment.live_count += 1;
+                    return;
+                }
+            }
+        }
     }
 
     // ── Sparse vertex index methods ──

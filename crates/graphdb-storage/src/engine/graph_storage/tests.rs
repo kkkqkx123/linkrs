@@ -3020,16 +3020,13 @@ mod tests {
         let all = storage
             .scan_edges_by_type("test_space", "WEIGHTED")
             .unwrap();
-        eprintln!("scan_edges_by_type count = {}", all.len());
-        for e in &all {
-            eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props);
-        }
+        assert_eq!(all.len(), 3);
         storage
             .enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024)
             .unwrap();
-        eprintln!(
-            "has_index = {:?}",
-            storage.has_edge_property_index("test_space", "WEIGHTED")
+        assert!(
+            storage.has_edge_property_index("test_space", "WEIGHTED"),
+            "property index should be active after enable"
         );
         let edges = storage
             .lookup_edges_by_property_range(
@@ -3042,10 +3039,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        eprintln!("lookup >=20 count = {}", edges.len());
-        for e in &edges {
-            eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props);
-        }
+        assert_eq!(edges.len(), 1);
     }
 
     #[test]

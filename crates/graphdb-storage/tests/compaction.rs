@@ -146,8 +146,9 @@ fn test_compact_persistent_roundtrip() {
         .unwrap()
         .is_none());
 
-    // Edge still exists (between Alice and Bob, both gone now but edge is separate)
-    let edge = storage
+    // Edge lookup after compaction must not fail; visibility depends on
+    // the edge CSR compaction path, so only liveness of the call is asserted.
+    let _ = storage
         .get_edge(
             "test_space",
             &VertexId::from_int64(1),
@@ -156,10 +157,4 @@ fn test_compact_persistent_roundtrip() {
             0,
         )
         .unwrap();
-    // Edge might or might not exist depending on compaction of edge CSR
-    // This is informative rather than critical
-    eprintln!(
-        "Edge after compact: {:?}",
-        edge.as_ref().map(|e| e.properties())
-    );
 }

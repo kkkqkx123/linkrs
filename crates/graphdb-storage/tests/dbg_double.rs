@@ -9,7 +9,7 @@ use graphdb_storage::{
 use std::collections::HashMap;
 
 #[test]
-fn debug_double_property() {
+fn double_and_float_property_roundtrip() {
     let mut storage = GraphStorage::new_with_config(PropertyGraphConfig::test()).unwrap();
     storage
         .create_space(&mut SpaceInfo::new("s".to_string()))
@@ -35,7 +35,8 @@ fn debug_double_property() {
         .get_vertex("s", &VertexId::from_int64(1))
         .unwrap()
         .unwrap();
-    for t in read.tags() {
-        println!("DBG props={:?}", t.properties);
-    }
+    let tags = read.tags();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].properties.get("d"), Some(&Value::Double(std::f64::consts::E)));
+    assert_eq!(tags[0].properties.get("f"), Some(&Value::Float(std::f32::consts::PI)));
 }

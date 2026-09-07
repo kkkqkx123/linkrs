@@ -295,6 +295,13 @@ pub(crate) fn serialize_stat_value(writer: &mut impl Write, value: &Value) -> St
             writer.write_all(b)?;
             Ok(5 + b.len())
         }
+        // Struct/Array have no meaningful ordering; skip min/max serialization.
+        // Callers should use stat_orderable() to exclude these from min/max
+        // tracking, but this is a safety net.
+        Value::Struct(_) | Value::Array(_) => {
+            writer.write_all(&[15u8])?;
+            Ok(1)
+        }
         _ => Err(graphdb_core::StorageError::not_supported(format!(
             "Stats serialization for value type {:?}",
             value.data_type()
@@ -444,6 +451,10 @@ pub(crate) fn deserialize_stat_value(reader: &mut impl Read) -> StorageResult<Va
             reader.read_exact(&mut bytes)?;
             Ok(Value::Blob(bytes))
         }
+        // Struct/Array stats placeholder (min/max skipped during serialization).
+        // Return empty string as a safe placeholder; callers should not rely on
+        // this value for Struct/Array columns.
+        15 => Ok(Value::string("")),
         _ => Err(graphdb_core::StorageError::deserialize_error(format!(
             "Unknown value tag {} in stats",
             tag[0]

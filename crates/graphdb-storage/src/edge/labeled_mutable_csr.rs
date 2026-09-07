@@ -134,18 +134,20 @@ impl LabeledMutableCsr {
         }
 
         // Find or create label range
-        let ranges = &mut self.label_ranges[src_vid as usize];
-        let label_idx = ranges.iter().position(|lr| lr.label == label);
+        let label_idx = self.label_ranges[src_vid as usize]
+            .iter()
+            .position(|lr| lr.label == label);
 
         if let Some(idx) = label_idx {
-            let lr = &ranges[idx];
-            let end = (lr.offset + lr.count) as usize;
-            let start = lr.offset as usize;
+            let (start, end) = {
+                let lr = &self.label_ranges[src_vid as usize][idx];
+                (lr.offset as usize, (lr.offset + lr.count) as usize)
+            };
 
             // Check for duplicate
             let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
             let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
-            for nbr in &self.nbr_list[start..end] {
+            for nbr in &self.nbr_list[start..end.min(self.nbr_list.len())] {
                 if nbr.endpoint == dst_ep && nbr.rank == dst_rank && nbr.delete_ts == Timestamp::MAX
                 {
                     return Err(StorageError::edge_already_exists(format!(
@@ -155,16 +157,34 @@ impl LabeledMutableCsr {
                 }
             }
 
-            // Append to end of label range
+            // Insert at the end of this label run so the run stays contiguous.
+            // Runs of all vertices share the global list, so runs starting at
+            // or after the insertion point shift by one.
             let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-            self.nbr_list.push(Nbr::with_create_ts(
+            let nbr = Nbr::with_create_ts(
                 endpoint_vid.as_int64().unwrap_or(0) as u32,
                 rank,
                 edge_id,
                 ts,
-            ));
-            self.nbr_sources.push(src_vid);
-            ranges[idx].count += 1;
+            );
+            if end >= self.nbr_list.len() {
+                self.nbr_list.push(nbr);
+                self.nbr_sources.push(src_vid);
+            } else {
+                self.nbr_list.insert(end, nbr);
+                self.nbr_sources.insert(end, src_vid);
+                let src_usize = src_vid as usize;
+                for (v, vertex_ranges) in self.label_ranges.iter_mut().enumerate() {
+                    for lr in vertex_ranges.iter_mut() {
+                        if lr.offset as usize >= end
+                            && !(v == src_usize && lr.label == label)
+                        {
+                            lr.offset += 1;
+                        }
+                    }
+                }
+            }
+            self.label_ranges[src_vid as usize][idx].count += 1;
         } else {
             // Create new label range
             let offset = self.nbr_list.len() as u32;
@@ -176,6 +196,7 @@ impl LabeledMutableCsr {
                 ts,
             ));
             self.nbr_sources.push(src_vid);
+            let ranges = &mut self.label_ranges[src_vid as usize];
             ranges.push(LabelRange {
                 label,
                 offset,
@@ -331,8 +352,13 @@ impl MutableCsrTrait for LabeledMutableCsr {
             return Ok(false);
         }
 
-        for nbr in &mut self.nbr_list {
+        for (idx, nbr) in self.nbr_list.iter_mut().enumerate() {
             if nbr.edge_id == edge_id {
+                // Edge ids are globally unique; still verify the owner so a
+                // caller cannot delete another vertex's edge by mistake.
+                if self.nbr_sources.get(idx) != Some(&src_vid) {
+                    return Ok(false);
+                }
                 if nbr.delete_ts != Timestamp::MAX {
                     if nbr.delete_ts != ts {
                         return Err(StorageError::write_write_conflict(format!(
@@ -462,49 +488,59 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn compact_with_ts(&mut self, ts: Timestamp, _reserve_ratio: f32) -> usize {
+        // Snapshot the label owning each position before draining; the owner
+        // map alone cannot recover labels.
+        let mut pos_labels: Vec<Option<LabelId>> = vec![None; self.nbr_list.len()];
+        for (v, ranges) in self.label_ranges.iter().enumerate() {
+            for lr in ranges {
+                let end = (lr.offset + lr.count) as usize;
+                let start = lr.offset as usize;
+                for pos in start..end.min(pos_labels.len()) {
+                    pos_labels[pos] = Some(lr.label);
+                }
+            }
+        }
         let mut removed = 0;
-        let mut kept: Vec<Nbr> = Vec::with_capacity(self.nbr_list.len());
-        let mut kept_sources: Vec<u32> = Vec::with_capacity(self.nbr_list.len());
+        let mut kept: Vec<(Nbr, u32, LabelId)> = Vec::with_capacity(self.nbr_list.len());
         for (idx, nbr) in self.nbr_list.drain(..).enumerate() {
             if nbr.delete_ts <= ts {
                 removed += 1;
             } else {
-                kept.push(nbr);
-                kept_sources.push(self.nbr_sources[idx]);
+                let src = *self.nbr_sources.get(idx).unwrap_or(&0);
+                let label = pos_labels.get(idx).copied().flatten().unwrap_or(0);
+                kept.push((nbr, src, label));
             }
         }
-        self.nbr_list = kept;
-        self.nbr_sources = kept_sources;
-
-        // Update edge count
-        self.edge_count.fetch_sub(removed as u64, Ordering::Relaxed);
-
-        // Rebuild label_ranges after compaction using the tracked owners.
+        self.nbr_sources.clear();
+        // Group by owner and label so each run is contiguous again.
+        kept.sort_by_key(|(_, src, label)| (*src, *label));
+        self.nbr_list.clear();
+        self.nbr_list.reserve(kept.len());
         for ranges in &mut self.label_ranges {
             ranges.clear();
         }
 
-        for idx in 0..self.nbr_list.len() {
-            let src_vid = self.nbr_sources[idx];
+        // Update edge count
+        self.edge_count.fetch_sub(removed as u64, Ordering::Relaxed);
+
+        // Rebuild label_ranges after compaction using the tracked owners and labels.
+        for (nbr, src_vid, label) in kept {
+            let idx = self.nbr_list.len() as u32;
+            self.nbr_list.push(nbr);
+            self.nbr_sources.push(src_vid);
             if (src_vid as usize) < self.vertex_capacity() {
                 let ranges = &mut self.label_ranges[src_vid as usize];
                 if let Some(lr) = ranges.last_mut() {
-                    if lr.label == 0 {
+                    if lr.label == label {
                         lr.count += 1;
-                    } else {
-                        ranges.push(LabelRange {
-                            label: 0,
-                            offset: idx as u32,
-                            count: 1,
-                        });
+                        continue;
                     }
-                } else {
-                    ranges.push(LabelRange {
-                        label: 0,
-                        offset: idx as u32,
-                        count: 1,
-                    });
                 }
+                ranges.push(LabelRange {
+                    label,
+                    offset: idx,
+                    count: 1,
+                });
             }
         }
 
@@ -513,13 +549,14 @@ impl MutableCsrTrait for LabeledMutableCsr {
 
     fn used_memory_size(&self) -> usize {
         let nbr_size = self.nbr_list.len() * std::mem::size_of::<Nbr>();
+        let sources_size = self.nbr_sources.len() * std::mem::size_of::<u32>();
         let ranges_size = self
             .label_ranges
             .iter()
             .map(|v| v.len() * std::mem::size_of::<LabelRange>())
             .sum::<usize>();
         let degrees_size = self.degrees.len() * std::mem::size_of::<u32>();
-        nbr_size + ranges_size + degrees_size + std::mem::size_of::<Self>()
+        nbr_size + sources_size + ranges_size + degrees_size + std::mem::size_of::<Self>()
     }
 
     fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {

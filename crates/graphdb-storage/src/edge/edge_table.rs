@@ -1192,18 +1192,15 @@ mod tests {
                 table.in_csr.vertex_capacity(),
             );
             let mem = table.mutable_csr_memory_size();
-            println!(
+            log::debug!(
                 "row footprint: out_rows={out_rows}, in_rows={in_rows}, mutable_memory={mem} B, edges={}",
                 table.edge_count()
             );
             (out_rows, in_rows, mem)
         };
 
-        println!("dense_sequential:"); // prefix for pattern identification
         let (dense_out, dense_in, dense_mem) = footprint(&dense);
-        println!("sparse_high_id:");
         let (sparse_out, sparse_in, sparse_mem) = footprint(&sparse);
-        println!("delete_reinsert:");
         let (reinsert_out, reinsert_in, _) = footprint(&reinsert);
 
         let tail = |rows: usize| ((rows as f64) * 1.25).ceil() as usize;

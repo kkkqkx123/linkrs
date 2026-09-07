@@ -1158,6 +1158,7 @@ impl VertexTable {
         if !delta_dir.exists() {
             return Ok(());
         }
+        let mut applied: Vec<(String, usize)> = Vec::new();
         for entry in std::fs::read_dir(&delta_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -1165,52 +1166,49 @@ impl VertexTable {
                 continue;
             }
             let bytes = std::fs::read(&path)?;
-            // Extract column name and page id from file name: "<col>_<page>.page"
-            // We rely on deserialize to place rows correctly.
-            // Try to deserialize into the appropriate column.
-            // If file name doesn't match any column, skip.
-            if let Some(file_name) = path.file_stem().and_then(|n| n.to_str()) {
-                if let Some((col_name, _page_str)) = file_name.rsplit_once('_') {
-                    if self.columns.get_column(col_name).is_some() {
-                        if let Some(col) = self.columns.get_column_mut(col_name) {
-                            if let Err(e) = col.deserialize_page(&bytes) {
-                                log::warn!(
-                                    "Skipping corrupted delta page {} for column {}: {}",
-                                    path.display(),
-                                    col_name,
-                                    e
-                                );
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-            // Fallback: try each column (covers naming mismatches)
-            let mut applied = false;
-            for col in self
-                .columns
-                .columns()
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>()
+            // File name encodes the target column: "<col>_<page>.page".
+            // Only the named column may consume the page; a page that fails
+            // to deserialize there is corrupt and must not be tried against
+            // other columns (their payloads are independent).
+            let (col_name, page_id) = match path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .and_then(|stem| stem.rsplit_once('_'))
             {
-                if let Some(c) = self.columns.get_column_mut(&col) {
-                    if c.deserialize_page(&bytes).is_ok() {
-                        applied = true;
-                        break;
+                Some((name, page)) => match page.parse::<usize>() {
+                    Ok(id) => (name.to_string(), id),
+                    Err(_) => {
+                        log::warn!("Skipping delta page with bad name {}", path.display());
+                        continue;
                     }
+                },
+                None => {
+                    log::warn!("Skipping delta page with bad name {}", path.display());
+                    continue;
                 }
-            }
-            if !applied {
+            };
+            let Some(col) = self.columns.get_column_mut(&col_name) else {
                 log::warn!(
-                    "Skipping unrecognized or corrupted delta page {}",
-                    path.display()
+                    "Skipping delta page {} for unknown column {}",
+                    path.display(),
+                    col_name
                 );
+                continue;
+            };
+            if let Err(e) = col.deserialize_page(&bytes) {
+                log::warn!(
+                    "Skipping corrupted delta page {} for column {}: {}",
+                    path.display(),
+                    col_name,
+                    e
+                );
+                continue;
             }
+            applied.push((col_name, page_id));
         }
-        // After applying deltas, clear dirty marks (data now reflects persisted delta).
-        self.clear_dirty();
+        // Mark only successfully applied pages clean; corrupt or unknown
+        // pages stay dirty so the next flush retries them.
+        self.columns.clear_pages(&applied);
         Ok(())
     }
 }

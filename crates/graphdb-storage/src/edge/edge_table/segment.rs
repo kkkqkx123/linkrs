@@ -238,6 +238,10 @@ pub struct CsrSegment {
     pub lock_state: SegmentLockState,
     /// Last access timestamp for LRU eviction ordering
     pub last_access_ts: AtomicU64,
+    /// Live (non-tombstoned) edge count in this segment, maintained incrementally.
+    /// Initialized from `csr.edge_count() - deletion_info.deleted_count` at freeze
+    /// and updated by `delete_edge` on frozen segments and segment compaction.
+    pub live_count: u64,
 }
 
 impl CsrSegment {
@@ -254,6 +258,18 @@ impl CsrSegment {
             deletion_info,
             Timestamp::MAX,
         )
+    }
+
+    pub fn with_live_count(
+        csr: Csr,
+        create_ts_min: Timestamp,
+        create_ts_max: Timestamp,
+        deletion_info: DeletionInfo,
+        live_count: u64,
+    ) -> Self {
+        let mut seg = Self::new(csr, create_ts_min, create_ts_max, deletion_info);
+        seg.live_count = live_count;
+        seg
     }
 
     pub fn with_creation_ts(
@@ -276,7 +292,15 @@ impl CsrSegment {
             residency: RwLock::new(SegmentResidency::Resident),
             lock_state: SegmentLockState::new(),
             last_access_ts: AtomicU64::new(0),
+            live_count: 0,
         };
+        // Derive live_count from CSR edge count minus deletions at creation time.
+        let total = seg.csr.read().edge_count();
+        let deleted = match deletion_info {
+            DeletionInfo::NoDeletes => 0u64,
+            DeletionInfo::HasDeletes { deleted_count, .. } => deleted_count as u64,
+        };
+        seg.live_count = total.saturating_sub(deleted);
         seg.version.checksum = SegmentVersion::compute_checksum(&seg);
         seg
     }
