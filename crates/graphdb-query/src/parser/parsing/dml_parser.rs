@@ -423,6 +423,10 @@ impl DmlParser {
         // postfix JSON get.
         ctx.with_edge_syntax_mode(|ctx| {
             let start_span = ctx.current_span();
+
+            // Support DETACH DELETE syntax: DETACH DELETE ...
+            let detach = ctx.match_token(TokenKind::Detach);
+
             ctx.expect_token(TokenKind::Delete)?;
 
             // Check whether there are any keywords such as VERTEX, EDGE, or TAG.
@@ -557,6 +561,7 @@ impl DmlParser {
                 target,
                 where_clause: None,
                 with_edge,
+                detach,
             }))
         })
     }
@@ -1024,6 +1029,7 @@ impl DmlParser {
             predicates: Vec::new(),
             direction,
             range: None,
+            path_semantic: None,
         })
     }
 

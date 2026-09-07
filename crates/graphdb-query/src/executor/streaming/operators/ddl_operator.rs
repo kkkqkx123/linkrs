@@ -6,8 +6,9 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::{
-    EdgeManageCommand, IndexManageCommand, MigrateAction, SequenceManageCommand,
-    SpaceManageCommand, TagManageCommand, UserManageCommand,
+    DatabaseManageCommand, EdgeManageCommand, ExtensionManageCommand, IndexManageCommand,
+    MacroManageCommand, MigrateAction, SequenceManageCommand, SpaceManageCommand, TagManageCommand,
+    TypeManageCommand, UserManageCommand,
 };
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::{SlotInfo, SlotLayout};
@@ -172,6 +173,21 @@ pub enum DdlOperatorKind {
         space_name: String,
         emitted: bool,
     },
+    ShowFunctions {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
+    ShowGraphs {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
+    ShowMacros {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
     Analyze {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -208,6 +224,26 @@ pub enum DdlOperatorKind {
     SequenceManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         command: SequenceManageCommand,
+        emitted: bool,
+    },
+    MacroManage {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        command: MacroManageCommand,
+        emitted: bool,
+    },
+    TypeManage {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        command: TypeManageCommand,
+        emitted: bool,
+    },
+    DatabaseManage {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        command: DatabaseManageCommand,
+        emitted: bool,
+    },
+    ExtensionManage {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        command: ExtensionManageCommand,
         emitted: bool,
     },
 }
@@ -298,6 +334,21 @@ impl DdlOperator {
                 space_name: space_name.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::ShowFunctions { space_name } => DdlOperatorKind::ShowFunctions {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ShowGraphs { space_name } => DdlOperatorKind::ShowGraphs {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ShowMacros { space_name } => DdlOperatorKind::ShowMacros {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
             super::spec::DdlSpec::Analyze { space_name } => DdlOperatorKind::Analyze {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -348,6 +399,28 @@ impl DdlOperator {
                 command: command.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::MacroManage { command } => DdlOperatorKind::MacroManage {
+                storage,
+                command: command.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::TypeManage { command } => DdlOperatorKind::TypeManage {
+                storage,
+                command: command.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::DatabaseManage { command } => DdlOperatorKind::DatabaseManage {
+                storage,
+                command: command.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ExtensionManage { command } => {
+                DdlOperatorKind::ExtensionManage {
+                    storage,
+                    command: command.clone(),
+                    emitted: false,
+                }
+            }
         };
         Self::new(kind, output_layout)
     }
@@ -396,6 +469,11 @@ impl DdlOperator {
             DdlOperatorKind::ShowSessions { .. } => {
                 maintenance_executor::execute_show_sessions(self)
             }
+            DdlOperatorKind::ShowFunctions { .. } => {
+                maintenance_executor::execute_show_functions(self)
+            }
+            DdlOperatorKind::ShowGraphs { .. } => maintenance_executor::execute_show_graphs(self),
+            DdlOperatorKind::ShowMacros { .. } => maintenance_executor::execute_show_macros(self),
             DdlOperatorKind::Analyze { .. } => maintenance_executor::execute_analyze(self),
             DdlOperatorKind::Migrate { .. } => maintenance_executor::execute_migrate(self),
             DdlOperatorKind::MigratePlan { .. } => migration_executor::execute_migrate_plan(self),
@@ -404,6 +482,10 @@ impl DdlOperator {
                 migration_executor::execute_migrate_rollback(self)
             }
             DdlOperatorKind::SequenceManage { .. } => self.execute_sequence_manage(),
+            DdlOperatorKind::MacroManage { .. } => self.execute_macro_manage(),
+            DdlOperatorKind::TypeManage { .. } => self.execute_type_manage(),
+            DdlOperatorKind::DatabaseManage { .. } => self.execute_database_manage(),
+            DdlOperatorKind::ExtensionManage { .. } => self.execute_extension_manage(),
         }
     }
 
@@ -469,6 +551,146 @@ impl DdlOperator {
             }
         } else {
             unreachable!("execute_sequence_manage called with non-SequenceManage kind")
+        }
+    }
+
+    fn execute_macro_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        if let DdlOperatorKind::MacroManage {
+            ref command,
+            ref mut emitted,
+            ..
+        } = self.kind
+        {
+            if *emitted {
+                return Ok(None);
+            }
+            *emitted = true;
+
+            match command {
+                MacroManageCommand::Create {
+                    macro_name,
+                    params: _,
+                    body: _,
+                    if_not_exists,
+                } => Ok(Some(make_manage_result(
+                    "create",
+                    Some(macro_name),
+                    if *if_not_exists {
+                        "if_not_exists"
+                    } else {
+                        "ok"
+                    },
+                ))),
+                MacroManageCommand::Drop {
+                    macro_name,
+                    if_exists,
+                } => Ok(Some(make_manage_result(
+                    "drop",
+                    Some(macro_name),
+                    if *if_exists { "if_exists" } else { "ok" },
+                ))),
+            }
+        } else {
+            unreachable!("execute_macro_manage called with non-MacroManage kind")
+        }
+    }
+
+    fn execute_type_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        if let DdlOperatorKind::TypeManage {
+            ref command,
+            ref mut emitted,
+            ..
+        } = self.kind
+        {
+            if *emitted {
+                return Ok(None);
+            }
+            *emitted = true;
+
+            match command {
+                TypeManageCommand::Create {
+                    type_name,
+                    underlying_type: _,
+                    if_not_exists,
+                } => Ok(Some(make_manage_result(
+                    "create",
+                    Some(type_name),
+                    if *if_not_exists {
+                        "if_not_exists"
+                    } else {
+                        "ok"
+                    },
+                ))),
+                TypeManageCommand::Drop {
+                    type_name,
+                    if_exists,
+                } => Ok(Some(make_manage_result(
+                    "drop",
+                    Some(type_name),
+                    if *if_exists { "if_exists" } else { "ok" },
+                ))),
+            }
+        } else {
+            unreachable!("execute_type_manage called with non-TypeManage kind")
+        }
+    }
+
+    fn execute_database_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        if let DdlOperatorKind::DatabaseManage {
+            ref command,
+            ref mut emitted,
+            ..
+        } = self.kind
+        {
+            if *emitted {
+                return Ok(None);
+            }
+            *emitted = true;
+
+            match command {
+                DatabaseManageCommand::Attach {
+                    path,
+                    alias,
+                    db_type: _,
+                } => Ok(Some(make_manage_result(
+                    "attach",
+                    Some(alias),
+                    &format!("ok: {}", path),
+                ))),
+                DatabaseManageCommand::Detach { alias } => {
+                    Ok(Some(make_manage_result("detach", Some(alias), "ok")))
+                }
+            }
+        } else {
+            unreachable!("execute_database_manage called with non-DatabaseManage kind")
+        }
+    }
+
+    fn execute_extension_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        if let DdlOperatorKind::ExtensionManage {
+            ref command,
+            ref mut emitted,
+            ..
+        } = self.kind
+        {
+            if *emitted {
+                return Ok(None);
+            }
+            *emitted = true;
+
+            match command {
+                ExtensionManageCommand::Load { path } => {
+                    Ok(Some(make_manage_result("load", Some(path), "ok")))
+                }
+                ExtensionManageCommand::Install { name, repo: _ } => {
+                    Ok(Some(make_manage_result("install", Some(name), "ok")))
+                }
+                ExtensionManageCommand::Uninstall { name } => {
+                    Ok(Some(make_manage_result("uninstall", Some(name), "ok")))
+                }
+            }
+        } else {
+            unreachable!("execute_extension_manage called with non-ExtensionManage kind")
         }
     }
 }

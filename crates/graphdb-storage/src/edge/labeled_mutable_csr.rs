@@ -176,9 +176,7 @@ impl LabeledMutableCsr {
                 let src_usize = src_vid as usize;
                 for (v, vertex_ranges) in self.label_ranges.iter_mut().enumerate() {
                     for lr in vertex_ranges.iter_mut() {
-                        if lr.offset as usize >= end
-                            && !(v == src_usize && lr.label == label)
-                        {
+                        if lr.offset as usize >= end && !(v == src_usize && lr.label == label) {
                             lr.offset += 1;
                         }
                     }
@@ -491,7 +489,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
         // Snapshot the label owning each position before draining; the owner
         // map alone cannot recover labels.
         let mut pos_labels: Vec<Option<LabelId>> = vec![None; self.nbr_list.len()];
-        for (v, ranges) in self.label_ranges.iter().enumerate() {
+        for (_v, ranges) in self.label_ranges.iter().enumerate() {
             for lr in ranges {
                 let end = (lr.offset + lr.count) as usize;
                 let start = lr.offset as usize;

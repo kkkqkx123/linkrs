@@ -376,6 +376,8 @@ impl ExpressionPrecomputationOptimizer {
                         .iter()
                         .all(|e| self.check_expression_deterministic(e))
             }
+            Expression::CountSubquery { .. } => false,
+            Expression::Lambda { body, .. } => self.check_expression_deterministic(body),
         }
     }
 

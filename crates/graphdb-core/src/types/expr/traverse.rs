@@ -107,6 +107,17 @@ impl Expression {
                 }
                 c
             }
+            Expression::CountSubquery { body } => {
+                let mut c: Vec<&Expression> = vec![];
+                if let Some(where_clause) = &body.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &body.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
+            Expression::Lambda { body, .. } => vec![body.as_ref()],
             Expression::WindowFunction {
                 args,
                 over_partition_by,
@@ -224,6 +235,17 @@ impl Expression {
                 }
                 c
             }
+            Expression::CountSubquery { body } => {
+                let mut c: Vec<&mut Expression> = vec![];
+                if let Some(where_clause) = &mut body.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &mut body.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
+            Expression::Lambda { body, .. } => vec![body.as_mut()],
             Expression::WindowFunction {
                 args,
                 over_partition_by,
@@ -451,6 +473,11 @@ impl Expression {
                 expr: Box::new(expr.transform(transformer)),
                 subquery: subquery.clone(),
                 negated: *negated,
+            },
+            Expression::CountSubquery { body } => Expression::CountSubquery { body: body.clone() },
+            Expression::Lambda { params, body } => Expression::Lambda {
+                params: params.clone(),
+                body: Box::new(body.transform(transformer)),
             },
             Expression::WindowFunction {
                 name,

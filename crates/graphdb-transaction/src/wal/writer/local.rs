@@ -403,7 +403,9 @@ impl LocalWalWriter {
         let old = self.current_lsn.load(Ordering::SeqCst);
         log::error!(
             "WAL SET_CURRENT_LSN: old={}, new={}, delta={}",
-            old, lsn.as_u64(), lsn.as_u64().saturating_sub(old)
+            old,
+            lsn.as_u64(),
+            lsn.as_u64().saturating_sub(old)
         );
         self.current_lsn.store(lsn.as_u64(), Ordering::SeqCst);
     }

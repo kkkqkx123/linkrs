@@ -310,6 +310,43 @@ impl ParameterizingTransformer {
             | Expression::Exists { .. }
             | Expression::In { .. }
             | Expression::WindowFunction { .. } => expr.clone(),
+            Expression::CountSubquery { body } => {
+                Expression::count_subquery(self.transform_subquery_body(body, result))
+            }
+            Expression::Lambda { params, body } => {
+                let transformed_body = self.transform_with_params(body, result);
+                Expression::Lambda {
+                    params: params.clone(),
+                    body: Box::new(transformed_body),
+                }
+            }
+        }
+    }
+
+    fn transform_subquery_body(
+        &mut self,
+        body: &graphdb_core::types::expr::SubqueryBody,
+        result: &mut ParameterizedResult,
+    ) -> graphdb_core::types::expr::SubqueryBody {
+        let where_clause = body
+            .where_clause
+            .as_ref()
+            .map(|expr| {
+                let transformed = self.transform_with_params(expr, result);
+                Box::new(transformed)
+            });
+        let return_expr = body
+            .return_expr
+            .as_ref()
+            .map(|expr| {
+                let transformed = self.transform_with_params(expr, result);
+                Box::new(transformed)
+            });
+        graphdb_core::types::expr::SubqueryBody {
+            id: body.id,
+            patterns: body.patterns.clone(),
+            where_clause,
+            return_expr,
         }
     }
 }

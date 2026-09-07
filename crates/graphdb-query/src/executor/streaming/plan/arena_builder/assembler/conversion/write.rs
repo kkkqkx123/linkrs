@@ -327,6 +327,36 @@ impl ArenaPlanAssembler {
                     space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 },
             ),
+            PlanNodeEnum::ShowFunctions(_) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::ShowFunctions {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                },
+            ),
+            PlanNodeEnum::ShowGraphs(_) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::ShowGraphs {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                },
+            ),
+            PlanNodeEnum::ShowMacros(_) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::ShowMacros {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                },
+            ),
 
             // ── Fulltext nodes ──────────────────────────────────────────────────
             PlanNodeEnum::FulltextManage(fm_node) => {

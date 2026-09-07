@@ -203,6 +203,16 @@ impl Expression {
         matches!(self, Expression::Reduce { .. })
     }
 
+    /// Checks for a COUNT subquery expression
+    pub fn is_count_subquery(&self) -> bool {
+        matches!(self, Expression::CountSubquery { .. })
+    }
+
+    /// Checks for a Lambda expression
+    pub fn is_lambda(&self) -> bool {
+        matches!(self, Expression::Lambda { .. })
+    }
+
     /// Gets the function name (if it is a function call)
     pub fn as_function_name(&self) -> Option<String> {
         match self {

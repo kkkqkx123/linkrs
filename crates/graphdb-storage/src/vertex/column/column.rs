@@ -799,11 +799,7 @@ impl Column {
     ///
     /// On success the chunk transitions to `Evicted` state and reads targeting
     /// its row range will trigger an on-demand reload.
-    pub fn evict_chunk(
-        &mut self,
-        chunk_idx: usize,
-        spill_dir: &std::path::Path,
-    ) -> bool {
+    pub fn evict_chunk(&mut self, chunk_idx: usize, spill_dir: &std::path::Path) -> bool {
         use super::chunk_residency::{spill_chunk, ChunkResidency};
 
         let chunk = match self.chunks.get(chunk_idx) {
@@ -815,15 +811,11 @@ impl Column {
         if chunk.overlay.len() > 0 {
             return false;
         }
-        if chunk
-            .version_chains
-            .as_ref()
-            .is_some_and(|chains| {
-                chains
-                    .get(chunk.row_offset / self.chunk_capacity.max(1))
-                    .is_some_and(|c| !c.is_empty())
-            })
-        {
+        if chunk.version_chains.as_ref().is_some_and(|chains| {
+            chains
+                .get(chunk.row_offset / self.chunk_capacity.max(1))
+                .is_some_and(|c| !c.is_empty())
+        }) {
             return false;
         }
         if !chunk.is_resident() {

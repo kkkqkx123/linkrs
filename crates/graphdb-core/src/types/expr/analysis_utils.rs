@@ -135,6 +135,8 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         Expression::WindowFunction { args, .. } => args.iter().any(requires_runtime_context),
         Expression::Exists { .. } => true,
         Expression::In { expr, .. } => requires_runtime_context(expr),
+        Expression::CountSubquery { .. } => true,
+        Expression::Lambda { body, .. } => requires_runtime_context(body),
     }
 }
 

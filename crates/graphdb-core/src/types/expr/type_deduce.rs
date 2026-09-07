@@ -58,6 +58,8 @@ impl Expression {
             Expression::Vector(v) => DataType::VectorDense(v.len()),
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
+            Expression::CountSubquery { .. } => DataType::BigInt,
+            Expression::Lambda { .. } => DataType::Unknown,
             Expression::WindowFunction { .. } => DataType::Unknown,
         }
     }

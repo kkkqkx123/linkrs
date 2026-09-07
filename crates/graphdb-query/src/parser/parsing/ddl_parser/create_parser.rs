@@ -440,10 +440,74 @@ impl DdlParser {
                 },
                 if_not_exists,
             }))
+        } else if ctx.check_keyword("MACRO") {
+            ctx.consume_keyword("MACRO")?;
+            let mut if_not_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Not)?;
+                ctx.expect_token(TokenKind::Exists)?;
+                if_not_exists = true;
+            }
+            let name = ctx.expect_identifier()?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut params = vec![];
+            while !ctx.check_token(TokenKind::RParen) {
+                let param_name = ctx.expect_identifier()?;
+                let default_value = if ctx.match_token(TokenKind::Assign) {
+                    let expr = crate::parser::parsing::expr_parser::parse_expression_with_context(
+                        ctx,
+                        ctx.expression_context_clone(),
+                    )?;
+                    Some(expr)
+                } else {
+                    None
+                };
+                params.push(MacroParam {
+                    name: param_name,
+                    default_value,
+                });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            ctx.consume_keyword("AS")?;
+            let body = crate::parser::parsing::expr_parser::parse_expression_with_context(
+                ctx,
+                ctx.expression_context_clone(),
+            )?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::CreateMacro(CreateMacroStmt {
+                span,
+                name,
+                params,
+                body,
+                if_not_exists,
+            }))
+        } else if ctx.check_keyword("TYPE") {
+            ctx.consume_keyword("TYPE")?;
+            let mut if_not_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Not)?;
+                ctx.expect_token(TokenKind::Exists)?;
+                if_not_exists = true;
+            }
+            let name = ctx.expect_identifier()?;
+            ctx.consume_keyword("AS")?;
+            let underlying_type = self.parse_data_type(ctx)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::CreateType(CreateTypeStmt {
+                span,
+                name,
+                underlying_type,
+                if_not_exists,
+            }))
         } else {
             Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected TAG, EDGE, SPACE, INDEX, or SEQUENCE after CREATE".to_string(),
+                "Expected TAG, EDGE, SPACE, INDEX, SEQUENCE, MACRO, or TYPE after CREATE".to_string(),
                 ctx.current_position(),
             ))
         }

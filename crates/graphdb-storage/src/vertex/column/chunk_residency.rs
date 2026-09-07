@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use graphdb_core::{DataType, StorageError, StorageResult};
 
-use crate::encoding::ColumnEncoding;
 use super::chunk::ColumnChunk;
+use crate::encoding::ColumnEncoding;
 
 // ---------------------------------------------------------------------------
 // ChunkResidency
@@ -75,7 +75,11 @@ pub fn spill_chunk(chunk: &ColumnChunk, data_type: &DataType) -> StorageResult<V
     let mut enc_buf = Vec::new();
     chunk.encoding.serialize_meta(&mut enc_buf)?;
     // enc_buf[0] is the tag byte written by serialize_meta; skip it.
-    let enc_body = if enc_buf.len() > 1 { &enc_buf[1..] } else { &[] };
+    let enc_body = if enc_buf.len() > 1 {
+        &enc_buf[1..]
+    } else {
+        &[]
+    };
     buf.extend_from_slice(&(enc_body.len() as u32).to_le_bytes());
     buf.extend_from_slice(enc_body);
 
@@ -186,7 +190,11 @@ pub fn reload_chunk(bytes: &[u8]) -> StorageResult<ColumnChunk> {
     cursor.read_exact(&mut u32b)?;
     let bitmap_bytes_len = u32::from_le_bytes(u32b) as usize;
     let bitmap_raw = if bitmap_bytes_len > 0 {
-        Some(take_bytes(&mut cursor, bitmap_bytes_len as u32, "null bitmap")?)
+        Some(take_bytes(
+            &mut cursor,
+            bitmap_bytes_len as u32,
+            "null bitmap",
+        )?)
     } else {
         None
     };
@@ -206,16 +214,15 @@ pub fn reload_chunk(bytes: &[u8]) -> StorageResult<ColumnChunk> {
     // Overlay — length-prefixed.
     let mut has_overlay = [0u8; 1];
     cursor.read_exact(&mut has_overlay)?;
-    let overlay_entries: Vec<(u32, Option<graphdb_core::Value>)> =
-        if has_overlay[0] != 0 {
-            cursor.read_exact(&mut u32b)?;
-            let ol_len = u32::from_le_bytes(u32b) as usize;
-            let ol_bytes = take_bytes(&mut cursor, ol_len as u32, "overlay")?;
-            postcard::from_bytes(&ol_bytes)
-                .map_err(|e| StorageError::deserialize_error(e.to_string()))?
-        } else {
-            Vec::new()
-        };
+    let overlay_entries: Vec<(u32, Option<graphdb_core::Value>)> = if has_overlay[0] != 0 {
+        cursor.read_exact(&mut u32b)?;
+        let ol_len = u32::from_le_bytes(u32b) as usize;
+        let ol_bytes = take_bytes(&mut cursor, ol_len as u32, "overlay")?;
+        postcard::from_bytes(&ol_bytes)
+            .map_err(|e| StorageError::deserialize_error(e.to_string()))?
+    } else {
+        Vec::new()
+    };
 
     // Encoding metadata
     cursor.read_exact(&mut u32b)?;
@@ -238,7 +245,9 @@ pub fn reload_chunk(bytes: &[u8]) -> StorageResult<ColumnChunk> {
         version_chains: None,
         visibility: super::mvcc::RowVisibility::new(),
         element_size,
-        overlay: super::chunk_encoding::UpdateOverlay::new(super::chunk_encoding::DEFAULT_OVERLAY_CAPACITY),
+        overlay: super::chunk_encoding::UpdateOverlay::new(
+            super::chunk_encoding::DEFAULT_OVERLAY_CAPACITY,
+        ),
         encoding_meta,
         updates_since_encode: 0,
         residency: ChunkResidency::Resident,
@@ -301,8 +310,8 @@ fn decode_encoding_for_spill(
     data_type: &DataType,
 ) -> StorageResult<ColumnEncoding> {
     use crate::encoding::{
-        AlpColumn, BitPackedIntColumn, ConstantColumn, DictionaryColumn,
-        FsstColumn, RleBoolColumn, RleIntColumn,
+        AlpColumn, BitPackedIntColumn, ConstantColumn, DictionaryColumn, FsstColumn, RleBoolColumn,
+        RleIntColumn,
     };
     let mut cursor = &meta_bytes[..];
     match encoding_type {
@@ -326,9 +335,9 @@ fn decode_encoding_for_spill(
         crate::encoding::EncodingType::BitPacking => Ok(ColumnEncoding::BitPacked(
             BitPackedIntColumn::deserialize_meta(&mut cursor)?,
         )),
-        crate::encoding::EncodingType::Alp => Ok(ColumnEncoding::Alp(
-            AlpColumn::deserialize_meta(&mut cursor)?,
-        )),
+        crate::encoding::EncodingType::Alp => Ok(ColumnEncoding::Alp(AlpColumn::deserialize_meta(
+            &mut cursor,
+        )?)),
         crate::encoding::EncodingType::Constant => Ok(ColumnEncoding::Constant(
             ConstantColumn::deserialize_meta(&mut cursor)?,
         )),
@@ -376,8 +385,8 @@ mod tests {
         let mut chunk = ColumnChunk::new_variable(100, 3, true);
         chunk.offsets = vec![0, 5, 10];
         chunk.data = vec![
-            3, 0, 0, 0, 0, b'h', b'e', b'l', b'l', b'o', 5, 0, 0, 0, 0, b'w', b'o', b'r',
-            b'l', b'd',
+            3, 0, 0, 0, 0, b'h', b'e', b'l', b'l', b'o', 5, 0, 0, 0, 0, b'w', b'o', b'r', b'l',
+            b'd',
         ];
 
         let buf = spill_chunk(&chunk, &DataType::String).unwrap();
@@ -393,9 +402,7 @@ mod tests {
     fn spill_reload_with_overlay() {
         let mut chunk = ColumnChunk::new(0, 4, 4, false);
         chunk.data = vec![0; 16];
-        chunk
-            .overlay
-            .put(1, Some(graphdb_core::Value::Int(42)));
+        chunk.overlay.put(1, Some(graphdb_core::Value::Int(42)));
         chunk.overlay.put(3, None);
 
         let buf = spill_chunk(&chunk, &DataType::Int).unwrap();

@@ -10,6 +10,7 @@ pub struct DeleteStmt {
     pub target: DeleteTarget,
     pub where_clause: Option<ContextualExpression>,
     pub with_edge: bool,
+    pub detach: bool,
 }
 
 impl DeleteStmt {
@@ -19,11 +20,17 @@ impl DeleteStmt {
             target,
             where_clause: None,
             with_edge: false,
+            detach: false,
         }
     }
 
     pub fn with_edge(mut self, with_edge: bool) -> Self {
         self.with_edge = with_edge;
+        self
+    }
+
+    pub fn with_detach(mut self, detach: bool) -> Self {
+        self.detach = detach;
         self
     }
 }

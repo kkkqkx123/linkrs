@@ -249,7 +249,17 @@ impl PlannerEnum {
             | Stmt::CommitTransaction(_)
             | Stmt::RollbackTransaction(_)
             | Stmt::Savepoint(_)
-            | Stmt::ReleaseSavepoint(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            | Stmt::ReleaseSavepoint(_)
+            | Stmt::CommentOn(_)
+            | Stmt::Checkpoint(_)
+            | Stmt::ExportDatabase(_)
+            | Stmt::ImportDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            // New reading clause statements — no dedicated planner yet; route
+            // through the MaintainPlanner fallback (returns UnsupportedOperation
+            // until a proper planner is implemented).
+            Stmt::LoadFrom(_) | Stmt::InQueryCall(_) => {
+                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
+            }
             // The type of the following sentence does not currently support direct planning.
             _ => None,
         }

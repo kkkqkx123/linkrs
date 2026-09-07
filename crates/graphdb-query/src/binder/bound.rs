@@ -150,6 +150,17 @@ pub enum BoundExpression {
         negated: bool,
     },
 
+    /// COUNT subquery: evaluates to the number of rows returned by the subquery
+    CountSubquery {
+        query: Box<BoundStatement>,
+    },
+
+    /// Lambda expression: anonymous function used as callback for higher-order list functions
+    Lambda {
+        params: Vec<String>,
+        body: Box<BoundExpression>,
+    },
+
     /// Path expression
     Path(Vec<BoundExpression>, DataType),
 
@@ -239,6 +250,8 @@ impl BoundExpression {
             Self::Subscript { return_type, .. } => return_type.clone(),
             Self::WindowFunction { return_type, .. } => return_type.clone(),
             Self::In { .. } => DataType::Bool,
+            Self::CountSubquery { .. } => DataType::Int,
+            Self::Lambda { .. } => DataType::Unknown,
             Self::Path(_, dt) => dt.clone(),
             Self::ListComprehension { return_type, .. } => return_type.clone(),
             Self::Reduce { return_type, .. } => return_type.clone(),

@@ -831,12 +831,19 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::ShowConfigs { .. } => "ShowConfigs",
         DdlSpec::ShowQueries { .. } => "ShowQueries",
         DdlSpec::ShowSessions { .. } => "ShowSessions",
+        DdlSpec::ShowFunctions { .. } => "ShowFunctions",
+        DdlSpec::ShowGraphs { .. } => "ShowGraphs",
+        DdlSpec::ShowMacros { .. } => "ShowMacros",
         DdlSpec::Analyze { .. } => "Analyze",
         DdlSpec::Migrate { .. } => "Migrate",
         DdlSpec::MigratePlan { .. } => "MigratePlan",
         DdlSpec::MigrateRun { .. } => "MigrateRun",
         DdlSpec::MigrateRollback { .. } => "MigrateRollback",
         DdlSpec::SequenceManage { .. } => "SequenceManage",
+        DdlSpec::MacroManage { .. } => "MacroManage",
+        DdlSpec::TypeManage { .. } => "TypeManage",
+        DdlSpec::DatabaseManage { .. } => "DatabaseManage",
+        DdlSpec::ExtensionManage { .. } => "ExtensionManage",
     }
 }
 

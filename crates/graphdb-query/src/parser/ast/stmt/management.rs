@@ -32,6 +32,9 @@ pub enum ShowTarget {
     Users,
     Roles,
     Stats,
+    Functions,
+    Graphs,
+    Macros,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -209,6 +212,87 @@ impl PartialEq for SetOperationStmt {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.op_type == other.op_type
     }
+}
+
+/// `COMMENT ON <target> IS <string>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentOnStmt {
+    pub span: Span,
+    pub target: CommentTarget,
+    pub comment: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommentTarget {
+    Tag(String),
+    Edge(String),
+}
+
+/// `EXPORT DATABASE '<path>' [WITH OPTIONS (...)]` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportDatabaseStmt {
+    pub span: Span,
+    pub path: String,
+    pub options: Vec<ExportOption>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportOption {
+    pub key: String,
+    pub value: String,
+}
+
+/// `IMPORT DATABASE '<path>'` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDatabaseStmt {
+    pub span: Span,
+    pub path: String,
+}
+
+/// `ATTACH '<path>' AS <alias> [DBTYPE <type>] [OPTIONS (...)]` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachDatabaseStmt {
+    pub span: Span,
+    pub path: String,
+    pub alias: String,
+    pub db_type: Option<String>,
+    pub options: Vec<AttachOption>,
+}
+
+/// Option for ATTACH DATABASE statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachOption {
+    pub key: String,
+    pub value: String,
+}
+
+/// `DETACH <alias>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetachDatabaseStmt {
+    pub span: Span,
+    pub alias: String,
+}
+
+/// `LOAD EXTENSION '<path>'` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadExtensionStmt {
+    pub span: Span,
+    pub path: String,
+}
+
+/// `INSTALL EXTENSION <name> [FROM '<repo>']` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallExtensionStmt {
+    pub span: Span,
+    pub name: String,
+    pub repo: Option<String>,
+}
+
+/// `UNINSTALL EXTENSION <name>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UninstallExtensionStmt {
+    pub span: Span,
+    pub name: String,
 }
 
 pub struct StmtUtils;

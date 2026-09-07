@@ -234,3 +234,33 @@ pub struct YieldStmt {
     pub skip: Option<SkipClause>,
     pub limit: Option<LimitClause>,
 }
+
+/// `LOAD FROM <source> [OPTIONS (...)] [RETURN ...]` reading clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadFromStmt {
+    pub span: Span,
+    pub source: ScanSource,
+    pub options: Vec<LoadOption>,
+    pub return_clause: Option<ReturnClause>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanSource {
+    File(String),
+    Glob(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadOption {
+    pub key: String,
+    pub value: String,
+}
+
+/// `CALL <func>(<args>) [YIELD <cols>]` in-query function call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InQueryCallStmt {
+    pub span: Span,
+    pub func_name: String,
+    pub args: Vec<ContextualExpression>,
+    pub yield_clause: Option<YieldClause>,
+}

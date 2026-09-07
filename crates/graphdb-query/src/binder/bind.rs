@@ -107,6 +107,12 @@ impl Binder {
             Stmt::AlterUser(s) => self.bind_alter_user(s),
             Stmt::CreateFulltextIndex(s) => self.bind_create_fulltext_index(s),
             Stmt::CreateVectorIndex(s) => self.bind_create_vector_index(s),
+            Stmt::CommentOn(_)
+            | Stmt::Checkpoint(_)
+            | Stmt::LoadFrom(_)
+            | Stmt::InQueryCall(_)
+            | Stmt::ExportDatabase(_)
+            | Stmt::ImportDatabase(_) => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
             _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
         }
     }

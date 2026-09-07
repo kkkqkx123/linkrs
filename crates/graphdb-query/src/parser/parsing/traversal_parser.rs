@@ -765,6 +765,7 @@ impl TraversalParser {
         let mut edge_types = Vec::new();
         let mut properties = None;
         let mut range = None;
+        let mut path_semantic = None;
 
         if ctx.match_token(TokenKind::LBracket) {
             if let TokenKind::Identifier(ref name) = ctx.current_token().kind.clone() {
@@ -796,7 +797,26 @@ impl TraversalParser {
             }
 
             if ctx.match_token(TokenKind::Star) {
-                if ctx.match_token(TokenKind::LBracket) {
+                // Check for path semantic keywords after *
+                if ctx.match_token(TokenKind::Trail) {
+                    path_semantic = Some(PathSemantic::Trail);
+                    range = Some(EdgeRange::any());
+                } else if ctx.match_token(TokenKind::Acyclic) {
+                    path_semantic = Some(PathSemantic::Acyclic);
+                    range = Some(EdgeRange::any());
+                } else if ctx.match_token(TokenKind::Shortest) {
+                    path_semantic = Some(PathSemantic::Shortest);
+                    range = Some(EdgeRange::any());
+                } else if ctx.match_token(TokenKind::Weighted) {
+                    // *WSHORTEST(weight_prop) - parse the weight property in parens
+                    ctx.expect_token(TokenKind::LParen)?;
+                    let weight_prop = ctx.expect_identifier()?;
+                    ctx.expect_token(TokenKind::RParen)?;
+                    path_semantic = Some(PathSemantic::Shortest);
+                    range = Some(EdgeRange::any());
+                    // Store weight property in edge_types for now (will be used by executor)
+                    edge_types.push(format!("WSHORTEST({})", weight_prop));
+                } else if ctx.match_token(TokenKind::LBracket) {
                     let min = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
                         let n = ctx.expect_integer_literal()? as usize;
                         Some(n)
@@ -877,6 +897,7 @@ impl TraversalParser {
             predicates: Vec::new(),
             direction,
             range,
+            path_semantic,
         })
     }
 

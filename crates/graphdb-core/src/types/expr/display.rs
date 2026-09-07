@@ -234,6 +234,13 @@ impl Expression {
                     subquery.patterns.join(", ")
                 )
             }
+            Expression::CountSubquery { body } => {
+                format!("COUNT {{ {} }}", body.patterns.join(", "))
+            }
+            Expression::Lambda { params, body } => {
+                let params_str = params.join(", ");
+                format!("{} -> {}", params_str, body.to_expression_string())
+            }
             Expression::WindowFunction {
                 name,
                 args,

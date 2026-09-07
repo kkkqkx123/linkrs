@@ -65,6 +65,17 @@ pub struct EdgePattern {
     pub predicates: Vec<ContextualExpression>,
     pub direction: EdgeDirection,
     pub range: Option<EdgeRange>,
+    pub path_semantic: Option<PathSemantic>,
+}
+
+/// Path semantic types for variable-length patterns
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathSemantic {
+    Walk,        // * (default, allows repeated nodes/edges)
+    Trail,       // *TRAIL (no repeated nodes)
+    Acyclic,     // *ACYCLIC (no repeated edges)
+    Shortest,    // *SHORTEST
+    AllShortest, // *ALL SHORTEST
 }
 
 impl EdgePattern {
@@ -85,6 +96,7 @@ impl EdgePattern {
             predicates,
             direction,
             range,
+            path_semantic: None,
         }
     }
 }

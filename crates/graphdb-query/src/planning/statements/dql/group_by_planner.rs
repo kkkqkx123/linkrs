@@ -188,6 +188,17 @@ impl GroupByPlanner {
             | Expression::Exists { .. }
             | Expression::In { .. }
             | Expression::WindowFunction { .. } => {}
+            Expression::CountSubquery { body } => {
+                if let Some(ref where_clause) = body.where_clause {
+                    self.collect_aggregate_functions_recursive(where_clause, functions);
+                }
+                if let Some(ref return_expr) = body.return_expr {
+                    self.collect_aggregate_functions_recursive(return_expr, functions);
+                }
+            }
+            Expression::Lambda { body, .. } => {
+                self.collect_aggregate_functions_recursive(body, functions);
+            }
         }
     }
 }
@@ -745,6 +756,17 @@ impl GroupByPlanner {
             | Expression::Exists { .. }
             | Expression::In { .. }
             | Expression::WindowFunction { .. } => {}
+            Expression::CountSubquery { body } => {
+                if let Some(ref where_clause) = body.where_clause {
+                    Self::collect_aggregate_args_recursive(where_clause, args_out);
+                }
+                if let Some(ref return_expr) = body.return_expr {
+                    Self::collect_aggregate_args_recursive(return_expr, args_out);
+                }
+            }
+            Expression::Lambda { body, .. } => {
+                Self::collect_aggregate_args_recursive(body, args_out);
+            }
         }
     }
 }

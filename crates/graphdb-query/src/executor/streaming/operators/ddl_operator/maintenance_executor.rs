@@ -145,6 +145,72 @@ pub(super) fn execute_show_sessions(
     )))
 }
 
+pub(super) fn execute_show_functions(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowFunctions {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("functions", "string"),
+        vec![],
+    )))
+}
+
+pub(super) fn execute_show_graphs(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowGraphs {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("graphs", "string"),
+        vec![],
+    )))
+}
+
+pub(super) fn execute_show_macros(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowMacros {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("macros", "string"),
+        vec![],
+    )))
+}
+
 pub(super) fn execute_analyze(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {

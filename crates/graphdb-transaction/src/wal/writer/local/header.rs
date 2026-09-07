@@ -72,7 +72,10 @@ impl LocalWalWriter {
         let current_lsn = self.current_lsn();
         log::error!(
             "WAL SET_RECOVERY_BASELINE: requested={}, current={}, file_used={}, file_start_lsn={}",
-            lsn, current_lsn, self.file_used, self.file_start_lsn
+            lsn,
+            current_lsn,
+            self.file_used,
+            self.file_start_lsn
         );
         if lsn <= current_lsn {
             return Ok(());

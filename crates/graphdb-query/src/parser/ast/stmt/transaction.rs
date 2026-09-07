@@ -51,3 +51,9 @@ pub struct AssignVariableStmt {
     /// parameters).
     pub expression: ContextualExpression,
 }
+
+/// `CHECKPOINT` statement — manually trigger a WAL checkpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointStmt {
+    pub span: Span,
+}

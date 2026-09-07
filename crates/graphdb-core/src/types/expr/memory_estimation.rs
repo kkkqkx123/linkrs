@@ -173,6 +173,19 @@ impl MemoryEstimatable for Expression {
                         .map(estimate_string_memory)
                         .sum::<usize>()
             }
+            Expression::CountSubquery { body } => {
+                base_size
+                    + body
+                        .patterns
+                        .iter()
+                        .map(estimate_string_memory)
+                        .sum::<usize>()
+            }
+            Expression::Lambda { params, body } => {
+                base_size
+                    + params.iter().map(estimate_string_memory).sum::<usize>()
+                    + body.estimate_memory()
+            }
         }
     }
 }
@@ -408,6 +421,18 @@ impl Expression {
                         stack.push(return_expr);
                     }
                 }
+                Expression::CountSubquery { body } => {
+                    total += std::mem::size_of::<SubqueryBody>();
+                    for p in &body.patterns {
+                        total += p.capacity();
+                    }
+                    if let Some(where_clause) = &body.where_clause {
+                        stack.push(where_clause);
+                    }
+                    if let Some(return_expr) = &body.return_expr {
+                        stack.push(return_expr);
+                    }
+                }
                 Expression::WindowFunction {
                     args,
                     over_partition_by,
@@ -425,6 +450,12 @@ impl Expression {
                     for e in over_order_by {
                         stack.push(e);
                     }
+                }
+                Expression::Lambda { params, body } => {
+                    for p in params {
+                        total += p.capacity();
+                    }
+                    stack.push(body);
                 }
             }
         }

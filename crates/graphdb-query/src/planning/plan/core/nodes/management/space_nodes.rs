@@ -222,3 +222,107 @@ impl SpaceManageInfo {
         self
     }
 }
+
+use crate::parser::ast::stmt::{CommentTarget, ExportOption};
+
+define_plan_node! {
+    pub struct CommentOnNode {
+        target: CommentTarget,
+        comment: String,
+    }
+    manage_enum: SpaceManageNode::CommentOn as SpaceManage
+    input: ZeroInputNode
+}
+
+impl CommentOnNode {
+    pub fn new(id: i64, target: CommentTarget, comment: String) -> Self {
+        Self {
+            id,
+            target,
+            comment,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn target(&self) -> &CommentTarget {
+        &self.target
+    }
+
+    pub fn comment(&self) -> &str {
+        &self.comment
+    }
+}
+
+define_plan_node! {
+    pub struct CheckpointNode {
+    }
+    manage_enum: SpaceManageNode::Checkpoint as SpaceManage
+    input: ZeroInputNode
+}
+
+impl CheckpointNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}
+
+define_plan_node! {
+    pub struct ExportDatabaseNode {
+        path: String,
+        options: Vec<ExportOption>,
+    }
+    manage_enum: SpaceManageNode::ExportDatabase as SpaceManage
+    input: ZeroInputNode
+}
+
+impl ExportDatabaseNode {
+    pub fn new(id: i64, path: String, options: Vec<ExportOption>) -> Self {
+        Self {
+            id,
+            path,
+            options,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn options(&self) -> &[ExportOption] {
+        &self.options
+    }
+}
+
+define_plan_node! {
+    pub struct ImportDatabaseNode {
+        path: String,
+    }
+    manage_enum: SpaceManageNode::ImportDatabase as SpaceManage
+    input: ZeroInputNode
+}
+
+impl ImportDatabaseNode {
+    pub fn new(id: i64, path: String) -> Self {
+        Self {
+            id,
+            path,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}

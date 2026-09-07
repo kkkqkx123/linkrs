@@ -29,6 +29,36 @@ impl StmtParser {
         if ctx.check_keyword("MIGRATE") {
             return Self::parse_migrate_statement(ctx);
         }
+        if ctx.check_keyword("COMMENT") {
+            return Self::parse_comment_on_statement(ctx);
+        }
+        if ctx.check_keyword("CHECKPOINT") {
+            return Self::parse_checkpoint_statement(ctx);
+        }
+        if ctx.check_keyword("LOAD") {
+            return Self::parse_load_from_statement(ctx);
+        }
+        if ctx.check_keyword("CALL") {
+            return Self::parse_in_query_call_statement(ctx);
+        }
+        if ctx.check_keyword("EXPORT") {
+            return Self::parse_export_database_statement(ctx);
+        }
+        if ctx.check_keyword("IMPORT") {
+            return Self::parse_import_database_statement(ctx);
+        }
+        if ctx.check_keyword("ATTACH") {
+            return Self::parse_attach_database_statement(ctx);
+        }
+        if ctx.check_keyword("DETACH") {
+            return Self::parse_detach_database_statement(ctx);
+        }
+        if ctx.check_keyword("INSTALL") {
+            return Self::parse_install_extension_statement(ctx);
+        }
+        if ctx.check_keyword("UNINSTALL") {
+            return Self::parse_uninstall_extension_statement(ctx);
+        }
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
@@ -443,13 +473,15 @@ impl StmtParser {
             || ctx.check_token(TokenKind::Space)
             || ctx.check_token(TokenKind::Index)
             || ctx.check_token(TokenKind::Sequence)
+            || ctx.check_keyword("MACRO")
+            || ctx.check_keyword("TYPE")
         {
             return DdlParser::new().parse_create_after_token(ctx, start_span);
         }
 
         Err(ParseError::new(
             ParseErrorKind::SyntaxError,
-            "CREATE statement expects '(' (Cypher data creation) or TAG/EDGE/SPACE/INDEX (Schema definition) or USER (user management)".to_string(),
+            "CREATE statement expects '(' (Cypher data creation) or TAG/EDGE/SPACE/INDEX/MACRO/TYPE (Schema definition) or USER (user management)".to_string(),
             ctx.current_position(),
         ))
     }
@@ -521,6 +553,322 @@ impl StmtParser {
                 ctx.current_position(),
             ))
         }
+    }
+
+    /// Parse `COMMENT ON TAG|EDGE <name> IS '<string>'`.
+    fn parse_comment_on_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::{CommentOnStmt, CommentTarget};
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("COMMENT")?;
+        ctx.consume_keyword("ON")?;
+
+        let target = if ctx.check_keyword("TAG") {
+            ctx.consume_keyword("TAG")?;
+            let name = ctx.expect_identifier()?;
+            CommentTarget::Tag(name)
+        } else if ctx.check_keyword("EDGE") {
+            ctx.consume_keyword("EDGE")?;
+            let name = ctx.expect_identifier()?;
+            CommentTarget::Edge(name)
+        } else {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "COMMENT ON expects TAG or EDGE".to_string(),
+                ctx.current_position(),
+            ));
+        };
+
+        ctx.consume_keyword("IS")?;
+        let comment = ctx.expect_string_literal()?;
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::CommentOn(CommentOnStmt {
+            span,
+            target,
+            comment,
+        }))
+    }
+
+    /// Parse `CHECKPOINT`.
+    fn parse_checkpoint_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::CheckpointStmt;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("CHECKPOINT")?;
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::Checkpoint(CheckpointStmt { span }))
+    }
+
+    /// Parse `LOAD FROM '<path>' [OPTIONS (key=value, ...)] [RETURN ...]`.
+    fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::{LoadFromStmt, LoadOption, ScanSource};
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("LOAD")?;
+        ctx.consume_keyword("FROM")?;
+
+        let source = if ctx.check_keyword("GLOB") {
+            ctx.consume_keyword("GLOB")?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let pattern = ctx.expect_string_literal()?;
+            ctx.expect_token(TokenKind::RParen)?;
+            ScanSource::Glob(pattern)
+        } else {
+            let path = ctx.expect_string_literal()?;
+            ScanSource::File(path)
+        };
+
+        let options = if ctx.check_keyword("OPTIONS") || ctx.check_token(TokenKind::LParen) {
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut opts = Vec::new();
+            loop {
+                let key = ctx.expect_identifier()?;
+                ctx.expect_token(TokenKind::Assign)?;
+                let value = ctx.expect_string_literal()?;
+                opts.push(LoadOption { key, value });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            opts
+        } else {
+            vec![]
+        };
+
+        let return_clause = if ctx.check_keyword("RETURN") || ctx.check_token(TokenKind::Return) {
+            ctx.expect_token(TokenKind::Return)?;
+            let distinct = ctx.match_token(TokenKind::Distinct);
+            let mut items = Vec::new();
+            loop {
+                let expression = Self::parse_expression(ctx)?;
+                let alias = if ctx.match_token(TokenKind::As) {
+                    Some(ctx.expect_identifier()?)
+                } else {
+                    None
+                };
+                items.push(ReturnItem::Expression { expression, alias });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            Some(ReturnClause {
+                span: ctx.current_span(),
+                items,
+                distinct,
+                order_by: None,
+                limit: None,
+                skip: None,
+                sample: None,
+                having_clause: None,
+            })
+        } else {
+            None
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::LoadFrom(LoadFromStmt {
+            span,
+            source,
+            options,
+            return_clause,
+        }))
+    }
+
+    /// Parse `CALL <func>(<args>) [YIELD ...]`.
+    fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::InQueryCallStmt;
+        use crate::parser::parsing::clause_parser::ClauseParser;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("CALL")?;
+
+        let func_name = ctx.expect_identifier()?;
+        ctx.expect_token(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        if !ctx.check_token(TokenKind::RParen) {
+            loop {
+                let arg = Self::parse_expression(ctx)?;
+                args.push(arg);
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        ctx.expect_token(TokenKind::RParen)?;
+
+        let yield_clause = if ctx.match_token(TokenKind::Yield) {
+            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+        } else {
+            None
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::InQueryCall(InQueryCallStmt {
+            span,
+            func_name,
+            args,
+            yield_clause,
+        }))
+    }
+
+    /// Parse `EXPORT DATABASE '<path>' [WITH OPTIONS (key=value, ...)]`.
+    fn parse_export_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::{ExportDatabaseStmt, ExportOption};
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("EXPORT")?;
+        ctx.consume_keyword("DATABASE")?;
+        let path = ctx.expect_string_literal()?;
+
+        let options = if ctx.check_keyword("WITH") {
+            ctx.consume_keyword("WITH")?;
+            ctx.consume_keyword("OPTIONS")?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut opts = Vec::new();
+            loop {
+                let key = ctx.expect_identifier()?;
+                ctx.expect_token(TokenKind::Assign)?;
+                let value = ctx.expect_string_literal()?;
+                opts.push(ExportOption { key, value });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            opts
+        } else {
+            vec![]
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::ExportDatabase(ExportDatabaseStmt {
+            span,
+            path,
+            options,
+        }))
+    }
+
+    /// Parse `IMPORT DATABASE '<path>'`.
+    fn parse_import_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::ImportDatabaseStmt;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("IMPORT")?;
+        ctx.consume_keyword("DATABASE")?;
+        let path = ctx.expect_string_literal()?;
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::ImportDatabase(ImportDatabaseStmt { span, path }))
+    }
+
+    /// Parse `ATTACH '<path>' AS <alias> [DBTYPE <type>] [OPTIONS (key=value, ...)]`.
+    fn parse_attach_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::{AttachDatabaseStmt, AttachOption};
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("ATTACH")?;
+        let path = ctx.expect_string_literal()?;
+        ctx.consume_keyword("AS")?;
+        let alias = ctx.expect_identifier()?;
+
+        let db_type = if ctx.check_keyword("DBTYPE") {
+            ctx.consume_keyword("DBTYPE")?;
+            Some(ctx.expect_identifier()?)
+        } else {
+            None
+        };
+
+        let options = if ctx.check_keyword("OPTIONS") {
+            ctx.consume_keyword("OPTIONS")?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut opts = Vec::new();
+            loop {
+                let key = ctx.expect_identifier()?;
+                ctx.expect_token(TokenKind::Assign)?;
+                let value = ctx.expect_string_literal()?;
+                opts.push(AttachOption { key, value });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            opts
+        } else {
+            vec![]
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::AttachDatabase(AttachDatabaseStmt {
+            span,
+            path,
+            alias,
+            db_type,
+            options,
+        }))
+    }
+
+    /// Parse `DETACH <alias>`.
+    fn parse_detach_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::DetachDatabaseStmt;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("DETACH")?;
+        let alias = ctx.expect_identifier()?;
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::DetachDatabase(DetachDatabaseStmt { span, alias }))
+    }
+
+    /// Parse `INSTALL EXTENSION <name> [FROM '<repo>']`.
+    fn parse_install_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::InstallExtensionStmt;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("INSTALL")?;
+        ctx.consume_keyword("EXTENSION")?;
+        let name = ctx.expect_identifier()?;
+
+        let repo = if ctx.check_keyword("FROM") {
+            ctx.consume_keyword("FROM")?;
+            Some(ctx.expect_string_literal()?)
+        } else {
+            None
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::InstallExtension(InstallExtensionStmt {
+            span,
+            name,
+            repo,
+        }))
+    }
+
+    /// Parse `UNINSTALL EXTENSION <name>`.
+    fn parse_uninstall_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::UninstallExtensionStmt;
+
+        let start_span = ctx.current_span();
+        ctx.consume_keyword("UNINSTALL")?;
+        ctx.consume_keyword("EXTENSION")?;
+        let name = ctx.expect_identifier()?;
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::UninstallExtension(UninstallExtensionStmt {
+            span,
+            name,
+        }))
     }
 
     /// Pipeline after parsing set operation statements, or end of the process.
@@ -1356,6 +1704,168 @@ mod tests {
                 "Expecting a SetOperation statement, you actually get {:?}",
                 result
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_comment_on_tag() {
+        let mut ctx = create_parser_context("COMMENT ON TAG Person IS 'the person table'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "COMMENT ON TAG parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::CommentOn(stmt)) = result {
+            assert_eq!(stmt.comment, "the person table");
+        } else {
+            panic!("Expected CommentOn statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_comment_on_edge() {
+        let mut ctx = create_parser_context("COMMENT ON EDGE Knows IS 'friendship edge'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "COMMENT ON EDGE parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::CommentOn(stmt)) = result {
+            assert_eq!(stmt.comment, "friendship edge");
+        } else {
+            panic!("Expected CommentOn statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_checkpoint() {
+        let mut ctx = create_parser_context("CHECKPOINT");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "CHECKPOINT parse failure: {:?}",
+            result.err()
+        );
+        assert!(matches!(result.unwrap(), Stmt::Checkpoint(_)));
+    }
+
+    #[test]
+    fn test_parse_load_from() {
+        let mut ctx = create_parser_context("LOAD FROM 'data.csv' RETURN *");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LOAD FROM parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::LoadFrom(stmt)) = result {
+            assert!(stmt.return_clause.is_some());
+        } else {
+            panic!("Expected LoadFrom statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_from_with_options() {
+        let mut ctx =
+            create_parser_context("LOAD FROM 'data.csv' (header='true', delimiter=',') RETURN *");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LOAD FROM with options parse failure: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_parse_load_from_glob() {
+        let mut ctx = create_parser_context("LOAD FROM GLOB('data/*.csv') RETURN *");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LOAD FROM GLOB parse failure: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_parse_call_no_args() {
+        let mut ctx = create_parser_context("CALL db_version()");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "CALL db_version() parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::InQueryCall(stmt)) = result {
+            assert_eq!(stmt.func_name, "db_version");
+            assert!(stmt.args.is_empty());
+        } else {
+            panic!("Expected InQueryCall statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_call_with_args_yield() {
+        let mut ctx = create_parser_context("CALL list_touch(1, 2) YIELD result AS x");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "CALL with args and YIELD parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::InQueryCall(stmt)) = result {
+            assert_eq!(stmt.func_name, "list_touch");
+            assert_eq!(stmt.args.len(), 2);
+            assert!(stmt.yield_clause.is_some());
+        } else {
+            panic!("Expected InQueryCall statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_export_database() {
+        let mut ctx = create_parser_context("EXPORT DATABASE '/tmp/db'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "EXPORT DATABASE parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::ExportDatabase(stmt)) = result {
+            assert_eq!(stmt.path, "/tmp/db");
+        } else {
+            panic!("Expected ExportDatabase statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_export_database_with_options() {
+        let mut ctx =
+            create_parser_context("EXPORT DATABASE '/tmp/db' WITH OPTIONS (format='parquet')");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "EXPORT DATABASE with options parse failure: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_parse_import_database() {
+        let mut ctx = create_parser_context("IMPORT DATABASE '/tmp/db'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "IMPORT DATABASE parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::ImportDatabase(stmt)) = result {
+            assert_eq!(stmt.path, "/tmp/db");
+        } else {
+            panic!("Expected ImportDatabase statement");
         }
     }
 }

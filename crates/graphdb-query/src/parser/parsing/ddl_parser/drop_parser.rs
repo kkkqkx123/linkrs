@@ -132,10 +132,40 @@ impl DdlParser {
                 target: DropTarget::Sequence(seq_name),
                 if_exists,
             }));
+        } else if ctx.check_keyword("MACRO") {
+            ctx.consume_keyword("MACRO")?;
+            let mut if_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Exists)?;
+                if_exists = true;
+            }
+            let name = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::DropMacro(DropMacroStmt {
+                span,
+                name,
+                if_exists,
+            }));
+        } else if ctx.check_keyword("TYPE") {
+            ctx.consume_keyword("TYPE")?;
+            let mut if_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Exists)?;
+                if_exists = true;
+            }
+            let name = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::DropType(DropTypeStmt {
+                span,
+                name,
+                if_exists,
+            }));
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected SPACE, TAG, EDGE, INDEX, SEQUENCE, or USER".to_string(),
+                "Expected SPACE, TAG, EDGE, INDEX, SEQUENCE, MACRO, TYPE, or USER".to_string(),
                 ctx.current_position(),
             ));
         };

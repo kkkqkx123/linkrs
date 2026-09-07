@@ -329,6 +329,14 @@ impl ExpressionEvaluator {
                 );
                 Ok(Value::Bool(if *negated { !found } else { found }))
             }
+            Expression::CountSubquery { body } => {
+                let results = context.execute_subquery(body)?;
+                Ok(Value::Int(results.len() as i32))
+            }
+            Expression::Lambda { .. } => Err(ExpressionError::type_error(
+                "Lambda expression cannot be evaluated directly; \
+                 use it as an argument to a higher-order function like list_transform or list_filter",
+            )),
         }
     }
 

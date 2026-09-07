@@ -334,6 +334,24 @@ fn space_manage_to_command(
         Clear(n) => SpaceManageCommand::Clear {
             space_name: n.space_name().to_string(),
         },
+        CommentOn(n) => {
+            let target = n.target();
+            let target_name = match target {
+                crate::parser::ast::stmt::CommentTarget::Tag(name) => name.clone(),
+                crate::parser::ast::stmt::CommentTarget::Edge(name) => name.clone(),
+            };
+            SpaceManageCommand::CommentOn {
+                space_name: target_name,
+                comment: n.comment().to_string(),
+            }
+        }
+        Checkpoint(_) => SpaceManageCommand::Checkpoint,
+        ExportDatabase(n) => SpaceManageCommand::ExportDatabase {
+            path: n.path().to_string(),
+        },
+        ImportDatabase(n) => SpaceManageCommand::ImportDatabase {
+            path: n.path().to_string(),
+        },
     }
 }
 

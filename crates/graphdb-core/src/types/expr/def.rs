@@ -198,6 +198,26 @@ pub enum Expression {
         /// Whether this is NOT IN
         negated: bool,
     },
+
+    /// COUNT subquery expression
+    ///
+    /// Evaluates to the number of rows returned by the subquery.
+    /// Syntax: `COUNT { MATCH ... RETURN ... }`
+    CountSubquery {
+        /// The subquery body
+        body: Box<SubqueryBody>,
+    },
+
+    /// Lambda expression
+    ///
+    /// Represents an anonymous function, e.g. `x -> x + 1` or `(x, y) -> x + y`.
+    /// Used as callbacks for higher-order list functions like list_transform, list_filter.
+    Lambda {
+        /// Parameter names
+        params: Vec<String>,
+        /// Lambda body expression
+        body: Box<Expression>,
+    },
 }
 
 /// A subquery body used in EXISTS and IN expressions.

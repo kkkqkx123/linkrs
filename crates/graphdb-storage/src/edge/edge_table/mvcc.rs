@@ -217,6 +217,7 @@ impl MVCCManager {
             .take(remaining)
             .collect();
         remaining = remaining.saturating_sub(hot_keys.len());
+        let _ = remaining;
         for edge_id in hot_keys {
             if self.tombstones.remove(&edge_id).is_some() {
                 removed += 1;
@@ -425,11 +426,7 @@ impl MVCCManager {
 
     /// Record edge creation. Called on insert_edge to register the edge's
     /// creation timestamp in the centralized MVCC store.
-    pub fn record_creation(
-        &mut self,
-        edge_id: EdgeId,
-        create_ts: Timestamp,
-    ) {
+    pub fn record_creation(&mut self, edge_id: EdgeId, create_ts: Timestamp) {
         self.edge_timestamps
             .insert(edge_id, EdgeTimestamps::new(create_ts));
     }

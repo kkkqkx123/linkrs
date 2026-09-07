@@ -176,6 +176,8 @@ impl<'a> ExpressionBinder<'a> {
             },
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
+            Expression::CountSubquery { .. } => DataType::Int,
+            Expression::Lambda { .. } => DataType::Unknown,
         }
     }
 

@@ -299,7 +299,9 @@ impl TimeTravelEdgeStore {
 
         // Binary search to find earliest relevant segment (create_ts_min <= ts)
         let max_index_pos = if !segment_index.is_empty() {
-            match segment_index.binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater)) {
+            match segment_index
+                .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
+            {
                 Ok(pos) | Err(pos) => pos.saturating_sub(1),
             }
         } else {
@@ -381,7 +383,9 @@ impl TimeTravelEdgeStore {
         // where create_ts_min <= ts, then iterate from the end of the index
         // (newest segment) up to that position.
         let max_index_pos = if !segment_index.is_empty() {
-            match segment_index.binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater)) {
+            match segment_index
+                .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
+            {
                 Ok(pos) | Err(pos) => {
                     // pos is the first element with create_ts_min > ts.
                     // We want elements 0..pos (create_ts_min <= ts).
@@ -1037,8 +1041,7 @@ impl TimeTravelEdgeStore {
     }
 
     pub fn edge_count(&self) -> u64 {
-        self.out_csr.edge_count()
-            + self.out_segments.iter().map(|s| s.live_count).sum::<u64>()
+        self.out_csr.edge_count() + self.out_segments.iter().map(|s| s.live_count).sum::<u64>()
     }
 
     pub fn delta_edge_count(&self) -> u64 {
@@ -1418,7 +1421,7 @@ impl TimeTravelEdgeStore {
     /// Scans segments newest-first (same order as `base_get_edge`) to find
     /// the segment; once found the scan terminates.
     fn decrement_segment_live_count(&mut self, edge_id: EdgeId) {
-        for segment in self.out_segments.iter().rev() {
+        for segment in self.out_segments.iter_mut().rev() {
             if segment.is_evicted() {
                 let _ = segment.reload_from_spill();
             }
@@ -1438,7 +1441,7 @@ impl TimeTravelEdgeStore {
     /// Called when a post-freeze deletion tombstone is removed (rollback) to
     /// keep `live_count` consistent.
     fn increment_segment_live_count(&mut self, edge_id: EdgeId) {
-        for segment in self.out_segments.iter().rev() {
+        for segment in self.out_segments.iter_mut().rev() {
             if segment.is_evicted() {
                 let _ = segment.reload_from_spill();
             }

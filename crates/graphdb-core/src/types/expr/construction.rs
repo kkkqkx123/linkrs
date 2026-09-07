@@ -256,6 +256,21 @@ impl Expression {
         }
     }
 
+    /// Create a COUNT subquery expression
+    pub fn count_subquery(body: SubqueryBody) -> Self {
+        Expression::CountSubquery {
+            body: Box::new(body),
+        }
+    }
+
+    /// Create a Lambda expression
+    pub fn lambda(params: Vec<String>, body: Expression) -> Self {
+        Expression::Lambda {
+            params,
+            body: Box::new(body),
+        }
+    }
+
     /// Creating a boolean literal
     pub fn bool(value: bool) -> Self {
         Expression::Literal(Value::Bool(value))

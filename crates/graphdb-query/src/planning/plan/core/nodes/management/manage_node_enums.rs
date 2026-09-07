@@ -24,8 +24,9 @@ use crate::planning::plan::core::nodes::management::index_nodes::{
     ShowCreateIndexNode, ShowEdgeIndexesNode, ShowIndexesNode, ShowTagIndexesNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    AlterSpaceNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode,
-    ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
+    AlterSpaceNode, CheckpointNode, ClearSpaceNode, CommentOnNode, CreateSpaceNode, DescSpaceNode,
+    DropSpaceNode, ExportDatabaseNode, ImportDatabaseNode, ShowCreateSpaceNode, ShowSpacesNode,
+    SwitchSpaceNode,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
@@ -181,6 +182,10 @@ define_manage_node_enum! {
         Switch(SwitchSpaceNode, "SwitchSpace", "switch_space", "Switch Space", "switch_space"),
         Alter(AlterSpaceNode, "AlterSpace", "alter_space", "Alter Space", "alter_space"),
         Clear(ClearSpaceNode, "ClearSpace", "clear_space", "Clear Space", "clear_space"),
+        CommentOn(CommentOnNode, "CommentOn", "comment_on", "Comment On", "comment_on"),
+        Checkpoint(CheckpointNode, "Checkpoint", "checkpoint", "Checkpoint", "checkpoint"),
+        ExportDatabase(ExportDatabaseNode, "ExportDatabase", "export_database", "Export Database", "export_database"),
+        ImportDatabase(ImportDatabaseNode, "ImportDatabase", "import_database", "Import Database", "import_database"),
     }
 }
 

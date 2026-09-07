@@ -361,6 +361,7 @@ impl StmtFactory {
             target,
             where_clause,
             with_edge: false,
+            detach: false,
         })
     }
 
@@ -375,6 +376,7 @@ impl StmtFactory {
             target,
             where_clause,
             with_edge: true,
+            detach: false,
         })
     }
 

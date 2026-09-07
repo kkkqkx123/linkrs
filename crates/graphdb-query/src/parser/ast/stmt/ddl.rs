@@ -170,3 +170,45 @@ pub enum ShowCreateTarget {
     Edge(String),
     Index(String),
 }
+
+/// `CREATE MACRO <name>(<params>) AS <body>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMacroStmt {
+    pub span: Span,
+    pub name: String,
+    pub params: Vec<MacroParam>,
+    pub body: ContextualExpression,
+    pub if_not_exists: bool,
+}
+
+/// Parameter definition for a macro.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroParam {
+    pub name: String,
+    pub default_value: Option<ContextualExpression>,
+}
+
+/// `DROP MACRO <name>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropMacroStmt {
+    pub span: Span,
+    pub name: String,
+    pub if_exists: bool,
+}
+
+/// `CREATE TYPE <name> AS <type>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateTypeStmt {
+    pub span: Span,
+    pub name: String,
+    pub underlying_type: DataType,
+    pub if_not_exists: bool,
+}
+
+/// `DROP TYPE <name>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropTypeStmt {
+    pub span: Span,
+    pub name: String,
+    pub if_exists: bool,
+}

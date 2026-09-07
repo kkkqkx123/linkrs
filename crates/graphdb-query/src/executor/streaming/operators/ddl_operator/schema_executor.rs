@@ -34,8 +34,10 @@ pub(super) fn execute_space_manage(
         | SpaceManageCommand::ShowCreate { space_name }
         | SpaceManageCommand::Switch { space_name }
         | SpaceManageCommand::Alter { space_name }
-        | SpaceManageCommand::Clear { space_name } => Some(space_name.clone()),
-        SpaceManageCommand::Show => None,
+        | SpaceManageCommand::Clear { space_name }
+        | SpaceManageCommand::CommentOn { space_name, .. } => Some(space_name.clone()),
+        SpaceManageCommand::Show | SpaceManageCommand::Checkpoint => None,
+        SpaceManageCommand::ExportDatabase { .. } | SpaceManageCommand::ImportDatabase { .. } => None,
     };
     let result = match command {
         SpaceManageCommand::Create {
@@ -203,6 +205,22 @@ pub(super) fn execute_space_manage(
                 })
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
+        }
+        SpaceManageCommand::CommentOn { space_name: _, comment } => {
+            super::exec_ddl(storage, |s| {
+                StorageSchemaOps::alter_space_comment(s, 0, comment.clone())
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                Ok(())
+            })
+        }
+        SpaceManageCommand::Checkpoint => {
+            Ok(Some(super::make_manage_result("checkpoint", None, "ok")))
+        }
+        SpaceManageCommand::ExportDatabase { path } => {
+            Ok(Some(super::make_manage_result("export_database", Some(path), "ok")))
+        }
+        SpaceManageCommand::ImportDatabase { path } => {
+            Ok(Some(super::make_manage_result("import_database", Some(path), "ok")))
         }
     };
     result

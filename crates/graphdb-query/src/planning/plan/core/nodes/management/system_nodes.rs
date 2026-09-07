@@ -63,3 +63,57 @@ impl ShowSessionsNode {
         }
     }
 }
+
+define_plan_node! {
+    pub struct ShowFunctionsNode {
+    }
+    enum: ShowFunctions
+    input: ZeroInputNode
+}
+
+impl ShowFunctionsNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}
+
+define_plan_node! {
+    pub struct ShowGraphsNode {
+    }
+    enum: ShowGraphs
+    input: ZeroInputNode
+}
+
+impl ShowGraphsNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}
+
+define_plan_node! {
+    pub struct ShowMacrosNode {
+    }
+    enum: ShowMacros
+    input: ZeroInputNode
+}
+
+impl ShowMacrosNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}

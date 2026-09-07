@@ -70,10 +70,10 @@ pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTie
 
 // ── Spill types ──
 pub use spill::{
-    finalize_partitions_with_runtime, hash_bytes_partition,
-    hash_row_partition, schema_fingerprint, DiskQuota, HashPartitionConfig, HashPartitionSpiller,
-    RunHeader, RunReader, RunWriter, SpillConfig, SpillManager, SpilledRun, COLLECTOR_RUN_ROWS_MAX,
-    COLLECTOR_SPILL_ROWS_DEFAULT, HASH_JOIN_MAX_DEPTH, HASH_JOIN_PARTITIONS_DEFAULT,
+    finalize_partitions_with_runtime, hash_bytes_partition, hash_row_partition, schema_fingerprint,
+    DiskQuota, HashPartitionConfig, HashPartitionSpiller, RunHeader, RunReader, RunWriter,
+    SpillConfig, SpillManager, SpilledRun, COLLECTOR_RUN_ROWS_MAX, COLLECTOR_SPILL_ROWS_DEFAULT,
+    HASH_JOIN_MAX_DEPTH, HASH_JOIN_PARTITIONS_DEFAULT,
 };
 
 // ── New types ──

@@ -210,6 +210,7 @@ pub fn is_ddl(stmt: &Stmt) -> bool {
             | Stmt::AlterFulltextIndex(_)
             | Stmt::CreateVectorIndex(_)
             | Stmt::DropVectorIndex(_)
+            | Stmt::CommentOn(_)
     )
 }
 
@@ -256,6 +257,10 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
                 | Stmt::Explain(_)
                 | Stmt::Profile(_)
                 | Stmt::Analyze(_)
+                | Stmt::CommentOn(_)
+                | Stmt::Checkpoint(_)
+                | Stmt::ExportDatabase(_)
+                | Stmt::ImportDatabase(_)
         ),
     }
 }

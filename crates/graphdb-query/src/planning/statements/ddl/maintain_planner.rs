@@ -9,7 +9,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    CreateSpaceNode, SpaceManageInfo,
+    CheckpointNode, CommentOnNode, CreateSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
+    SpaceManageInfo,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
 use crate::planning::plan::core::nodes::{
@@ -20,6 +21,9 @@ use crate::planning::plan::core::nodes::{
 use crate::planning::plan::core::{
     node_id_generator::next_node_id, AlterSpaceNode, ClearSpaceNode, PlanNodeEnum, ShowSpacesNode,
     ShowStatsNode, ShowStatsType, ShowUsersNode,
+};
+use crate::planning::plan::core::nodes::management::system_nodes::{
+    ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
 };
 use crate::planning::plan::SubPlan;
 use crate::planning::plan::{
@@ -93,6 +97,18 @@ impl MaintainPlanner {
                 let show_indexes_node =
                     ShowIndexesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::IndexManage(IndexManageNode::ShowIndexes(show_indexes_node))
+            }
+            ShowTarget::Functions => {
+                let show_functions_node = ShowFunctionsNode::new(next_node_id());
+                PlanNodeEnum::ShowFunctions(show_functions_node)
+            }
+            ShowTarget::Graphs => {
+                let show_graphs_node = ShowGraphsNode::new(next_node_id());
+                PlanNodeEnum::ShowGraphs(show_graphs_node)
+            }
+            ShowTarget::Macros => {
+                let show_macros_node = ShowMacrosNode::new(next_node_id());
+                PlanNodeEnum::ShowMacros(show_macros_node)
             }
         }
     }
@@ -613,6 +629,41 @@ impl Planner for MaintainPlanner {
                 }
             },
 
+            Stmt::CommentOn(comment_stmt) => {
+                let node = CommentOnNode::new(
+                    next_node_id(),
+                    comment_stmt.target.clone(),
+                    comment_stmt.comment.clone(),
+                );
+                PlanNodeEnum::SpaceManage(SpaceManageNode::CommentOn(node))
+            }
+
+            Stmt::Checkpoint(_) => {
+                let node = CheckpointNode::new(next_node_id());
+                PlanNodeEnum::SpaceManage(SpaceManageNode::Checkpoint(node))
+            }
+
+            Stmt::ExportDatabase(export_stmt) => {
+                let node = ExportDatabaseNode::new(
+                    next_node_id(),
+                    export_stmt.path.clone(),
+                    export_stmt.options.clone(),
+                );
+                PlanNodeEnum::SpaceManage(SpaceManageNode::ExportDatabase(node))
+            }
+
+            Stmt::ImportDatabase(import_stmt) => {
+                let node = ImportDatabaseNode::new(next_node_id(), import_stmt.path.clone());
+                PlanNodeEnum::SpaceManage(SpaceManageNode::ImportDatabase(node))
+            }
+
+            Stmt::LoadFrom(_) | Stmt::InQueryCall(_) => {
+                return Err(PlannerError::UnsupportedOperation(format!(
+                    "Statement {:?} is not yet supported by MaintainPlanner",
+                    stmt
+                )));
+            }
+
             _ => {
                 return Err(PlannerError::UnsupportedOperation(format!(
                     "Statement {:?} is not supported by MaintainPlanner",
@@ -644,6 +695,12 @@ impl Planner for MaintainPlanner {
                 | Stmt::Savepoint(_)
                 | Stmt::ReleaseSavepoint(_)
                 | Stmt::Migrate(_)
+                | Stmt::CommentOn(_)
+                | Stmt::Checkpoint(_)
+                | Stmt::ExportDatabase(_)
+                | Stmt::ImportDatabase(_)
+                | Stmt::LoadFrom(_)
+                | Stmt::InQueryCall(_)
         )
     }
 }

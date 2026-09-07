@@ -35,6 +35,17 @@ pub enum SpaceManageCommand {
     Clear {
         space_name: String,
     },
+    CommentOn {
+        space_name: String,
+        comment: String,
+    },
+    Checkpoint,
+    ExportDatabase {
+        path: String,
+    },
+    ImportDatabase {
+        path: String,
+    },
 }
 
 /// Tag DDL command payload.
@@ -114,6 +125,63 @@ pub enum SequenceManageCommand {
     Drop {
         seq_name: String,
         if_exists: bool,
+    },
+}
+
+/// Macro DDL command payload.
+#[derive(Debug, Clone)]
+pub enum MacroManageCommand {
+    Create {
+        macro_name: String,
+        params: Vec<String>,
+        body: String,
+        if_not_exists: bool,
+    },
+    Drop {
+        macro_name: String,
+        if_exists: bool,
+    },
+}
+
+/// Type DDL command payload.
+#[derive(Debug, Clone)]
+pub enum TypeManageCommand {
+    Create {
+        type_name: String,
+        underlying_type: String,
+        if_not_exists: bool,
+    },
+    Drop {
+        type_name: String,
+        if_exists: bool,
+    },
+}
+
+/// Database management command payload.
+#[derive(Debug, Clone)]
+pub enum DatabaseManageCommand {
+    Attach {
+        path: String,
+        alias: String,
+        db_type: Option<String>,
+    },
+    Detach {
+        alias: String,
+    },
+}
+
+/// Extension management command payload.
+#[derive(Debug, Clone)]
+pub enum ExtensionManageCommand {
+    Load {
+        path: String,
+    },
+    Install {
+        name: String,
+        repo: Option<String>,
+    },
+    Uninstall {
+        name: String,
     },
 }
 
@@ -237,6 +305,15 @@ pub enum DdlSpec {
     ShowSessions {
         space_name: String,
     },
+    ShowFunctions {
+        space_name: String,
+    },
+    ShowGraphs {
+        space_name: String,
+    },
+    ShowMacros {
+        space_name: String,
+    },
     Analyze {
         space_name: String,
     },
@@ -261,6 +338,18 @@ pub enum DdlSpec {
     SequenceManage {
         command: SequenceManageCommand,
     },
+    MacroManage {
+        command: MacroManageCommand,
+    },
+    TypeManage {
+        command: TypeManageCommand,
+    },
+    DatabaseManage {
+        command: DatabaseManageCommand,
+    },
+    ExtensionManage {
+        command: ExtensionManageCommand,
+    },
 }
 
 impl SpaceManageCommand {
@@ -270,9 +359,14 @@ impl SpaceManageCommand {
     /// session-level space routing.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Drop { .. } | Self::Alter { .. } | Self::Clear { .. } => {
-                true
-            }
+            Self::Create { .. }
+            | Self::Drop { .. }
+            | Self::Alter { .. }
+            | Self::Clear { .. }
+            | Self::CommentOn { .. }
+            | Self::Checkpoint
+            | Self::ExportDatabase { .. }
+            | Self::ImportDatabase { .. } => true,
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } | Self::Switch { .. } => false,
         }
     }
@@ -303,6 +397,42 @@ impl SequenceManageCommand {
     pub fn is_write(&self) -> bool {
         match self {
             Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+        }
+    }
+}
+
+impl MacroManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Drop { .. } => true,
+        }
+    }
+}
+
+impl TypeManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Create { .. } | Self::Drop { .. } => true,
+        }
+    }
+}
+
+impl DatabaseManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Attach { .. } | Self::Detach { .. } => true,
+        }
+    }
+}
+
+impl ExtensionManageCommand {
+    /// Whether the command mutates stored state.
+    pub fn is_write(&self) -> bool {
+        match self {
+            Self::Load { .. } | Self::Install { .. } | Self::Uninstall { .. } => true,
         }
     }
 }
@@ -363,12 +493,19 @@ impl DdlSpec {
             | Self::ShowConfigs { .. }
             | Self::ShowQueries { .. }
             | Self::ShowSessions { .. }
+            | Self::ShowFunctions { .. }
+            | Self::ShowGraphs { .. }
+            | Self::ShowMacros { .. }
             | Self::Analyze { .. } => false,
             Self::Migrate { .. }
             | Self::MigratePlan { .. }
             | Self::MigrateRun { .. }
             | Self::MigrateRollback { .. } => true,
             Self::SequenceManage { command } => command.is_write(),
+            Self::MacroManage { command } => command.is_write(),
+            Self::TypeManage { command } => command.is_write(),
+            Self::DatabaseManage { command } => command.is_write(),
+            Self::ExtensionManage { command } => command.is_write(),
         }
     }
 }

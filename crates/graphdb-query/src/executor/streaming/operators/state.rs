@@ -423,12 +423,19 @@ pub enum DdlState {
     ShowConfigs,
     ShowQueries,
     ShowSessions,
+    ShowFunctions,
+    ShowGraphs,
+    ShowMacros,
     Analyze,
     Migrate,
     MigratePlan,
     MigrateRun,
     MigrateRollback,
     SequenceManage,
+    MacroManage,
+    TypeManage,
+    DatabaseManage,
+    ExtensionManage,
 }
 
 impl DdlState {
@@ -444,12 +451,19 @@ impl DdlState {
             super::spec::DdlSpec::ShowConfigs { .. } => DdlState::ShowConfigs,
             super::spec::DdlSpec::ShowQueries { .. } => DdlState::ShowQueries,
             super::spec::DdlSpec::ShowSessions { .. } => DdlState::ShowSessions,
+            super::spec::DdlSpec::ShowFunctions { .. } => DdlState::ShowFunctions,
+            super::spec::DdlSpec::ShowGraphs { .. } => DdlState::ShowGraphs,
+            super::spec::DdlSpec::ShowMacros { .. } => DdlState::ShowMacros,
             super::spec::DdlSpec::Analyze { .. } => DdlState::Analyze,
             super::spec::DdlSpec::Migrate { .. } => DdlState::Migrate,
             super::spec::DdlSpec::MigratePlan { .. } => DdlState::MigratePlan,
             super::spec::DdlSpec::MigrateRun { .. } => DdlState::MigrateRun,
             super::spec::DdlSpec::MigrateRollback { .. } => DdlState::MigrateRollback,
             super::spec::DdlSpec::SequenceManage { .. } => DdlState::SequenceManage,
+            super::spec::DdlSpec::MacroManage { .. } => DdlState::MacroManage,
+            super::spec::DdlSpec::TypeManage { .. } => DdlState::TypeManage,
+            super::spec::DdlSpec::DatabaseManage { .. } => DdlState::DatabaseManage,
+            super::spec::DdlSpec::ExtensionManage { .. } => DdlState::ExtensionManage,
         }
     }
 }

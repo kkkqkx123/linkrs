@@ -495,6 +495,51 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
     match token.kind {
         TokenKind::LParen => {
             ctx.next_token();
+
+            // Check if this is a lambda expression: (x, y) -> expr
+            // Look ahead to see if we have identifier(s) followed by -> and )
+            if let TokenKind::Identifier(_) = ctx.current_token().kind {
+                let first_name = ctx.current_token().lexeme.clone();
+                ctx.next_token();
+
+                // Check if it's a single-param lambda: (x -> expr)
+                if ctx.check_token(TokenKind::Arrow) {
+                    ctx.next_token(); // consume ->
+                    let body = parse_expression(ctx)?;
+                    ctx.expect_token(TokenKind::RParen)?;
+                    let span = ctx.merge_span(start_pos, ctx.current_position());
+                    return Ok(ParseResult {
+                        expr: Expression::lambda(vec![first_name], body.expr),
+                        span,
+                    });
+                }
+
+                // Check for multi-param lambda: (x, y, ...) -> expr
+                let mut params = vec![first_name];
+                while ctx.match_token(TokenKind::Comma) {
+                    if let TokenKind::Identifier(ref name) = ctx.current_token().kind {
+                        let name = name.clone();
+                        ctx.next_token();
+                        params.push(name);
+
+                        // Check if we have -> after this parameter
+                        if ctx.check_token(TokenKind::Arrow) {
+                            ctx.next_token(); // consume ->
+                            let body = parse_expression(ctx)?;
+                            ctx.expect_token(TokenKind::RParen)?;
+                            let span = ctx.merge_span(start_pos, ctx.current_position());
+                            return Ok(ParseResult {
+                                expr: Expression::lambda(params, body.expr),
+                                span,
+                            });
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Not a lambda, parse as normal parenthesized expression
             let expression = parse_expression(ctx)?;
             ctx.expect_token(TokenKind::RParen)?;
             Ok(expression)
@@ -504,6 +549,15 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             let span = ctx.merge_span(start_pos, ctx.current_position());
             if ctx.match_token(TokenKind::LParen) {
                 parse_function_call(name, span, ctx)
+            } else if ctx.check_token(TokenKind::Arrow) {
+                // Lambda expression: x -> expr
+                ctx.next_token(); // consume ->
+                let body = parse_expression(ctx)?;
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                Ok(ParseResult {
+                    expr: Expression::lambda(vec![name], body.expr),
+                    span,
+                })
             } else {
                 Ok(ParseResult {
                     expr: Expression::variable(name),
@@ -561,7 +615,34 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 span,
             })
         }
-        TokenKind::Count | TokenKind::Sum | TokenKind::Avg | TokenKind::Min | TokenKind::Max => {
+        TokenKind::Count => {
+            // COUNT { ... } is a count subquery; COUNT(...) is a function call.
+            let next = ctx.peek_token();
+            if next.kind == TokenKind::LBrace {
+                ctx.next_token();
+                ctx.next_token(); // consume {
+                let body = parse_subquery_body(ctx)?;
+                ctx.expect_token(TokenKind::RBrace)?;
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                Ok(ParseResult {
+                    expr: Expression::count_subquery(body),
+                    span,
+                })
+            } else {
+                let func_name = token.lexeme.clone();
+                ctx.next_token();
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                if ctx.match_token(TokenKind::LParen) {
+                    parse_function_call(func_name, span, ctx)
+                } else {
+                    Ok(ParseResult {
+                        expr: Expression::variable(func_name),
+                        span,
+                    })
+                }
+            }
+        }
+        TokenKind::Sum | TokenKind::Avg | TokenKind::Min | TokenKind::Max => {
             let func_name = token.lexeme.clone();
             ctx.next_token();
             let span = ctx.merge_span(start_pos, ctx.current_position());

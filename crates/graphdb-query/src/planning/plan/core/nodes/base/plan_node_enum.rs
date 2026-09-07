@@ -21,7 +21,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+    ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode,
+    ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -95,8 +96,9 @@ pub use crate::planning::plan::core::nodes::management::stats_nodes::{
     ShowStatsNode as ShowStatsNodeType, ShowStatsType,
 };
 pub use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode as ShowConfigsNodeType, ShowQueriesNode as ShowQueriesNodeType,
-    ShowSessionsNode as ShowSessionsNodeType,
+    ShowConfigsNode as ShowConfigsNodeType, ShowFunctionsNode as ShowFunctionsNodeType,
+    ShowGraphsNode as ShowGraphsNodeType, ShowMacrosNode as ShowMacrosNodeType,
+    ShowQueriesNode as ShowQueriesNodeType, ShowSessionsNode as ShowSessionsNodeType,
 };
 pub use crate::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
@@ -245,6 +247,9 @@ pub enum PlanNodeEnum {
     ShowConfigs(ShowConfigsNode),
     ShowQueries(ShowQueriesNode),
     ShowSessions(ShowSessionsNode),
+    ShowFunctions(ShowFunctionsNode),
+    ShowGraphs(ShowGraphsNode),
+    ShowMacros(ShowMacrosNode),
 
     // Full-text Search Nodes
     FulltextSearch(FulltextSearchNode),
@@ -353,6 +358,9 @@ crate::define_enum_is_methods! {
     (ShowConfigs, is_show_configs),
     (ShowQueries, is_show_queries),
     (ShowSessions, is_show_sessions),
+    (ShowFunctions, is_show_functions),
+    (ShowGraphs, is_show_graphs),
+    (ShowMacros, is_show_macros),
     // Full-text Search Nodes
     (FulltextSearch, is_fulltext_search),
     (FulltextLookup, is_fulltext_lookup),
@@ -461,6 +469,9 @@ crate::define_enum_as_methods! {
     (ShowConfigs, as_show_configs, ShowConfigsNode),
     (ShowQueries, as_show_queries, ShowQueriesNode),
     (ShowSessions, as_show_sessions, ShowSessionsNode),
+    (ShowFunctions, as_show_functions, ShowFunctionsNode),
+    (ShowGraphs, as_show_graphs, ShowGraphsNode),
+    (ShowMacros, as_show_macros, ShowMacrosNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup, FulltextLookupNode),
@@ -568,6 +579,9 @@ crate::define_enum_as_mut_methods! {
     (ShowConfigs, as_show_configs_mut, ShowConfigsNode),
     (ShowQueries, as_show_queries_mut, ShowQueriesNode),
     (ShowSessions, as_show_sessions_mut, ShowSessionsNode),
+    (ShowFunctions, as_show_functions_mut, ShowFunctionsNode),
+    (ShowGraphs, as_show_graphs_mut, ShowGraphsNode),
+    (ShowMacros, as_show_macros_mut, ShowMacrosNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search_mut, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup_mut, FulltextLookupNode),
@@ -681,6 +695,9 @@ crate::define_all_plan_nodes! {
     (ShowConfigs, ShowConfigsNode, PlanNodeCategory::Management, "ShowConfigs"),
     (ShowQueries, ShowQueriesNode, PlanNodeCategory::Management, "ShowQueries"),
     (ShowSessions, ShowSessionsNode, PlanNodeCategory::Management, "ShowSessions"),
+    (ShowFunctions, ShowFunctionsNode, PlanNodeCategory::Management, "ShowFunctions"),
+    (ShowGraphs, ShowGraphsNode, PlanNodeCategory::Management, "ShowGraphs"),
+    (ShowMacros, ShowMacrosNode, PlanNodeCategory::Management, "ShowMacros"),
     // Full-text Search Nodes
     (FulltextSearch, FulltextSearchNode, PlanNodeCategory::DataAccess, "FulltextSearch"),
     (FulltextLookup, FulltextLookupNode, PlanNodeCategory::DataAccess, "FulltextLookup"),
@@ -723,6 +740,9 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::ShowConfigs(_)
                 | PlanNodeEnum::ShowQueries(_)
                 | PlanNodeEnum::ShowSessions(_)
+                | PlanNodeEnum::ShowFunctions(_)
+                | PlanNodeEnum::ShowGraphs(_)
+                | PlanNodeEnum::ShowMacros(_)
         )
     }
 }
@@ -831,6 +851,9 @@ mod tests {
         "ShowConfigs",
         "ShowQueries",
         "ShowSessions",
+        "ShowFunctions",
+        "ShowGraphs",
+        "ShowMacros",
         // DataAccess (3)
         "FulltextSearch",
         "FulltextLookup",
@@ -919,6 +942,9 @@ mod tests {
         "ShowConfigs",
         "ShowQueries",
         "ShowSessions",
+        "ShowFunctions",
+        "ShowGraphs",
+        "ShowMacros",
         "FulltextSearch",
         "FulltextLookup",
         "MatchFulltext",
@@ -927,11 +953,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 82 variants. With `qdrant`: 85 variants.
-    #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 82;
-    #[cfg(feature = "vector")]
+    /// Default build: 85 variants. With `qdrant`: 88 variants.
+    #[cfg(not(feature = "qdrant"))]
     const EXPECTED_VARIANT_COUNT: usize = 85;
+    #[cfg(feature = "qdrant")]
+    const EXPECTED_VARIANT_COUNT: usize = 88;
 
     #[test]
     fn variant_count_matches_documented_number() {

@@ -32,8 +32,9 @@ pub use apply::{ApplyKind, ApplySpec};
 pub use blocking::BlockingSpec;
 pub use cardinality::operator_cardinality_shape_key;
 pub use ddl::{
-    DdlSpec, EdgeManageCommand, IndexManageCommand, MigrateAction, PropertyRename,
-    SequenceManageCommand, SpaceManageCommand, TagManageCommand, UserManageCommand,
+    DdlSpec, DatabaseManageCommand, EdgeManageCommand, ExtensionManageCommand, IndexManageCommand,
+    MacroManageCommand, MigrateAction, PropertyRename, SequenceManageCommand, SpaceManageCommand,
+    TagManageCommand, TypeManageCommand, UserManageCommand,
 };
 pub use exchange::ExchangeSpec;
 pub use fulltext::{FulltextManageCommand, FulltextSpec};

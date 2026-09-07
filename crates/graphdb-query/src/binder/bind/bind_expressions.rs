@@ -559,6 +559,19 @@ impl Binder {
                     negated: *negated,
                 })
             }
+            Expression::CountSubquery { body } => {
+                let query = self.bind_subquery_body(body)?;
+                Ok(BoundExpression::CountSubquery {
+                    query: Box::new(query),
+                })
+            }
+            Expression::Lambda { params, body } => {
+                let bound_body = self.bind_inner_expr(body, None)?;
+                Ok(BoundExpression::Lambda {
+                    params: params.clone(),
+                    body: Box::new(bound_body),
+                })
+            }
         }
     }
 

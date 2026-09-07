@@ -291,6 +291,12 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
             Err("Exists expression conversion not yet supported".to_string())
         }
         BoundExpression::In { .. } => Err("In expression conversion not yet supported".to_string()),
+        BoundExpression::CountSubquery { .. } => {
+            Err("CountSubquery expression conversion not yet supported".to_string())
+        }
+        BoundExpression::Lambda { .. } => {
+            Err("Lambda expression conversion not yet supported".to_string())
+        }
         BoundExpression::Pattern(_) => {
             Err("Pattern expression conversion not yet supported".to_string())
         }

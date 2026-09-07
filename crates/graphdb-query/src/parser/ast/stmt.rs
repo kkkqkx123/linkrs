@@ -153,6 +153,21 @@ pub enum Stmt {
     AssignVariable(AssignVariableStmt),
     Copy(CopyStmt),
     Migrate(MigrateStmt),
+    CommentOn(CommentOnStmt),
+    Checkpoint(CheckpointStmt),
+    LoadFrom(LoadFromStmt),
+    InQueryCall(InQueryCallStmt),
+    ExportDatabase(ExportDatabaseStmt),
+    ImportDatabase(ImportDatabaseStmt),
+    CreateMacro(CreateMacroStmt),
+    DropMacro(DropMacroStmt),
+    CreateType(CreateTypeStmt),
+    DropType(DropTypeStmt),
+    AttachDatabase(AttachDatabaseStmt),
+    DetachDatabase(DetachDatabaseStmt),
+    LoadExtension(LoadExtensionStmt),
+    InstallExtension(InstallExtensionStmt),
+    UninstallExtension(UninstallExtensionStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -224,6 +239,21 @@ crate::define_stmt_helpers! {
     ReleaseSavepoint => Transaction,
     AssignVariable => Dql,
     Copy => Dml,
+    CommentOn => Ddl,
+    Checkpoint => Admin,
+    LoadFrom => Dql,
+    InQueryCall => Dql,
+    ExportDatabase => Admin,
+    ImportDatabase => Admin,
+    CreateMacro => Ddl,
+    DropMacro => Ddl,
+    CreateType => Ddl,
+    DropType => Ddl,
+    AttachDatabase => Admin,
+    DetachDatabase => Admin,
+    LoadExtension => Admin,
+    InstallExtension => Admin,
+    UninstallExtension => Admin,
 }
 
 impl Stmt {
@@ -318,6 +348,21 @@ impl Stmt {
                 MigrateStmt::Execute(_) => "MIGRATE EXECUTE",
                 MigrateStmt::Rollback(_) => "MIGRATE ROLLBACK",
             },
+            Stmt::CommentOn(_) => "COMMENT ON",
+            Stmt::Checkpoint(_) => "CHECKPOINT",
+            Stmt::LoadFrom(_) => "LOAD FROM",
+            Stmt::InQueryCall(_) => "CALL",
+            Stmt::ExportDatabase(_) => "EXPORT DATABASE",
+            Stmt::ImportDatabase(_) => "IMPORT DATABASE",
+            Stmt::CreateMacro(_) => "CREATE MACRO",
+            Stmt::DropMacro(_) => "DROP MACRO",
+            Stmt::CreateType(_) => "CREATE TYPE",
+            Stmt::DropType(_) => "DROP TYPE",
+            Stmt::AttachDatabase(_) => "ATTACH DATABASE",
+            Stmt::DetachDatabase(_) => "DETACH DATABASE",
+            Stmt::LoadExtension(_) => "LOAD EXTENSION",
+            Stmt::InstallExtension(_) => "INSTALL EXTENSION",
+            Stmt::UninstallExtension(_) => "UNINSTALL EXTENSION",
         }
     }
 
@@ -595,6 +640,7 @@ mod tests {
                     target: DeleteTarget::Vertices(vec![]),
                     where_clause: None,
                     with_edge: false,
+                    detach: false,
                 }),
                 Dml,
             ),
@@ -982,8 +1028,127 @@ mod tests {
                 })),
                 Ddl,
             ),
+            (
+                Stmt::CommentOn(CommentOnStmt {
+                    span,
+                    target: CommentTarget::Tag("Person".to_string()),
+                    comment: "a comment".to_string(),
+                }),
+                Ddl,
+            ),
+            (Stmt::Checkpoint(CheckpointStmt { span }), Admin),
+            (
+                Stmt::LoadFrom(LoadFromStmt {
+                    span,
+                    source: ScanSource::File("data.csv".to_string()),
+                    options: vec![],
+                    return_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::InQueryCall(InQueryCallStmt {
+                    span,
+                    func_name: "db_version".to_string(),
+                    args: vec![],
+                    yield_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::ExportDatabase(ExportDatabaseStmt {
+                    span,
+                    path: "/tmp/db".to_string(),
+                    options: vec![],
+                }),
+                Admin,
+            ),
+            (
+                Stmt::ImportDatabase(ImportDatabaseStmt {
+                    span,
+                    path: "/tmp/db".to_string(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::CreateMacro(CreateMacroStmt {
+                    span,
+                    name: "double".to_string(),
+                    params: vec![MacroParam {
+                        name: "x".to_string(),
+                        default_value: None,
+                    }],
+                    body: ctx_expr(),
+                    if_not_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::DropMacro(DropMacroStmt {
+                    span,
+                    name: "double".to_string(),
+                    if_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::CreateType(CreateTypeStmt {
+                    span,
+                    name: "Age".to_string(),
+                    underlying_type: DataType::Int,
+                    if_not_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::DropType(DropTypeStmt {
+                    span,
+                    name: "Age".to_string(),
+                    if_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::AttachDatabase(AttachDatabaseStmt {
+                    span,
+                    path: "/tmp/other.db".to_string(),
+                    alias: "other".to_string(),
+                    db_type: None,
+                    options: vec![],
+                }),
+                Admin,
+            ),
+            (
+                Stmt::DetachDatabase(DetachDatabaseStmt {
+                    span,
+                    alias: "other".to_string(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::LoadExtension(LoadExtensionStmt {
+                    span,
+                    path: "my_ext".to_string(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::InstallExtension(InstallExtensionStmt {
+                    span,
+                    name: "my_ext".to_string(),
+                    repo: None,
+                }),
+                Admin,
+            ),
+            (
+                Stmt::UninstallExtension(UninstallExtensionStmt {
+                    span,
+                    name: "my_ext".to_string(),
+                }),
+                Admin,
+            ),
         ];
-        assert_eq!(cases.len(), 69, "Stmt has 69 variants; update this test");
+        assert_eq!(cases.len(), 84, "Stmt has 84 variants; update this test");
         for (stmt, expected) in cases {
             assert_eq!(
                 stmt.category(),

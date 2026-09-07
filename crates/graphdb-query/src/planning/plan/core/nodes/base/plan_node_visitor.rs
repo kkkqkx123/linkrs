@@ -12,7 +12,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+    ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode,
+    ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -169,6 +170,9 @@ pub trait PlanNodeVisitor {
         ShowConfigs, ShowConfigsNode, visit_show_configs;
         ShowQueries, ShowQueriesNode, visit_show_queries;
         ShowSessions, ShowSessionsNode, visit_show_sessions;
+        ShowFunctions, ShowFunctionsNode, visit_show_functions;
+        ShowGraphs, ShowGraphsNode, visit_show_graphs;
+        ShowMacros, ShowMacrosNode, visit_show_macros;
     );
 
     impl_visitor_methods!(
@@ -284,6 +288,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowConfigs(node) => visitor.visit_show_configs(node),
             PlanNodeEnum::ShowQueries(node) => visitor.visit_show_queries(node),
             PlanNodeEnum::ShowSessions(node) => visitor.visit_show_sessions(node),
+            PlanNodeEnum::ShowFunctions(node) => visitor.visit_show_functions(node),
+            PlanNodeEnum::ShowGraphs(node) => visitor.visit_show_graphs(node),
+            PlanNodeEnum::ShowMacros(node) => visitor.visit_show_macros(node),
             PlanNodeEnum::CopyFrom(node) => visitor.visit_copy_from(node),
             PlanNodeEnum::CopyTo(node) => visitor.visit_copy_to(node),
             PlanNodeEnum::InsertVertices(node) => visitor.visit_insert_vertices(node),

@@ -58,6 +58,12 @@ impl UtilStmtParser {
             ShowTarget::Tags
         } else if ctx.match_token(TokenKind::Edges) {
             ShowTarget::Edges
+        } else if ctx.match_token(TokenKind::Functions) {
+            ShowTarget::Functions
+        } else if ctx.match_token(TokenKind::Graphs) {
+            ShowTarget::Graphs
+        } else if ctx.match_token(TokenKind::Macros) {
+            ShowTarget::Macros
         } else {
             ShowTarget::Spaces
         };
