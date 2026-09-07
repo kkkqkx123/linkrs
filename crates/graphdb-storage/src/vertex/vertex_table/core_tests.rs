@@ -961,3 +961,52 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         .collect();
     assert_eq!(props_at_300.get("age"), Some(&Value::Int(32)));
 }
+
+#[test]
+fn test_flush_chunk_sidecars_and_chunked_reload() {
+    use tempfile::TempDir;
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema.clone());
+    for i in 0..20 {
+        table
+            .insert(
+                &format!("v{}", i),
+                &[
+                    ("name".to_string(), Value::string(format!("n{}", i))),
+                    ("age".to_string(), Value::Int(i as i32)),
+                ],
+                100,
+            )
+            .unwrap();
+    }
+    let tmp = TempDir::new().unwrap();
+    let shard = tmp.path().join("shard");
+    table
+        .flush(
+            &shard,
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+    // Chunk metadata is written alongside columns.bin without format change.
+    assert!(shard.join("columns.bin").exists());
+    assert!(shard.join("age.chunks").exists());
+    assert!(shard.join("name.chunks").exists());
+
+    let mut reloaded = new_table(0, "person", schema);
+    reloaded.load(&shard).unwrap();
+    // Schema and stats load eagerly; verify a mid-table read first.
+    let rec = reloaded.get_by_internal_id(10, 100).unwrap();
+    let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
+    assert_eq!(props.get("age"), Some(&Value::Int(10)));
+
+    // Chunked columns serve point reads after reload.
+    let age = reloaded.columns.get_column_mut("age").unwrap();
+    age.set_chunk_capacity(8);
+    age.materialize_chunks();
+    assert!(age.chunk_count() >= 2);
+    let age = reloaded.columns.get_column("age").unwrap();
+    assert_eq!(age.get(0), Some(Value::Int(0)));
+    let rec = reloaded.get_by_internal_id(0, 100).unwrap();
+    let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
+    assert_eq!(props.get("age"), Some(&Value::Int(0)));
+}

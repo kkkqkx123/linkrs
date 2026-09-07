@@ -13,6 +13,10 @@ impl LocalWalWriter {
         let current_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
         let header = WalFileHeader::new(self.thread_id, self.checkpoint_seq, current_lsn)
             .with_checksum_enabled(self.config.checksum_enabled);
+        log::error!(
+            "WAL WRITE_FILE_HEADER: path={:?}, start_lsn={}, checkpoint_seq={}, thread_id={}, file_used={}",
+            self.file_path, current_lsn, self.checkpoint_seq, self.thread_id, self.file_used
+        );
         self.persist_file_header(header, true)
     }
 
@@ -66,6 +70,10 @@ impl LocalWalWriter {
     /// first record appended after restart would have an invalid prev_lsn chain.
     pub fn set_recovery_baseline_lsn(&mut self, lsn: Lsn) -> WalResult<()> {
         let current_lsn = self.current_lsn();
+        log::error!(
+            "WAL SET_RECOVERY_BASELINE: requested={}, current={}, file_used={}, file_start_lsn={}",
+            lsn, current_lsn, self.file_used, self.file_start_lsn
+        );
         if lsn <= current_lsn {
             return Ok(());
         }

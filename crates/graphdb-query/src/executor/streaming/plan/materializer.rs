@@ -204,7 +204,7 @@ impl PhysicalPlanMaterializer {
                         &bindings.memory_budget,
                         output_layout.clone(),
                     );
-                    StreamingExecutor::Join(base, Box::new(left), Box::new(right), op)
+                    StreamingExecutor::Join(base, Box::new(left), Box::new(right), Box::new(op))
                 }
                 OperatorKindSpec::Wco(wco_spec) => {
                     require_input_count(fragment.id, op_id, &inputs, 1 + wco_spec.num_builds())?;

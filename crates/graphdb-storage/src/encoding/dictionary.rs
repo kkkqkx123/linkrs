@@ -24,6 +24,14 @@ impl StringDictionary {
         }
     }
 
+    pub fn len_entries(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn contains(&self, value: &str) -> bool {
+        self.index_map.contains_key(value)
+    }
+
     pub fn insert(&mut self, value: &str) -> u32 {
         if let Some(&idx) = self.index_map.get(value) {
             return idx;
@@ -222,6 +230,14 @@ impl DictionaryColumn {
 
     pub fn len(&self) -> usize {
         self.encoder.len()
+    }
+
+    pub fn len_entries(&self) -> usize {
+        self.encoder.dictionary.len_entries()
+    }
+
+    pub fn contains(&self, value: &str) -> bool {
+        self.encoder.dictionary.contains(value)
     }
 
     pub fn memory_usage(&self) -> usize {

@@ -75,7 +75,7 @@ pub enum StreamingExecutor {
         OperatorBase,
         Box<StreamingExecutor>,
         Box<StreamingExecutor>,
-        JoinOperator,
+        Box<JoinOperator>,
     ),
     Set(
         OperatorBase,
@@ -919,7 +919,7 @@ impl Spillable for StreamingExecutor {
         match self {
             Self::Blocking(_, _, op) => op.spill_count(),
             Self::Join(_, _, _, op) => op.spill_count(),
-            Self::Set(_, _, _, _op) => 0,
+            Self::Set(_, _, _, op) => op.spill_count(),
             Self::Wco(_, _, _, _op) => 0,
             _ => 0,
         }

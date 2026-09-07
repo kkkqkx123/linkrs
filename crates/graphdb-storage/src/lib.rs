@@ -11,6 +11,7 @@ pub(crate) mod index;
 pub(crate) mod macros;
 pub mod memory_watermark;
 pub mod mvcc_visibility;
+pub mod stats;
 pub use graphdb_core::types::SnapshotHandle;
 pub mod migration_history;
 pub(crate) mod schema;

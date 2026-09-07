@@ -800,6 +800,12 @@ pub struct WalConfig {
     pub group_commit_batch_size: usize,
     /// When true, WAL is skipped entirely (in-memory mode).
     pub in_memory: bool,
+    /// Per-thread buffer size for async WAL flush (default 256KB).
+    pub buffer_size: usize,
+    /// Background flush interval in milliseconds (default 10ms).
+    pub flush_interval_ms: u64,
+    /// Enable background async flush; false preserves synchronous behavior.
+    pub enable_async_flush: bool,
 }
 
 impl Default for WalConfig {
@@ -823,6 +829,9 @@ impl Default for WalConfig {
             group_commit_timeout_ms: 30_000,
             group_commit_batch_size: 32,
             in_memory: false,
+            buffer_size: 256 * 1024,
+            flush_interval_ms: 10,
+            enable_async_flush: true,
         }
     }
 }
@@ -938,6 +947,25 @@ impl WalConfig {
     pub fn with_in_memory(mut self, in_memory: bool) -> Self {
         self.in_memory = in_memory;
         self
+    }
+
+    pub fn with_buffer_size(mut self, size: usize) -> Self {
+        self.buffer_size = size;
+        self
+    }
+
+    pub fn with_flush_interval_ms(mut self, ms: u64) -> Self {
+        self.flush_interval_ms = ms;
+        self
+    }
+
+    pub fn with_async_flush(mut self, enabled: bool) -> Self {
+        self.enable_async_flush = enabled;
+        self
+    }
+
+    pub fn flush_interval(&self) -> Duration {
+        Duration::from_millis(self.flush_interval_ms)
     }
 
     pub fn is_in_memory(&self) -> bool {

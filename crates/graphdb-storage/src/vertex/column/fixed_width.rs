@@ -231,6 +231,7 @@ pub(crate) fn write_fixed_value(
         Value::Date(_) => 12,
         Value::Time(_) => 8,
         Value::DateTime(_) => 28,
+        Value::Uuid(_) => 16,
         _ => {
             return Err(StorageError::type_mismatch(
                 value.data_type(),
@@ -289,6 +290,9 @@ pub(crate) fn write_fixed_value(
             data[offset + 20..offset + 24].copy_from_slice(&dt.sec.to_le_bytes());
             data[offset + 24..offset + 28].copy_from_slice(&dt.microsec.to_le_bytes());
         }
+        Value::Uuid(u) => {
+            data[offset..offset + 16].copy_from_slice(u.as_bytes());
+        }
         _ => {
             return Err(StorageError::type_mismatch(
                 value.data_type(),
@@ -345,6 +349,12 @@ pub(crate) fn read_fixed_value(data: &[u8], offset: usize, element_size: usize) 
                 sec: u32::from_le_bytes(sec_bytes),
                 microsec: u32::from_le_bytes(microsec_bytes),
             }))
+        }
+        16 => {
+            let bytes: [u8; 16] = data[offset..offset + 16].try_into().ok()?;
+            Some(Value::Uuid(graphdb_core::value::UuidValue::from_bytes(
+                bytes,
+            )))
         }
         _ => None,
     }

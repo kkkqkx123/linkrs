@@ -255,8 +255,8 @@ impl PartitionedJoinState {
         memory_tracker: &mut MemoryTracker,
         runtime: Option<&Arc<ExecutionRuntime>>,
     ) -> Result<bool, QueryError> {
-        while (self.current as usize) < self.num_partitions as usize {
-            let idx = self.current as usize;
+        while self.current < self.num_partitions as usize {
+            let idx = self.current;
             let build_empty = self.build_runs.get(idx).is_none_or(Vec::is_empty);
             let probe_empty = self.probe_runs.get(idx).is_none_or(Vec::is_empty);
             if build_empty && probe_empty {

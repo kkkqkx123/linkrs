@@ -52,6 +52,9 @@ pub struct SetOperator {
     pub runtime: Option<Arc<ExecutionRuntime>>,
     pub output_layout: Arc<SlotLayout>,
     pub config: OperatorConfig,
+    spilled_bytes: u64,
+    spilled_rows: u64,
+    spill_count: u64,
 }
 
 impl SetOperator {
@@ -97,6 +100,9 @@ impl SetOperator {
             runtime: None,
             output_layout,
             config: OperatorConfig::default(),
+            spilled_bytes: 0,
+            spilled_rows: 0,
+            spill_count: 0,
         }
     }
 
@@ -497,6 +503,9 @@ impl SetOperator {
                         let mut writer = sm.create_run_writer(fp)?;
                         writer.write_rows(chunk)?;
                         let run = sm.finalize_run(writer)?;
+                        self.spilled_rows += run.row_count;
+                        self.spilled_bytes += run.byte_size;
+                        self.spill_count += 1;
                         if let Some(rt) = self.runtime.as_ref() {
                             rt.columnar_stats()
                                 .record_spill(run.row_count, run.byte_size);
@@ -524,6 +533,9 @@ impl SetOperator {
                         let mut writer = sm.create_run_writer(fp)?;
                         writer.write_rows(&chunk)?;
                         let run = sm.finalize_run(writer)?;
+                        self.spilled_rows += run.row_count;
+                        self.spilled_bytes += run.byte_size;
+                        self.spill_count += 1;
                         if let Some(rt) = self.runtime.as_ref() {
                             rt.columnar_stats()
                                 .record_spill(run.row_count, run.byte_size);
@@ -557,10 +569,14 @@ impl SetOperator {
     }
 
     pub fn spilled_bytes(&self) -> u64 {
-        0
+        self.spilled_bytes
     }
 
     pub fn spilled_rows(&self) -> u64 {
-        0
+        self.spilled_rows
+    }
+
+    pub fn spill_count(&self) -> u64 {
+        self.spill_count
     }
 }

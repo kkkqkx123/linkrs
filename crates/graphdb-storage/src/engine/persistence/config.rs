@@ -27,6 +27,12 @@ pub struct PersistenceConfig {
     pub async_checkpoint_enabled: bool,
     /// Interval for background checkpoint polling.
     pub async_checkpoint_poll_interval: Duration,
+    /// Per-thread WAL buffer size for async flush (default 256KB).
+    pub wal_buffer_size: usize,
+    /// Background WAL flush interval in milliseconds (default 10ms).
+    pub wal_flush_interval_ms: u64,
+    /// Enable background async WAL flush; false preserves sync behavior.
+    pub wal_enable_async_flush: bool,
 }
 
 impl Default for PersistenceConfig {
@@ -47,6 +53,9 @@ impl Default for PersistenceConfig {
             property_graph_config: PropertyGraphConfig::default(),
             async_checkpoint_enabled: true,
             async_checkpoint_poll_interval: Duration::from_secs(1),
+            wal_buffer_size: 256 * 1024,
+            wal_flush_interval_ms: 10,
+            wal_enable_async_flush: true,
         }
     }
 }

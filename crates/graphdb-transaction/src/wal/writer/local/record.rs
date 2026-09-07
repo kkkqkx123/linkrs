@@ -22,6 +22,13 @@ impl LocalWalWriter {
         timestamp: Timestamp,
         payload: &[u8],
     ) -> WalResult<()> {
+        // Buffered mode: serialize into the per-thread buffer without file
+        // I/O. This dispatch lives on the inherent method (not just the
+        // trait impl) because inherent methods shadow trait methods at
+        // call sites, so all callers route through the buffer when enabled.
+        if self.buffer.is_some() {
+            return self.append_entry_buffered(op_type, timestamp, payload);
+        }
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
@@ -200,6 +207,28 @@ impl LocalWalWriter {
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
+        }
+
+        // Buffered mode: serialize without the file lock, then drain. This
+        // separates record assembly from I/O and wakes the flush thread.
+        if self.buffer.is_some() {
+            for (op_type, timestamp, payload) in entries {
+                self.append_entry_buffered(*op_type, *timestamp, payload)?;
+            }
+            self.request_flush();
+            let new_lsn = self.current_lsn.load(Ordering::SeqCst);
+            if matches!(durability, graphdb_core::types::DurabilityLevel::Sync) {
+                self.flush_buffered_to_file()?;
+                if let Some(ref coordinator) = self.group_commit {
+                    coordinator.record_appended(new_lsn);
+                    coordinator.append_and_wait(new_lsn)?;
+                } else {
+                    self.sync_via_file()?;
+                    return Ok(());
+                }
+                self.last_synced_lsn.store(new_lsn, Ordering::SeqCst);
+            }
+            return Ok(());
         }
 
         let new_lsn = self.write_batch_entries(entries)?;

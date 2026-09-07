@@ -122,6 +122,13 @@ impl LocalWalWriter {
 
         self.write_file_header()?;
 
+        // Refresh the shared async flush position after rotation so buffered
+        // drains target the new segment.
+        if self.buffer.is_some() {
+            self.flush_state = None;
+            self.ensure_flush_state();
+        }
+
         // Record rotation statistics
         self.stats.record_rotation();
 

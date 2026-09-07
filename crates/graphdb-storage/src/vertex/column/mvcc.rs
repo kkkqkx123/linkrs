@@ -188,11 +188,8 @@ impl Column {
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
         let start_ts = self.visibility.commit_ts.get(row_idx).copied().unwrap_or(0);
         if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
-            return if self.encoding.is_encoded() {
-                self.encoding.get(row_idx)
-            } else {
-                self.inner().get(row_idx)
-            };
+            // Chunk-routed base read: overlay first, then encoded base.
+            return self.get(row_idx);
         }
         self.with_version_chains_read(|chains| {
             chains.and_then(|c| c.get(row_idx)).and_then(|chain| {
@@ -392,7 +389,7 @@ impl Column {
             // backward over the expired one. This preserves the most recent
             // history instead of keeping the older value.
             // Timestamp::MAX disables folding entirely (safe default).
-            let mut entries: Vec<VersionEntry> = chain.drain(..).collect();
+            let mut entries: Vec<VersionEntry> = std::mem::take(chain);
             let mut fold_count = 0usize;
             while entries.len() - fold_count > cap
                 && fold_count + 1 < entries.len()
@@ -463,14 +460,5 @@ impl Column {
         f: impl FnOnce(&mut Option<Vec<Vec<VersionEntry>>>) -> R,
     ) -> R {
         f(&mut self.version_chains)
-    }
-
-    /// Directly set the optional version chains (used by V2 serialization).
-    #[allow(unused)]
-    pub fn set_version_chains_opt(&mut self, v: Option<Vec<Vec<VersionEntry>>>) {
-        self.version_chains = v;
-        if let Some(chains) = self.version_chains.as_ref() {
-            self.visibility.ensure_len(chains.len());
-        }
     }
 }

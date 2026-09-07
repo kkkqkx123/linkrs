@@ -60,13 +60,12 @@ fn build_side_loop(
         // Spill-routed path: an external `spill_with_manager` call (or an
         // earlier budget failure) opened the pending spiller; every further
         // build row streams to disk without touching the memory budget.
-        if grace.pending_build.is_some() {
+        if let Some(pending) = grace.pending_build.as_mut() {
             if manager.is_none() {
                 return Err(QueryError::execution(
                     "spill run: spill manager not available".to_string(),
                 ));
             }
-            let pending = grace.pending_build.as_mut().expect("pending must exist");
             let num_partitions = pending.writer.num_partitions();
             for row in chunk.visible_rows() {
                 let key = evaluate_join_key(row, &col_names, hash_keys, None)?;

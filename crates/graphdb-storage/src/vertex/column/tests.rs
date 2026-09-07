@@ -726,4 +726,205 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_column_chunk_materialize_and_read() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        for i in 0..10 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        assert_eq!(col.chunk_count(), 3);
+        // Chunk-layer reads serve every row through the active routing.
+        for i in 0..10 {
+            assert_eq!(col.get(i), Some(Value::Int(i as i32)));
+        }
+        assert_eq!(col.chunk_for_row(3).unwrap().row_offset, 0);
+        assert!(col.chunk_for_row(100).is_none());
+    }
+
+    #[test]
+    fn test_column_chunk_layer_read() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.materialize_chunks();
+        assert_eq!(col.get(3), Some(Value::Int(3)));
+        assert_eq!(col.chunk_for_row(3).unwrap().row_offset, 0);
+        assert!(col.chunk_for_row(100).is_none());
+    }
+
+    #[test]
+    fn test_column_chunk_encoding_roundtrip() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int((i % 4) as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::BitPacking, 255)
+            .unwrap();
+        let meta = col.chunk_encoding_metadata();
+        assert_eq!(meta.len(), 2);
+        // Point update inside bit width lands without full decode: the
+        // chunk keeps its encoding and serves the new value.
+        col.set(1, Some(&Value::Int(2))).unwrap();
+        assert_eq!(col.get(1), Some(Value::Int(2)));
+        assert_eq!(
+            col.chunk_encoding_metadata()[0].1,
+            crate::encoding::EncodingType::BitPacking
+        );
+    }
+
+    #[test]
+    fn test_column_chunk_constant_inplace_rules() {
+        let mut col = Column::new("s".to_string(), 0, DataType::String, true);
+        col.set_chunk_capacity(8);
+        for i in 0..8 {
+            col.set(i, Some(&Value::string("same"))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::Constant, 255)
+            .unwrap();
+        // Equal value is a noop; different value lands in the overlay while
+        // the chunk keeps its constant encoding.
+        col.set(0, Some(&Value::string("same"))).unwrap();
+        assert_eq!(col.get(0), Some(Value::string("same")));
+        col.set(1, Some(&Value::string("other"))).unwrap();
+        assert_eq!(col.get(1), Some(Value::string("other")));
+        assert_eq!(
+            col.chunk_encoding_metadata()[0].1,
+            crate::encoding::EncodingType::Constant
+        );
+    }
+
+    #[test]
+    fn test_column_store_collect_dirty_pages() {
+        let mut store = ColumnStore::new();
+        store.add_column("age".to_string(), DataType::Int, true);
+        let col = store.get_column_mut("age").unwrap();
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        store.get_column_mut("age").unwrap().materialize_chunks();
+        // Written rows report dirty pages; clearing resets the tracking.
+        assert!(!store.collect_dirty_pages().is_empty());
+        store.clear_dirty();
+        assert!(store.collect_dirty_pages().is_empty());
+    }
+
+    // ==================== Chunk Eviction / Reload Tests ====================
+
+    #[test]
+    fn test_chunk_eviction_reload_roundtrip() {
+        let mut col = Column::new("val".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32 * 10))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        assert_eq!(col.chunk_count(), 2);
+
+        // Verify data before eviction.
+        for i in 0..8 {
+            assert_eq!(col.get(i), Some(Value::Int(i as i32 * 10)));
+        }
+
+        // Evict chunk 0.
+        let spill_dir = tempfile::tempdir().unwrap();
+        assert!(col.evict_chunk(0, spill_dir.path()));
+        assert!(!col.chunk_at(0).unwrap().is_resident());
+        assert!(col.chunk_at(1).unwrap().is_resident());
+
+        // Reload chunk 0 and verify data.
+        assert!(col.ensure_chunk_resident(0));
+        assert!(col.chunk_at(0).unwrap().is_resident());
+        for i in 0..4 {
+            assert_eq!(col.get(i), Some(Value::Int(i as i32 * 10)));
+        }
+        // Chunk 1 data unchanged.
+        for i in 4..8 {
+            assert_eq!(col.get(i), Some(Value::Int(i as i32 * 10)));
+        }
+    }
+
+    #[test]
+    fn test_evict_idle_chunks_skips_dirty_overlay() {
+        let mut col = Column::new("val".to_string(), 0, DataType::Int, false);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+
+        // Write to chunk 0 via overlay (encoded column).
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::BitPacking, 255)
+            .unwrap();
+        col.set(1, Some(&Value::Int(99))).unwrap();
+        // Chunk 0 now has a non-empty overlay and should not be evicted.
+
+        let spill_dir = tempfile::tempdir().unwrap();
+        let evicted = col.evict_idle_chunks(spill_dir.path());
+        assert_eq!(evicted, 1, "only chunk 1 (clean) should be evicted");
+        assert!(col.chunk_at(0).unwrap().is_resident());
+        assert!(!col.chunk_at(1).unwrap().is_resident());
+    }
+
+    #[test]
+    fn test_write_through_evicted_chunk_triggers_reload() {
+        let mut col = Column::new("val".to_string(), 0, DataType::Int, false);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+
+        let spill_dir = tempfile::tempdir().unwrap();
+        col.evict_chunk(0, spill_dir.path());
+        assert!(!col.chunk_at(0).unwrap().is_resident());
+
+        // Writing into an evicted chunk triggers reload.
+        col.set(2, Some(&Value::Int(42))).unwrap();
+        assert!(col.chunk_at(0).unwrap().is_resident());
+        assert_eq!(col.get(2), Some(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_column_store_evict_idle_chunks() {
+        let mut store = ColumnStore::new();
+        store.add_column("a".to_string(), DataType::Int, false);
+        store.add_column("b".to_string(), DataType::String, false);
+        let col_a = store.get_column_mut("a").unwrap();
+        col_a.set_chunk_capacity(4);
+        for i in 0..8 {
+            col_a.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col_a.clear_dirty();
+        col_a.materialize_chunks();
+
+        let col_b = store.get_column_mut("b").unwrap();
+        col_b.set_chunk_capacity(4);
+        for i in 0..4 {
+            col_b
+                .set(i, Some(&Value::string(format!("s{}", i))))
+                .unwrap();
+        }
+        col_b.clear_dirty();
+        col_b.materialize_chunks();
+
+        let spill_dir = tempfile::tempdir().unwrap();
+        let evicted = store.evict_idle_chunks(spill_dir.path());
+        assert!(evicted >= 2, "at least 2 chunks should be evicted");
+        assert!(store.evicted_memory_usage() > 0);
+    }
 }

@@ -331,6 +331,18 @@ impl BitPackedIntColumn {
         self.packed.len()
     }
 
+    /// Returns true when `value` fits in the existing bit width, allowing
+    /// an in-place chunk update without re-encoding.
+    pub fn can_store_value(&self, value: &Value) -> bool {
+        let int_val = match value {
+            Value::SmallInt(i) => *i as i64,
+            Value::Int(i) => *i as i64,
+            Value::BigInt(i) => *i,
+            _ => return false,
+        };
+        self.packed.fits_value(int_val)
+    }
+
     pub fn memory_usage(&self) -> usize {
         self.packed.memory_usage()
     }

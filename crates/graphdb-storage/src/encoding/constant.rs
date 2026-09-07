@@ -44,6 +44,10 @@ impl ConstantColumn {
         values.iter().all(|v| v == first)
     }
 
+    pub fn value(&self) -> Option<Value> {
+        self.value.clone()
+    }
+
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         if row_idx >= self.count {
             return None;

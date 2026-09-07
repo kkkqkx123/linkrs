@@ -4,10 +4,10 @@
 //! Provides min/max values, null counts, and encoding metadata
 //! that can be used for predicate pushdown and range pruning.
 
-use std::collections::HashSet;
 use std::io::{Read, Write};
 
 use crate::encoding::EncodingType;
+use crate::stats::HyperLogLog;
 use graphdb_core::{StorageResult, Value};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +19,12 @@ pub struct ColumnStats {
     pub encoding_type: EncodingType,
     pub compressed_size: u64,
     pub raw_size: u64,
+    /// HLL registers backing the distinct estimate (64 bytes when present).
+    pub hll: Option<HyperLogLog>,
+    /// True when the column provably contains no nulls.
+    pub guaranteed_no_nulls: bool,
+    /// True when every observed row is null.
+    pub all_null: bool,
 }
 
 impl ColumnStats {
@@ -31,6 +37,9 @@ impl ColumnStats {
             encoding_type,
             compressed_size,
             raw_size,
+            hll: None,
+            guaranteed_no_nulls: false,
+            all_null: false,
         }
     }
 
@@ -56,13 +65,13 @@ impl ColumnStats {
         writer.write_all(&[self.min_value.is_some() as u8])?;
         written += 1;
         if let Some(ref v) = self.min_value {
-            written += serialize_value(writer, v)?;
+            written += serialize_stat_value(writer, v)?;
         }
 
         writer.write_all(&[self.max_value.is_some() as u8])?;
         written += 1;
         if let Some(ref v) = self.max_value {
-            written += serialize_value(writer, v)?;
+            written += serialize_stat_value(writer, v)?;
         }
 
         writer.write_all(&self.null_count.to_le_bytes())?;
@@ -84,6 +93,15 @@ impl ColumnStats {
         writer.write_all(&self.raw_size.to_le_bytes())?;
         written += 8;
 
+        writer.write_all(&[self.hll.is_some() as u8])?;
+        written += 1;
+        if let Some(ref hll) = self.hll {
+            written += hll.serialize(writer)?;
+        }
+        writer.write_all(&[self.guaranteed_no_nulls as u8])?;
+        writer.write_all(&[self.all_null as u8])?;
+        written += 2;
+
         Ok(written)
     }
 
@@ -93,7 +111,7 @@ impl ColumnStats {
         reader.read_exact(&mut buf)?;
         let has_min = buf[0] != 0;
         let min_value = if has_min {
-            Some(deserialize_value(reader)?)
+            Some(deserialize_stat_value(reader)?)
         } else {
             None
         };
@@ -101,7 +119,7 @@ impl ColumnStats {
         reader.read_exact(&mut buf)?;
         let has_max = buf[0] != 0;
         let max_value = if has_max {
-            Some(deserialize_value(reader)?)
+            Some(deserialize_stat_value(reader)?)
         } else {
             None
         };
@@ -129,6 +147,41 @@ impl ColumnStats {
         reader.read_exact(&mut nb)?;
         let raw_size = u64::from_le_bytes(nb);
 
+        // Tail added later; old files end here.
+        let mut tail = [0u8; 1];
+        let hll = match reader.read_exact(&mut tail) {
+            Ok(()) => {
+                if tail[0] != 0 {
+                    Some(HyperLogLog::deserialize(reader)?)
+                } else {
+                    None
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => None,
+            Err(e) => return Err(graphdb_core::StorageError::io_error(e.to_string())),
+        };
+        let (guaranteed_no_nulls, all_null) = match hll {
+            Some(_) => {
+                let mut flags = [0u8; 2];
+                match reader.read_exact(&mut flags) {
+                    Ok(()) => (flags[0] != 0, flags[1] != 0),
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => (false, false),
+                    Err(e) => return Err(graphdb_core::StorageError::io_error(e.to_string())),
+                }
+            }
+            None => {
+                // Old file without HLL: try to read flags, tolerate EOF.
+                let mut flags = [0u8; 2];
+                match reader.read_exact(&mut flags) {
+                    Ok(()) => (flags[0] != 0, flags[1] != 0),
+                    Err(_) => (
+                        false,
+                        null_count > 0 && min_value.is_none() && max_value.is_none(),
+                    ),
+                }
+            }
+        };
+
         Ok(Self {
             min_value,
             max_value,
@@ -137,16 +190,19 @@ impl ColumnStats {
             encoding_type,
             compressed_size,
             raw_size,
+            hll,
+            guaranteed_no_nulls,
+            all_null,
         })
     }
 }
 
-fn serialize_value(writer: &mut impl Write, value: &Value) -> StorageResult<usize> {
+pub(crate) fn serialize_stat_value(writer: &mut impl Write, value: &Value) -> StorageResult<usize> {
     match value {
         Value::SmallInt(v) => {
             writer.write_all(&[1u8])?;
             writer.write_all(&v.to_le_bytes())?;
-            Ok(9)
+            Ok(3)
         }
         Value::Int(v) => {
             writer.write_all(&[2u8])?;
@@ -180,6 +236,65 @@ fn serialize_value(writer: &mut impl Write, value: &Value) -> StorageResult<usiz
             writer.write_all(bytes)?;
             Ok(5 + bytes.len())
         }
+        Value::Date(d) => {
+            writer.write_all(&[8u8])?;
+            writer.write_all(&d.year.to_le_bytes())?;
+            writer.write_all(&d.month.to_le_bytes())?;
+            writer.write_all(&d.day.to_le_bytes())?;
+            Ok(13)
+        }
+        Value::Time(t) => {
+            writer.write_all(&[9u8])?;
+            writer.write_all(&t.hour.to_le_bytes())?;
+            writer.write_all(&t.minute.to_le_bytes())?;
+            writer.write_all(&t.sec.to_le_bytes())?;
+            writer.write_all(&t.microsec.to_le_bytes())?;
+            Ok(17)
+        }
+        Value::DateTime(dt) => {
+            writer.write_all(&[10u8])?;
+            writer.write_all(&dt.year.to_le_bytes())?;
+            writer.write_all(&dt.month.to_le_bytes())?;
+            writer.write_all(&dt.day.to_le_bytes())?;
+            writer.write_all(&dt.hour.to_le_bytes())?;
+            writer.write_all(&dt.minute.to_le_bytes())?;
+            writer.write_all(&dt.sec.to_le_bytes())?;
+            writer.write_all(&dt.microsec.to_le_bytes())?;
+            Ok(29)
+        }
+        Value::Uuid(u) => {
+            writer.write_all(&[11u8])?;
+            writer.write_all(u.as_bytes())?;
+            Ok(17)
+        }
+        Value::FixedString(s) => {
+            writer.write_all(&[12u8])?;
+            let bytes = s.as_bytes();
+            writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(bytes)?;
+            Ok(5 + bytes.len())
+        }
+        Value::Json(j) => {
+            writer.write_all(&[13u8])?;
+            let bytes = j.as_str().as_bytes();
+            writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(bytes)?;
+            Ok(5 + bytes.len())
+        }
+        Value::JsonB(j) => {
+            writer.write_all(&[13u8])?;
+            let text = j.to_json_string();
+            let bytes = text.as_bytes();
+            writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(bytes)?;
+            Ok(5 + bytes.len())
+        }
+        Value::Blob(b) => {
+            writer.write_all(&[14u8])?;
+            writer.write_all(&(b.len() as u32).to_le_bytes())?;
+            writer.write_all(b)?;
+            Ok(5 + b.len())
+        }
         _ => Err(graphdb_core::StorageError::not_supported(format!(
             "Stats serialization for value type {:?}",
             value.data_type()
@@ -187,7 +302,7 @@ fn serialize_value(writer: &mut impl Write, value: &Value) -> StorageResult<usiz
     }
 }
 
-fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
+pub(crate) fn deserialize_stat_value(reader: &mut impl Read) -> StorageResult<Value> {
     let mut tag = [0u8; 1];
     reader.read_exact(&mut tag)?;
 
@@ -232,6 +347,103 @@ fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
                 .map_err(|e| graphdb_core::StorageError::deserialize_error(e.to_string()))?;
             Ok(Value::string(s))
         }
+        8 => {
+            let mut i32b = [0u8; 4];
+            let mut u32b = [0u8; 4];
+            reader.read_exact(&mut i32b)?;
+            let year = i32::from_le_bytes(i32b);
+            reader.read_exact(&mut u32b)?;
+            let month = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let day = u32::from_le_bytes(u32b);
+            Ok(Value::Date(graphdb_core::value::DateValue {
+                year,
+                month,
+                day,
+            }))
+        }
+        9 => {
+            let mut u32b = [0u8; 4];
+            reader.read_exact(&mut u32b)?;
+            let hour = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let minute = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let sec = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let microsec = u32::from_le_bytes(u32b);
+            Ok(Value::Time(graphdb_core::value::TimeValue {
+                hour,
+                minute,
+                sec,
+                microsec,
+            }))
+        }
+        10 => {
+            let mut i32b = [0u8; 4];
+            let mut u32b = [0u8; 4];
+            reader.read_exact(&mut i32b)?;
+            let year = i32::from_le_bytes(i32b);
+            reader.read_exact(&mut u32b)?;
+            let month = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let day = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let hour = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let minute = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let sec = u32::from_le_bytes(u32b);
+            reader.read_exact(&mut u32b)?;
+            let microsec = u32::from_le_bytes(u32b);
+            Ok(Value::DateTime(graphdb_core::value::DateTimeValue {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                sec,
+                microsec,
+            }))
+        }
+        11 => {
+            let mut bytes = [0u8; 16];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Uuid(graphdb_core::value::UuidValue::from_bytes(
+                bytes,
+            )))
+        }
+        12 => {
+            let mut lb = [0u8; 4];
+            reader.read_exact(&mut lb)?;
+            let len = u32::from_le_bytes(lb) as usize;
+            let mut bytes = vec![0u8; len];
+            reader.read_exact(&mut bytes)?;
+            let s = String::from_utf8(bytes)
+                .map_err(|e| graphdb_core::StorageError::deserialize_error(e.to_string()))?;
+            Ok(Value::FixedString(s))
+        }
+        13 => {
+            let mut lb = [0u8; 4];
+            reader.read_exact(&mut lb)?;
+            let len = u32::from_le_bytes(lb) as usize;
+            let mut bytes = vec![0u8; len];
+            reader.read_exact(&mut bytes)?;
+            let s = String::from_utf8(bytes)
+                .map_err(|e| graphdb_core::StorageError::deserialize_error(e.to_string()))?;
+            match Value::json(&s) {
+                Ok(v) => Ok(v),
+                Err(e) => Err(graphdb_core::StorageError::deserialize_error(e.to_string())),
+            }
+        }
+        14 => {
+            let mut lb = [0u8; 4];
+            reader.read_exact(&mut lb)?;
+            let len = u32::from_le_bytes(lb) as usize;
+            let mut bytes = vec![0u8; len];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Blob(bytes))
+        }
         _ => Err(graphdb_core::StorageError::deserialize_error(format!(
             "Unknown value tag {} in stats",
             tag[0]
@@ -239,35 +451,62 @@ fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
     }
 }
 
-pub fn compute_stats(
-    values: &[Option<Value>],
+/// Whether a value kind has stats min/max ordering and serialization.
+/// Composite, graph, vector, decimal and interval kinds keep counts and HLL
+/// only; Json/JsonB record string-order bounds without pruning guarantees.
+pub fn stat_orderable(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::SmallInt(_)
+            | Value::Int(_)
+            | Value::BigInt(_)
+            | Value::Float(_)
+            | Value::Double(_)
+            | Value::Bool(_)
+            | Value::String(_)
+            | Value::Date(_)
+            | Value::Time(_)
+            | Value::DateTime(_)
+            | Value::Uuid(_)
+            | Value::FixedString(_)
+            | Value::Json(_)
+            | Value::JsonB(_)
+            | Value::Blob(_)
+    )
+}
+
+/// Streaming aggregation over an iterator: single pass, no value vector,
+/// HLL-backed distinct estimate instead of a hash set.
+pub fn compute_stats_streaming(
+    values: impl Iterator<Item = Option<Value>>,
     encoding_type: EncodingType,
     compressed_size: u64,
     raw_size: u64,
 ) -> ColumnStats {
     let mut stats = ColumnStats::new(encoding_type, compressed_size, raw_size);
-
-    let mut distinct = HashSet::new();
+    let mut hll = HyperLogLog::new();
+    let mut total = 0u64;
 
     for v in values {
         match v {
             Some(val) => {
-                distinct.insert(val.clone());
-
-                if let Some(ref min) = stats.min_value {
-                    if val < min {
+                total += 1;
+                hll.add_value(&val);
+                if stat_orderable(&val) {
+                    if let Some(ref min) = stats.min_value {
+                        if val < *min {
+                            stats.min_value = Some(val.clone());
+                        }
+                    } else {
                         stats.min_value = Some(val.clone());
                     }
-                } else {
-                    stats.min_value = Some(val.clone());
-                }
-
-                if let Some(ref max) = stats.max_value {
-                    if val > max {
+                    if let Some(ref max) = stats.max_value {
+                        if val > *max {
+                            stats.max_value = Some(val.clone());
+                        }
+                    } else {
                         stats.max_value = Some(val.clone());
                     }
-                } else {
-                    stats.max_value = Some(val.clone());
                 }
             }
             None => {
@@ -276,7 +515,10 @@ pub fn compute_stats(
         }
     }
 
-    stats.distinct_count = Some(distinct.len() as u64);
+    stats.distinct_count = Some(hll.estimate());
+    stats.hll = Some(hll);
+    stats.all_null = total == 0 && stats.null_count > 0;
+    stats.guaranteed_no_nulls = stats.null_count == 0;
     stats
 }
 
@@ -318,12 +560,12 @@ mod tests {
             Some(Value::Int(20)),
         ];
 
-        let stats = compute_stats(&values, EncodingType::BitPacking, 100, 200);
+        let stats = compute_stats_streaming(values.into_iter(), EncodingType::BitPacking, 100, 200);
 
         assert_eq!(stats.min_value, Some(Value::Int(5)));
         assert_eq!(stats.max_value, Some(Value::Int(20)));
         assert_eq!(stats.null_count, 1);
-        assert_eq!(stats.distinct_count, Some(3));
+        assert!(stats.distinct_count.unwrap() >= 2);
         assert_eq!(stats.encoding_type, EncodingType::BitPacking);
     }
 
@@ -341,5 +583,77 @@ mod tests {
 
         assert_eq!(restored.min_value, stats.min_value);
         assert_eq!(restored.max_value, stats.max_value);
+    }
+
+    #[test]
+    fn test_new_scalar_tags_roundtrip() {
+        let cases: Vec<Value> = vec![
+            Value::Date(graphdb_core::value::DateValue {
+                year: 2024,
+                month: 2,
+                day: 29,
+            }),
+            Value::Time(graphdb_core::value::TimeValue {
+                hour: 1,
+                minute: 2,
+                sec: 3,
+                microsec: 4,
+            }),
+            Value::DateTime(graphdb_core::value::DateTimeValue {
+                year: 2024,
+                month: 1,
+                day: 2,
+                hour: 3,
+                minute: 4,
+                sec: 5,
+                microsec: 6,
+            }),
+            Value::Uuid(graphdb_core::value::UuidValue::from_bytes([7u8; 16])),
+            Value::FixedString("abc".to_string()),
+            Value::Blob(vec![1, 2, 3]),
+        ];
+        for v in cases {
+            let mut buf = Vec::new();
+            serialize_stat_value(&mut buf, &v).unwrap();
+            let back = deserialize_stat_value(&mut &buf[..]).unwrap();
+            assert_eq!(back, v);
+        }
+        let j = Value::json(r#"{"a":1}"#).unwrap();
+        let mut buf = Vec::new();
+        serialize_stat_value(&mut buf, &j).unwrap();
+        assert!(deserialize_stat_value(&mut &buf[..]).is_ok());
+    }
+
+    #[test]
+    fn test_streaming_matches_min_max_null() {
+        let values = vec![
+            Some(Value::Int(10)),
+            Some(Value::Int(20)),
+            None,
+            Some(Value::Int(5)),
+            Some(Value::Int(20)),
+        ];
+        let stats = compute_stats_streaming(values.into_iter(), EncodingType::BitPacking, 100, 200);
+        assert_eq!(stats.min_value, Some(Value::Int(5)));
+        assert_eq!(stats.max_value, Some(Value::Int(20)));
+        assert_eq!(stats.null_count, 1);
+        assert_eq!(stats.guaranteed_no_nulls, false);
+    }
+
+    #[test]
+    fn test_hll_merge_accuracy() {
+        let mut a = HyperLogLog::new();
+        let mut b = HyperLogLog::new();
+        for i in 0..5000i32 {
+            if i % 2 == 0 {
+                a.add_value(&Value::Int(i));
+            } else {
+                b.add_value(&Value::Int(i));
+            }
+        }
+        a.merge(&b);
+        let est = a.estimate() as f64;
+        let err = (est - 5000.0).abs() / 5000.0;
+        assert!(err < 0.15, "estimate={}", est);
     }
 }

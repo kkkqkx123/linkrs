@@ -49,7 +49,8 @@ impl WalBuffer {
     pub fn append(&self, data: &[u8]) {
         let mut buf = self.buffer.lock().unwrap();
         buf.extend_from_slice(data);
-        self.pending_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.pending_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
         self.entry_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -161,7 +162,9 @@ impl WalFlushCoordinator {
                     if coordinator.shutdown.load(Ordering::SeqCst) {
                         break;
                     }
-                    let result = cvar.wait_timeout(guard, coordinator.flush_interval).unwrap();
+                    let result = cvar
+                        .wait_timeout(guard, coordinator.flush_interval)
+                        .unwrap();
                     guard = result.0;
                     // Reset signal
                     *guard = false;
@@ -176,11 +179,13 @@ impl WalFlushCoordinator {
                         let data = buf.drain();
                         if !data.is_empty() {
                             total_flushed += data.len() as u64;
-                            if let Err(_e) = flush_fn(&data) {
-                                // On flush failure, we could re-buffer or poison.
-                                // For now, log and continue (data is already drained).
-                                // The WAL file may be inconsistent, but the next sync
-                                // will detect the issue.
+                            if let Err(e) = flush_fn(&data) {
+                                log::warn!(
+                                    "WAL flush failed ({} bytes, {} entries): {}",
+                                    data.len(),
+                                    buf.entry_count(),
+                                    e
+                                );
                             }
                         }
                     }

@@ -8,10 +8,10 @@
 //! - File rotation and cleanup
 //! - Archive support
 
+pub mod buffer;
 mod compression;
 mod group_commit;
 mod local;
-pub mod buffer;
 mod sync;
 
 pub use compression::decompress_payload;

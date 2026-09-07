@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::buffer;
 use super::compression::{create_compressor, Compressor};
 use super::group_commit::GroupCommitCoordinator;
 use super::sync::elapsed_since;
-use super::buffer;
 use crate::wal::parser::{LocalWalParser, WalParser};
 use graphdb_core::types::Timestamp;
 use graphdb_core::wal::traits::WalWriter;
@@ -33,6 +33,19 @@ pub(crate) struct WalHeaderParams<'a> {
     pub record_type: RecordType,
     pub payload: &'a [u8],
     pub compression: WalCompression,
+}
+
+/// File position owned by the async flush path.
+///
+/// The background flush thread and `sync(&self)` share this state through an
+/// `Arc<Mutex<..>>` so buffered bytes can be drained to disk without `&mut`
+/// access to the writer. It holds a cloned file handle plus the next write
+/// offset; the synchronous `self.file`/`file_used` pair is synced back after
+/// each drain.
+pub(crate) struct BufferedFlushState {
+    file: File,
+    offset: u64,
+    file_size: usize,
 }
 pub struct LocalWalWriter {
     wal_uri: String,
@@ -60,6 +73,17 @@ pub struct LocalWalWriter {
     /// to this buffer instead of directly to the file. The flush coordinator
     /// drains the buffer periodically.
     buffer: Option<Arc<buffer::WalBuffer>>,
+    /// Coordinates background flush of per-thread buffers. Sits above the
+    /// group-commit coordinator: flush thread drains buffers to file, then
+    /// group commit batches the fsync.
+    flush_coordinator: Option<Arc<buffer::WalFlushCoordinator>>,
+    /// Shared file position for the async flush path (see `BufferedFlushState`).
+    flush_state: Option<Arc<Mutex<BufferedFlushState>>>,
+    /// Latest LSN staged in the async buffer. Read by the flush thread to
+    /// advance group commit after writing, without touching writer threads.
+    buffered_lsn: Arc<AtomicU64>,
+    /// Guards one-time background thread startup.
+    background_started: Arc<AtomicBool>,
 }
 
 impl LocalWalWriter {
@@ -89,6 +113,10 @@ impl LocalWalWriter {
             poison_reason: Mutex::new(None),
             group_commit: None,
             buffer: None,
+            flush_coordinator: None,
+            flush_state: None,
+            buffered_lsn: Arc::new(AtomicU64::new(0)),
+            background_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -119,6 +147,10 @@ impl LocalWalWriter {
             poison_reason: Mutex::new(None),
             group_commit: None,
             buffer: None,
+            flush_coordinator: None,
+            flush_state: None,
+            buffered_lsn: Arc::new(AtomicU64::new(0)),
+            background_started: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -126,11 +158,227 @@ impl LocalWalWriter {
 impl LocalWalWriter {
     /// Enable async buffer mode for this writer.
     ///
-    /// When enabled, `append()` writes to a per-thread buffer instead of
-    /// directly to the file. The flush coordinator drains the buffer
-    /// periodically or on explicit sync.
+    /// When enabled, `append_entry` serializes into a per-thread buffer
+    /// without holding the file lock. The flush coordinator drains buffers
+    /// to disk periodically or on explicit sync.
     pub fn enable_async_buffer(&mut self, buffer: Arc<buffer::WalBuffer>) {
+        if self.flush_coordinator.is_none() {
+            let coordinator = buffer::WalFlushCoordinator::new(self.config.flush_interval());
+            coordinator.register_buffer(Arc::clone(&buffer));
+            self.flush_coordinator = Some(coordinator);
+        } else if let Some(ref coordinator) = self.flush_coordinator {
+            coordinator.register_buffer(Arc::clone(&buffer));
+        }
         self.buffer = Some(buffer);
+        self.buffered_lsn
+            .store(self.current_lsn.load(Ordering::SeqCst), Ordering::SeqCst);
+        // Best-effort shared flush position when the file is already open.
+        self.ensure_flush_state();
+    }
+
+    /// Enable async flush using config defaults (buffer size + interval).
+    /// When `enable_async_flush` is false in config this is a no-op that
+    /// preserves exact synchronous behavior.
+    pub fn enable_async_flush(&mut self) {
+        if !self.config.enable_async_flush {
+            return;
+        }
+        let buf = Arc::new(buffer::WalBuffer::new(self.config.buffer_size));
+        self.enable_async_buffer(buf);
+    }
+
+    /// Disable async mode and synchronously drain pending buffered data.
+    pub fn disable_async_flush(&mut self) -> WalResult<()> {
+        self.flush_buffered_to_file()?;
+        self.buffer = None;
+        if let Some(ref coordinator) = self.flush_coordinator {
+            coordinator.shutdown();
+        }
+        self.flush_coordinator = None;
+        self.flush_state = None;
+        self.background_started.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Returns true when async buffer mode is active.
+    pub fn is_async_enabled(&self) -> bool {
+        self.buffer.is_some() && self.config.enable_async_flush
+    }
+
+    /// Request an immediate background flush wake-up.
+    pub fn request_flush(&self) {
+        if let Some(ref coordinator) = self.flush_coordinator {
+            coordinator.signal_flush();
+        }
+    }
+
+    /// Initialize the shared flush position from the open file handle.
+    fn ensure_flush_state(&mut self) {
+        if self.flush_state.is_some() || self.buffer.is_none() {
+            return;
+        }
+        if let Some(ref file) = self.file {
+            if let Ok(cloned) = file.try_clone() {
+                self.flush_state = Some(Arc::new(Mutex::new(BufferedFlushState {
+                    file: cloned,
+                    offset: self.file_used as u64,
+                    file_size: self.file_size,
+                })));
+            }
+        }
+    }
+
+    /// Write drained bytes at the shared flush offset, growing the file.
+    fn write_to_flush_state(state: &mut BufferedFlushState, data: &[u8]) -> WalResult<()> {
+        let end = state.offset + data.len() as u64;
+        if end as usize > state.file_size {
+            state.file.set_len(end)?;
+            state.file_size = end as usize;
+        }
+        state.file.seek(SeekFrom::Start(state.offset))?;
+        state.file.write_all(data)?;
+        state.offset = end;
+        Ok(())
+    }
+
+    /// Drain one buffer into the shared flush position. Callable from `&self`
+    /// so both the background thread and `sync()` can flush without `&mut`.
+    fn drain_buffer_to_state(&self) -> WalResult<bool> {
+        let buf = match self.buffer.as_ref() {
+            Some(b) => Arc::clone(b),
+            None => return Ok(false),
+        };
+        if buf.pending_bytes() == 0 {
+            return Ok(false);
+        }
+        let state = match self.flush_state.as_ref() {
+            Some(s) => Arc::clone(s),
+            None => return Ok(false),
+        };
+        let data = buf.drain();
+        if data.is_empty() {
+            return Ok(false);
+        }
+        let mut guard = state
+            .lock()
+            .map_err(|e| WalError::InvalidOperation(format!("flush state lock poisoned: {}", e)))?;
+        Self::write_to_flush_state(&mut guard, &data)?;
+        // The flush path (not writer threads) advances group commit.
+        let staged = self.buffered_lsn.load(Ordering::SeqCst);
+        drop(guard);
+        if let Some(ref coordinator) = self.group_commit {
+            coordinator.record_appended(staged);
+        }
+        Ok(true)
+    }
+
+    /// Sync the synchronous file position from the shared flush offset.
+    fn syncback_file_used(&mut self) {
+        if let Some(ref state) = self.flush_state {
+            if let Ok(guard) = state.lock() {
+                self.file_used = guard.offset as usize;
+                self.file_size = guard.file_size;
+            }
+        }
+    }
+
+    /// Drain all buffered bytes to the WAL file without fsync.
+    pub fn flush_buffered_to_file(&mut self) -> WalResult<()> {
+        if self.buffer.is_none() {
+            return Ok(());
+        }
+        self.ensure_flush_state();
+        // Fast path: shared state drain (also advances group commit).
+        if self.flush_state.is_some() {
+            let _ = self.drain_buffer_to_state()?;
+            self.syncback_file_used();
+            self.request_flush();
+            return Ok(());
+        }
+        // Fallback when the file is not open yet: keep bytes buffered.
+        Ok(())
+    }
+
+    /// Drain buffers and fsync, advancing the durable sequence.
+    pub fn flush_and_sync(&mut self) -> WalResult<()> {
+        self.flush_buffered_to_file()?;
+        self.sync_via_file()
+    }
+
+    /// Start the background flush thread.
+    ///
+    /// The thread periodically drains registered buffers into the WAL file
+    /// and advances group commit via `record_appended`, so writer threads
+    /// never block on file I/O. Durability still requires `sync()` /
+    /// `wait_for_durable()`, which drain synchronously first.
+    pub fn start_background_flush(&mut self) -> WalResult<()> {
+        if !self.is_async_enabled() {
+            return Err(WalError::InvalidOperation(
+                "async buffer not enabled".to_string(),
+            ));
+        }
+        if self
+            .background_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(());
+        }
+        self.ensure_flush_state();
+        let coordinator = self.flush_coordinator.clone().ok_or_else(|| {
+            WalError::InvalidOperation("flush coordinator not enabled".to_string())
+        })?;
+        let state = self
+            .flush_state
+            .clone()
+            .ok_or_else(|| WalError::InvalidOperation("flush state not initialized".to_string()))?;
+        let staged = Arc::clone(&self.buffered_lsn);
+        let group = self.group_commit.clone();
+        coordinator.start_flush_thread(move |data: &[u8]| {
+            let mut guard = state.lock().map_err(|e| {
+                WalError::InvalidOperation(format!("flush state lock poisoned: {}", e))
+            })?;
+            Self::write_to_flush_state(&mut guard, data)?;
+            let lsn = staged.load(Ordering::SeqCst);
+            drop(guard);
+            if let Some(ref coordinator) = group {
+                coordinator.record_appended(lsn);
+            }
+            Ok(())
+        });
+        Ok(())
+    }
+
+    /// File-level sync shared by `sync()` after buffers are drained.
+    fn sync_via_file(&self) -> WalResult<()> {
+        self.check_poisoned()?;
+        let current_lsn = self.current_lsn.load(Ordering::SeqCst);
+        if let Some(ref coordinator) = self.group_commit {
+            coordinator.record_appended(current_lsn);
+            coordinator.append_and_wait(current_lsn)?;
+        } else if self.flush_state.is_some() {
+            // Buffered mode without group commit: fsync via shared handle.
+            if let Some(ref state) = self.flush_state {
+                let guard = state.lock().map_err(|e| {
+                    WalError::InvalidOperation(format!("flush state lock poisoned: {}", e))
+                })?;
+                guard.file.sync_all().map_err(|e| {
+                    self.poison(format!("fsync failed: {}", e));
+                    WalError::IoError(e.to_string())
+                })?;
+            }
+        } else if let Some(ref file) = self.file {
+            if let Err(e) = file.sync_all() {
+                self.poison(format!("fsync failed: {}", e));
+                return Err(WalError::IoError(e.to_string()));
+            }
+        }
+        self.last_synced_lsn.store(current_lsn, Ordering::SeqCst);
+        self.write_count.store(0, Ordering::SeqCst);
+        if let Ok(mut guard) = self.last_sync_time.lock() {
+            *guard = Some(Instant::now());
+        }
+        Ok(())
     }
 
     /// Returns a reference to the async buffer, if enabled.
@@ -152,6 +400,11 @@ impl LocalWalWriter {
     }
 
     pub fn set_current_lsn(&self, lsn: Lsn) {
+        let old = self.current_lsn.load(Ordering::SeqCst);
+        log::error!(
+            "WAL SET_CURRENT_LSN: old={}, new={}, delta={}",
+            old, lsn.as_u64(), lsn.as_u64().saturating_sub(old)
+        );
         self.current_lsn.store(lsn.as_u64(), Ordering::SeqCst);
     }
 
@@ -160,6 +413,11 @@ impl LocalWalWriter {
     }
 
     pub fn file_used(&self) -> usize {
+        if let Some(ref state) = self.flush_state {
+            if let Ok(guard) = state.lock() {
+                return (guard.offset as usize).max(self.file_used);
+            }
+        }
         self.file_used
     }
 
@@ -195,16 +453,19 @@ impl LocalWalWriter {
         // Compress payload
         let (final_payload, compression) = self.compressor.compress(payload)?;
 
+        if final_payload.len() > WAL_MAX_RECORD_SIZE {
+            return self.append_fragmented_buffered(
+                op_type,
+                timestamp,
+                &final_payload,
+                compression,
+            );
+        }
+
         // Build WAL header
         let prev_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
         let entry_size = WAL_HEADER_SIZE + final_payload.len();
         let new_lsn = Lsn::new(prev_lsn.as_u64() + entry_size as u64);
-
-        let record_type = if final_payload.len() > WAL_MAX_RECORD_SIZE {
-            RecordType::First
-        } else {
-            RecordType::Full
-        };
 
         let header = self.build_wal_header(WalHeaderParams {
             op_type,
@@ -212,39 +473,87 @@ impl LocalWalWriter {
             payload_len: final_payload.len(),
             prev_lsn,
             new_lsn,
-            record_type,
+            record_type: RecordType::Full,
             payload: &final_payload,
             compression,
         });
 
-        // Serialize header + payload to bytes
+        // Serialize header + payload to bytes. Entries are written
+        // contiguously with no padding so the flushed byte stream is
+        // identical to synchronous writes and recovery is unchanged.
         let header_bytes = header.as_bytes();
         let mut entry_bytes = Vec::with_capacity(header_bytes.len() + final_payload.len());
         entry_bytes.extend_from_slice(&header_bytes);
         entry_bytes.extend_from_slice(&final_payload);
-
-        // Pad to block alignment for WAL reader compatibility
-        let padding_needed =
-            graphdb_core::wal::types::block_padding_needed(entry_bytes.len());
-        if padding_needed > 0 {
-            entry_bytes.resize(entry_bytes.len() + padding_needed, 0);
-        }
 
         // Append to buffer (no file I/O)
         buffer.append(&entry_bytes);
 
         // Update LSN
         self.current_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+        self.buffered_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
 
-        // For large payloads that exceed WAL_MAX_RECORD_SIZE, write fragments
-        if final_payload.len() > WAL_MAX_RECORD_SIZE {
-            // Fragmented entries are written as-is in the buffer.
-            // The flush thread will write them to the file.
-            // We don't handle fragmentation in buffer mode for simplicity;
-            // the caller should use append_transaction_batch which handles
-            // its own batching.
+        // Wake the flush thread when the buffer crosses its threshold.
+        if buffer.needs_flush() {
+            self.request_flush();
         }
 
+        Ok(())
+    }
+
+    /// Buffered variant of fragmented writes: each fragment is serialized
+    /// into the per-thread buffer with First/Middle/Last record types.
+    fn append_fragmented_buffered(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+        compression: WalCompression,
+    ) -> WalResult<()> {
+        let buffer = self
+            .buffer
+            .as_ref()
+            .ok_or_else(|| WalError::InvalidOperation("async buffer not enabled".to_string()))?;
+        let total_chunks = payload.len().div_ceil(WAL_MAX_RECORD_SIZE);
+        let mut offset = 0;
+        let mut chunk_index = 0;
+        while offset < payload.len() {
+            let chunk_end = (offset + WAL_MAX_RECORD_SIZE).min(payload.len());
+            let chunk_data = &payload[offset..chunk_end];
+            let prev_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
+            let new_lsn = Lsn::new(prev_lsn.as_u64() + (WAL_HEADER_SIZE + chunk_data.len()) as u64);
+            let record_type = if total_chunks == 1 {
+                RecordType::Full
+            } else if chunk_index == 0 {
+                RecordType::First
+            } else if chunk_index == total_chunks - 1 {
+                RecordType::Last
+            } else {
+                RecordType::Middle
+            };
+            let header = self.build_wal_header(WalHeaderParams {
+                op_type,
+                timestamp,
+                payload_len: chunk_data.len(),
+                prev_lsn,
+                new_lsn,
+                record_type,
+                payload: chunk_data,
+                compression,
+            });
+            let header_bytes = header.as_bytes();
+            let mut entry_bytes = Vec::with_capacity(header_bytes.len() + chunk_data.len());
+            entry_bytes.extend_from_slice(&header_bytes);
+            entry_bytes.extend_from_slice(chunk_data);
+            buffer.append(&entry_bytes);
+            self.current_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+            self.buffered_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+            offset = chunk_end;
+            chunk_index += 1;
+        }
+        if buffer.needs_flush() {
+            self.request_flush();
+        }
         Ok(())
     }
 }
@@ -282,10 +591,15 @@ impl WalWriter for LocalWalWriter {
         if self.current_lsn.load(Ordering::SeqCst) == 0 {
             let mut parser = LocalWalParser::new();
             if parser.open(&self.wal_uri).is_ok() {
+                let parsed_lsn = parser.last_lsn();
+                log::error!(
+                    "WAL OPEN PARSE: parsed_last_lsn={}, setting current_lsn",
+                    parsed_lsn
+                );
                 self.current_lsn
-                    .store(parser.last_lsn().as_u64(), Ordering::SeqCst);
+                    .store(parsed_lsn.as_u64(), Ordering::SeqCst);
                 self.last_synced_lsn
-                    .store(parser.last_lsn().as_u64(), Ordering::SeqCst);
+                    .store(parsed_lsn.as_u64(), Ordering::SeqCst);
             }
         }
 
@@ -299,12 +613,25 @@ impl WalWriter for LocalWalWriter {
 
         self.write_file_header()?;
 
+        // Initialize the shared async flush position when buffering is on.
+        self.ensure_flush_state();
+        self.buffered_lsn
+            .store(self.current_lsn.load(Ordering::SeqCst), Ordering::SeqCst);
+
         Ok(())
     }
 
     fn close(&mut self) {
         if !self.is_open.swap(false, Ordering::SeqCst) {
             return;
+        }
+
+        // Drain pending buffered bytes so no staged entry is lost on close.
+        // Crash-before-sync semantics still apply: only synced data is durable.
+        let _ = self.flush_buffered_to_file();
+
+        if let Some(ref coordinator) = self.flush_coordinator {
+            coordinator.shutdown();
         }
 
         if let Some(ref file) = self.file {
@@ -317,6 +644,8 @@ impl WalWriter for LocalWalWriter {
         self.file_used = 0;
         self.file_header = None;
         self.group_commit = None;
+        self.flush_state = None;
+        self.background_started.store(false, Ordering::SeqCst);
     }
 
     fn append(&mut self, data: &[u8]) -> WalResult<()> {
@@ -374,31 +703,36 @@ impl WalWriter for LocalWalWriter {
     }
 
     fn sync(&self) -> WalResult<()> {
-        self.check_poisoned()?;
-        let current_lsn = self.current_lsn.load(Ordering::SeqCst);
-
-        if let Some(ref coordinator) = self.group_commit {
-            coordinator.record_appended(current_lsn);
-            coordinator.append_and_wait(current_lsn)?;
-        } else if let Some(ref file) = self.file {
-            if let Err(e) = file.sync_all() {
-                self.poison(format!("fsync failed: {}", e));
-                return Err(WalError::IoError(e.to_string()));
-            }
+        // Buffered mode: drain staged bytes to the file before fsync so
+        // entries are durable after `sync()` returns.
+        if self.buffer.is_some() {
+            self.drain_buffer_to_state()?;
         }
-
-        self.last_synced_lsn.store(current_lsn, Ordering::SeqCst);
-        self.write_count.store(0, Ordering::SeqCst);
-        if let Ok(mut guard) = self.last_sync_time.lock() {
-            *guard = Some(Instant::now());
-        }
-        Ok(())
+        self.sync_via_file()
     }
 
     fn wait_for_durable(&self, appended_lsn: u64) -> WalResult<()> {
+        // Same drain-then-wait pattern as `sync()`: the flush path advances
+        // group commit after writing, then we wait for fsync coverage.
+        if self.buffer.is_some() {
+            self.drain_buffer_to_state()?;
+        }
         if let Some(ref coordinator) = self.group_commit {
             coordinator.record_appended(appended_lsn);
             coordinator.append_and_wait(appended_lsn)
+        } else if self.flush_state.is_some() {
+            self.check_poisoned()?;
+            if let Some(ref state) = self.flush_state {
+                let guard = state.lock().map_err(|e| {
+                    WalError::InvalidOperation(format!("flush state lock poisoned: {}", e))
+                })?;
+                guard
+                    .file
+                    .sync_all()
+                    .map_err(|e| WalError::IoError(e.to_string()))?;
+            }
+            self.last_synced_lsn.store(appended_lsn, Ordering::SeqCst);
+            Ok(())
         } else if let Some(ref file) = self.file {
             self.check_poisoned()?;
             file.sync_all()
@@ -900,5 +1234,147 @@ mod tests {
             .expect("append after recovery baseline should succeed");
         writer.sync().expect("WAL sync should succeed");
         assert!(writer.current_lsn() > baseline);
+    }
+
+    #[test]
+    fn test_async_flush_disabled_preserves_sync_behavior() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let config = WalConfig::new().with_async_flush(false);
+        let mut writer = LocalWalWriter::with_config(&wal_path, 0, config);
+        writer.open().expect("Failed to open WAL");
+        writer.enable_async_flush();
+        assert!(!writer.is_async_enabled());
+
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, b"payload")
+            .expect("Failed to append entry");
+        writer.sync().expect("Failed to sync");
+        let lsn = writer.current_lsn();
+        assert_eq!(writer.last_synced_lsn(), lsn);
+        writer.close();
+
+        let mut parser = LocalWalParser::new();
+        parser.open(&wal_path).expect("WAL should parse");
+        assert!(!parser.parse_all_entries().is_empty());
+    }
+
+    #[test]
+    fn test_async_buffer_flush_correctness_and_recovery() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let config = WalConfig::new()
+            .with_async_flush(true)
+            .with_buffer_size(4096);
+        let mut writer = LocalWalWriter::with_config(&wal_path, 0, config);
+        writer.open().expect("Failed to open WAL");
+        writer.enable_async_flush();
+        assert!(writer.is_async_enabled());
+
+        for i in 0..10u64 {
+            writer
+                .append_entry(
+                    WalOpType::InsertVertex,
+                    i,
+                    format!("payload-{}", i).as_bytes(),
+                )
+                .expect("Failed to append entry");
+        }
+        // Entries are staged without file I/O on the hot path.
+        assert!(writer.buffer().unwrap().pending_bytes() > 0);
+        writer.sync().expect("Failed to sync");
+        assert_eq!(writer.buffer().unwrap().pending_bytes(), 0);
+        assert_eq!(writer.current_lsn(), writer.last_synced_lsn());
+        writer.close();
+
+        let mut parser = LocalWalParser::new();
+        parser.open(&wal_path).expect("WAL should parse");
+        let entries = parser.parse_all_entries();
+        assert_eq!(entries.len(), 10);
+    }
+
+    #[test]
+    fn test_async_transaction_batch_recovery() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let config = WalConfig::new().with_async_flush(true);
+        let mut writer = LocalWalWriter::with_config(&wal_path, 0, config);
+        writer.open().expect("Failed to open WAL");
+        writer.enable_async_flush();
+        writer
+            .start_background_flush()
+            .expect("background flush starts");
+
+        let transaction_id = TransactionId::new(7);
+        let commit_lsn = writer
+            .append_transaction_batch(
+                transaction_id,
+                vec![crate::wal::TransactionWalEntry {
+                    op_type: WalOpType::InsertVertex,
+                    timestamp: 3,
+                    payload: vec![4, 5, 6],
+                    transaction_id: None,
+                    mutation_sequence: None,
+                }],
+                &[],
+            )
+            .expect("transaction batch should append");
+        assert_eq!(commit_lsn.get(), writer.current_lsn().as_u64());
+        writer.request_flush();
+        writer.sync().expect("sync should drain");
+        writer.close();
+
+        let mut parser = LocalWalParser::new();
+        parser.open(&wal_path).expect("WAL should parse");
+        let transactions = collect_committed_transactions(&parser.parse_all_entries())
+            .expect("committed transaction should validate");
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].transaction_id, transaction_id);
+        assert_eq!(transactions[0].commit_lsn, commit_lsn);
+    }
+
+    #[test]
+    fn test_async_concurrent_buffer_drain() {
+        use std::sync::{Arc, Barrier};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let config = WalConfig::new().with_async_flush(true);
+        let mut writer = LocalWalWriter::with_config(&wal_path, 0, config);
+        writer.open().expect("Failed to open WAL");
+        writer.enable_async_flush();
+        let writer = Arc::new(parking_lot::Mutex::new(writer));
+        let barrier = Arc::new(Barrier::new(4));
+        let mut handles = Vec::new();
+        for t in 0..4 {
+            let w = Arc::clone(&writer);
+            let b = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                b.wait();
+                for i in 0..25u64 {
+                    w.lock()
+                        .append_entry(
+                            WalOpType::InsertVertex,
+                            i,
+                            format!("t{}-{}", t, i).as_bytes(),
+                        )
+                        .expect("append should succeed");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+        let mut writer = writer.lock();
+        writer.sync().expect("sync should drain");
+        assert_eq!(writer.buffer().unwrap().pending_bytes(), 0);
+        writer.close();
+
+        let mut parser = LocalWalParser::new();
+        parser.open(&wal_path).expect("WAL should parse");
+        assert_eq!(parser.parse_all_entries().len(), 100);
     }
 }

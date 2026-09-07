@@ -1,10 +1,7 @@
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::column_stats::ColumnStats;
-use crate::encoding::{
-    AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
-    FsstEncoder, RleIntColumn,
-};
+use crate::encoding::{ColumnEncoding, EncodingType, FsstColumn, FsstEncoder};
 use graphdb_core::NullBitmap;
 
 use super::Column;
@@ -32,18 +29,6 @@ impl Column {
     pub(super) fn sync_row_count_from_encoding(&mut self) {
         let encoded_len = self.encoding.len();
         self.inner_mut().resize(encoded_len);
-    }
-
-    /// Decode the compressed encoding back into the raw column storage.
-    ///
-    /// This is needed when WAL replay needs to write rows beyond the encoded
-    /// column's row_count (e.g., new vertices after a checkpoint load).
-    /// After decoding, the column falls back to its uncompressed representation.
-    pub(super) fn decode_encoding_to_raw(&mut self) -> StorageResult<()> {
-        let (data, offsets, bitmap) = self.get_flush_data();
-        self.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), self.len());
-        self.encoding = ColumnEncoding::None;
-        Ok(())
     }
 
     pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {
@@ -219,76 +204,20 @@ impl Column {
         Ok(())
     }
 
-    pub fn apply_fsst_from_meta(&mut self, fsst_col: FsstColumn) -> StorageResult<()> {
-        let encoded_len = fsst_col.len();
-        self.encoding = ColumnEncoding::Fsst(fsst_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_dictionary_from_meta(&mut self, dict_col: DictionaryColumn) -> StorageResult<()> {
-        let encoded_len = dict_col.len();
-        self.encoding = ColumnEncoding::Dictionary(dict_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_rle_int_from_meta(&mut self, rle_col: RleIntColumn) -> StorageResult<()> {
-        let encoded_len = rle_col.len();
-        self.encoding = ColumnEncoding::RleInt(rle_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_rle_bool_from_meta(
-        &mut self,
-        rle_col: crate::encoding::RleBoolColumn,
-    ) -> StorageResult<()> {
-        if self.data_type != DataType::Bool {
-            return Err(StorageError::type_mismatch(
-                DataType::Bool,
-                self.data_type.clone(),
-            ));
-        }
-        let encoded_len = rle_col.len();
-        self.encoding = ColumnEncoding::RleBool(rle_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_bitpacked_from_meta(&mut self, bp_col: BitPackedIntColumn) -> StorageResult<()> {
-        let encoded_len = bp_col.len();
-        self.encoding = ColumnEncoding::BitPacked(bp_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_alp_from_meta(&mut self, alp_col: AlpColumn) -> StorageResult<()> {
-        let encoded_len = alp_col.len();
-        self.encoding = ColumnEncoding::Alp(alp_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_constant_from_meta(
-        &mut self,
-        col: crate::encoding::ConstantColumn,
-    ) -> StorageResult<()> {
-        let encoded_len = col.len();
-        self.encoding = ColumnEncoding::Constant(col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
     /// Compute statistics for the bytes that this column will persist.
     ///
     /// Encoded columns persist their encoding metadata, while unencoded
     /// columns persist the raw buffers. Keeping the size calculation here
     /// makes flush-time statistics reflect the actual column format.
+    ///
+    /// Aggregation is streaming: rows are visited once without materializing
+    /// a value vector or a distinct hash set (HLL-backed estimate).
     pub fn compute_stats(&self) -> StorageResult<ColumnStats> {
-        let values = (0..self.len())
-            .map(|row_idx| self.get(row_idx))
-            .collect::<Vec<_>>();
+        self.compute_stats_streaming()
+    }
+
+    /// Streaming stats aggregation over chunks without row materialization.
+    pub fn compute_stats_streaming(&self) -> StorageResult<ColumnStats> {
         let (data, offsets, bitmap) = self.get_flush_data();
         let raw_size = data
             .len()
@@ -308,12 +237,48 @@ impl Column {
             raw_size
         };
 
-        Ok(crate::column_stats::compute_stats(
-            &values,
-            self.encoding_type(),
+        let encoding_type = self.encoding_type();
+        let iter = (0..self.len()).map(|row_idx| self.get(row_idx));
+        Ok(crate::column_stats::compute_stats_streaming(
+            iter,
+            encoding_type,
             compressed_size,
             raw_size,
         ))
+    }
+
+    /// Rebuild zone maps and per-chunk encoding profiles in one pass.
+    pub fn rebuild_chunk_profiles(&mut self) {
+        self.rebuild_zone_maps();
+        if self.chunks.is_empty() {
+            return;
+        }
+        // Raw size is column-wide and identical for every chunk: resolve the
+        // flush buffers once instead of materializing them per chunk.
+        let (flush_data, flush_offsets, _) = self.get_flush_data();
+        let raw_size = flush_data.len() as u64 + flush_offsets.len() as u64 * 8;
+        let total_rows = self.len();
+        for idx in 0..self.chunks.len() {
+            let start = self.chunks[idx].row_offset;
+            let end = (start + self.chunks[idx].row_count).min(total_rows);
+            let mut min: Option<Value> = None;
+            let mut max: Option<Value> = None;
+            let mut count = 0u32;
+            for row in start..end {
+                if let Some(v) = self.get(row) {
+                    count += 1;
+                    if min.as_ref().is_none_or(|m| &v < m) {
+                        min = Some(v.clone());
+                    }
+                    if max.as_ref().is_none_or(|m| &v > m) {
+                        max = Some(v.clone());
+                    }
+                }
+            }
+            let all_null = count == 0;
+            let enc_bytes = self.chunks[idx].encoding.memory_usage() as u64;
+            self.chunks[idx].refresh_encoding_meta(count, all_null, min, max, enc_bytes, raw_size);
+        }
     }
 
     /// Persisted column statistics meta (min/max/null/distinct from the last

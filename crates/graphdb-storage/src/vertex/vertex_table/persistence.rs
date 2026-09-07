@@ -31,6 +31,53 @@ fn take_bytes(cursor: &mut &[u8], len: u32, field: &str) -> StorageResult<Vec<u8
     Ok(value.to_vec())
 }
 
+/// Columns file record-layout version. Development builds keep this at 1;
+/// there is no backward compatibility with any other layout.
+pub const COLUMNS_FORMAT_VERSION: u8 = 1;
+
+/// Pick one encoding for a column by profiling each chunk independently
+/// (streaming, no column-wide value vector) and voting for the most common
+/// non-None chunk choice. Hot chunks vote `None` through the profile.
+fn select_encoding_for_column(
+    col: &crate::vertex::column::Column,
+    selector: &crate::encoding::EncodingSelector,
+) -> crate::encoding::EncodingType {
+    use crate::encoding::{profile_chunk, EncodingType};
+    use std::collections::HashMap;
+    if col.is_empty() {
+        return EncodingType::None;
+    }
+    let capacity = col.chunk_capacity().max(1);
+    let total = col.len();
+    let n_chunks = total.div_ceil(capacity).max(1);
+    let mut votes: HashMap<u8, usize> = HashMap::new();
+    for ci in 0..n_chunks {
+        let start = ci * capacity;
+        let end = (start + capacity).min(total);
+        let hot = col
+            .chunk_for_row(start)
+            .map(|c| c.needs_recode(selector.thresholds().hot_update_threshold))
+            .unwrap_or(false);
+        let profile = profile_chunk((start..end).map(|r| col.get(r)), &col.data_type, hot);
+        let choice = selector.select_for_chunk_profile(&profile);
+        *votes.entry(choice.to_u8()).or_insert(0) += 1;
+    }
+    let (best_tag, best_count) = votes
+        .iter()
+        .max_by_key(|(_, count)| **count)
+        .map(|(tag, count)| (*tag, *count))
+        .unwrap_or((EncodingType::None.to_u8(), 0));
+    if best_tag == EncodingType::None.to_u8() || best_count == 0 {
+        return EncodingType::None;
+    }
+    // Require a majority for non-trivial encodings on multi-chunk columns so
+    // a single odd chunk cannot force a column-wide encoding.
+    if n_chunks > 1 && best_count * 2 <= n_chunks {
+        return EncodingType::None;
+    }
+    EncodingType::from_u8(best_tag)
+}
+
 impl VertexTable {
     pub fn flush<P: AsRef<Path>>(
         &mut self,
@@ -59,18 +106,14 @@ impl VertexTable {
         let mut columns = self.columns.clone();
         // Use the persistent encoding selector so compression feedback
         // accumulates across flushes, enabling the re-encoding detector.
+        // Selection is streaming per chunk: each chunk profiles its own
+        // rows without materializing a column-wide value vector.
         let selections = columns
             .columns()
             .iter()
             .map(|col| {
-                let values = (0..col.len())
-                    .map(|row_idx| col.get(row_idx))
-                    .collect::<Vec<_>>();
-                (
-                    col.name.clone(),
-                    self.encoding_selector
-                        .select_for_column(&col.data_type, &values),
-                )
+                let selection = select_encoding_for_column(col, &self.encoding_selector);
+                (col.name.clone(), selection)
             })
             .collect::<Vec<_>>();
         for (name, encoding_type) in &selections {
@@ -95,9 +138,17 @@ impl VertexTable {
                             stats.raw_size,
                             stats.compressed_size,
                         );
-                        self.encoding_selector
-                            .record_compression_result(*encoding_type, stats.compression_ratio());
-                        if self.encoding_selector.should_reencode(*encoding_type) {
+                        let family: crate::encoding::DataTypeFamily =
+                            crate::encoding::data_type_family(&col.data_type);
+                        self.encoding_selector.record_compression_result_for(
+                            *encoding_type,
+                            family,
+                            stats.compression_ratio(),
+                        );
+                        if self
+                            .encoding_selector
+                            .should_reencode_for(*encoding_type, family)
+                        {
                             log::info!(
                                 "column={} encoding={:?} avg_ratio={:.2} exceeds threshold, \
                                  consider re-encoding",
@@ -110,7 +161,7 @@ impl VertexTable {
                 }
             }
         }
-        self.flush_columns(&columns_path, &columns)?;
+        self.flush_columns(&columns_path, &mut columns)?;
 
         // Apply encoding to in-memory columns so data stays compressed after flush.
         // This moves compression from "flush-time only" to "post-flush in-memory",
@@ -133,10 +184,64 @@ impl VertexTable {
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
+        // Write per-column chunk metadata alongside columns.bin so reload
+        // can reconstruct lazy-loaded segments without changing the format.
+        self.flush_chunk_metadata(path)?;
         // Successful full flush clears dirty tracking (data now persisted).
         self.clear_dirty();
 
         Ok(())
+    }
+
+    /// Write per-column chunk metadata as `{col_name}.chunks` sidecar files.
+    fn flush_chunk_metadata(&self, dir: &Path) -> StorageResult<()> {
+        for col in self.columns.columns() {
+            let chunk_meta: Vec<(usize, usize, u8)> = if col.has_chunks() {
+                col.chunk_encoding_metadata()
+                    .into_iter()
+                    .map(|(idx, enc, rows)| (idx, rows, enc.to_u8()))
+                    .collect()
+            } else {
+                vec![(0, col.len(), col.encoding_type().to_u8())]
+            };
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&(chunk_meta.len() as u32).to_le_bytes());
+            for (idx, rows, enc) in &chunk_meta {
+                buf.extend_from_slice(&(*idx as u32).to_le_bytes());
+                buf.extend_from_slice(&(*rows as u32).to_le_bytes());
+                buf.push(*enc);
+            }
+            let file_name = format!("{}.chunks", col.name);
+            crate::compression::write_shadow_file(dir.join(file_name), &buf)?;
+        }
+        Ok(())
+    }
+
+    /// Load of chunk sidecars: materializes segments from the `{col}.chunks`
+    /// metadata written by flush. Columns restored from chunk records in
+    /// `columns.bin` already carry authoritative chunk state (encodings,
+    /// overlays, rebuilt profiles) and are left untouched; the sidecar only
+    /// fills the gap for raw columns.
+    fn load_chunk_metadata(&mut self, dir: &Path) {
+        for col_name in self
+            .columns
+            .columns()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect::<Vec<_>>()
+        {
+            let sidecar = dir.join(format!("{}.chunks", col_name));
+            if !sidecar.exists() {
+                continue;
+            }
+            if let Some(col) = self.columns.get_column_mut(&col_name) {
+                if col.has_chunks() {
+                    continue;
+                }
+                col.materialize_chunks();
+                col.rebuild_chunk_profiles();
+            }
+        }
     }
 
     /// Incremental flush: only serialize dirty pages.
@@ -324,7 +429,7 @@ impl VertexTable {
     fn flush_columns(
         &self,
         path: &Path,
-        columns: &crate::vertex::ColumnStore,
+        columns: &mut crate::vertex::ColumnStore,
     ) -> StorageResult<()> {
         let mut payload = Vec::new();
         write_header_to(&mut payload, section::VERTEX_COLUMNS).map_err(|e| {
@@ -333,33 +438,82 @@ impl VertexTable {
 
         let column_count = columns.column_count() as u32;
         payload.extend_from_slice(&column_count.to_le_bytes());
+        payload.push(COLUMNS_FORMAT_VERSION);
 
-        for col in columns.columns() {
+        // Rebuild overflow sidecars from live rows so deleted payloads shrink.
+        for col in columns.columns_mut() {
+            col.rebuild_overflow();
+        }
+
+        let col_names: Vec<String> = columns.columns().iter().map(|c| c.name.clone()).collect();
+        for name in &col_names {
+            let col = columns.get_column(name).unwrap();
             let name_bytes = col.name.as_bytes();
             payload.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
             payload.extend_from_slice(name_bytes);
 
             if col.encoding_type() != EncodingType::None {
                 payload.push(1u8);
-                let mut meta_buf = Vec::new();
-                col.encoding().serialize_meta(&mut meta_buf)?;
-                let meta_len = meta_buf.len() as u32;
-                payload.extend_from_slice(&meta_len.to_le_bytes());
-                payload.extend_from_slice(&meta_buf);
-
-                let stats = col.compute_stats()?;
                 payload.push(1u8);
-                let mut stats_buf = Vec::new();
-                stats.serialize_meta(&mut stats_buf)?;
-                payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
-                payload.extend_from_slice(&stats_buf);
+                // Ensure per-chunk segmentation exists on the snapshot.
+                let col_mut = columns.get_column_mut(name).unwrap();
+                if !col_mut.has_chunks() {
+                    col_mut.materialize_chunks();
+                }
+                let col_ref = columns.get_column(name).unwrap();
+                let chunk_count = col_ref.chunk_count().max(1) as u32;
+                payload.extend_from_slice(&chunk_count.to_le_bytes());
+                for ci in 0..col_ref.chunk_count().max(1) {
+                    let chunk = col_ref.chunk_at(ci);
+                    let (row_offset, row_count) = match chunk {
+                        Some(c) => (c.row_offset as u32, c.row_count as u32),
+                        None => (0u32, col_ref.len() as u32),
+                    };
+                    payload.extend_from_slice(&row_offset.to_le_bytes());
+                    payload.extend_from_slice(&row_count.to_le_bytes());
+                    // Compression metadata.
+                    let mut meta_buf = Vec::new();
+                    if let Some(c) = chunk {
+                        c.encoding_meta.serialize(&mut meta_buf)?;
+                    }
+                    payload.extend_from_slice(&(meta_buf.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&meta_buf);
+                    // Full encoding metadata for this chunk.
+                    let mut enc_buf = Vec::new();
+                    if let Some(c) = chunk {
+                        c.encoding.serialize_meta(&mut enc_buf)?;
+                    } else {
+                        col_ref.encoding().serialize_meta(&mut enc_buf)?;
+                    }
+                    payload.extend_from_slice(&(enc_buf.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&enc_buf);
+                    // Overlay entries.
+                    let overlay_entries: Vec<(u32, Option<graphdb_core::Value>)> = chunk
+                        .map(|c| c.overlay.iter().map(|(k, v)| (*k, v.clone())).collect())
+                        .unwrap_or_default();
+                    let overlay_bytes = postcard::to_allocvec(&overlay_entries)
+                        .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+                    payload.extend_from_slice(&(overlay_bytes.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&overlay_bytes);
+                }
+
+                // Overflow sidecar presence flag (same semantics as raw).
+                let overflow_present = (col_ref.has_overflow()
+                    && matches!(
+                        col_ref.data_type,
+                        graphdb_core::DataType::String | graphdb_core::DataType::Blob
+                    )) as u8;
+                payload.push(overflow_present);
+
+                Self::write_stats_with_fallback(&mut payload, col_ref);
             } else {
                 payload.push(0u8);
-                let (data, offsets, bitmap) = col.get_flush_data();
+                let col_ref = columns.get_column(name).unwrap();
+                let (data, offsets, bitmap) = col_ref.get_flush_data();
 
                 let row_count = offsets
                     .len()
-                    .max(if data.is_empty() { 0 } else { col.len() });
+                    .max(if data.is_empty() { 0 } else { col_ref.len() });
                 payload.extend_from_slice(&(row_count as u32).to_le_bytes());
 
                 payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -382,18 +536,78 @@ impl VertexTable {
                     payload.push(0u8);
                 }
 
-                let stats = col.compute_stats()?;
-                payload.push(1u8);
-                let mut stats_buf = Vec::new();
-                stats.serialize_meta(&mut stats_buf)?;
-                payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
-                payload.extend_from_slice(&stats_buf);
+                // Overflow sidecar presence flag.
+                let overflow_present = (col_ref.has_overflow()
+                    && matches!(
+                        col_ref.data_type,
+                        graphdb_core::DataType::String | graphdb_core::DataType::Blob
+                    )) as u8;
+                payload.push(overflow_present);
+
+                Self::write_stats_with_fallback(&mut payload, col_ref);
             }
         }
 
         let page_size = crate::compression::DEFAULT_PAGE_SIZE;
         let total_rows = self.columns.row_count() as u32;
-        Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
+        Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)?;
+
+        // Persist overflow sidecars next to columns.bin.
+        if let Some(dir) = path.parent() {
+            for name in &col_names {
+                let col = columns.get_column(name).unwrap();
+                if !matches!(
+                    col.data_type,
+                    graphdb_core::DataType::String | graphdb_core::DataType::Blob
+                ) {
+                    continue;
+                }
+                if !col.has_overflow() {
+                    continue;
+                }
+                match col.serialize_overflow() {
+                    Ok(bytes) => {
+                        let sidecar = dir.join(format!("{}.overflow", name));
+                        if let Err(e) = crate::compression::write_shadow_file(&sidecar, &bytes) {
+                            log::warn!("failed to write overflow sidecar for {}: {}", name, e);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("failed to serialize overflow for {}: {}", name, e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize column stats, degrading to `has_stats=0` for composite
+    /// columns whose bounds cannot be represented instead of failing flush.
+    fn write_stats_with_fallback(payload: &mut Vec<u8>, col: &crate::vertex::column::Column) {
+        match col.compute_stats() {
+            Ok(stats) => match stats.serialize_meta(&mut Vec::new()) {
+                Ok(_) => {
+                    let mut stats_buf = Vec::new();
+                    // Re-serialize into the real buffer (checked above).
+                    let _ = stats.serialize_meta(&mut stats_buf);
+                    payload.push(1u8);
+                    payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&stats_buf);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "column {} stats not representable, skipping stats: {}",
+                        col.name,
+                        e
+                    );
+                    payload.push(0u8);
+                }
+            },
+            Err(e) => {
+                log::warn!("column {} stats failed, skipping stats: {}", col.name, e);
+                payload.push(0u8);
+            }
+        }
     }
 
     fn flush_timestamps(&self, path: &Path) -> StorageResult<()> {
@@ -493,6 +707,8 @@ impl VertexTable {
 
         let columns_path = path.join("columns.bin");
         self.load_columns(&columns_path)?;
+        // Reconstruct lazy-loaded chunk segments from sidecars when present.
+        self.load_chunk_metadata(path);
 
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
@@ -556,7 +772,17 @@ impl VertexTable {
         cursor.read_exact(&mut column_count_bytes)?;
         let column_count = u32::from_le_bytes(column_count_bytes) as usize;
 
+        let mut ver = [0u8; 1];
+        cursor.read_exact(&mut ver)?;
+        if ver[0] != COLUMNS_FORMAT_VERSION {
+            return Err(StorageError::deserialize_error(format!(
+                "unsupported columns format version {}",
+                ver[0]
+            )));
+        }
+
         self.columns.clear();
+        let dir = path.parent().map(|p| p.to_path_buf());
 
         for _ in 0..column_count {
             let mut name_len_bytes = [0u8; 4];
@@ -573,27 +799,17 @@ impl VertexTable {
             let has_encoding = has_encoding_bytes[0] == 1;
 
             if has_encoding {
-                let mut meta_len_bytes = [0u8; 4];
-                cursor.read_exact(&mut meta_len_bytes)?;
-                let meta_len = u32::from_le_bytes(meta_len_bytes) as usize;
-                let mut meta_bytes = vec![0u8; meta_len];
-                cursor.read_exact(&mut meta_bytes)?;
-                let encoding_type = EncodingType::from_u8(meta_bytes[0]);
-                let mut meta_cursor = &meta_bytes[1..];
-                self.load_column_with_encoding(&name, encoding_type, &mut meta_cursor)?;
-
-                let mut has_stats_bytes = [0u8; 1];
-                cursor.read_exact(&mut has_stats_bytes)?;
-                if has_stats_bytes[0] == 1 {
-                    let mut stats_len_bytes = [0u8; 4];
-                    cursor.read_exact(&mut stats_len_bytes)?;
-                    let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
-                    let mut stats_bytes = vec![0u8; stats_len];
-                    cursor.read_exact(&mut stats_bytes)?;
-                    let stats =
-                        crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
-                    if let Some(col) = self.columns.get_column_mut(&name) {
-                        col.set_stats(stats);
+                let overflow_present = self.load_column_chunked(&name, &mut cursor)?;
+                if overflow_present {
+                    Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
+                }
+                // Chunk records carry encoding bodies and overlays, but the
+                // derived per-chunk profiles (zone min/max, sizes) are
+                // recomputed from the restored state so later selection and
+                // update checks observe fresh metadata.
+                if let Some(col) = self.columns.get_column_mut(&name) {
+                    if col.has_chunks() {
+                        col.rebuild_chunk_profiles();
                     }
                 }
             } else {
@@ -648,6 +864,11 @@ impl VertexTable {
                     bitmap_bit_len,
                 )?;
 
+                // Raw records carry an overflow sidecar flag.
+                let mut flag = [0u8; 1];
+                cursor.read_exact(&mut flag)?;
+                let overflow_present = flag[0] != 0;
+
                 let mut has_stats_bytes = [0u8; 1];
                 cursor.read_exact(&mut has_stats_bytes)?;
                 if has_stats_bytes[0] == 1 {
@@ -661,6 +882,10 @@ impl VertexTable {
                     if let Some(col) = self.columns.get_column_mut(&name) {
                         col.set_stats(stats);
                     }
+                }
+
+                if overflow_present {
+                    Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
                 }
             }
         }
@@ -676,68 +901,214 @@ impl VertexTable {
         Ok(())
     }
 
-    fn load_column_with_encoding(
-        &mut self,
-        name: &str,
-        encoding_type: EncodingType,
-        meta_cursor: &mut &[u8],
-    ) -> StorageResult<()> {
-        use crate::encoding::{
-            AlpColumn, BitPackedIntColumn, ConstantColumn, DictionaryColumn, FsstColumn,
-            RleBoolColumn, RleIntColumn,
-        };
+    /// Decode one chunked encoded-column record.
+    /// Load one chunked column record. Returns whether an overflow sidecar
+    /// must be restored afterwards (the caller owns the flush directory).
+    fn load_column_chunked(&mut self, name: &str, cursor: &mut &[u8]) -> StorageResult<bool> {
+        use crate::vertex::column::{element_size, is_variable_length_type, ColumnChunk};
+        use graphdb_core::Value;
 
-        match encoding_type {
-            EncodingType::Fsst => {
-                let col = FsstColumn::deserialize_meta(meta_cursor)?;
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                column.apply_fsst_from_meta(col)?;
+        let mut flag = [0u8; 1];
+        cursor.read_exact(&mut flag)?;
+        if flag[0] != 1 {
+            return Err(StorageError::deserialize_error(format!(
+                "unsupported chunked column marker {}",
+                flag[0]
+            )));
+        }
+
+        let mut count_bytes = [0u8; 4];
+        cursor.read_exact(&mut count_bytes)?;
+        let chunk_count = u32::from_le_bytes(count_bytes) as usize;
+
+        struct ChunkRec {
+            row_offset: usize,
+            row_count: usize,
+            meta: crate::encoding::ChunkEncodingMeta,
+            encoding: crate::encoding::ColumnEncoding,
+            overlay: Vec<(u32, Option<Value>)>,
+        }
+        let mut recs = Vec::with_capacity(chunk_count);
+        for _ in 0..chunk_count {
+            let mut u32b = [0u8; 4];
+            cursor.read_exact(&mut u32b)?;
+            let row_offset = u32::from_le_bytes(u32b) as usize;
+            cursor.read_exact(&mut u32b)?;
+            let row_count = u32::from_le_bytes(u32b) as usize;
+            cursor.read_exact(&mut u32b)?;
+            let meta_len = u32::from_le_bytes(u32b) as usize;
+            let meta_bytes = take_bytes(cursor, meta_len as u32, "chunk meta")?;
+            let meta = if meta_bytes.is_empty() {
+                crate::encoding::ChunkEncodingMeta::default()
+            } else {
+                crate::encoding::ChunkEncodingMeta::deserialize(&mut &meta_bytes[..])?
+            };
+            cursor.read_exact(&mut u32b)?;
+            let enc_len = u32::from_le_bytes(u32b) as usize;
+            let enc_bytes = take_bytes(cursor, enc_len as u32, "chunk encoding")?;
+            if enc_bytes.is_empty() {
+                return Err(StorageError::deserialize_error(
+                    "empty chunk encoding".to_string(),
+                ));
             }
-            EncodingType::Dictionary => {
-                let col = DictionaryColumn::deserialize_meta(meta_cursor)?;
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                column.apply_dictionary_from_meta(col)?;
+            let encoding_type = EncodingType::from_u8(enc_bytes[0]);
+            let mut enc_cursor = &enc_bytes[1..];
+            let chunk_data_type = self
+                .columns
+                .get_column(name)
+                .map(|c| c.data_type.clone())
+                .unwrap_or(graphdb_core::DataType::Int);
+            let encoding = Self::decode_encoding(encoding_type, &mut enc_cursor, &chunk_data_type)?;
+            cursor.read_exact(&mut u32b)?;
+            let overlay_len = u32::from_le_bytes(u32b) as usize;
+            let overlay_bytes = take_bytes(cursor, overlay_len as u32, "chunk overlay")?;
+            let overlay: Vec<(u32, Option<Value>)> = if overlay_bytes.is_empty() {
+                Vec::new()
+            } else {
+                postcard::from_bytes(&overlay_bytes)
+                    .map_err(|e| StorageError::deserialize_error(e.to_string()))?
+            };
+            recs.push(ChunkRec {
+                row_offset,
+                row_count,
+                meta,
+                encoding,
+                overlay,
+            });
+        }
+
+        // Rebuild column state from chunk records.
+        let total_rows = recs
+            .iter()
+            .map(|r| r.row_offset + r.row_count)
+            .max()
+            .unwrap_or(0);
+        let col = self
+            .columns
+            .get_column_mut(name)
+            .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
+        col.resize(total_rows);
+        let data_type = col.data_type.clone();
+        let nullable = col.nullable;
+        let elem_size = element_size(&data_type);
+        let is_var = is_variable_length_type(&data_type);
+        let mut chunks = Vec::with_capacity(recs.len());
+        for rec in &recs {
+            let mut chunk = if is_var {
+                ColumnChunk::new_variable(rec.row_offset, rec.row_count, nullable)
+            } else {
+                ColumnChunk::new(rec.row_offset, rec.row_count, elem_size, nullable)
+            };
+            chunk.encoding = rec.encoding.clone();
+            chunk.encoding_meta = rec.meta.clone();
+            for (local, v) in &rec.overlay {
+                chunk.overlay.put(*local, v.clone());
             }
-            EncodingType::Rle => {
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                if column.data_type == graphdb_core::DataType::Bool {
-                    let col = RleBoolColumn::deserialize_meta(meta_cursor)?;
-                    column.apply_rle_bool_from_meta(col)?;
-                } else {
-                    let col = RleIntColumn::deserialize_meta(meta_cursor)?;
-                    column.apply_rle_int_from_meta(col)?;
+            chunk.updates_since_encode = chunk.overlay.len() as u64;
+            chunks.push(chunk);
+        }
+        let first_encoding = recs.first().map(|r| r.encoding.clone());
+        col.set_chunks(chunks);
+        if let Some(enc) = first_encoding {
+            col.restore_encoding(enc);
+        }
+        // Overflow flag sits between the chunk records and the stats suffix.
+        let mut flag = [0u8; 1];
+        cursor.read_exact(&mut flag)?;
+        let overflow_present = flag[0] != 0;
+        Self::load_stats_suffix(&mut self.columns, name, cursor)?;
+        Ok(overflow_present)
+    }
+
+    /// Best-effort restore of a `<col>.overflow` sidecar: a corrupt or
+    /// missing sidecar degrades to placeholder reads, never a load failure.
+    fn load_overflow_sidecar(
+        columns: &mut crate::vertex::ColumnStore,
+        dir: Option<&std::path::Path>,
+        name: &str,
+    ) {
+        let dir = match dir {
+            Some(d) => d,
+            None => return,
+        };
+        let sidecar = dir.join(format!("{}.overflow", name));
+        if !sidecar.exists() {
+            return;
+        }
+        match std::fs::read(&sidecar) {
+            Ok(bytes) => {
+                if let Some(col) = columns.get_column_mut(name) {
+                    if let Err(e) = col.load_overflow_bytes(&bytes) {
+                        log::warn!("ignoring corrupt overflow sidecar for {}: {}", name, e);
+                    }
                 }
             }
-            EncodingType::BitPacking => {
-                let col = BitPackedIntColumn::deserialize_meta(meta_cursor)?;
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                column.apply_bitpacked_from_meta(col)?;
+            Err(e) => {
+                log::warn!("failed to read overflow sidecar for {}: {}", name, e);
             }
-            EncodingType::Alp => {
-                let col = AlpColumn::deserialize_meta(meta_cursor)?;
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                column.apply_alp_from_meta(col)?;
+        }
+    }
+
+    fn load_stats_suffix(
+        columns: &mut crate::vertex::ColumnStore,
+        name: &str,
+        cursor: &mut &[u8],
+    ) -> StorageResult<()> {
+        let mut has_stats_bytes = [0u8; 1];
+        cursor.read_exact(&mut has_stats_bytes)?;
+        if has_stats_bytes[0] == 1 {
+            let mut stats_len_bytes = [0u8; 4];
+            cursor.read_exact(&mut stats_len_bytes)?;
+            let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
+            let mut stats_bytes = vec![0u8; stats_len];
+            cursor.read_exact(&mut stats_bytes)?;
+            let stats = crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
+            if let Some(col) = columns.get_column_mut(name) {
+                col.set_stats(stats);
             }
-            EncodingType::Constant => {
-                let col = ConstantColumn::deserialize_meta(meta_cursor)?;
-                let Some(column) = self.columns.get_column_mut(name) else {
-                    return Err(StorageError::column_not_found(name.to_string()));
-                };
-                column.apply_constant_from_meta(col)?;
-            }
-            EncodingType::None => {}
         }
         Ok(())
+    }
+
+    /// Decode one chunk encoding body.
+    fn decode_encoding(
+        encoding_type: EncodingType,
+        meta_cursor: &mut &[u8],
+        data_type: &graphdb_core::DataType,
+    ) -> StorageResult<crate::encoding::ColumnEncoding> {
+        use crate::encoding::{
+            AlpColumn, BitPackedIntColumn, ColumnEncoding, ConstantColumn, DictionaryColumn,
+            FsstColumn, RleBoolColumn, RleIntColumn,
+        };
+        match encoding_type {
+            EncodingType::Fsst => Ok(ColumnEncoding::Fsst(FsstColumn::deserialize_meta(
+                meta_cursor,
+            )?)),
+            EncodingType::Dictionary => Ok(ColumnEncoding::Dictionary(
+                DictionaryColumn::deserialize_meta(meta_cursor)?,
+            )),
+            EncodingType::Rle => {
+                if *data_type == graphdb_core::DataType::Bool {
+                    Ok(ColumnEncoding::RleBool(RleBoolColumn::deserialize_meta(
+                        meta_cursor,
+                    )?))
+                } else {
+                    Ok(ColumnEncoding::RleInt(RleIntColumn::deserialize_meta(
+                        meta_cursor,
+                    )?))
+                }
+            }
+            EncodingType::BitPacking => Ok(ColumnEncoding::BitPacked(
+                BitPackedIntColumn::deserialize_meta(meta_cursor)?,
+            )),
+            EncodingType::Alp => Ok(ColumnEncoding::Alp(AlpColumn::deserialize_meta(
+                meta_cursor,
+            )?)),
+            EncodingType::Constant => Ok(ColumnEncoding::Constant(
+                ConstantColumn::deserialize_meta(meta_cursor)?,
+            )),
+            EncodingType::None => Ok(ColumnEncoding::None),
+        }
     }
 
     pub(crate) fn load_timestamps(&mut self, path: &Path) -> StorageResult<()> {

@@ -34,6 +34,11 @@ pub struct VertexTableConfig {
     /// this timestamp may be folded while keeping the newest value. Use
     /// `Timestamp::MAX` to disable lossy folding (the safe default).
     pub retention_horizon: Timestamp,
+    /// Payload size above which strings spill to the per-column overflow
+    /// file. `usize::MAX` disables overflow routing (inline storage).
+    pub string_overflow_threshold: usize,
+    /// Rows per chunk for chunk-local encodings and update overlays.
+    pub chunk_capacity: usize,
 }
 
 impl Default for VertexTableConfig {
@@ -42,6 +47,8 @@ impl Default for VertexTableConfig {
             initial_capacity: 4096,
             version_chain_cap: 64,
             retention_horizon: Timestamp::MAX,
+            string_overflow_threshold: crate::vertex::column::overflow::DEFAULT_OVERFLOW_THRESHOLD,
+            chunk_capacity: crate::vertex::column::chunk::DEFAULT_CHUNK_ROWS,
         }
     }
 }
@@ -78,6 +85,12 @@ pub struct VertexTable {
     /// detect when a column's compression ratio degrades and recommend
     /// re-evaluating the encoding choice.
     pub(super) encoding_selector: EncodingSelector,
+    /// Payload size above which new string/blob columns spill to the
+    /// per-column overflow file (applied when columns are created).
+    pub(super) string_overflow_threshold: usize,
+    /// Rows per chunk for chunk-local encodings (applied when columns are
+    /// created).
+    pub(super) chunk_capacity: usize,
     /// Maximum version chain length per row before folding oldest entries.
     pub(super) version_chain_cap: usize,
     /// Retention horizon for version chain folding.
@@ -95,6 +108,17 @@ impl VertexTable {
 
         for prop in &schema.properties {
             columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+            if let Some(col) = columns.get_column_mut(&prop.name) {
+                col.set_chunk_capacity(config.chunk_capacity);
+            }
+            if matches!(
+                prop.data_type,
+                graphdb_core::DataType::String | graphdb_core::DataType::Blob
+            ) {
+                if let Some(col) = columns.get_column_mut(&prop.name) {
+                    col.set_overflow_threshold(config.string_overflow_threshold);
+                }
+            }
         }
 
         let mut property_index_cache = HashMap::new();
@@ -124,6 +148,8 @@ impl VertexTable {
                 handle_counter: 0,
             },
             encoding_selector: EncodingSelector::default(),
+            string_overflow_threshold: config.string_overflow_threshold,
+            chunk_capacity: config.chunk_capacity,
             version_chain_cap: config.version_chain_cap,
             retention_horizon: config.retention_horizon,
         }

@@ -32,10 +32,6 @@ use super::super::spill::{RunReader, RunWriter};
 /// Rows per collector block. Bounds the reallocation peak of a single push.
 pub const COLLECTOR_BLOCK_ROWS: usize = 4096;
 
-/// Rows per collector spill run. Bounds both the writer-side body buffer and
-/// the reader-side full-run load peak.
-pub const COLLECTOR_SPILL_RUN_ROWS: u64 = COLLECTOR_RUN_ROWS_MAX;
-
 /// Open spill run held by the collector.
 #[derive(Debug)]
 struct ActiveRun {

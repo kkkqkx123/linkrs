@@ -79,11 +79,8 @@ impl Column {
     pub fn rebuild_zone_maps(&mut self) {
         self.zone_maps.clear();
         for row_idx in 0..self.len() {
-            let value = if self.encoding.is_encoded() {
-                self.encoding.get(row_idx)
-            } else {
-                self.inner().get(row_idx)
-            };
+            // Chunk-aware base read: overlay first, then chunk encodings.
+            let value = self.get(row_idx);
             self.update_zone_maps(row_idx, value.as_ref());
         }
     }

@@ -194,7 +194,7 @@ fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
         operator_base(3, &["left_id".to_string(), "right_id".to_string()]),
         Box::new(left),
         Box::new(right),
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::HashJoin {
                 join_condition: None,
                 hash_keys: vec![Expression::Variable("id".to_string())],
@@ -211,7 +211,7 @@ fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
                 "left_id".to_string(),
                 "right_id".to_string(),
             ])),
-        ),
+        )),
     );
 
     let mut engine = StreamingExecutionEngine::new();
@@ -788,7 +788,7 @@ fn partitioned_hash_join_matches_rows_across_partition_boundaries() {
             Vec::new(),
             vec!["id".to_string(), "right".to_string()],
         )),
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::HashJoin {
                 join_condition: None,
                 hash_keys: vec![graphdb_core::types::expr::Expression::Variable(
@@ -806,7 +806,7 @@ fn partitioned_hash_join_matches_rows_across_partition_boundaries() {
                 grace: crate::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             join_layout,
-        ),
+        )),
     );
     engine
         .build_partitioned_join_executor(
@@ -873,7 +873,7 @@ fn partitioned_join_rejects_mismatched_input_partition_counts() {
         OperatorBase::new(44),
         Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
         Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::InnerJoin {
                 join_condition: None,
                 build_side_tuples: Vec::new(),
@@ -885,7 +885,7 @@ fn partitioned_join_rejects_mismatched_input_partition_counts() {
                 "id".to_string(),
                 "id".to_string(),
             ])),
-        ),
+        )),
     );
     let error = engine
         .build_partitioned_join_executor(
@@ -972,7 +972,7 @@ fn grace_join_engine(
         ),
         Box::new(probe),
         Box::new(build),
-        op,
+        Box::new(op),
     );
     let mut engine = StreamingExecutionEngine::new();
     engine.set_runtime(runtime);

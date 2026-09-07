@@ -55,7 +55,8 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
     /// Whether the entry has expired under the given TTL (since insertion) or
     /// TTI (since last access) policies. `0` disables the respective policy.
     fn is_expired(&self, now_nanos: u64, ttl_nanos: u64, tti_nanos: u64) -> bool {
-        (ttl_nanos != 0 && now_nanos.saturating_sub(self.created_at.load(Ordering::Relaxed)) >= ttl_nanos)
+        (ttl_nanos != 0
+            && now_nanos.saturating_sub(self.created_at.load(Ordering::Relaxed)) >= ttl_nanos)
             || (tti_nanos != 0
                 && now_nanos.saturating_sub(self.last_access.load(Ordering::Relaxed)) >= tti_nanos)
     }
@@ -116,18 +117,16 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
 
     /// Enable TTL (expire entries this long after insertion).
     pub(crate) fn set_ttl(&self, ttl: Option<std::time::Duration>) {
-        self.inner.ttl_nanos.store(
-            ttl.map_or(0, |d| d.as_nanos() as u64),
-            Ordering::Relaxed,
-        );
+        self.inner
+            .ttl_nanos
+            .store(ttl.map_or(0, |d| d.as_nanos() as u64), Ordering::Relaxed);
     }
 
     /// Enable TTI (expire entries this long after their last access).
     pub(crate) fn set_tti(&self, tti: Option<std::time::Duration>) {
-        self.inner.tti_nanos.store(
-            tti.map_or(0, |d| d.as_nanos() as u64),
-            Ordering::Relaxed,
-        );
+        self.inner
+            .tti_nanos
+            .store(tti.map_or(0, |d| d.as_nanos() as u64), Ordering::Relaxed);
     }
 
     fn shard_for(&self, key: &K) -> usize {

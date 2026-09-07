@@ -349,6 +349,20 @@ impl AlpColumn {
         self.row_count
     }
 
+    pub fn exception_rate(&self) -> f64 {
+        if self.row_count == 0 {
+            return 0.0;
+        }
+        self.encoder.exceptions().len() as f64 / self.row_count as f64
+    }
+
+    pub fn spare_exception_slots(&self) -> usize {
+        let max_allowed = (self.row_count as f64
+            * crate::vertex::column::chunk_encoding::DEFAULT_ALP_EXCEPTION_THRESHOLD)
+            as usize;
+        max_allowed.saturating_sub(self.encoder.exceptions().len())
+    }
+
     pub fn memory_usage(&self) -> usize {
         self.encoder.memory_usage() + self.null_bitmap.memory_usage()
     }

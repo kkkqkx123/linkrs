@@ -236,7 +236,8 @@ impl ShardedVertexTable {
         let mut min: Option<graphdb_core::Value> = None;
         let mut max: Option<graphdb_core::Value> = None;
         let mut null_count: Option<u64> = None;
-        let mut distinct_count: Option<u64> = None;
+        let mut merged_hll: Option<crate::stats::HyperLogLog> = None;
+        let mut hll_complete = true;
         let mut any_info = false;
 
         for shard in &self.shards {
@@ -249,10 +250,17 @@ impl ShardedVertexTable {
             if let Some(stats) = table.columns.get_column(column).and_then(|c| c.stats()) {
                 any_info = true;
                 *null_count.get_or_insert(0) += stats.null_count;
-                if let Some(d) = stats.distinct_count {
-                    // Sum of per-shard distincts is an upper bound; good
-                    // enough for cardinality estimation.
-                    *distinct_count.get_or_insert(0) += d;
+                match &stats.hll {
+                    Some(h) => {
+                        if let Some(ref mut acc) = merged_hll {
+                            acc.merge(h);
+                        } else {
+                            merged_hll = Some(h.clone());
+                        }
+                    }
+                    None => {
+                        hll_complete = false;
+                    }
                 }
             }
         }
@@ -260,10 +268,18 @@ impl ShardedVertexTable {
         if !any_info {
             return None;
         }
+        let (hll, distinct_count) = match (merged_hll, hll_complete) {
+            (Some(h), true) => {
+                let est = h.estimate();
+                (Some(h), Some(est))
+            }
+            _ => (None, None),
+        };
         Some(ColumnStatsSnapshot {
             row_count: self.total_count() as u64,
             null_count,
             distinct_count,
+            hll,
             min_value: min,
             max_value: max,
         })

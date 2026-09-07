@@ -10,6 +10,7 @@
 
 pub mod alp;
 pub mod bitpacking;
+pub mod chunk_meta;
 pub mod constant;
 pub mod dictionary;
 pub mod fsst;
@@ -22,11 +23,12 @@ use graphdb_core::{DataType, StorageResult, Value};
 
 pub use alp::AlpColumn;
 pub use bitpacking::BitPackedIntColumn;
+pub use chunk_meta::{profile_chunk, ChunkEncodingMeta, ChunkProfile};
 pub use constant::ConstantColumn;
 pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
-pub use selector::EncodingSelector;
+pub use selector::{data_type_family, DataTypeFamily, EncodingSelector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodingType {

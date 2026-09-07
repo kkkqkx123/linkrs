@@ -21,9 +21,11 @@ pub struct ColumnStatsSnapshot {
     pub row_count: u64,
     /// Number of null values, when tracked by the storage layer.
     pub null_count: Option<u64>,
-    /// Distinct value count as an *upper-bound estimate* (sum of per-shard /
-    /// per-partition NDVs), only when every contributing table tracks it.
+    /// Distinct value count as an HLL union estimate across merged shards,
+    /// only when every contributing table tracks it.
     pub distinct_count: Option<u64>,
+    /// HLL registers backing the distinct estimate when available.
+    pub hll: Option<crate::stats::HyperLogLog>,
     /// Global minimum over non-null values (zone-map bounds are conservative:
     /// they only widen after writes, never shrink).
     pub min_value: Option<Value>,
@@ -45,21 +47,34 @@ impl ColumnStatsSnapshot {
     ///   pushed-predicate evaluation;
     /// - null counts sum over the tables that track them (missing tracking
     ///   is treated as no contribution);
-    /// - distinct counts are kept only when *both* sides carry the estimate
-    ///   and then summed. Per-table NDVs are not disjoint, so the result is
-    ///   an upper bound; a partially-known aggregate could underestimate
-    ///   true NDV, hence it degrades to `None`.
+    /// - distinct counts merge HLL registers into a union estimate when both
+    ///   sides carry HLL state; when only numeric estimates exist without
+    ///   registers the merge degrades to `None` instead of summing (a sum
+    ///   would be a loose upper bound that double-counts overlap).
     pub fn absorb(&mut self, other: &ColumnStatsSnapshot) {
         self.row_count += other.row_count;
         if let Some(n) = other.null_count {
             *self.null_count.get_or_insert(0) += n;
         }
-        match (self.distinct_count, other.distinct_count) {
-            (Some(a), Some(b)) => self.distinct_count = Some(a.saturating_add(b)),
-            _ => self.distinct_count = None,
+        match (self.hll.clone(), other.hll.clone()) {
+            (Some(mut a), Some(b)) => {
+                a.merge(&b);
+                self.distinct_count = Some(a.estimate());
+                self.hll = Some(a);
+            }
+            _ => {
+                self.distinct_count = None;
+                self.hll = None;
+            }
         }
         merge_min(&mut self.min_value, other.min_value.clone());
         merge_max(&mut self.max_value, other.max_value.clone());
+    }
+
+    /// Attach an HLL estimator and refresh the distinct estimate from it.
+    pub fn set_hll(&mut self, hll: crate::stats::HyperLogLog) {
+        self.distinct_count = Some(hll.estimate());
+        self.hll = Some(hll);
     }
 }
 
@@ -134,26 +149,36 @@ mod tests {
             row_count,
             null_count: None,
             distinct_count: None,
+            hll: None,
             min_value: min,
             max_value: max,
         }
+    }
+
+    fn hll_with(values: &[i32]) -> crate::stats::HyperLogLog {
+        let mut hll = crate::stats::HyperLogLog::new();
+        for v in values {
+            hll.add_value(&Value::Int(*v));
+        }
+        hll
     }
 
     #[test]
     fn absorb_widens_bounds_across_mixed_numeric_kinds() {
         let mut acc = snap(10, Some(Value::Int(1)), Some(Value::BigInt(100)));
         acc.null_count = Some(2);
-        acc.distinct_count = Some(7);
+        acc.set_hll(hll_with(&(0..100).collect::<Vec<_>>()));
 
         let mut other = snap(5, Some(Value::Double(-0.5)), Some(Value::SmallInt(50)));
         other.null_count = Some(1);
-        other.distinct_count = Some(3);
+        other.set_hll(hll_with(&(100..150).collect::<Vec<_>>()));
         acc.absorb(&other);
 
         assert_eq!(acc.row_count, 15);
         assert_eq!(acc.null_count, Some(3));
-        // NDV is only kept when both sides carry it; sum is an upper bound.
-        assert_eq!(acc.distinct_count, Some(10));
+        // HLL union estimate tracks the true union instead of summing.
+        let est = acc.distinct_count.unwrap() as f64;
+        assert!((est - 150.0).abs() / 150.0 < 0.2, "estimate={}", est);
         assert_eq!(acc.min_value, Some(Value::Double(-0.5)));
         assert_eq!(acc.max_value, Some(Value::BigInt(100)));
     }
@@ -161,8 +186,19 @@ mod tests {
     #[test]
     fn absorb_drops_partial_distinct_counts() {
         let mut acc = snap(4, None, None);
-        acc.distinct_count = Some(9);
+        acc.set_hll(hll_with(&[1, 2, 3]));
         acc.absorb(&snap(2, None, None));
+        assert_eq!(acc.distinct_count, None);
+    }
+
+    #[test]
+    fn absorb_without_hll_registers_degrades_to_unknown() {
+        // Bare numeric estimates without registers must not be summed.
+        let mut acc = snap(4, None, None);
+        acc.distinct_count = Some(9);
+        let mut other = snap(2, None, None);
+        other.distinct_count = Some(3);
+        acc.absorb(&other);
         assert_eq!(acc.distinct_count, None);
     }
 

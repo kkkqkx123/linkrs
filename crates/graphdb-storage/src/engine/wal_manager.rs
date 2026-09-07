@@ -70,6 +70,17 @@ impl WalManager {
                 StorageError::wal_error(format!("Failed to enable group commit: {:?}", e))
             })?;
         }
+        // Production async-flush path: stage appends in the per-thread buffer
+        // and drain them from a background thread. Disabled via
+        // `WalConfig::enable_async_flush = false` for exact sync behavior.
+        if self.config.enable_async_flush {
+            writer.enable_async_flush();
+            if writer.is_async_enabled() {
+                // A missing file handle (e.g. in-memory mode) makes background
+                // flush impossible; fall back to synchronous drains in sync().
+                let _ = writer.start_background_flush();
+            }
+        }
         self.local_writer = Some(Arc::new(Mutex::new(writer)));
         Ok(())
     }
@@ -111,6 +122,25 @@ impl WalManager {
             durable_lsn: self.durable_lsn(),
             sync_count: self.sync_count.load(Ordering::Relaxed),
             sync_failures: self.sync_failures.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Whether the background async-flush path is active.
+    pub fn is_async_enabled(&self) -> bool {
+        if let Some(ref writer) = self.local_writer {
+            writer.lock().is_async_enabled()
+        } else {
+            false
+        }
+    }
+
+    /// Drain buffered appends and stop the background flush thread.
+    /// Idempotent; safe to call on an unopened or sync-mode manager.
+    pub fn shutdown(&self) {
+        if let Some(ref writer) = self.local_writer {
+            let mut guard = writer.lock();
+            let _ = guard.flush_and_sync();
+            let _ = guard.disable_async_flush();
         }
     }
 
@@ -283,6 +313,12 @@ impl Default for WalManager {
     }
 }
 
+impl Drop for WalManager {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +334,35 @@ mod tests {
             .expect("Failed to open WAL");
 
         assert_eq!(manager.current_lsn(), Lsn::ZERO);
+    }
+
+    #[test]
+    fn test_wal_manager_open_starts_async_flush_by_default() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mut manager = WalManager::new();
+        manager
+            .open(temp_dir.path(), 0)
+            .expect("Failed to open WAL");
+        assert!(
+            manager.is_async_enabled(),
+            "default WalConfig enables async flush, so open must start it"
+        );
+        manager.shutdown();
+    }
+
+    #[test]
+    fn test_wal_manager_open_sync_mode_stays_synchronous() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mut cfg = WalConfig::default();
+        cfg.enable_async_flush = false;
+        let mut manager = WalManager::with_config(cfg);
+        manager
+            .open(temp_dir.path(), 0)
+            .expect("Failed to open WAL");
+        assert!(
+            !manager.is_async_enabled(),
+            "async disabled in config must preserve exact sync behavior"
+        );
     }
 
     #[test]

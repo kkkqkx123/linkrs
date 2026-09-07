@@ -718,7 +718,8 @@ impl TimeTravelEdgeStore {
             if total_merged > 0 {
                 log::info!(
                     "Emergency merge: {} segments (exceeded max {} per direction)",
-                    total_merged, self.config.max_segments_per_direction
+                    total_merged,
+                    self.config.max_segments_per_direction
                 );
                 return total_merged;
             }

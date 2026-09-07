@@ -23,6 +23,12 @@ pub struct EncodingThresholds {
     pub reencode_threshold: f64,
     /// Maximum number of symbols for FSST encoding.
     pub fsst_max_symbols: usize,
+    /// ALP exception-rate ceiling above which floats fall back to raw.
+    pub alp_exception_threshold: f64,
+    /// Maximum dictionary entries per chunk.
+    pub dict_max_entries_per_chunk: usize,
+    /// Chunk update count above which a chunk is considered hot.
+    pub hot_update_threshold: u64,
 }
 
 impl Default for EncodingThresholds {
@@ -34,7 +40,29 @@ impl Default for EncodingThresholds {
             fsst_rebuild_threshold: 0.2,
             reencode_threshold: 0.8,
             fsst_max_symbols: 255,
+            alp_exception_threshold: 0.25,
+            dict_max_entries_per_chunk: 65536,
+            hot_update_threshold: 1000,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DataTypeFamily {
+    Integer,
+    Float,
+    Bool,
+    String,
+    Other,
+}
+
+pub fn data_type_family(data_type: &DataType) -> DataTypeFamily {
+    match data_type {
+        DataType::SmallInt | DataType::Int | DataType::BigInt => DataTypeFamily::Integer,
+        DataType::Float | DataType::Double => DataTypeFamily::Float,
+        DataType::Bool => DataTypeFamily::Bool,
+        DataType::String => DataTypeFamily::String,
+        _ => DataTypeFamily::Other,
     }
 }
 
@@ -46,6 +74,7 @@ struct EncodingFeedback {
 #[derive(Debug, Clone, Copy)]
 struct FeedbackObservation {
     encoding_type: EncodingType,
+    family: DataTypeFamily,
     compression_ratio: f64,
 }
 
@@ -53,21 +82,31 @@ impl EncodingFeedback {
     const MAX_OBSERVATIONS: usize = 100;
     const REEVALUATE_AFTER: usize = 20;
 
-    fn record(&mut self, encoding_type: EncodingType, compression_ratio: f64) {
+    fn record(
+        &mut self,
+        encoding_type: EncodingType,
+        family: DataTypeFamily,
+        compression_ratio: f64,
+    ) {
         if self.observations.len() >= Self::MAX_OBSERVATIONS {
             self.observations.remove(0);
         }
         self.observations.push(FeedbackObservation {
             encoding_type,
+            family,
             compression_ratio,
         });
     }
 
-    fn average_ratio(&self, encoding_type: EncodingType) -> Option<f64> {
+    fn average_ratio(
+        &self,
+        encoding_type: EncodingType,
+        family: Option<DataTypeFamily>,
+    ) -> Option<f64> {
         let ratios: Vec<f64> = self
             .observations
             .iter()
-            .filter(|o| o.encoding_type == encoding_type)
+            .filter(|o| o.encoding_type == encoding_type && family.is_none_or(|f| o.family == f))
             .map(|o| o.compression_ratio)
             .collect();
         if ratios.is_empty() {
@@ -76,11 +115,15 @@ impl EncodingFeedback {
         Some(ratios.iter().sum::<f64>() / ratios.len() as f64)
     }
 
-    fn should_reevaluate(&self, encoding_type: EncodingType) -> bool {
+    fn should_reevaluate(
+        &self,
+        encoding_type: EncodingType,
+        family: Option<DataTypeFamily>,
+    ) -> bool {
         let count = self
             .observations
             .iter()
-            .filter(|o| o.encoding_type == encoding_type)
+            .filter(|o| o.encoding_type == encoding_type && family.is_none_or(|f| o.family == f))
             .count();
         count >= Self::REEVALUATE_AFTER
     }
@@ -105,19 +148,21 @@ impl EncodingSelector {
         &self.thresholds
     }
 
-    pub fn record_compression_result(
+    pub fn record_compression_result_for(
         &mut self,
         encoding_type: EncodingType,
+        family: DataTypeFamily,
         compression_ratio: f64,
     ) {
-        self.feedback.record(encoding_type, compression_ratio);
+        self.feedback
+            .record(encoding_type, family, compression_ratio);
     }
 
-    pub fn should_reencode(&self, encoding_type: EncodingType) -> bool {
-        if !self.feedback.should_reevaluate(encoding_type) {
+    pub fn should_reencode_for(&self, encoding_type: EncodingType, family: DataTypeFamily) -> bool {
+        if !self.feedback.should_reevaluate(encoding_type, Some(family)) {
             return false;
         }
-        if let Some(avg_ratio) = self.feedback.average_ratio(encoding_type) {
+        if let Some(avg_ratio) = self.feedback.average_ratio(encoding_type, Some(family)) {
             avg_ratio > self.thresholds.reencode_threshold
         } else {
             false
@@ -169,8 +214,11 @@ impl EncodingSelector {
 
         let distinct: std::collections::HashSet<&str> = non_null.iter().copied().collect();
         let cardinality_ratio = distinct.len() as f64 / non_null.len() as f64;
+        // A dictionary larger than the per-chunk entry cap is never worth
+        // building; fall through to the FSST/raw decision instead.
+        let dict_fits = distinct.len() <= self.thresholds.dict_max_entries_per_chunk;
 
-        if cardinality_ratio <= self.thresholds.cardinality_ratio_threshold {
+        if dict_fits && cardinality_ratio <= self.thresholds.cardinality_ratio_threshold {
             return EncodingType::Dictionary;
         }
 
@@ -182,16 +230,27 @@ impl EncodingSelector {
             }
         }
 
-        if cardinality_ratio < 0.8 {
+        if dict_fits && cardinality_ratio < 0.8 {
             return EncodingType::Dictionary;
         }
 
         EncodingType::Fsst
     }
 
-    /// Select encoding for floating-point columns.
-    pub fn select_for_floats(&self, _values: &[Option<Value>]) -> EncodingType {
-        EncodingType::Alp
+    /// Select encoding for floating-point columns. Falls back to raw when
+    /// the ALP exception rate exceeds the configured ceiling.
+    pub fn select_for_floats(&self, values: &[Option<Value>]) -> EncodingType {
+        let analyzed = values
+            .first()
+            .and_then(|v| v.as_ref())
+            .map(|v| v.data_type())
+            .map(|data_type| crate::encoding::AlpColumn::analyze_values(values, data_type));
+        match analyzed {
+            Some(Ok(col)) if col.exception_rate() <= self.thresholds.alp_exception_threshold => {
+                EncodingType::Alp
+            }
+            _ => EncodingType::None,
+        }
     }
 
     /// Select encoding for boolean columns.
@@ -215,6 +274,84 @@ impl EncodingSelector {
             }
             DataType::Float | DataType::Double => self.select_for_floats(values),
             DataType::String => self.select_for_strings(values),
+            _ => EncodingType::None,
+        }
+    }
+
+    /// Chunk-aware encoding selection.
+    ///
+    /// Takes a single chunk slice (local min/max/distribution) instead of
+    /// column-level stats so each chunk independently picks the encoding
+    /// that best fits its local data distribution.
+    pub fn select_for_chunk(
+        &self,
+        data_type: &DataType,
+        chunk_values: &[Option<Value>],
+    ) -> EncodingType {
+        self.select_for_column(data_type, chunk_values)
+    }
+
+    /// Profile-driven chunk selection without materializing value vectors.
+    pub fn select_for_chunk_profile(
+        &self,
+        profile: &crate::encoding::ChunkProfile,
+    ) -> EncodingType {
+        if profile.num_values == 0 {
+            return EncodingType::Constant;
+        }
+        // Constant chunks are O(1) regardless of size.
+        if let (Some(min), Some(max)) = (profile.min.clone(), profile.max.clone()) {
+            if min == max {
+                return EncodingType::Constant;
+            }
+        }
+        // Small chunks keep simple heuristics to avoid fitting elaborate
+        // encodings to noise.
+        let small = profile.num_values < self.thresholds.string_min_rows;
+        match &profile.data_type {
+            DataType::String if small => return EncodingType::Dictionary,
+            DataType::SmallInt | DataType::Int | DataType::BigInt if small => {
+                return EncodingType::BitPacking
+            }
+            _ => {}
+        }
+        match &profile.data_type {
+            DataType::Bool => EncodingType::Rle,
+            DataType::SmallInt | DataType::Int | DataType::BigInt => {
+                if profile.hot_update && profile.run_ratio.unwrap_or(1.0) >= 0.1 {
+                    return EncodingType::None;
+                }
+                match profile.bit_width {
+                    Some(64) => EncodingType::None,
+                    _ => {
+                        if profile.run_ratio.unwrap_or(1.0) < 0.1 {
+                            EncodingType::Rle
+                        } else {
+                            EncodingType::BitPacking
+                        }
+                    }
+                }
+            }
+            DataType::Float | DataType::Double => EncodingType::Alp,
+            DataType::String => {
+                let total = profile.num_values.max(1);
+                let distinct = profile.distinct.unwrap_or(total);
+                let ratio = distinct as f64 / total as f64;
+                let dict_fits = distinct <= self.thresholds.dict_max_entries_per_chunk;
+                if dict_fits && ratio <= self.thresholds.cardinality_ratio_threshold {
+                    return EncodingType::Dictionary;
+                }
+                let avg_len = profile.total_str_len.unwrap_or(0) / total;
+                if avg_len >= self.thresholds.avg_length_threshold
+                    && ratio >= self.thresholds.fsst_rebuild_threshold
+                {
+                    return EncodingType::Fsst;
+                }
+                if dict_fits && ratio < 0.8 {
+                    return EncodingType::Dictionary;
+                }
+                EncodingType::Fsst
+            }
             _ => EncodingType::None,
         }
     }
@@ -301,10 +438,19 @@ mod tests {
     #[test]
     fn test_select_alp_for_floats() {
         let selector = EncodingSelector::default();
+        let values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Double(i as f64))).collect();
+        assert_eq!(selector.select_for_floats(&values), EncodingType::Alp);
+    }
+
+    #[test]
+    fn test_select_raw_when_alp_exceptions_exceed_threshold() {
+        let selector = EncodingSelector::default();
+        // Fractional multiples defeat ALP exponent sharing: the exception
+        // rate exceeds the 0.25 ceiling, so selection falls back to raw.
         let values: Vec<Option<Value>> = (0..100)
             .map(|i| Some(Value::Double(i as f64 * 0.1)))
             .collect();
-        assert_eq!(selector.select_for_floats(&values), EncodingType::Alp);
+        assert_eq!(selector.select_for_floats(&values), EncodingType::None);
     }
 
     #[test]
@@ -323,6 +469,7 @@ mod tests {
             fsst_rebuild_threshold: 0.5,
             reencode_threshold: 0.9,
             fsst_max_symbols: 128,
+            ..Default::default()
         };
         let selector = EncodingSelector::new(thresholds);
         assert_eq!(selector.thresholds().string_min_rows, 10);
@@ -336,27 +483,53 @@ mod tests {
     fn test_feedback_triggers_reencode() {
         let mut selector = EncodingSelector::default();
         for _ in 0..EncodingFeedback::REEVALUATE_AFTER {
-            selector.record_compression_result(EncodingType::Dictionary, 0.95);
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                0.95,
+            );
         }
-        assert!(selector.should_reencode(EncodingType::Dictionary));
+        assert!(selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
     }
 
     #[test]
     fn test_no_reencode_with_few_observations() {
         let mut selector = EncodingSelector::default();
         for _ in 0..5 {
-            selector.record_compression_result(EncodingType::Dictionary, 0.95);
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                0.95,
+            );
         }
-        assert!(!selector.should_reencode(EncodingType::Dictionary));
+        assert!(!selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
     }
 
     #[test]
     fn test_no_reencode_with_good_ratio() {
         let mut selector = EncodingSelector::default();
         for _ in 0..EncodingFeedback::REEVALUATE_AFTER {
-            selector.record_compression_result(EncodingType::Dictionary, 0.5);
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                0.5,
+            );
         }
-        assert!(!selector.should_reencode(EncodingType::Dictionary));
+        assert!(!selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
+    }
+
+    #[test]
+    fn test_reencode_for_is_family_scoped() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..EncodingFeedback::REEVALUATE_AFTER {
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                0.95,
+            );
+        }
+        assert!(selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
+        assert!(!selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::Integer));
     }
 
     #[test]

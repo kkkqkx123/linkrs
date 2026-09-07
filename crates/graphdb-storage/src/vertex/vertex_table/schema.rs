@@ -61,6 +61,17 @@ impl VertexTable {
         // Add to columns first (potentially failing operation)
         self.columns
             .add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+        if let Some(col) = self.columns.get_column_mut(&prop.name) {
+            col.set_chunk_capacity(self.chunk_capacity);
+        }
+        if matches!(
+            prop.data_type,
+            graphdb_core::DataType::String | graphdb_core::DataType::Blob
+        ) {
+            if let Some(col) = self.columns.get_column_mut(&prop.name) {
+                col.set_overflow_threshold(self.string_overflow_threshold);
+            }
+        }
 
         // Only modify schema if columns addition succeeded
         self.schema.properties.push(prop.clone());

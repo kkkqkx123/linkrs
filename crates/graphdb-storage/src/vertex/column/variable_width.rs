@@ -90,6 +90,8 @@ impl ColumnStorage for VariableWidthColumn {
             // Composite values are stored as postcard-encoded whole `Value`s
             // (the serde single-track format).
             postcard::from_bytes::<Value>(bytes).ok()
+        } else if matches!(self.data_type, DataType::Blob) {
+            Some(Value::Blob(bytes.to_vec()))
         } else {
             String::from_utf8(bytes.to_vec()).ok().map(Value::string)
         }
@@ -254,6 +256,11 @@ pub(crate) fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> Storage
             let len = bytes.len() as u64;
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(bytes);
+        }
+        Value::Blob(b) => {
+            let len = b.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(b);
         }
         Value::Geography(geo) => {
             let bytes = postcard::to_allocvec(geo).map_err(|e| {

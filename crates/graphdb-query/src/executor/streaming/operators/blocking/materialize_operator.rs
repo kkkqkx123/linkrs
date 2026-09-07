@@ -242,7 +242,6 @@ pub(super) fn next_materialize(
                 if let Err(e) = memory_tracker.try_reserve_row(&row) {
                     if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
                         spill_not_supported(&mut state.materialized_rows, &sm, memory_tracker)?;
-                        memory_tracker.try_reserve_row(&row)?;
                     } else {
                         return Err(e);
                     }
@@ -292,7 +291,6 @@ pub(super) fn next_data_collect(
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
                     spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
-                    memory_tracker.try_reserve_row(&row)?;
                 } else {
                     return Err(e);
                 }
@@ -346,7 +344,6 @@ pub(super) fn next_rollup_apply(
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
                     spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
-                    memory_tracker.try_reserve_row(&row)?;
                 } else {
                     return Err(e);
                 }

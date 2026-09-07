@@ -353,10 +353,7 @@ impl TransactionManager {
             );
         };
 
-        let context = match self.get_context(txn_id) {
-            Ok(context) => Some(context),
-            Err(_) => None,
-        };
+        let context = self.get_context(txn_id).ok();
         let Some(context) = context else {
             // No transaction-level state left to complete; still give the
             // storage sink a chance to finish idempotently.

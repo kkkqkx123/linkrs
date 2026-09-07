@@ -128,8 +128,16 @@ impl PersistenceCoordinator {
             if let Some(ref sp) = config.sync_policy {
                 wal_cfg.sync_policy = *sp;
             }
+            wal_cfg.buffer_size = config.wal_buffer_size;
+            wal_cfg.flush_interval_ms = config.wal_flush_interval_ms;
+            wal_cfg.enable_async_flush = config.wal_enable_async_flush;
             let mut wal_manager = WalManager::with_config(wal_cfg);
             wal_manager.open(&config.wal_dir, 0)?;
+            log::info!(
+                "WAL opened at {} (async_flush={})",
+                config.wal_dir.display(),
+                wal_manager.is_async_enabled(),
+            );
             Some(Arc::new(RwLock::new(wal_manager)))
         } else {
             None

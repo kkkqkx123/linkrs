@@ -409,6 +409,11 @@ fn parse_wal_file_bytes(
             .and_then(|lsn| lsn.checked_add(header.length() as u64))
             .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
         if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
+            log::error!(
+                "WAL LSN CHAIN DEBUG: file_start_lsn={}, expected_prev={}, got_prev={}, got_lsn={}, offset={}, buffer_len={}, file_used_info=first_128_bytes={:?}",
+                file_start_lsn, expected_prev_lsn, header.prev_lsn(), header.lsn(), offset, buffer.len(),
+                &buffer[..buffer.len().min(128)]
+            );
             return Err(WalError::Corrupted(format!(
                 "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
                 offset,
@@ -706,6 +711,17 @@ impl LocalWalParser {
         }
 
         let file_start_lsn = file_header.start_lsn();
+        log::error!(
+            "WAL FILE DEBUG: path={:?}, file_size={}, file_start_lsn={}, checkpoint_seq={}, thread_id={}, first_record_at_64={:?}",
+            path, buffer.len(), file_start_lsn, file_header.checkpoint_seq, file_header.thread_id,
+            if buffer.len() >= WAL_FILE_HEADER_SIZE + WAL_HEADER_SIZE {
+                WalHeader::from_bytes(&buffer[WAL_FILE_HEADER_SIZE..WAL_FILE_HEADER_SIZE + WAL_HEADER_SIZE])
+                    .map(|h| format!("prev_lsn={}, lsn={}, ts={}, len={}", h.prev_lsn(), h.lsn(), h.timestamp, h.length()))
+                    .unwrap_or_else(|| "invalid header".to_string())
+            } else {
+                "no records".to_string()
+            }
+        );
         self.file_headers.push(file_header);
 
         let result = parse_wal_file_bytes(
