@@ -1,6 +1,6 @@
 //! Hierarchical MemoryPool for query execution.
 //!
-//! M4: replaces the flat per-query `MemoryBudget` with a multi-level tree:
+//! Replaces the flat per-query `MemoryBudget` with a multi-level tree:
 //!
 //! ```text
 //! DatabaseMemoryPool (process-level, admission control)

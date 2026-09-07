@@ -242,7 +242,7 @@ impl TimeTravelEdgeStore {
 
     /// Select high-density regions to freeze incrementally using CalibratorTree.
     ///
-    /// Implements Phase 5 incremental region-based freeze: high-density or high-deletion
+    /// Implements incremental region-based freeze: high-density or high-deletion
     /// regions are frozen per call, low-density regions stay in the mutable CSR to
     /// reduce per-freeze latency. Uses calibrator tree hierarchical aggregation:
     /// if a parent node is over-utilized, all its children are expanded (global
@@ -608,7 +608,7 @@ impl TimeTravelEdgeStore {
         let bound = self.mvcc.effective_retention_bound();
         let deletion_filter = (bound < Timestamp::MAX).then_some(bound);
 
-        // Phase 5: Calibrator-guided incremental region merge — try selective high-deletion
+        // Calibrator-guided incremental region merge — try selective high-deletion
         // subtree merge before generic threshold merges. Reduces latency by merging only
         // dense/deleted subtrees instead of global merge when possible.
         let region_n = self.config.region_vertex_count;

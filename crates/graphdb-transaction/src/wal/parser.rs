@@ -410,9 +410,8 @@ fn parse_wal_file_bytes(
             .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
         if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
             log::error!(
-                "WAL LSN CHAIN DEBUG: file_start_lsn={}, expected_prev={}, got_prev={}, got_lsn={}, offset={}, buffer_len={}, file_used_info=first_128_bytes={:?}",
-                file_start_lsn, expected_prev_lsn, header.prev_lsn(), header.lsn(), offset, buffer.len(),
-                &buffer[..buffer.len().min(128)]
+                "WAL LSN CHAIN DEBUG: file_start_lsn={}, expected_prev={}, got_prev={}, got_lsn={}, offset={}, buffer_len={}",
+                file_start_lsn, expected_prev_lsn, header.prev_lsn(), header.lsn(), offset, buffer.len()
             );
             return Err(WalError::Corrupted(format!(
                 "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",

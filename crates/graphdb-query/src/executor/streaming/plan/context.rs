@@ -76,7 +76,7 @@ pub struct PhysicalPlanBuildContext {
     /// Parameter schema for prepared-statement parameters.
     pub parameter_schema: ParameterSchema,
 
-    /// M3: optional partition spec for partitioned execution.
+    /// optional partition spec for partitioned execution.
     /// When set, the builder produces a PhysicalPlan with multiple source
     /// fragments and exchange/gather fragments instead of a single linear chain.
     pub partition_spec: Option<PartitionSpec>,

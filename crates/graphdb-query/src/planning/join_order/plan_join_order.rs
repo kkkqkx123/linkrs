@@ -5,7 +5,7 @@
 //! enumeration tries every `(left, right)` split up to
 //! [`MAX_LEVEL_TO_PLAN_EXACTLY`]; larger levels only try `leftLevel == 1`
 //! splits to avoid the combinatorial explosion. Binary joins live here; the
-//! WCO intersect hook (`plan_wco_join`, Phase 3) plugs into the exact path.
+//! WCO intersect hook (`plan_wco_join`) plugs into the exact path.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -91,7 +91,7 @@ pub enum StreamingExecutor {
     ),
     Blocking(OperatorBase, Box<StreamingExecutor>, BlockingOperator),
     Graph(OperatorBase, Box<StreamingExecutor>, GraphOperator),
-    /// M7: Recursive fragment for variable-length path traversal,
+    /// Recursive fragment for variable-length path traversal,
     /// BFS, shortest-path, and multi-round graph algorithms.
     RecursiveFragment(
         OperatorBase,

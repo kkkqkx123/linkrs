@@ -410,7 +410,7 @@ impl SinkOperator {
 
     /// Check that the transaction scope allows writes.
     ///
-    /// M0.4: requires a transaction scope for DML operations.  Absent scope
+    /// requires a transaction scope for DML operations.  Absent scope
     /// is rejected to prevent unbounded writes outside any transaction.
     fn check_write_permission(&self) -> Result<(), QueryError> {
         let rt = self.runtime.as_ref().ok_or_else(|| {

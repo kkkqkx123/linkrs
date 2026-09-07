@@ -36,7 +36,7 @@ pub trait TaskScheduler: Send + Sync + std::fmt::Debug {
     fn max_workers(&self) -> usize;
 }
 
-/// Engine-level shared scheduler (M6).
+/// Engine-level shared scheduler.
 ///
 /// Created once at database startup and reused across all queries.  Each
 /// query receives an `Arc` reference through its bindings.  Workers are

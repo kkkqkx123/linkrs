@@ -713,13 +713,13 @@ impl ResourceOwner {
 /// lifecycle, and query-registration so that operators do not each
 /// carry ad-hoc context.
 ///
-/// M2: unified cancellation via [`CancelToken`]
+/// unified cancellation via [`CancelToken`]
 /// has been removed; operators check [`CancelToken::is_cancelled`].
 #[derive(Debug)]
 pub struct ExecutionRuntime {
     /// Query identity (behind Mutex for write-once from the API layer).
     query_id: parking_lot::Mutex<QueryIdentity>,
-    /// M2: typed cancellation token with reason tracking (single source).
+    /// typed cancellation token with reason tracking (single source).
     /// Behind a `Mutex` because the token is adopted after the runtime is
     /// shared with the executor tree (`Arc::get_mut` is unusable once the
     /// tree holds clones); `&self` mutation keeps the registry-None path
@@ -735,19 +735,19 @@ pub struct ExecutionRuntime {
     resource_owner: Arc<Mutex<ResourceOwner>>,
     /// Optional reference to the global QueryManager for KILL QUERY.
     query_manager: Option<Arc<QueryManager>>,
-    /// M2: Session-level transaction controller for transaction commands.
+    /// Session-level transaction controller for transaction commands.
     /// Behind a RwLock for interior mutability (set after runtime is shared).
     session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
-    /// M2: Transaction scope for this execution (set by bindings).
+    /// Transaction scope for this execution (set by bindings).
     transaction_scope: Option<TransactionScope>,
-    /// M2: Optional reference to the [`QueryRegistry`] for KILL QUERY.
+    /// Optional reference to the [`QueryRegistry`] for KILL QUERY.
     /// Behind a `Mutex` for the same interior-mutability reason as the
     /// cancel token (the registry is attached after the executor tree clones
     /// the runtime `Arc`).
     query_registry: parking_lot::Mutex<Option<Arc<QueryRegistry>>>,
-    /// M2: Query ID allocated by the registry.
+    /// Query ID allocated by the registry.
     registry_query_id: parking_lot::Mutex<Option<QueryId>>,
-    /// M6: Engine-level shared scheduler for dynamic partition execution.
+    /// Engine-level shared scheduler for dynamic partition execution.
     /// When set, all queries share the same worker pool instead of creating
     /// per-query threads.  Falls back to serial if neither this nor the
     /// per-query `worker_pool` is set.
@@ -755,7 +755,7 @@ pub struct ExecutionRuntime {
     /// mutability pattern used throughout [`ExecutionRuntime`]).
     shared_scheduler: parking_lot::Mutex<Option<Arc<super::pool::SharedScheduler>>>,
     /// Query-level morsel worker pool for dynamic partition execution
-    /// Kept for backward compat during M6 migration.
+    /// Kept for backward compatibility.
     /// Created when `max_workers > 1` and no `shared_scheduler` is set;
     /// `None` means serial fallback.
     /// Behind a Mutex so the engine can set the pool after construction.
@@ -900,7 +900,7 @@ impl ExecutionRuntime {
         Some(QueryFinishGuard::new(qm, id.query_id as i64))
     }
 
-    // ── M2: QueryRegistry integration ──
+    // ── QueryRegistry integration ──
 
     /// Attach a [`QueryRegistry`] and the allocated [`QueryId`].
     ///
@@ -1017,7 +1017,7 @@ impl ExecutionRuntime {
 
     /// Cancel this query with a typed reason.
     ///
-    /// Sets the M2 [`CancelToken`], marks the query as Killed in the
+    /// Sets the [`CancelToken`], marks the query as Killed in the
     /// attached QueryManager, and cancels the registry entry (if configured).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
         self.cancel_token_v2.lock().cancel(reason.clone());
@@ -1129,7 +1129,7 @@ impl ExecutionRuntime {
         *self.worker_pool.lock() = pool.map(|p| Arc::new(p) as Arc<dyn TaskScheduler>);
     }
 
-    /// Set the engine-level shared scheduler for this query (M6).
+    /// Set the engine-level shared scheduler for this query.
     ///
     /// When set, all parallel execution uses the shared worker pool instead
     /// of per-query threads.  The scheduler's `Arc<dyn TaskScheduler>` is

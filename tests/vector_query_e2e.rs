@@ -1,6 +1,6 @@
 //! Query-layer vector statement end-to-end tests.
 //!
-//! Covers the four Phase C §3.4 case groups against the built-in local vector
+//! Covers the four end-to-end case groups against the built-in local vector
 //! engine, driven entirely through SQL statements plus the VectorApi insertion
 //! hook:
 //! 1. DDL → DML → query round-trip with top-k score assertions.

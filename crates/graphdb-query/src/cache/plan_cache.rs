@@ -109,10 +109,10 @@ impl QueryPlanCache {
 
     /// Look up a cached plan with space, schema, and parameter type context.
     ///
-    /// M0: space_name and schema_version are incorporated into the cache key
+    /// space_name and schema_version are incorporated into the cache key
     /// to prevent cross-space plan reuse and stale plans after DDL.
     ///
-    /// M1.6: param_type_signature is a hash of parameter *types* so that
+    /// param_type_signature is a hash of parameter *types* so that
     /// the same query with different param types gets a different cache key.
     ///
     /// index_version forces replan after index DDL (use the same value
@@ -205,7 +205,7 @@ impl QueryPlanCache {
 
     /// Put the plan in the cache.
     ///
-    /// M3: stores an [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`].
+    /// stores an [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`].
     ///
     /// # Parameters
     /// - `query`: Query text
@@ -236,16 +236,16 @@ impl QueryPlanCache {
 
     /// Put the plan with full context (space, schema version, index version, tables).
     ///
-    /// M0: space_name and schema_version are incorporated into the cache key
+    /// space_name and schema_version are incorporated into the cache key
     /// to prevent cross-space reuse and stale plans after DDL.
     ///
-    /// M1.6: `param_type_signature` is derived from the parameter type
+    /// `param_type_signature` is derived from the parameter type
     /// declarations (not values) and is included in the cache key.
     ///
     /// index_version is incorporated into the cache key to force replan
     /// after index DDL (CREATE/DROP index) even when schema_version is unchanged.
     ///
-    /// M3: stores [`Arc<PhysicalPlan>`] — the immutable arena plan.
+    /// stores [`Arc<PhysicalPlan>`] — the immutable arena plan.
     pub fn put_with_context(
         &self,
         query: &str,
@@ -319,7 +319,7 @@ impl QueryPlanCache {
 
     /// Calculate priority based on query characteristics.
     ///
-    /// M3: uses operator count from the arena [`PhysicalPlan`].
+    /// uses operator count from the arena [`PhysicalPlan`].
     fn calculate_priority(&self, plan: &PhysicalPlan) -> CachePriority {
         let complexity = self.calculate_complexity_score(plan);
 
@@ -334,7 +334,7 @@ impl QueryPlanCache {
 
     /// Calculate complexity score from the arena [`PhysicalPlan`].
     ///
-    /// M3: uses operator count and fragment count as a proxy for complexity.
+    /// uses operator count and fragment count as a proxy for complexity.
     fn calculate_complexity_score(&self, plan: &PhysicalPlan) -> u32 {
         let op_count = plan.operator_count() as u32;
         let frag_count = plan.fragment_count() as u32;
@@ -478,7 +478,7 @@ impl QueryPlanCache {
 
     /// Compute a parameter type signature from param positions.
     ///
-    /// M1.6: produces a hash of the parameter *types* (not values) so that
+    /// produces a hash of the parameter *types* (not values) so that
     /// plans with different param type declarations get different cache keys.
     pub(crate) fn compute_param_type_signature(params: &[ParamPosition]) -> Option<u64> {
         if params.is_empty() {
@@ -577,7 +577,7 @@ impl QueryPlanCache {
 
     /// Invalidate all cache entries for a given space.
     ///
-    /// M0: called after DDL/index/schema changes to force replanning.
+    /// called after DDL/index/schema changes to force replanning.
     /// Iterates all entries and removes those matching the space name.
     pub fn invalidate_space(&self, space_name: &str) -> usize {
         // Collect keys to remove while iterating (can't mutate during iter).

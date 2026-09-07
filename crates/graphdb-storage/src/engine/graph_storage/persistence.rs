@@ -605,12 +605,14 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     // Replay deferred edge operations (two-phase recovery)
     ctx.replay_deferred_edges()?;
 
-    // Set the WAL writer's LSN to the last replayed position so that
+    // Advance the WAL writer's LSN to the last replayed position so that
     // create_checkpoint records the correct LSN instead of the fresh WAL's 0.
+    // Use set_recovery_baseline_lsn to also update the file header's start_lsn,
+    // preventing an LSN chain mismatch on subsequent recovery.
     if let Some(persistence) = ctx.persistence() {
         let coordinator = persistence.read();
         if let Some(wal_mgr) = coordinator.wal_manager() {
-            let _ = wal_mgr.write().set_current_lsn(stats.last_lsn);
+            let _ = wal_mgr.write().set_recovery_baseline_lsn(stats.last_lsn);
         }
     }
 
@@ -666,7 +668,7 @@ pub(crate) fn recover_from_wal_with_config(
     if let Some(persistence) = ctx.persistence() {
         let coordinator = persistence.read();
         if let Some(wal_mgr) = coordinator.wal_manager() {
-            let _ = wal_mgr.write().set_current_lsn(stats.last_lsn);
+            let _ = wal_mgr.write().set_recovery_baseline_lsn(stats.last_lsn);
         }
     }
 

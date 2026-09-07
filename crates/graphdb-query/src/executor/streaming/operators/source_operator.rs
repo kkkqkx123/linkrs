@@ -148,7 +148,7 @@ pub enum SourceOperatorKind {
         edge_type_names: std::collections::HashMap<u32, String>,
     },
     Argument,
-    /// Property retrieval (zero-input source, will migrate to Unary in M2).
+    /// Property retrieval as a zero-input source (prefer the unary GetV).
     GetProp {
         storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
         space_name: String,
@@ -453,7 +453,7 @@ impl SourceOperator {
             SourceOperatorKind::IndexScan { .. } => index_scan::next(self),
             SourceOperatorKind::GetProp { .. } => Err(QueryError::execution(
                 "GetProp is not available as a source operator; \
-                 use the unary GetProp (coming in M2)"
+                  use the unary GetProp operator"
                     .to_string(),
             )),
             SourceOperatorKind::Start => {

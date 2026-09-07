@@ -66,7 +66,7 @@ pub struct ExecutionContext {
     pub chunk_size: usize,
     /// Maximum buffered chunks before back-pressure.
     pub max_buffered_chunks: usize,
-    /// M6: Engine-level shared scheduler.
+    /// Engine-level shared scheduler.
     pub shared_scheduler: Option<Arc<SharedScheduler>>,
     /// Optional thread-safe bumpalo arena for executor temporary allocations.
     pub arena: Option<Arc<parking_lot::Mutex<Arena>>>,

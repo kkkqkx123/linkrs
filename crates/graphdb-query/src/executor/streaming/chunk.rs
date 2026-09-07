@@ -3,7 +3,7 @@
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
 //! Typical size: 2048 rows (~8MB, OLAP vectorized batch)
 //!
-//! # Ownership & Memory Accounting Rules (M4)
+//! # Ownership & Memory Accounting Rules
 //!
 //! - **`rows`**: Owned `Vec<Vec<Value>>`. `Clone` performs an explicit deep
 //!   copy (there is no shallow-clone path).

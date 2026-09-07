@@ -94,7 +94,7 @@ impl PhysicalPlanValidator {
         Self::check_fragment_parallelism(plan, &mut result);
         Self::check_partition_parallelism(plan, &mut result);
 
-        // M3.6: Additional structural integrity checks.
+        // Additional structural integrity checks.
         Self::check_fragment_kind_matches(plan, &mut result);
         Self::check_root_fragment_kind(plan, &mut result);
         Self::check_unreferenced_operators(plan, &mut result);
@@ -461,7 +461,7 @@ impl PhysicalPlanValidator {
         }
     }
 
-    // ── M3.6: Additional structural integrity checks ──
+    // ── Additional structural integrity checks ──
 
     /// Fragment kind should be consistent with the root operator type.
     ///
@@ -708,7 +708,7 @@ impl PhysicalPlanValidator {
 
     /// Check operator spec internal consistency.
     ///
-    /// M3.6: validations that catch spec-level errors before execution.
+    /// validations that catch spec-level errors before execution.
     fn check_operator_spec_consistency(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
             // Check that Source operators are not in fragments with inputs.

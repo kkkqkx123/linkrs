@@ -285,7 +285,7 @@ pub fn merge_in_place_region_aware_with_free_space(
 /// Calibrator-guided incremental region merge: select segments with high deletion density
 /// per calibrator tree, merging only those to reduce latency vs global merge.
 ///
-/// Implements Phase 5 calibrator tree hierarchical detection: walks the tree bottom-up,
+/// Implements calibrator tree hierarchical detection: walks the tree bottom-up,
 /// merging only high-deletion subtrees. If the global deletion ratio is low, no merge
 /// is triggered; if high, only the dense subtrees are merged incrementally.
 pub fn merge_segments_calibrated_with_free_space(

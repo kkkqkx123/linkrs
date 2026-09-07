@@ -6,14 +6,14 @@ use std::time::{Duration, Instant};
 
 /// Cached query plan entries
 ///
-/// M3: stores [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`] so that the
+/// stores [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`] so that the
 /// cached plan is an immutable, verifiable arena plan that can be shared
 /// across concurrent executions without re-building.
 #[derive(Debug, Clone)]
 pub struct CachedPlan {
     /// Query template (parameterized form)
     pub query_template: String,
-    /// Immutable arena-based physical plan (M3).
+    /// Immutable arena-based physical plan.
     pub plan: Arc<PhysicalPlan>,
     /// Parameter location information (for parameter binding)
     pub param_positions: Vec<ParamPosition>,
@@ -80,7 +80,7 @@ impl CachedPlan {
 
     /// Estimate memory usage for the physical plan.
     ///
-    /// M3: uses [`PhysicalPlan::operator_count`] and spec sizes for estimation.
+    /// uses [`PhysicalPlan::operator_count`] and spec sizes for estimation.
     fn estimate_plan_memory(&self, plan: &PhysicalPlan) -> usize {
         let base_size = std::mem::size_of::<PhysicalPlan>();
         let op_count = plan.operator_count();

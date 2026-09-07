@@ -58,7 +58,7 @@ pub struct PhysicalPlanMaterializer;
 impl PhysicalPlanMaterializer {
     /// Materialize a physical plan into an executable operator tree.
     ///
-    /// M1.4: validates bindings and builds the [`ParameterFrame`] for
+    /// validates bindings and builds the [`ParameterFrame`] for
     /// slot-based parameter access during execution.
     pub fn materialize(
         plan: &PhysicalPlan,
@@ -66,7 +66,7 @@ impl PhysicalPlanMaterializer {
     ) -> Result<(StreamingExecutor, Arc<ExecutionRuntime>), QueryError> {
         Self::validate_bindings(plan, bindings)?;
 
-        // M1.4: build the parameter frame — this requires a mutable bindings
+        // build the parameter frame — this requires a mutable bindings
         // clone to set the frame.  We clone because the caller's bindings
         // are immutable past this point.
         let mut mutable_bindings = bindings.clone();
@@ -391,7 +391,7 @@ impl PhysicalPlanMaterializer {
 
     /// Validate bindings against the plan's parameter schema.
     ///
-    /// M1.3: checks for missing required params, unknown params, and type
+    /// checks for missing required params, unknown params, and type
     /// compatibility.  Returns an error description listing all violations.
     fn validate_bindings(plan: &PhysicalPlan, bindings: &QueryBindings) -> Result<(), QueryError> {
         let schema = &plan.parameter_schema;
@@ -433,7 +433,7 @@ impl PhysicalPlanMaterializer {
     }
 
     /// Rough type compatibility check for parameter values.
-    /// M1.3: ensures the runtime value is semantically assignable to the
+    /// ensures the runtime value is semantically assignable to the
     /// declared parameter type.
     fn type_compatible(
         value: &graphdb_core::Value,
@@ -495,7 +495,7 @@ impl PhysicalPlanMaterializer {
 
     /// Create an [`ExecutionRuntime`] from bindings.
     ///
-    /// M2: injects transaction scope and session controller into the runtime
+    /// injects transaction scope and session controller into the runtime
     /// so that operators can check write permissions and transaction commands
     /// can drive real state transitions.
     fn create_runtime(
@@ -515,7 +515,7 @@ impl PhysicalPlanMaterializer {
             bindings.search.clone(),
         );
 
-        // M2: inject transaction scope.
+        // inject transaction scope.
         match bindings.transaction {
             crate::executor::streaming::transaction_scope::TransactionScope::None => {
                 // DDL / admin commands may run without a txn scope, but DML will
@@ -526,7 +526,7 @@ impl PhysicalPlanMaterializer {
             }
         }
 
-        // M1.4: inject the parameter name→value map so operators can resolve $name.
+        // inject the parameter name→value map so operators can resolve $name.
         if let Some(values) = parameter_values {
             runtime.set_parameter_values(values);
         }
@@ -537,7 +537,7 @@ impl PhysicalPlanMaterializer {
             runtime.set_session_variable_values(bindings.session_variables.clone());
         }
 
-        // M6: shared scheduler takes priority.
+        // shared scheduler takes priority.
         if let Some(ref ss) = bindings.shared_scheduler {
             runtime.set_shared_scheduler(Some(ss.clone()));
         } else if bindings.max_workers > 1 {

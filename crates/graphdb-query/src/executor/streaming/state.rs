@@ -1,6 +1,6 @@
 //! Typed GlobalState / LocalState arenas for per-execution operator state.
 //!
-//! Per the M4 spec:
+//! State ownership split:
 //! - **GlobalState**: hash build, global aggregate, sort runs, exchange,
 //!   result collector — addressed by [`PhysicalOperatorId`].
 //! - **LocalState**: scan cursor, probe state, partial accumulator,

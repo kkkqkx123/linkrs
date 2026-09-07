@@ -45,7 +45,7 @@ use super::transaction_scope::TransactionScope;
 /// Multiple concurrent executions of the same plan each have their own
 /// `QueryBindings`, ensuring no mutable state is shared across instances.
 ///
-/// M1.4: carries a [`ParameterFrame`] for slot-based parameter access at
+/// carries a [`ParameterFrame`] for slot-based parameter access at
 /// execution time, built during validation from the plan's parameter schema.
 #[derive(Clone)]
 pub struct QueryBindings {
@@ -54,7 +54,7 @@ pub struct QueryBindings {
     /// Session variable snapshot (name → value map), captured once per
     /// statement at the API layer and resolved by `Expression::SessionVariable`.
     pub session_variables: Arc<HashMap<String, Value>>,
-    /// M1.4: slot-indexed parameter frame for hot-path access.
+    /// slot-indexed parameter frame for hot-path access.
     pub parameter_frame: Option<ParameterFrame>,
     /// Target space name.
     pub space_name: Option<String>,
@@ -89,7 +89,7 @@ pub struct QueryBindings {
     pub user_name: Option<String>,
     /// Transaction scope for this execution.
     pub transaction: TransactionScope,
-    /// M6: Engine-level shared scheduler.  When set, all queries share the
+    /// Engine-level shared scheduler.  When set, all queries share the
     /// same worker pool instead of creating per-query threads.
     pub shared_scheduler: Option<Arc<super::pool::SharedScheduler>>,
     /// Number of partitions for partitioned execution. 0 = non-partitioned.
@@ -156,7 +156,7 @@ impl QueryBindings {
     /// Build a [`ParameterFrame`] from the plan's parameter schema and the
     /// binding values.  Called after validation during materialization.
     ///
-    /// M1.4: produces a slot-indexed frame that operators can read without
+    /// produces a slot-indexed frame that operators can read without
     /// string-based lookup.
     pub fn build_parameter_frame(&mut self, schema: &ParameterSchema) {
         let mut values = Vec::with_capacity(schema.params.len());

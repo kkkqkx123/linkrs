@@ -193,7 +193,7 @@ fn all_value_variants_roundtrip_via_value_in_container() {
 
 #[test]
 fn map_with_non_string_keys_roundtrips() {
-    // M4: generalized map keys (any hashable Value) survive serde.
+    // generalized map keys (any hashable Value) survive serde.
     let mut map = HashMap::new();
     map.insert(Value::Int(7), Value::string("seven"));
     map.insert(Value::string("name"), Value::string("x"));

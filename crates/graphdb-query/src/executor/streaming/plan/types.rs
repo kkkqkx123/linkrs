@@ -91,8 +91,8 @@ pub enum PipelineMode {
 /// Describes the result shape that a plan (or fragment) delivers.
 ///
 /// This is the immutable contract stored in the cached plan, not bound to
-/// any particular sink or delivery mechanism.  Extended in M4 with
-/// nullability and ordering metadata so that consumers can inspect the
+/// any particular sink or delivery mechanism.  It records nullability and
+/// ordering metadata so that consumers can inspect the
 /// schema without receiving data.
 #[derive(Debug, Clone)]
 pub struct OutputContract {

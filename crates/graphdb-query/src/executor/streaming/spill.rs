@@ -539,64 +539,7 @@ impl std::fmt::Debug for RunReader {
     }
 }
 
-// ── Startup cleanup (M5.3) ───────────────────────────────────────────────────
-
-/// Clean up orphaned spill directories at database startup.
-///
-/// Scans `temp_dir` for directories matching the pattern `graphdb_spill_*`
-/// and removes those that are confirmed orphans by checking the instance id
-/// embedded in the directory name (if present).
-///
-/// For the initial implementation, all `graphdb_spill_*` directories older
-/// than 1 hour are considered orphaned and removed.
-pub fn cleanup_orphan_spill_dirs(temp_dir: Option<&Path>) -> Result<u64, QueryError> {
-    let base = temp_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(std::env::temp_dir);
-    let entries = match std::fs::read_dir(&base) {
-        Ok(e) => e,
-        Err(_) => return Ok(0),
-    };
-
-    let mut removed: u64 = 0;
-    let now = std::time::SystemTime::now();
-    let one_hour = std::time::Duration::from_secs(3600);
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        if !name.starts_with("graphdb_spill_") {
-            continue;
-        }
-
-        // Check if directory is old enough to be considered orphaned
-        let metadata = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let modified = match metadata.modified() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        if let Ok(age) = now.duration_since(modified) {
-            if age >= one_hour {
-                let _ = std::fs::remove_dir_all(&path);
-                removed += 1;
-            }
-        }
-    }
-
-    Ok(removed)
-}
-
-// ── Hash partition spill (M5.2) ──────────────────────────────────────────────
+// ── Hash partition spill ─────────────────────────────────────────────────────
 
 /// Fixed hash algorithm for partition spill operations.
 ///
@@ -710,26 +653,6 @@ impl HashPartitionSpiller {
             }
         }
         Ok(())
-    }
-
-    /// Finalize all partitions and return the metadata for each.
-    ///
-    /// Direct writer finalization without disk-quota enforcement. Deprecated
-    /// for production paths: prefer [`Self::finalize_with_manager`] so every
-    /// spill path is quota-checked. Retained for the no-manager fallback and
-    /// tests.
-    #[deprecated(
-        note = "bypasses disk-quota enforcement; use `finalize_with_manager` or `finalize_partitions_with_runtime` for production spill paths"
-    )]
-    pub fn finalize(mut self) -> Result<Vec<Option<SpilledRun>>, QueryError> {
-        let mut runs = Vec::with_capacity(self.writers.len());
-        for writer in self.writers.drain(..) {
-            match writer {
-                Some(w) => runs.push(Some(w.finalize()?)),
-                None => runs.push(None),
-            }
-        }
-        Ok(runs)
     }
 
     /// Finalize all partitions through the manager so disk quota is enforced.
@@ -955,10 +878,10 @@ impl SpillManager {
 /// group-by, distinct/materialize, join): when a manager is present each run
 /// goes through [`SpillManager::finalize_run`] and the run sizes are recorded
 /// into the runtime [`ColumnarStats`](crate::executor::streaming::runtime::ColumnarStats).
-/// Without a manager it falls back to plain finalization.
-#[allow(deprecated)]
+/// Without a manager there is no quota to enforce, so runs are finalized
+/// directly.
 pub fn finalize_partitions_with_runtime(
-    spiller: HashPartitionSpiller,
+    mut spiller: HashPartitionSpiller,
     runtime: Option<&Arc<crate::executor::streaming::runtime::ExecutionRuntime>>,
 ) -> Result<Vec<Option<SpilledRun>>, QueryError> {
     match runtime.and_then(|rt| rt.get_spill_manager()) {
@@ -972,7 +895,16 @@ pub fn finalize_partitions_with_runtime(
             }
             Ok(runs)
         }
-        None => spiller.finalize(),
+        None => {
+            let mut runs = Vec::with_capacity(spiller.writers.len());
+            for writer in spiller.writers.drain(..) {
+                match writer {
+                    Some(w) => runs.push(Some(w.finalize()?)),
+                    None => runs.push(None),
+                }
+            }
+            Ok(runs)
+        }
     }
 }
 

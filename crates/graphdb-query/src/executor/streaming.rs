@@ -70,7 +70,7 @@ pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTie
 
 // ── Spill types ──
 pub use spill::{
-    cleanup_orphan_spill_dirs, finalize_partitions_with_runtime, hash_bytes_partition,
+    finalize_partitions_with_runtime, hash_bytes_partition,
     hash_row_partition, schema_fingerprint, DiskQuota, HashPartitionConfig, HashPartitionSpiller,
     RunHeader, RunReader, RunWriter, SpillConfig, SpillManager, SpilledRun, COLLECTOR_RUN_ROWS_MAX,
     COLLECTOR_SPILL_ROWS_DEFAULT, HASH_JOIN_MAX_DEPTH, HASH_JOIN_PARTITIONS_DEFAULT,
@@ -88,7 +88,7 @@ pub use transaction_scope::{
     TransactionScope, TransactionState,
 };
 
-// ── M4: Memory pool types ──
+// ── Memory pool types ──
 pub use memory_pool::{
     DatabaseMemoryPool, FragmentPool, MemoryPoolError, MemoryPoolReservation, OperatorPool,
     PoolHandle, PooledChunk, QueryPool, TaskPool,

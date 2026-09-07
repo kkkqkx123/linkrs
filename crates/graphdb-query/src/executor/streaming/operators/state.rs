@@ -498,7 +498,7 @@ impl VectorState {
     }
 }
 
-// ── RecursiveFragment state (M7) ─────────────────────────────────────────────
+// ── RecursiveFragment state ─────────────────────────────────────────────
 
 /// Mutable execution state for recursive fragment operators.
 #[derive(Debug)]

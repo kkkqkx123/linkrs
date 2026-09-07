@@ -52,10 +52,10 @@ pub struct PlanCacheContext {
 /// with a fingerprint — effectively isolating partitioned plans from the
 /// cache until the caller can provide the current layout version.
 ///
-/// **M0**: Cache key now includes optional `space_name` and `schema_version`
+/// Cache key now includes optional `space_name` and `schema_version`
 /// to prevent cross-space plan reuse and stale plans after schema changes.
 ///
-/// **M1.6**: Cache key includes optional `param_type_signature` so that the
+/// Cache key includes optional `param_type_signature` so that the
 /// same query text with different parameter type signatures produces a
 /// different key, but different parameter *values* do not (allowing cached
 /// plan reuse across executions with different values of the same types).
@@ -68,11 +68,11 @@ pub struct PlanCacheKey {
     /// Partition layout fingerprint.  `Some` when the cached plan holds a
     /// `PartitionSpec`; absent for single-tree plans.
     pub(crate) partition_fingerprint: Option<u64>,
-    /// Space/catalog identity — prevents cross-space plan reuse (M0).
+    /// Space/catalog identity — prevents cross-space plan reuse.
     pub(crate) space_name: Option<String>,
-    /// Schema version at planning time — forces replan after DDL (M0).
+    /// Schema version at planning time — forces replan after DDL.
     pub(crate) schema_version: Option<u64>,
-    /// Parameter type signature — prevents reuse when param types differ (M1.6).
+    /// Parameter type signature — prevents reuse when param types differ.
     /// Does NOT include parameter values, only their declared types.
     pub(crate) param_type_signature: Option<u64>,
     /// Index version at planning time — forces replan after index DDL.
@@ -100,7 +100,7 @@ impl PlanCacheKey {
 
     /// Create a key scoped to a specific space and schema version.
     ///
-    /// M1.6: `param_type_signature` is a hash of the parameter types (not
+    /// `param_type_signature` is a hash of the parameter types (not
     /// values) so the same query with different param values but same types
     /// reuses the cached plan.
     pub fn from_query_with_space(
