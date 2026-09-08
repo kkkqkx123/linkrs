@@ -417,4 +417,67 @@ mod tests {
     fn test_should_auto_compact_empty_table() {
         assert!(!GraphStorageContext::should_auto_compact(0, 0, &cfg()));
     }
+
+    #[test]
+    fn test_background_freeze_manager_basics() {
+        use crate::engine::background_freeze::BackgroundFreezeManager;
+        use crate::engine::config::{FreezeConfig, FreezeDecisionInput, FreezeStrategyType};
+        use graphdb_core::types::Timestamp;
+
+        let config = FreezeConfig {
+            strategy: FreezeStrategyType::Conservative,
+            delta_edge_threshold: 1000,
+            delta_memory_threshold_bytes: 256 * 1024 * 1024,
+            max_segment_age: Timestamp::MAX,
+            deletion_threshold: 0.5,
+            adaptive_segment_threshold: 50,
+            adaptive_maximum_segments: 150,
+            lsm_segment_pressure_threshold: 200,
+        };
+        let manager = BackgroundFreezeManager::from_config(config);
+
+        // Test should_freeze decision (only edge count threshold)
+        let input1 = FreezeDecisionInput {
+            delta_edge_count: 500,
+            delta_memory_bytes: 100 * 1024 * 1024,
+            segment_count: 50,
+            oldest_segment_age: 1000,
+            deletion_ratio: 0.1,
+        };
+        assert!(!manager.should_freeze_with_stats(&input1));
+
+        let input2 = FreezeDecisionInput {
+            delta_edge_count: 1000,
+            ..input1
+        };
+        assert!(manager.should_freeze_with_stats(&input2));
+
+        let input3 = FreezeDecisionInput {
+            delta_edge_count: 1500,
+            ..input1
+        };
+        assert!(manager.should_freeze_with_stats(&input3));
+
+        // Test should_freeze with memory threshold exceeded
+        let input4 = FreezeDecisionInput {
+            delta_edge_count: 500,
+            delta_memory_bytes: 300 * 1024 * 1024,
+            segment_count: 50,
+            oldest_segment_age: 1000,
+            deletion_ratio: 0.1,
+        };
+        assert!(manager.should_freeze_with_stats(&input4));
+
+        // Test record_freeze
+        manager.record_freeze(100, 50);
+        let stats = manager.get_stats();
+        assert_eq!(stats.freeze_count, 1);
+        assert_eq!(stats.total_frozen_edges, 100);
+        assert_eq!(stats.last_freeze_duration_ms, 50);
+
+        // Test record_delta_size
+        manager.record_delta_size(750);
+        let stats = manager.get_stats();
+        assert_eq!(stats.current_delta_edges, 750);
+    }
 }
