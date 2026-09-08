@@ -3025,7 +3025,7 @@ mod tests {
             .enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024)
             .unwrap();
         assert!(
-            storage.has_edge_property_index("test_space", "WEIGHTED"),
+            storage.has_edge_property_index("test_space", "WEIGHTED").unwrap(),
             "property index should be active after enable"
         );
         let edges = storage
