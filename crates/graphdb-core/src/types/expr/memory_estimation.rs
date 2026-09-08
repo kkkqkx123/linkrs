@@ -73,7 +73,7 @@ impl MemoryEstimatable for Expression {
             Expression::Function { name, args } => {
                 base_size
                     + estimate_string_memory(name)
-                    + args.iter().map(|e| e.estimate_memory()).sum::<usize>()
+                    + args.iter().map(|e| e.as_expr().estimate_memory()).sum::<usize>()
             }
             Expression::Predicate { func, args } => {
                 base_size
@@ -310,7 +310,7 @@ impl Expression {
                 Expression::Function { name, args } => {
                     total += name.capacity() + args.len() * std::mem::size_of::<Expression>();
                     for arg in args {
-                        stack.push(arg);
+                        stack.push(arg.as_expr());
                     }
                 }
                 Expression::Predicate { func, args } => {
@@ -523,7 +523,13 @@ impl Expression {
                         stack.push(v);
                     }
                 }
-                Expression::Function { args, .. } | Expression::Predicate { args, .. } => {
+                Expression::Function { args, .. } => {
+                    count += args.len();
+                    for arg in args {
+                        stack.push(arg.as_expr());
+                    }
+                }
+                Expression::Predicate { args, .. } => {
                     count += args.len();
                     for arg in args {
                         stack.push(arg);
@@ -640,9 +646,9 @@ mod tests {
         let expr = Expression::Function {
             name: "sum".to_string(),
             args: vec![
-                Expression::Variable("a".to_string()),
-                Expression::Variable("b".to_string()),
-                Expression::Variable("c".to_string()),
+                crate::types::expr::FunctionArg::positional(Expression::Variable("a".to_string())),
+                crate::types::expr::FunctionArg::positional(Expression::Variable("b".to_string())),
+                crate::types::expr::FunctionArg::positional(Expression::Variable("c".to_string())),
             ],
         };
         let size = expr.estimate_memory();
@@ -668,8 +674,8 @@ mod tests {
             left: Box::new(Expression::Function {
                 name: "add".to_string(),
                 args: vec![
-                    Expression::Variable("a".to_string()),
-                    Expression::Variable("b".to_string()),
+                    crate::types::expr::FunctionArg::positional(Expression::Variable("a".to_string())),
+                    crate::types::expr::FunctionArg::positional(Expression::Variable("b".to_string())),
                 ],
             }),
             op: BinaryOperator::Add,

@@ -2,7 +2,7 @@ use super::parse_expression;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
-use graphdb_core::types::expr::{Expression, SubqueryBody};
+use graphdb_core::types::expr::{Expression, FunctionArg, SubqueryBody};
 
 pub(crate) fn parse_sql_subquery_body(
     ctx: &mut ParseContext<'_>,
@@ -92,7 +92,10 @@ pub(crate) fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression
             },
             Expression::Function { name, args } => Expression::Function {
                 name,
-                args: args.into_iter().map(|a| walk(a, tag)).collect(),
+                args: args
+                    .into_iter()
+                    .map(|a| FunctionArg::Positional(walk(a.into_expr(), tag)))
+                    .collect(),
             },
             Expression::Aggregate {
                 func,

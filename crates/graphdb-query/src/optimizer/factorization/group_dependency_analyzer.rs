@@ -160,7 +160,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
             }
             Expression::Function { args, name } => {
                 for arg in args {
-                    self.visit_expression(arg);
+                    self.visit_expression(arg.as_expr());
                 }
                 // List lambda functions require their lambda body to be flat.
                 if is_list_lambda(name) {
@@ -171,7 +171,7 @@ impl<'a> GroupDependencyAnalyzer<'a> {
                         let mut lambda_analyzer =
                             GroupDependencyAnalyzer::new(self.schema, self.collect_dependent_expr);
                         lambda_analyzer.expr_store = self.expr_store;
-                        lambda_analyzer.visit_expression(body);
+                        lambda_analyzer.visit_expression(body.as_expr());
                         self.required_flat_groups
                             .extend(lambda_analyzer.dependent_groups.iter().copied());
                         self.required_flat_groups
@@ -296,7 +296,8 @@ impl<'a> GroupDependencyAnalyzer<'a> {
 mod tests {
     use super::*;
     use crate::planning::plan::factorization::FactorizedSchema;
-    use graphdb_core::types::expr::ExpressionId;
+use graphdb_core::types::expr::ExpressionId;
+use graphdb_core::types::expr::FunctionArg;
 
     fn expr(id: u64) -> ExpressionId {
         ExpressionId::new(id)
@@ -436,7 +437,7 @@ mod tests {
         };
         let the_expr = graphdb_core::Expression::Function {
             name: "list_filter".to_string(),
-            args: vec![graphdb_core::Expression::Variable("a".to_string()), body],
+            args: vec![FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())), FunctionArg::Positional(body)],
         };
         let mut store = HashMap::new();
         let fake_id = expr(999);
@@ -485,7 +486,7 @@ mod tests {
             };
             let the_expr = graphdb_core::Expression::Function {
                 name: name.to_string(),
-                args: vec![graphdb_core::Expression::Variable("a".to_string()), body],
+                args: vec![FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())), FunctionArg::Positional(body)],
             };
             let mut store = HashMap::new();
             let fake_id = expr(999);

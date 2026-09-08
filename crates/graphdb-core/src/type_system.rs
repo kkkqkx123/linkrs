@@ -70,6 +70,8 @@ impl TypeUtils {
             // Parameterized composite types sit above all scalar types.
             DataType::Struct(_) => 220,
             DataType::Array(_) => 221,
+            DataType::Decimal { .. } => 33,
+            DataType::Union(_) => 230,
         }
     }
 
@@ -569,6 +571,11 @@ impl TypeUtils {
             DataType::JsonB => "jsonb".to_string(),
             DataType::Uuid => "uuid".to_string(),
             DataType::Interval => "interval".to_string(),
+            DataType::Decimal { precision, scale } => format!("decimal({}, {})", precision, scale),
+            DataType::Union(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| Self::type_to_string(t)).collect();
+                format!("union({})", type_strs.join(", "))
+            }
             DataType::Struct(_) => "struct".to_string(),
             DataType::Array(_) => "array".to_string(),
         }

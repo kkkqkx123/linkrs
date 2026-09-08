@@ -101,6 +101,30 @@ impl ShowParser {
             UtilStmtParser::new().parse_show_roles_internal(ctx, start_span)
         } else if ctx.check_token(TokenKind::Create) {
             UtilStmtParser::new().parse_show_create_internal(ctx, start_span)
+        } else if ctx.check_token(TokenKind::Functions) {
+            ctx.expect_token(TokenKind::Functions)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Functions,
+            }))
+        } else if ctx.check_token(TokenKind::Graphs) {
+            ctx.expect_token(TokenKind::Graphs)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Graphs,
+            }))
+        } else if ctx.check_token(TokenKind::Macros) {
+            ctx.expect_token(TokenKind::Macros)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Macros,
+            }))
         } else {
             Err(ParseError::new(
                 ParseErrorKind::SyntaxError,

@@ -70,7 +70,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
             requires_runtime_context(left) || requires_runtime_context(right)
         }
         Expression::Unary { operand, .. } => requires_runtime_context(operand),
-        Expression::Function { args, .. } => args.iter().any(requires_runtime_context),
+        Expression::Function { args, .. } => args.iter().any(|arg| requires_runtime_context(arg.as_expr())),
         Expression::Aggregate { args, .. } => args.iter().any(requires_runtime_context),
         Expression::List(items) => items.iter().any(requires_runtime_context),
         Expression::Map(pairs) => pairs.iter().any(|(_, val)| requires_runtime_context(val)),
@@ -187,7 +187,7 @@ fn collect_variables_recursive(expression: &Expression, variables: &mut Vec<Stri
         }
         Expression::Function { args, .. } => {
             for arg in args {
-                collect_variables_recursive(arg, variables);
+                collect_variables_recursive(arg.as_expr(), variables);
             }
         }
         Expression::Aggregate { args, .. } => {
@@ -281,7 +281,7 @@ pub fn has_aggregate_function(expression: &Expression) -> bool {
             has_aggregate_function(left) || has_aggregate_function(right)
         }
         Expression::Unary { operand, .. } => has_aggregate_function(operand),
-        Expression::Function { args, .. } => args.iter().any(has_aggregate_function),
+        Expression::Function { args, .. } => args.iter().any(|arg| has_aggregate_function(arg.as_expr())),
         Expression::List(items) => items.iter().any(has_aggregate_function),
         Expression::Map(pairs) => pairs.iter().any(|(_, expr)| has_aggregate_function(expr)),
         Expression::Case {
@@ -358,7 +358,7 @@ fn extract_aggregate_functions_recursive(
         }
         Expression::Function { args, .. } => {
             for arg in args {
-                extract_aggregate_functions_recursive(arg, functions);
+                extract_aggregate_functions_recursive(arg.as_expr(), functions);
             }
         }
         Expression::List(items) => {

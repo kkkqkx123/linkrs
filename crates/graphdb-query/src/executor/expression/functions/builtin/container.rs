@@ -31,6 +31,10 @@ pub enum ContainerFunction {
     ListDistinct,
     ListUnique,
     ListExtract,
+    ListAny,
+    ListAll,
+    ListSingle,
+    ListReduce,
     StructPack,
     StructExtract,
     MapCreation,
@@ -65,6 +69,10 @@ impl ContainerFunction {
             Self::ListDistinct => "list_distinct",
             Self::ListUnique => "list_unique",
             Self::ListExtract => "list_extract",
+            Self::ListAny => "list_any",
+            Self::ListAll => "list_all",
+            Self::ListSingle => "list_single",
+            Self::ListReduce => "list_reduce",
             Self::StructPack => "struct_pack",
             Self::StructExtract => "struct_extract",
             Self::MapCreation => "map",
@@ -99,6 +107,10 @@ impl ContainerFunction {
             Self::ListDistinct => 1,
             Self::ListUnique => 1,
             Self::ListExtract => 2,
+            Self::ListAny => 2,
+            Self::ListAll => 2,
+            Self::ListSingle => 2,
+            Self::ListReduce => 3,
             Self::StructPack => 0,
             Self::StructExtract => 2,
             Self::MapCreation => 0,
@@ -141,6 +153,10 @@ impl ContainerFunction {
             Self::ListDistinct => "Remove duplicate elements from list",
             Self::ListUnique => "Remove duplicate elements from list",
             Self::ListExtract => "Extract element from list at specified index",
+            Self::ListAny => "Check if any element in mask list is true",
+            Self::ListAll => "Check if all elements in mask list are true",
+            Self::ListSingle => "Check if exactly one element in mask list is true",
+            Self::ListReduce => "Reduce list to a single value using accumulator",
             Self::StructPack => "Pack values into a struct",
             Self::StructExtract => "Extract field from struct",
             Self::MapCreation => "Create a map from key-value pairs",
@@ -181,6 +197,10 @@ impl ContainerFunction {
             Self::ListDistinct => execute_list_distinct(args),
             Self::ListUnique => execute_list_distinct(args),
             Self::ListExtract => execute_list_extract(args),
+            Self::ListAny => execute_list_any(args),
+            Self::ListAll => execute_list_all(args),
+            Self::ListSingle => execute_list_single(args),
+            Self::ListReduce => execute_list_reduce(args),
             Self::StructPack => execute_struct_pack(args),
             Self::StructExtract => execute_struct_extract(args),
             Self::MapCreation => execute_map_creation(args),
@@ -632,6 +652,95 @@ fn execute_list_extract(args: &[Value]) -> Result<Value, ExpressionError> {
         Ok(Value::Null(NullType::Null))
     } else {
         Ok(list.values[idx as usize].clone())
+    }
+}
+
+fn execute_list_any(args: &[Value]) -> Result<Value, ExpressionError> {
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::List(mask)) => {
+            let min_len = list.values.len().min(mask.values.len());
+            let any_true = mask.values[..min_len]
+                .iter()
+                .any(|m| matches!(m, Value::Bool(true)));
+            Ok(Value::Bool(any_true))
+        }
+        (Value::List(_), _) => Err(ExpressionError::type_error(
+            "list_any second argument must be a boolean list",
+        )),
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_any requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_all(args: &[Value]) -> Result<Value, ExpressionError> {
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::List(mask)) => {
+            let min_len = list.values.len().min(mask.values.len());
+            if min_len == 0 {
+                return Ok(Value::Bool(true));
+            }
+            let all_true = mask.values[..min_len]
+                .iter()
+                .all(|m| matches!(m, Value::Bool(true)));
+            Ok(Value::Bool(all_true))
+        }
+        (Value::List(_), _) => Err(ExpressionError::type_error(
+            "list_all second argument must be a boolean list",
+        )),
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_all requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_single(args: &[Value]) -> Result<Value, ExpressionError> {
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::List(mask)) => {
+            let min_len = list.values.len().min(mask.values.len());
+            let count = mask.values[..min_len]
+                .iter()
+                .filter(|m| matches!(m, Value::Bool(true)))
+                .count();
+            Ok(Value::Bool(count == 1))
+        }
+        (Value::List(_), _) => Err(ExpressionError::type_error(
+            "list_single second argument must be a boolean list",
+        )),
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_single requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_reduce(args: &[Value]) -> Result<Value, ExpressionError> {
+    match (&args[0], &args[1]) {
+        (Value::List(list), initial) => {
+            let mut acc = initial.clone();
+            for item in &list.values {
+                match (&acc, item) {
+                    (Value::Int(a), Value::Int(b)) => acc = Value::Int(a + b),
+                    (Value::BigInt(a), Value::BigInt(b)) => acc = Value::BigInt(a + b),
+                    (Value::Float(a), Value::Float(b)) => acc = Value::Float(a + b),
+                    (Value::Double(a), Value::Double(b)) => acc = Value::Double(a + b),
+                    (Value::Int(a), Value::BigInt(b)) => acc = Value::BigInt(*a as i64 + b),
+                    (Value::BigInt(a), Value::Int(b)) => acc = Value::BigInt(a + *b as i64),
+                    _ => {
+                        return Err(ExpressionError::type_error(
+                            "list_reduce: accumulator and list elements must be numeric and of compatible types",
+                        ))
+                    }
+                }
+            }
+            Ok(acc)
+        }
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_reduce requires a list as first argument",
+        )),
     }
 }
 

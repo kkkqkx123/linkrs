@@ -56,7 +56,7 @@ impl Binder {
                     check(scope, right)
                 }
                 Expression::Unary { operand, .. } => check(scope, operand),
-                Expression::Function { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
+                Expression::Function { args, .. } => args.iter().try_for_each(|a| check(scope, a.as_expr())),
                 Expression::Aggregate { args, filter, .. } => {
                     args.iter().try_for_each(|a| check(scope, a))?;
                     if let Some(f) = filter {
@@ -229,7 +229,7 @@ impl Binder {
             Expression::Function { name, args } => {
                 let args = args
                     .iter()
-                    .map(|a| self.bind_inner_expr(a, None))
+                    .map(|a| self.bind_inner_expr(a.as_expr(), None))
                     .collect::<DBResult<Vec<_>>>()?;
                 let arg_types: Vec<DataType> = args.iter().map(|a| a.return_type()).collect();
                 let return_type = {

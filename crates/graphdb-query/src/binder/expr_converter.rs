@@ -73,10 +73,7 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
                 .iter()
                 .map(convert_bound_to_expression)
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(Expression::Function {
-                name: f.name.clone(),
-                args,
-            })
+            Ok(Expression::function(f.name.clone(), args))
         }
 
         BoundExpression::Aggregate(a) => {
@@ -285,20 +282,26 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         BoundExpression::Vector(v) => Ok(Expression::Vector(v.clone())),
 
         BoundExpression::Subquery(_) => {
-            Err("Subquery expression conversion not yet supported".to_string())
+            Err("Subquery expression conversion requires original AST context".to_string())
         }
         BoundExpression::Exists { .. } => {
-            Err("Exists expression conversion not yet supported".to_string())
+            Err("Exists expression conversion requires original AST context".to_string())
         }
-        BoundExpression::In { .. } => Err("In expression conversion not yet supported".to_string()),
+        BoundExpression::In { .. } => {
+            Err("In expression conversion requires original AST context".to_string())
+        }
         BoundExpression::CountSubquery { .. } => {
-            Err("CountSubquery expression conversion not yet supported".to_string())
+            Err("CountSubquery expression conversion requires original AST context".to_string())
         }
-        BoundExpression::Lambda { .. } => {
-            Err("Lambda expression conversion not yet supported".to_string())
+        BoundExpression::Lambda { params, body } => {
+            let body_expr = convert_bound_to_expression(body)?;
+            Ok(Expression::Lambda {
+                params: params.clone(),
+                body: Box::new(body_expr),
+            })
         }
         BoundExpression::Pattern(_) => {
-            Err("Pattern expression conversion not yet supported".to_string())
+            Err("Pattern expression conversion requires original AST context".to_string())
         }
     }
 }

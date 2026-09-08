@@ -4,6 +4,7 @@
 
 use crate::define_plan_node_with_deps;
 use graphdb_core::types::graph_schema::OrderDirection;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Sorting item definition
@@ -239,18 +240,18 @@ mod tests {
         let func_expr = Expression::Function {
             name: "cosine_similarity".to_string(),
             args: vec![
-                Expression::Property {
+                FunctionArg::Positional(Expression::Property {
                     object: Box::new(Expression::Variable("p".to_string())),
                     property: "embedding".to_string(),
-                },
-                Expression::Literal(graphdb_core::Value::List(Box::new(
+                }),
+                FunctionArg::Positional(Expression::Literal(graphdb_core::Value::List(Box::new(
                     graphdb_core::value::list::List {
                         values: vec![
                             graphdb_core::Value::Double(0.1),
                             graphdb_core::Value::Double(0.2),
                         ],
                     },
-                ))),
+                )))),
             ],
         };
 

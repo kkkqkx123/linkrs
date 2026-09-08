@@ -55,6 +55,7 @@ define_logical_plan_node_with_deps! {
         e_filter: Option<ContextualExpression>,
         v_filter: Option<ContextualExpression>,
         first_step_filter: Option<ContextualExpression>,
+        path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     }
     enum: Traverse
     input: SingleInputNode

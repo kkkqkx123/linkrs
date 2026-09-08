@@ -391,12 +391,24 @@ pub(super) fn expand_on_chunk(
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
 
-pub(super) fn traverse_on_chunk(
+pub(super) fn _traverse_on_chunk(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
     config: &TraversalConfig,
     visited: &mut VisitedSet,
+    cancel_token: Option<CancelToken>,
+) -> Result<Option<DataChunk>, QueryError> {
+    traverse_on_chunk_with_semantic(chunk, output_layout, reader, config, visited, true, cancel_token)
+}
+
+pub(super) fn traverse_on_chunk_with_semantic(
+    chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
+    reader: &dyn QueryStorage,
+    config: &TraversalConfig,
+    visited: &mut VisitedSet,
+    skip_visited: bool,
     cancel_token: Option<CancelToken>,
 ) -> Result<Option<DataChunk>, QueryError> {
     let _col_names = chunk.col_names();
@@ -429,7 +441,7 @@ pub(super) fn traverse_on_chunk(
 
             while let Some(event) = runtime.next_event() {
                 let nid = event.vertex.vid();
-                if !visited.insert(*nid) {
+                if skip_visited && !visited.insert(*nid) {
                     continue;
                 }
 

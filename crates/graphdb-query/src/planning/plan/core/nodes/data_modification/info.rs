@@ -83,6 +83,7 @@ pub struct VertexDeleteInfo {
     pub space_name: String,
     pub vertex_ids: Vec<ContextualExpression>,
     pub with_edge: bool,
+    pub cascade: bool,
     pub condition: Option<ContextualExpression>,
 }
 

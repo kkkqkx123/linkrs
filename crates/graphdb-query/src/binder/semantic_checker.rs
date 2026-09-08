@@ -158,17 +158,17 @@ impl CompositeValidator {
     }
 
     fn check_function_args(&mut self, expr: &Expression) -> DBResult<()> {
-        let (name, args) = match expr {
-            Expression::Function { name, args } => (name.as_str(), args.as_slice()),
-            Expression::WindowFunction { name, args, .. } => (name.as_str(), args.as_slice()),
+        let (name, arg_count) = match expr {
+            Expression::Function { name, args } => (name.as_str(), args.len()),
+            Expression::WindowFunction { name, args, .. } => (name.as_str(), args.len()),
             _ => return Ok(()),
         };
 
-        if args.len() > MAX_FUNCTION_ARGS {
+        if arg_count > MAX_FUNCTION_ARGS {
             return Err(DBError::from(QueryError::invalid_query(format!(
                 "The function {:?} has too many arguments: {}",
                 name,
-                args.len()
+                arg_count
             ))));
         }
 
@@ -177,40 +177,40 @@ impl CompositeValidator {
             let expected = func.arity();
             let variadic = func.is_variadic();
             if variadic {
-                if args.len() < expected {
+                if arg_count < expected {
                     return Err(DBError::from(QueryError::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
                         name,
                         expected,
-                        args.len()
+                        arg_count
                     ))));
                 }
-            } else if args.len() != expected {
+            } else if arg_count != expected {
                 return Err(DBError::from(QueryError::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
                     name,
                     expected,
-                    args.len()
+                    arg_count
                 ))));
             }
         } else if let Some(func) = registry.get_custom(name) {
             let expected = func.arity;
             let variadic = func.is_variadic;
             if variadic {
-                if args.len() < expected {
+                if arg_count < expected {
                     return Err(DBError::from(QueryError::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
                         name,
                         expected,
-                        args.len()
+                        arg_count
                     ))));
                 }
-            } else if args.len() != expected {
+            } else if arg_count != expected {
                 return Err(DBError::from(QueryError::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
                     name,
                     expected,
-                    args.len()
+                    arg_count
                 ))));
             }
         }

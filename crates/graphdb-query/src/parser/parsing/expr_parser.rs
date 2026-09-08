@@ -106,7 +106,7 @@ fn parse_not_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, Parse
 }
 
 fn parse_comparison_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
-    let mut left = parse_additive_expression(ctx)?;
+    let mut left = parse_bitwise_expression(ctx)?;
 
     if let Some(op) = parse_comparison_op(ctx) {
         let right = parse_additive_expression(ctx)?;
@@ -163,6 +163,43 @@ fn parse_comparison_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOperator> {
             ctx.next_token();
             ctx.match_token(TokenKind::With);
             Some(BinaryOperator::EndsWith)
+        }
+        _ => None,
+    }
+}
+
+fn parse_bitwise_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+    let mut left = parse_additive_expression(ctx)?;
+
+    while let Some(op) = parse_bitwise_op(ctx) {
+        let right = parse_additive_expression(ctx)?;
+        let span = ctx.merge_span(left.span.start, right.span.end);
+        left = ParseResult {
+            expr: Expression::binary(left.expr, op, right.expr),
+            span,
+        };
+    }
+
+    Ok(left)
+}
+
+fn parse_bitwise_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOperator> {
+    match ctx.current_token().kind {
+        TokenKind::Pipe => {
+            ctx.next_token();
+            Some(BinaryOperator::BitwiseOr)
+        }
+        TokenKind::Ampersand => {
+            ctx.next_token();
+            Some(BinaryOperator::BitwiseAnd)
+        }
+        TokenKind::ShiftLeft => {
+            ctx.next_token();
+            Some(BinaryOperator::ShiftLeft)
+        }
+        TokenKind::ShiftRight => {
+            ctx.next_token();
+            Some(BinaryOperator::ShiftRight)
         }
         _ => None,
     }
@@ -498,6 +535,7 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
 
             // Check if this is a lambda expression: (x, y) -> expr
             // Look ahead to see if we have identifier(s) followed by -> and )
+            let ckpt = ctx.checkpoint();
             if let TokenKind::Identifier(_) = ctx.current_token().kind {
                 let first_name = ctx.current_token().lexeme.clone();
                 ctx.next_token();
@@ -539,7 +577,8 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 }
             }
 
-            // Not a lambda, parse as normal parenthesized expression
+            // Not a lambda, restore and parse as normal parenthesized expression
+            ctx.restore(ckpt);
             let expression = parse_expression(ctx)?;
             ctx.expect_token(TokenKind::RParen)?;
             Ok(expression)
@@ -549,8 +588,11 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             let span = ctx.merge_span(start_pos, ctx.current_position());
             if ctx.match_token(TokenKind::LParen) {
                 parse_function_call(name, span, ctx)
-            } else if ctx.check_token(TokenKind::Arrow) {
+            } else if ctx.check_token(TokenKind::Arrow)
+                && !matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
+            {
                 // Lambda expression: x -> expr
+                // (JSON access `m->'key'` is handled in the postfix loop.)
                 ctx.next_token(); // consume ->
                 let body = parse_expression(ctx)?;
                 let span = ctx.merge_span(start_pos, ctx.current_position());

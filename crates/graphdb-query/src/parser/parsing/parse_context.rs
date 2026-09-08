@@ -102,6 +102,12 @@ pub struct ParseContext<'a> {
     recovery_count: usize,
 }
 
+pub struct ParseContextCheckpoint {
+    lexer_ckpt: crate::parser::lexing::LexerCheckpoint,
+    current_token: Token,
+    next_token: Option<Token>,
+}
+
 impl<'a> ParseContext<'a> {
     pub fn new(input: &'a str) -> Self {
         let lexer = Lexer::new(input);
@@ -141,6 +147,20 @@ impl<'a> ParseContext<'a> {
             expr_context,
             recovery_count: 0,
         }
+    }
+
+    pub fn checkpoint(&self) -> ParseContextCheckpoint {
+        ParseContextCheckpoint {
+            lexer_ckpt: self.lexer.checkpoint(),
+            current_token: self.current_token.clone(),
+            next_token: self.next_token.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, ckpt: ParseContextCheckpoint) {
+        self.lexer.restore(ckpt.lexer_ckpt);
+        self.current_token = ckpt.current_token;
+        self.next_token = ckpt.next_token;
     }
 
     pub fn set_expression_context(&mut self, expr_context: Arc<ExpressionAnalysisContext>) {
@@ -407,6 +427,12 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok(s)
             }
+            // Option-keywords used as keys in LOAD/EXPORT OPTIONS (...)
+            TokenKind::Format | TokenKind::Header | TokenKind::Delimiter => {
+                let s = self.current_token.lexeme.clone();
+                self.next_token();
+                Ok(s)
+            }
             _ => {
                 let pos = self.current_position();
                 Err(ParseError::new(
@@ -647,6 +673,7 @@ impl<'a> ParseContext<'a> {
             TokenKind::Group => keyword.eq_ignore_ascii_case("GROUP"),
             TokenKind::Having => keyword.eq_ignore_ascii_case("HAVING"),
             TokenKind::Between => keyword.eq_ignore_ascii_case("BETWEEN"),
+            TokenKind::Comment => keyword.eq_ignore_ascii_case("COMMENT"),
             TokenKind::Admin => keyword.eq_ignore_ascii_case("ADMIN"),
             TokenKind::Edges => keyword.eq_ignore_ascii_case("EDGES"),
             TokenKind::Vertex => keyword.eq_ignore_ascii_case("VERTEX"),

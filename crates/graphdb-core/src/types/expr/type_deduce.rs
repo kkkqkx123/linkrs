@@ -24,7 +24,7 @@ impl Expression {
             Expression::StructField { base, field } => Self::deduce_struct_field_type(base, field),
             Expression::Binary { op, left, right } => Self::deduce_binary_type(op, left, right),
             Expression::Unary { op, operand } => Self::deduce_unary_type(op, operand),
-            Expression::Function { name, args } => Self::deduce_function_type(name, args),
+            Expression::Function { name, args } => Self::deduce_function_type(name, &args),
             Expression::Aggregate { func, .. } => Self::deduce_aggregate_type(func),
             Expression::List(items) => {
                 DataType::List(Box::new(Self::deduce_expression_container_element(items)))
@@ -192,14 +192,14 @@ impl Expression {
     }
 
     /// Deriving function return types
-    fn deduce_function_type(name: &str, args: &[Expression]) -> DataType {
+    fn deduce_function_type(name: &str, args: &[crate::types::expr::FunctionArg]) -> DataType {
         let name_upper = name.to_uppercase();
         match name_upper.as_str() {
             // math function
             "ABS" | "CEIL" | "FLOOR" | "ROUND" | "SIGN" | "SQRT" | "POW" | "EXP" | "LOG"
             | "LOG10" | "LOG2" => {
                 if let Some(first_arg) = args.first() {
-                    first_arg.deduce_type()
+                    first_arg.as_expr().deduce_type()
                 } else {
                     DataType::Unknown
                 }
@@ -217,14 +217,14 @@ impl Expression {
             // aggregate function (math.)
             "HEAD" | "LAST" => {
                 if let Some(first_arg) = args.first() {
-                    first_arg.deduce_type()
+                    first_arg.as_expr().deduce_type()
                 } else {
                     DataType::Unknown
                 }
             }
             "TAIL" => {
                 if let Some(first_arg) = args.first() {
-                    DataType::List(Box::new(first_arg.deduce_type()))
+                    DataType::List(Box::new(first_arg.as_expr().deduce_type()))
                 } else {
                     DataType::List(Box::new(DataType::Unknown))
                 }
@@ -246,7 +246,7 @@ impl Expression {
             "COALESCE" => {
                 // Returns the type of the first argument with a known type
                 for arg in args {
-                    let arg_type = arg.deduce_type();
+                    let arg_type = arg.as_expr().deduce_type();
                     if arg_type != DataType::Null
                         && arg_type != DataType::Empty
                         && arg_type != DataType::Unknown

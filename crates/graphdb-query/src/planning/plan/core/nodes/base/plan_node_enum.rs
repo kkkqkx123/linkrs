@@ -21,8 +21,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode,
-    ShowSessionsNode,
+    InQueryCallNode, LoadFromNode, ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode,
+    ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -96,6 +96,7 @@ pub use crate::planning::plan::core::nodes::management::stats_nodes::{
     ShowStatsNode as ShowStatsNodeType, ShowStatsType,
 };
 pub use crate::planning::plan::core::nodes::management::system_nodes::{
+    InQueryCallNode as InQueryCallNodeType, LoadFromNode as LoadFromNodeType,
     ShowConfigsNode as ShowConfigsNodeType, ShowFunctionsNode as ShowFunctionsNodeType,
     ShowGraphsNode as ShowGraphsNodeType, ShowMacrosNode as ShowMacrosNodeType,
     ShowQueriesNode as ShowQueriesNodeType, ShowSessionsNode as ShowSessionsNodeType,
@@ -250,6 +251,8 @@ pub enum PlanNodeEnum {
     ShowFunctions(ShowFunctionsNode),
     ShowGraphs(ShowGraphsNode),
     ShowMacros(ShowMacrosNode),
+    LoadFrom(LoadFromNode),
+    InQueryCall(InQueryCallNode),
 
     // Full-text Search Nodes
     FulltextSearch(FulltextSearchNode),
@@ -361,6 +364,8 @@ crate::define_enum_is_methods! {
     (ShowFunctions, is_show_functions),
     (ShowGraphs, is_show_graphs),
     (ShowMacros, is_show_macros),
+    (LoadFrom, is_load_from),
+    (InQueryCall, is_in_query_call),
     // Full-text Search Nodes
     (FulltextSearch, is_fulltext_search),
     (FulltextLookup, is_fulltext_lookup),
@@ -472,6 +477,8 @@ crate::define_enum_as_methods! {
     (ShowFunctions, as_show_functions, ShowFunctionsNode),
     (ShowGraphs, as_show_graphs, ShowGraphsNode),
     (ShowMacros, as_show_macros, ShowMacrosNode),
+    (LoadFrom, as_load_from, LoadFromNode),
+    (InQueryCall, as_in_query_call, InQueryCallNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup, FulltextLookupNode),
@@ -582,6 +589,8 @@ crate::define_enum_as_mut_methods! {
     (ShowFunctions, as_show_functions_mut, ShowFunctionsNode),
     (ShowGraphs, as_show_graphs_mut, ShowGraphsNode),
     (ShowMacros, as_show_macros_mut, ShowMacrosNode),
+    (LoadFrom, as_load_from_mut, LoadFromNode),
+    (InQueryCall, as_in_query_call_mut, InQueryCallNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search_mut, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup_mut, FulltextLookupNode),
@@ -698,6 +707,8 @@ crate::define_all_plan_nodes! {
     (ShowFunctions, ShowFunctionsNode, PlanNodeCategory::Management, "ShowFunctions"),
     (ShowGraphs, ShowGraphsNode, PlanNodeCategory::Management, "ShowGraphs"),
     (ShowMacros, ShowMacrosNode, PlanNodeCategory::Management, "ShowMacros"),
+    (LoadFrom, LoadFromNode, PlanNodeCategory::Management, "LoadFrom"),
+    (InQueryCall, InQueryCallNode, PlanNodeCategory::Management, "InQueryCall"),
     // Full-text Search Nodes
     (FulltextSearch, FulltextSearchNode, PlanNodeCategory::DataAccess, "FulltextSearch"),
     (FulltextLookup, FulltextLookupNode, PlanNodeCategory::DataAccess, "FulltextLookup"),
@@ -743,6 +754,8 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::ShowFunctions(_)
                 | PlanNodeEnum::ShowGraphs(_)
                 | PlanNodeEnum::ShowMacros(_)
+                | PlanNodeEnum::LoadFrom(_)
+                | PlanNodeEnum::InQueryCall(_)
         )
     }
 }
@@ -826,7 +839,7 @@ mod tests {
         "BFSShortest",
         "AllPaths",
         "ShortestPath",
-        // Management/DDL (23)
+        // Management/DDL (25)
         "SpaceManage",
         "TagManage",
         "EdgeManage",
@@ -854,6 +867,8 @@ mod tests {
         "ShowFunctions",
         "ShowGraphs",
         "ShowMacros",
+        "LoadFrom",
+        "InQueryCall",
         // DataAccess (3)
         "FulltextSearch",
         "FulltextLookup",
@@ -945,6 +960,8 @@ mod tests {
         "ShowFunctions",
         "ShowGraphs",
         "ShowMacros",
+        "LoadFrom",
+        "InQueryCall",
         "FulltextSearch",
         "FulltextLookup",
         "MatchFulltext",
@@ -955,9 +972,9 @@ mod tests {
 
     /// Default build: 85 variants. With `qdrant`: 88 variants.
     #[cfg(not(feature = "qdrant"))]
-    const EXPECTED_VARIANT_COUNT: usize = 85;
+    const EXPECTED_VARIANT_COUNT: usize = 87;
     #[cfg(feature = "qdrant")]
-    const EXPECTED_VARIANT_COUNT: usize = 88;
+    const EXPECTED_VARIANT_COUNT: usize = 90;
 
     #[test]
     fn variant_count_matches_documented_number() {

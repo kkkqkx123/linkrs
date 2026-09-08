@@ -162,6 +162,7 @@ impl TraversalStartSelector {
                     }
                     _ => {}
                 },
+                PathElement::Recursive(_) => todo!("Recursive comprehension not yet supported"),
             }
         }
 
@@ -352,7 +353,7 @@ impl TraversalStartSelector {
                     return true;
                 }
                 // Recursive check of parameters
-                args.iter().any(|arg| self.has_vid_condition(arg))
+                args.iter().any(|arg| self.has_vid_condition(arg.as_expr()))
             }
             // Check whether the property access is of the .id type.
             Expression::Property { property, .. } => {

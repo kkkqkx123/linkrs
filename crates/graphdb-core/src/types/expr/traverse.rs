@@ -17,7 +17,7 @@ impl Expression {
             Expression::StructField { base, .. } => vec![base.as_ref()],
             Expression::Binary { left, right, .. } => vec![left.as_ref(), right.as_ref()],
             Expression::Unary { operand, .. } => vec![operand.as_ref()],
-            Expression::Function { args, .. } => args.iter().collect(),
+            Expression::Function { args, .. } => args.iter().map(|a| a.as_expr()).collect(),
             Expression::Aggregate { args, .. } => args.iter().collect(),
             Expression::List(items) => items.iter().collect(),
             Expression::Map(pairs) => pairs.iter().map(|(_, expression)| expression).collect(),
@@ -145,7 +145,7 @@ impl Expression {
             Expression::StructField { base, .. } => vec![base.as_mut()],
             Expression::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             Expression::Unary { operand, .. } => vec![operand.as_mut()],
-            Expression::Function { args, .. } => args.iter_mut().collect(),
+            Expression::Function { args, .. } => args.iter_mut().map(|a| a.as_expr_mut()).collect(),
             Expression::Aggregate { args, .. } => args.iter_mut().collect(),
             Expression::List(items) => items.iter_mut().collect(),
             Expression::Map(pairs) => pairs.iter_mut().map(|(_, expression)| expression).collect(),
@@ -355,7 +355,9 @@ impl Expression {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(|arg| arg.transform(transformer)).collect(),
+                args: args.iter().map(|arg| {
+                    crate::types::expr::FunctionArg::Positional(arg.as_expr().transform(transformer))
+                }).collect(),
             },
             Expression::Aggregate {
                 func,

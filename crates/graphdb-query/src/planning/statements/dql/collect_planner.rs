@@ -105,7 +105,7 @@ impl Planner for CollectPlanner {
                 graphdb_core::types::Expression::Function { name, args }
                     if name.eq_ignore_ascii_case("list") && args.len() == 1 =>
                 {
-                    args[0].to_expression_string()
+                    args[0].as_expr().to_expression_string()
                 }
                 other => other.to_expression_string(),
             };

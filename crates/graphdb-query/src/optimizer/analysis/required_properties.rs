@@ -25,6 +25,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::expr::visitor::ExpressionVisitor;
 use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Property requirement for one variable binding.
@@ -720,7 +721,7 @@ mod tests {
                 vec![yield_column(
                     Expression::Function {
                         name: "id".to_string(),
-                        args: vec![Expression::Variable("v".to_string())],
+                        args: vec![FunctionArg::Positional(Expression::Variable("v".to_string()))],
                     },
                     "id",
                 )],

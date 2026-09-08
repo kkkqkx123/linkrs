@@ -40,6 +40,7 @@ use crate::planning::plan::core::nodes::operation::sort_node::{SortItem, SortNod
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::expr::analysis_utils::is_evaluable;
 use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::ContextualExpression;
 use graphdb_core::Expression;
 
@@ -65,7 +66,7 @@ impl FoldConstantsRule {
                 global_registry_ref()
                     .get_builtin(name.as_str())
                     .is_some_and(|f| f.is_pure())
-                    && args.iter().all(Self::is_pure)
+                    && args.iter().all(|a| Self::is_pure(a.as_expr()))
             }
             Expression::Binary { left, right, .. } => Self::is_pure(left) && Self::is_pure(right),
             Expression::Unary { operand, .. } => Self::is_pure(operand),
@@ -120,7 +121,7 @@ impl FoldConstantsRule {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(Self::fold_expression).collect(),
+                args: args.iter().map(|a| FunctionArg::Positional(Self::fold_expression(a.as_expr()))).collect(),
             },
             Expression::List(items) => {
                 Expression::List(items.iter().map(Self::fold_expression).collect())
@@ -685,7 +686,7 @@ mod tests {
         // stay unfolded even though it carries no context dependency.
         let expr = Expression::Function {
             name: "future_nondeterministic_fn".to_string(),
-            args: vec![Expression::Literal(Value::Int(1))],
+            args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(1)))],
         };
         assert!(is_evaluable(&expr), "no context dependency");
         let folded = FoldConstantsRule::fold_expression(&expr);
@@ -696,7 +697,7 @@ mod tests {
     fn test_fold_pure_builtin_function() {
         let expr = Expression::Function {
             name: "abs".to_string(),
-            args: vec![Expression::Literal(Value::Int(-5))],
+            args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(-5)))],
         };
         let folded = FoldConstantsRule::fold_expression(&expr);
         assert_eq!(

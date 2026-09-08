@@ -157,7 +157,7 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
                 if index > 0 {
                     out.push_str(", ");
                 }
-                render_expr(out, values, arg)?;
+                render_expr(out, values, arg.as_expr())?;
             }
             out.push(')');
             Some(())

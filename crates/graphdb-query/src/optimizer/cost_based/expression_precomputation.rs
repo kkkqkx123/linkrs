@@ -266,7 +266,7 @@ impl ExpressionPrecomputationOptimizer {
                 is_deterministic_func
                     && args
                         .iter()
-                        .all(|arg| self.check_expression_deterministic(arg))
+                        .all(|arg| self.check_expression_deterministic(arg.as_expr()))
             }
             Expression::Case {
                 conditions,

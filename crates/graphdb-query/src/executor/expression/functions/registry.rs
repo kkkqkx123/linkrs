@@ -487,6 +487,10 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListDistinct));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListUnique));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListExtract));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListAny));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListAll));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListSingle));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListReduce));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::StructPack));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::StructExtract));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::MapCreation));
@@ -777,6 +781,10 @@ fn builtin_return_type(func: &BuiltinFunction) -> DataType {
             ContainerFunction::ListDistinct => DataType::List(Box::new(DataType::Empty)),
             ContainerFunction::ListUnique => DataType::List(Box::new(DataType::Empty)),
             ContainerFunction::ListExtract => DataType::Unknown,
+            ContainerFunction::ListAny => DataType::Bool,
+            ContainerFunction::ListAll => DataType::Bool,
+            ContainerFunction::ListSingle => DataType::Bool,
+            ContainerFunction::ListReduce => DataType::Unknown,
             ContainerFunction::StructPack => DataType::Map(Box::new(DataType::Empty)),
             ContainerFunction::StructExtract => DataType::Unknown,
             ContainerFunction::MapCreation => DataType::Map(Box::new(DataType::Empty)),

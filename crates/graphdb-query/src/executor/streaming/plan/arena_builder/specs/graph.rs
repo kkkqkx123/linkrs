@@ -406,6 +406,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         count_only,
         emit_raw_ids: node.id_only() || node.count_only(),
         lightweight_source: node.lightweight_source(),
+        path_semantic: None,
     })
 }
 
@@ -423,6 +424,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_traverse_spec(
             .or_else(|| node.v_filter())
             .map(contextual_to_expression)
             .transpose()?,
+        path_semantic: node.path_semantic(),
     })
 }
 

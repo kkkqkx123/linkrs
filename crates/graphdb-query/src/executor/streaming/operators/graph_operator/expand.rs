@@ -117,6 +117,7 @@ pub(super) fn handle_all(
         count_only,
         emit_raw_ids,
         lightweight_source,
+        path_semantic: _,
     } = &mut op.kind
     else {
         unreachable!("expand::handle_all called for a non-expand-all graph source")

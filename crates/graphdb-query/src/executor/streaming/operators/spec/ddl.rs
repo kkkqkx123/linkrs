@@ -62,6 +62,10 @@ pub enum TagManageCommand {
         deletions: Vec<String>,
         changes: Vec<PropertyRename>,
     },
+    Rename {
+        old_name: String,
+        new_name: String,
+    },
     Desc {
         tag_name: String,
     },
@@ -89,6 +93,10 @@ pub enum EdgeManageCommand {
         edge_name: String,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+    },
+    Rename {
+        old_name: String,
+        new_name: String,
     },
     Desc {
         edge_name: String,
@@ -314,6 +322,22 @@ pub enum DdlSpec {
     ShowMacros {
         space_name: String,
     },
+    LoadFrom {
+        space_name: String,
+        source_kind: String,
+        source_value: String,
+        func_name: Option<String>,
+        func_args_json: Option<String>,
+        options: Vec<(String, String)>,
+        col_names: Vec<String>,
+    },
+    InQueryCall {
+        space_name: String,
+        func_name: String,
+        args_json: String,
+        yield_items: Vec<(String, String)>,
+        col_names: Vec<String>,
+    },
     Analyze {
         space_name: String,
     },
@@ -376,7 +400,7 @@ impl TagManageCommand {
     /// Whether the command mutates stored state.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => true,
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
         }
     }
@@ -386,7 +410,7 @@ impl EdgeManageCommand {
     /// Whether the command mutates stored state.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Alter { .. } | Self::Drop { .. } => true,
+            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => true,
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
         }
     }
@@ -496,6 +520,8 @@ impl DdlSpec {
             | Self::ShowFunctions { .. }
             | Self::ShowGraphs { .. }
             | Self::ShowMacros { .. }
+            | Self::LoadFrom { .. }
+            | Self::InQueryCall { .. }
             | Self::Analyze { .. } => false,
             Self::Migrate { .. }
             | Self::MigratePlan { .. }

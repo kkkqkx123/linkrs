@@ -302,6 +302,10 @@ pub enum TokenKind {
     QMark,
     Question,
     Pipe,
+    DoublePipe,
+    Ampersand,
+    ShiftLeft,
+    ShiftRight,
     Arrow,
     BackArrow,
     RightArrow,
@@ -428,6 +432,10 @@ impl TokenKindExt for TokenKind {
                 | TokenKind::ArrowRight
                 | TokenKind::HashArrow
                 | TokenKind::HashArrowRight
+                | TokenKind::DoublePipe
+                | TokenKind::Ampersand
+                | TokenKind::ShiftLeft
+                | TokenKind::ShiftRight
         )
     }
 

@@ -23,7 +23,7 @@ use crate::planning::plan::core::{
     ShowStatsNode, ShowStatsType, ShowUsersNode,
 };
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
+    InQueryCallNode, LoadFromNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
 };
 use crate::planning::plan::SubPlan;
 use crate::planning::plan::{
@@ -234,6 +234,12 @@ impl MaintainPlanner {
                 // Sequence creation will be handled by the executor in S-7
                 Ok(None)
             }
+            CreateTarget::TagAsQuery { name, .. } => {
+                Err(PlannerError::UnsupportedOperation(format!(
+                    "CREATE TAG {} AS (query) is not yet supported",
+                    name
+                )))
+            }
         }
     }
 
@@ -294,6 +300,26 @@ impl MaintainPlanner {
                 // Sequence alteration will be handled by the executor in S-7
                 // Return a placeholder for now
                 unreachable!("ALTER SEQUENCE planning not yet implemented")
+            }
+            AlterTarget::RenameTag { old_name, new_name: _ } => {
+                let node = crate::planning::plan::core::nodes::management::tag_nodes::AlterTagNode::new(
+                    next_node_id(),
+                    crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo::new(
+                        current_space.to_string(),
+                        old_name.clone(),
+                    ),
+                );
+                PlanNodeEnum::TagManage(TagManageNode::Alter(node))
+            }
+            AlterTarget::RenameEdge { old_name, new_name: _ } => {
+                let node = crate::planning::plan::core::nodes::management::edge_nodes::AlterEdgeNode::new(
+                    next_node_id(),
+                    crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo::new(
+                        current_space.to_string(),
+                        old_name.clone(),
+                    ),
+                );
+                PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node))
             }
         }
     }
@@ -657,11 +683,101 @@ impl Planner for MaintainPlanner {
                 PlanNodeEnum::SpaceManage(SpaceManageNode::ImportDatabase(node))
             }
 
-            Stmt::LoadFrom(_) | Stmt::InQueryCall(_) => {
-                return Err(PlannerError::UnsupportedOperation(format!(
-                    "Statement {:?} is not yet supported by MaintainPlanner",
-                    stmt
-                )));
+            Stmt::LoadFrom(load_stmt) => {
+                use crate::parser::ast::stmt::ScanSource;
+                let (source_kind, source_value, func_name, func_args_json) = match &load_stmt
+                    .source
+                {
+                    ScanSource::File(path) => (
+                        "file".to_string(),
+                        path.clone(),
+                        None,
+                        None,
+                    ),
+                    ScanSource::Glob(pattern) => (
+                        "glob".to_string(),
+                        pattern.clone(),
+                        None,
+                        None,
+                    ),
+                    ScanSource::TableFunc { name, args } => {
+                        let args_json = serde_json::to_string(
+                            &args
+                                .iter()
+                                .map(|a| a.to_expression_string())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or_else(|_| "[]".to_string());
+                        ("table_func".to_string(), String::new(), Some(name.clone()), Some(args_json))
+                    }
+                };
+                let options: Vec<(String, String)> = load_stmt
+                    .options
+                    .iter()
+                    .map(|o| (o.key.clone(), o.value.clone()))
+                    .collect();
+                let col_names: Vec<String> = load_stmt
+                    .return_clause
+                    .as_ref()
+                    .map(|rc| {
+                        rc.items
+                            .iter()
+                            .map(|item| match item {
+                                crate::parser::ast::stmt::ReturnItem::Expression {
+                                    expression,
+                                    alias,
+                                } => alias.clone().unwrap_or_else(|| expression.to_expression_string()),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let node = LoadFromNode::new(
+                    next_node_id(),
+                    source_kind,
+                    source_value,
+                    func_name,
+                    func_args_json,
+                    options,
+                    col_names,
+                );
+                PlanNodeEnum::LoadFrom(node)
+            }
+
+            Stmt::InQueryCall(call_stmt) => {
+                let args_json = serde_json::to_string(
+                    &call_stmt
+                        .args
+                        .iter()
+                        .map(|a| a.to_expression_string())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_string());
+                let yield_items: Vec<(String, String)> = call_stmt
+                    .yield_clause
+                    .as_ref()
+                    .map(|yc| {
+                        yc.items
+                            .iter()
+                            .map(|item| {
+                                (
+                                    item.alias
+                                        .clone()
+                                        .unwrap_or_else(|| item.expression.to_expression_string()),
+                                    item.expression.to_expression_string(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let col_names: Vec<String> = yield_items.iter().map(|(a, _)| a.clone()).collect();
+                let node = InQueryCallNode::new(
+                    next_node_id(),
+                    call_stmt.func_name.clone(),
+                    args_json,
+                    yield_items,
+                    col_names,
+                );
+                PlanNodeEnum::InQueryCall(node)
             }
 
             _ => {

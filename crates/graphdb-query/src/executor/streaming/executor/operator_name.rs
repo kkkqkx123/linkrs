@@ -133,6 +133,8 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             DdlOperatorKind::ShowFunctions { .. } => "ShowFunctions",
             DdlOperatorKind::ShowGraphs { .. } => "ShowGraphs",
             DdlOperatorKind::ShowMacros { .. } => "ShowMacros",
+            DdlOperatorKind::LoadFrom { .. } => "LoadFrom",
+            DdlOperatorKind::InQueryCall { .. } => "InQueryCall",
             DdlOperatorKind::Analyze { .. } => "Analyze",
             DdlOperatorKind::Migrate { .. } => "Migrate",
             DdlOperatorKind::MigratePlan { .. } => "MigratePlan",

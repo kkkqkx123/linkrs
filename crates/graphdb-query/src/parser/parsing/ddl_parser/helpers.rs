@@ -287,6 +287,15 @@ impl DdlParser {
         ctx: &mut ParseContext,
         depth: usize,
     ) -> Result<DataType, ParseError> {
+        let (dt, _extra) = self.parse_data_type_inner_ex(ctx, depth)?;
+        Ok(dt)
+    }
+
+    fn parse_data_type_inner_ex(
+        &mut self,
+        ctx: &mut ParseContext,
+        depth: usize,
+    ) -> Result<(DataType, bool), ParseError> {
         let token = ctx.current_token();
         match token.kind {
             TokenKind::Struct => {
@@ -309,22 +318,33 @@ impl DdlParser {
                     ));
                 }
                 let mut fields = Vec::new();
-                while !ctx.match_token(TokenKind::Gt) {
+                let mut extra_gt = false;
+                loop {
                     let field_name = ctx.expect_identifier()?;
-                    let field_type = self.parse_data_type_inner(ctx, depth + 1)?;
+                    let (field_type, child_extra) = self.parse_data_type_inner_ex(ctx, depth + 1)?;
+                    extra_gt |= child_extra;
                     fields.push((field_name, field_type));
-                    if !ctx.match_token(TokenKind::Comma) {
-                        if !ctx.match_token(TokenKind::Gt) {
-                            return Err(ParseError::new(
-                                ParseErrorKind::SyntaxError,
-                                "STRUCT expects ',' or '>' between fields".to_string(),
-                                ctx.current_position(),
-                            ));
-                        }
+                    if extra_gt {
                         break;
                     }
+                    if ctx.match_token(TokenKind::Comma) {
+                        continue;
+                    }
+                    if ctx.match_token(TokenKind::Gt) {
+                        break;
+                    }
+                    if ctx.check_token(TokenKind::ShiftRight) {
+                        ctx.next_token();
+                        extra_gt = true;
+                        break;
+                    }
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "STRUCT expects ',' or '>' between fields".to_string(),
+                        ctx.current_position(),
+                    ));
                 }
-                Ok(DataType::Struct(Arc::new(StructTypeInfo::new(fields))))
+                Ok((DataType::Struct(Arc::new(StructTypeInfo::new(fields))), extra_gt))
             }
             TokenKind::Array => {
                 ctx.next_token();
@@ -345,13 +365,21 @@ impl DdlParser {
                         ctx.current_position(),
                     ));
                 }
-                let element = self.parse_data_type_inner(ctx, depth + 1)?;
-                if !ctx.match_token(TokenKind::Gt) {
-                    return Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        "ARRAY expects '>' after element type".to_string(),
-                        ctx.current_position(),
-                    ));
+                let (element, child_extra) = self.parse_data_type_inner_ex(ctx, depth + 1)?;
+                let mut extra_gt = child_extra;
+                if !extra_gt {
+                    if !ctx.match_token(TokenKind::Gt) {
+                        if ctx.check_token(TokenKind::ShiftRight) {
+                            ctx.next_token();
+                            extra_gt = true;
+                        } else {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                "ARRAY expects '>' after element type".to_string(),
+                                ctx.current_position(),
+                            ));
+                        }
+                    }
                 }
                 let len = if ctx.match_token(TokenKind::LParen) {
                     if let TokenKind::IntegerLiteral(n) = ctx.current_token().kind {
@@ -374,7 +402,80 @@ impl DdlParser {
                 } else {
                     None
                 };
-                Ok(DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))))
+                Ok((DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))), extra_gt))
+            }
+            TokenKind::Identifier(ref s) if s.eq_ignore_ascii_case("DECIMAL") => {
+                ctx.next_token();
+                if !ctx.match_token(TokenKind::LParen) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "DECIMAL requires '(' after keyword".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let precision = match ctx.current_token().kind {
+                    TokenKind::IntegerLiteral(n) => n as u8,
+                    _ => {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "DECIMAL precision must be an integer".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
+                };
+                ctx.next_token();
+                if !ctx.match_token(TokenKind::Comma) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "DECIMAL requires ',' between precision and scale".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let scale = match ctx.current_token().kind {
+                    TokenKind::IntegerLiteral(n) => n as u8,
+                    _ => {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "DECIMAL scale must be an integer".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
+                };
+                ctx.next_token();
+                if !ctx.match_token(TokenKind::RParen) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "DECIMAL requires ')' after scale".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                Ok((DataType::Decimal { precision, scale }, false))
+            }
+            TokenKind::Identifier(ref s) if s.eq_ignore_ascii_case("UNION") => {
+                ctx.next_token();
+                if !ctx.match_token(TokenKind::LParen) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "UNION requires '(' after keyword".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let mut types = Vec::new();
+                loop {
+                    let t = self.parse_data_type_inner(ctx, depth + 1)?;
+                    types.push(t);
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                if !ctx.match_token(TokenKind::RParen) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "UNION requires ')' after types".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                Ok((DataType::Union(types), false))
             }
             TokenKind::Int
             | TokenKind::Int8
@@ -397,7 +498,7 @@ impl DdlParser {
             | TokenKind::Text
             | TokenKind::Null => {
                 let canonical = token.lexeme.to_ascii_uppercase();
-                self.scalar_type_from_keyword(ctx, &canonical)
+                Ok((self.scalar_type_from_keyword(ctx, &canonical)?, false))
             }
             TokenKind::FixedString => {
                 ctx.next_token();
@@ -408,7 +509,7 @@ impl DdlParser {
                         ctx.next_token();
                         if ctx.current_token().kind == TokenKind::RParen {
                             ctx.next_token();
-                            Ok(DataType::FixedString(length))
+                            Ok((DataType::FixedString(length), false))
                         } else {
                             Err(ParseError::new(
                                 ParseErrorKind::SyntaxError,
@@ -424,7 +525,7 @@ impl DdlParser {
                         ))
                     }
                 } else {
-                    Ok(DataType::FixedString(32))
+                    Ok((DataType::FixedString(32), false))
                 }
             }
             TokenKind::KeywordVector => {
@@ -436,7 +537,7 @@ impl DdlParser {
                         ctx.next_token();
                         if ctx.current_token().kind == TokenKind::RParen {
                             ctx.next_token();
-                            Ok(DataType::VectorDense(dimension))
+                            Ok((DataType::VectorDense(dimension), false))
                         } else {
                             Err(ParseError::new(
                                 ParseErrorKind::SyntaxError,
@@ -452,7 +553,7 @@ impl DdlParser {
                         ))
                     }
                 } else {
-                    Ok(DataType::Vector)
+                    Ok((DataType::Vector, false))
                 }
             }
             TokenKind::Identifier(ref s) => {
@@ -467,7 +568,7 @@ impl DdlParser {
                                 ctx.next_token();
                                 if ctx.current_token().kind == TokenKind::RParen {
                                     ctx.next_token();
-                                    Ok(DataType::FixedString(length))
+                                    Ok((DataType::FixedString(length), false))
                                 } else {
                                     Err(ParseError::new(
                                         ParseErrorKind::SyntaxError,
@@ -483,7 +584,7 @@ impl DdlParser {
                                 ))
                             }
                         } else {
-                            Ok(DataType::FixedString(32))
+                            Ok((DataType::FixedString(32), false))
                         }
                     }
                     "VECTOR" => {
@@ -494,7 +595,7 @@ impl DdlParser {
                                 ctx.next_token();
                                 if ctx.current_token().kind == TokenKind::RParen {
                                     ctx.next_token();
-                                    Ok(DataType::VectorDense(dimension))
+                                    Ok((DataType::VectorDense(dimension), false))
                                 } else {
                                     Err(ParseError::new(
                                         ParseErrorKind::SyntaxError,
@@ -510,19 +611,19 @@ impl DdlParser {
                                 ))
                             }
                         } else {
-                            Ok(DataType::Vector)
+                            Ok((DataType::Vector, false))
                         }
                     }
                     // All other type names (including aliases) are resolved by
                     // the core `DataType::from_str` parser (single source of
                     // truth for the keyword -> type mapping).
-                    _ => type_name.parse::<DataType>().map_err(|e| {
+                    _ => Ok((type_name.parse::<DataType>().map_err(|e| {
                         ParseError::new(
                             ParseErrorKind::SyntaxError,
                             format!("Unknown data type: {}", e.name),
                             ctx.current_position(),
                         )
-                    }),
+                    })?, false)),
                 }
             }
             _ => Err(ParseError::new(

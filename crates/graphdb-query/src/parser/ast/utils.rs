@@ -93,10 +93,10 @@ impl ExprFactory {
                     .clone()
             })
             .collect();
-        let expr = Expression::Function {
+        let expr = Expression::function(
             name,
-            args: arg_exprs,
-        };
+            arg_exprs,
+        );
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);
         ContextualExpression::new(id, ctx)

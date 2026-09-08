@@ -49,7 +49,7 @@ impl LeftJoinToInnerJoinRule {
     fn check_is_not_null_condition(&self, expr: &Expression, right_col_names: &[String]) -> bool {
         match expr {
             Expression::Function { name, args } if name == "is_not_null" && args.len() == 1 => {
-                if let Expression::Variable(var_name) = &args[0] {
+                if let Expression::Variable(var_name) = args[0].as_expr() {
                     right_col_names.contains(var_name)
                 } else {
                     false
@@ -105,7 +105,7 @@ impl LeftJoinToInnerJoinRule {
     ) -> Option<Expression> {
         match expr {
             Expression::Function { name, args } if name == "is_not_null" && args.len() == 1 => {
-                if let Expression::Variable(var_name) = &args[0] {
+                if let Expression::Variable(var_name) = args[0].as_expr() {
                     if right_col_names.contains(var_name) {
                         return None;
                     }

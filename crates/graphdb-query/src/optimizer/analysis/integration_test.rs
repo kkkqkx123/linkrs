@@ -11,6 +11,7 @@ use crate::optimizer::analysis::{
 use crate::planning::plan::core::nodes::{FilterNode, GetVerticesNode, PlanNodeEnum, ProjectNode};
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::{Expression, ExpressionMeta};
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Value;
 
 /// Create an expression context for testing purposes.
@@ -150,20 +151,20 @@ fn test_expression_complexity_scoring() {
     let complex_expr = Expression::Binary {
         left: Box::new(Expression::Function {
             name: "abs".to_string(),
-            args: vec![Expression::Property {
+            args: vec![FunctionArg::Positional(Expression::Property {
                 object: Box::new(Expression::Variable("x".to_string())),
                 property: "value".to_string(),
-            }],
+            })],
         }),
         op: graphdb_core::types::BinaryOperator::Add,
         right: Box::new(Expression::Function {
             name: "coalesce".to_string(),
             args: vec![
-                Expression::Property {
+                FunctionArg::Positional(Expression::Property {
                     object: Box::new(Expression::Variable("y".to_string())),
                     property: "value".to_string(),
-                },
-                Expression::Literal(Value::Int(0)),
+                }),
+                FunctionArg::Positional(Expression::Literal(Value::Int(0))),
             ],
         }),
     };
@@ -226,15 +227,15 @@ fn test_multiple_function_calls() {
     let multi_func_expr = Expression::Function {
         name: "coalesce".to_string(),
         args: vec![
-            Expression::Function {
+            FunctionArg::Positional(Expression::Function {
                 name: "abs".to_string(),
-                args: vec![Expression::Literal(Value::Int(-5))],
-            },
-            Expression::Function {
+                args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(-5)))],
+            }),
+            FunctionArg::Positional(Expression::Function {
                 name: "sqrt".to_string(),
-                args: vec![Expression::Literal(Value::Int(25))],
-            },
-            Expression::Literal(Value::Int(0)),
+                args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(25)))],
+            }),
+            FunctionArg::Positional(Expression::Literal(Value::Int(0))),
         ],
     };
 

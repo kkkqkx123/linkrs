@@ -28,6 +28,7 @@
 //! The Filter criteria do not involve aggregate functions (they only relate to the input columns that are being aggregated).
 
 use crate::optimizer::heuristic::context::RewriteContext;
+use graphdb_core::types::expr::FunctionArg;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
@@ -353,7 +354,7 @@ mod tests {
     fn test_has_aggregate_function_reference_with_function() {
         let condition = Expression::Function {
             name: "sum".to_string(),
-            args: vec![Expression::Variable("amount".to_string())],
+            args: vec![FunctionArg::Positional(Expression::Variable("amount".to_string()))],
         };
 
         assert!(

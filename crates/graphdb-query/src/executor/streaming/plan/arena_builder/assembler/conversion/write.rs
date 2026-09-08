@@ -357,6 +357,36 @@ impl ArenaPlanAssembler {
                     space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 },
             ),
+            PlanNodeEnum::LoadFrom(lf) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::LoadFrom {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                    source_kind: lf.source_kind().to_string(),
+                    source_value: lf.source_value().to_string(),
+                    func_name: lf.func_name().map(|s| s.to_string()),
+                    func_args_json: lf.func_args_json().map(|s| s.to_string()),
+                    options: lf.options().to_vec(),
+                    col_names: lf.col_names().to_vec(),
+                },
+            ),
+            PlanNodeEnum::InQueryCall(iqc) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::InQueryCall {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                    func_name: iqc.func_name().to_string(),
+                    args_json: iqc.args_json().to_string(),
+                    yield_items: iqc.yield_items().to_vec(),
+                    col_names: iqc.col_names().to_vec(),
+                },
+            ),
 
             // ── Fulltext nodes ──────────────────────────────────────────────────
             PlanNodeEnum::FulltextManage(fm_node) => {

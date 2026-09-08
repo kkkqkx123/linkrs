@@ -521,6 +521,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     e_filter: n.e_filter().cloned(),
                     v_filter: n.v_filter().cloned(),
                     first_step_filter: n.first_step_filter().cloned(),
+                    path_semantic: n.path_semantic(),
                     input: Some(Box::new(logical_input.clone())),
                     deps: vec![logical_input],
                     output_var: n.output_var().map(|s| s.to_string()),

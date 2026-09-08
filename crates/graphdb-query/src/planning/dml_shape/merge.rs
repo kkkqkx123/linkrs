@@ -36,7 +36,8 @@ fn render_pattern(out: &mut String, values: &mut Vec<Value>, pattern: &Pattern) 
                     PathElement::Edge(edge) => render_edge(out, values, edge)?,
                     PathElement::Alternative(_)
                     | PathElement::Optional(_)
-                    | PathElement::Repeated(_, _) => return None,
+                    | PathElement::Repeated(_, _)
+                    | PathElement::Recursive(_) => return None,
                 }
             }
             Some(())

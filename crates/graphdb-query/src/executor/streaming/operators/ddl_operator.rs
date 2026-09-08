@@ -188,6 +188,26 @@ pub enum DdlOperatorKind {
         space_name: String,
         emitted: bool,
     },
+    LoadFrom {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        source_kind: String,
+        source_value: String,
+        func_name: Option<String>,
+        func_args_json: Option<String>,
+        options: Vec<(String, String)>,
+        col_names: Vec<String>,
+        emitted: bool,
+    },
+    InQueryCall {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        func_name: String,
+        args_json: String,
+        yield_items: Vec<(String, String)>,
+        col_names: Vec<String>,
+        emitted: bool,
+    },
     Analyze {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -349,6 +369,40 @@ impl DdlOperator {
                 space_name: space_name.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::LoadFrom {
+                space_name,
+                source_kind,
+                source_value,
+                func_name,
+                func_args_json,
+                options,
+                col_names,
+            } => DdlOperatorKind::LoadFrom {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                source_kind: source_kind.clone(),
+                source_value: source_value.clone(),
+                func_name: func_name.clone(),
+                func_args_json: func_args_json.clone(),
+                options: options.clone(),
+                col_names: col_names.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::InQueryCall {
+                space_name,
+                func_name,
+                args_json,
+                yield_items,
+                col_names,
+            } => DdlOperatorKind::InQueryCall {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                func_name: func_name.clone(),
+                args_json: args_json.clone(),
+                yield_items: yield_items.clone(),
+                col_names: col_names.clone(),
+                emitted: false,
+            },
             super::spec::DdlSpec::Analyze { space_name } => DdlOperatorKind::Analyze {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -474,6 +528,10 @@ impl DdlOperator {
             }
             DdlOperatorKind::ShowGraphs { .. } => maintenance_executor::execute_show_graphs(self),
             DdlOperatorKind::ShowMacros { .. } => maintenance_executor::execute_show_macros(self),
+            DdlOperatorKind::LoadFrom { .. } => maintenance_executor::execute_load_from(self),
+            DdlOperatorKind::InQueryCall { .. } => {
+                maintenance_executor::execute_in_query_call(self)
+            }
             DdlOperatorKind::Analyze { .. } => maintenance_executor::execute_analyze(self),
             DdlOperatorKind::Migrate { .. } => maintenance_executor::execute_migrate(self),
             DdlOperatorKind::MigratePlan { .. } => migration_executor::execute_migrate_plan(self),

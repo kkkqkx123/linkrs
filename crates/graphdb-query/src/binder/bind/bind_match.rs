@@ -409,6 +409,7 @@ impl Binder {
             PathElement::Repeated(elem, _rep) => {
                 self.process_path_element(elem, graph, prev_node_var)
             }
+            PathElement::Recursive(_) => todo!("Recursive comprehension not yet supported"),
         }
     }
 

@@ -834,6 +834,8 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::ShowFunctions { .. } => "ShowFunctions",
         DdlSpec::ShowGraphs { .. } => "ShowGraphs",
         DdlSpec::ShowMacros { .. } => "ShowMacros",
+        DdlSpec::LoadFrom { .. } => "LoadFrom",
+        DdlSpec::InQueryCall { .. } => "InQueryCall",
         DdlSpec::Analyze { .. } => "Analyze",
         DdlSpec::Migrate { .. } => "Migrate",
         DdlSpec::MigratePlan { .. } => "MigratePlan",

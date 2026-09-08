@@ -552,7 +552,7 @@ fn extract_predicates_recursive(expr: &Expression, predicates: &mut Vec<Predicat
             if name.eq_ignore_ascii_case("in") && args.len() >= 2 =>
         {
             if let (Some(col), Some(values)) =
-                (extract_column_name(&args[0]), extract_list_values(&args[1]))
+                (extract_column_name(args[0].as_expr()), extract_list_values(args[1].as_expr()))
             {
                 predicates.push(PredicateInfo::in_list(col, values));
             }

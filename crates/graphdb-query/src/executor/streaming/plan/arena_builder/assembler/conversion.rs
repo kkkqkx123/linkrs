@@ -632,6 +632,8 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::LoadFrom(_)
+            | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::FulltextManage(_)
             | PlanNodeEnum::FulltextSearch(_)
             | PlanNodeEnum::FulltextLookup(_)

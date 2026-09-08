@@ -579,6 +579,7 @@ pub struct BoundDelete {
     pub target: BoundDeleteTarget,
     pub where_clause: Option<BoundExpression>,
     pub with_edge: bool,
+    pub detach: bool,
 }
 
 #[derive(Debug, Clone)]

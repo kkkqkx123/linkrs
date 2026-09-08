@@ -26,7 +26,10 @@ pub use space_nodes::{
     ShowCreateSpaceNode, ShowSpacesNode, SpaceAlterOption, SpaceManageInfo, SwitchSpaceNode,
 };
 pub use stats_nodes::{ShowStatsNode, ShowStatsType};
-pub use system_nodes::{ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode};
+pub use system_nodes::{
+    InQueryCallNode, LoadFromNode, ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode,
+    ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
+};
 pub use tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
     TagAlterInfo, TagManageInfo,

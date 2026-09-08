@@ -84,7 +84,7 @@ impl RemoveAppendVerticesBelowJoinRule {
                 {
                     // Create new ContextualExpression packaging parameters.
                     let ctx = expr.context().clone();
-                    let meta = ExpressionMeta::new(args[0].clone());
+                    let meta = ExpressionMeta::new(args[0].as_expr().clone());
                     let id = ctx.register_expression(meta);
                     Some(ContextualExpression::new(id, ctx))
                 }
@@ -168,13 +168,13 @@ impl RemoveAppendVerticesBelowJoinRule {
         edge_alias: &str,
         vertex_alias: &str,
     ) -> ContextualExpression {
-        let expr = Expression::Function {
-            name: "none_direct_dst".to_string(),
-            args: vec![
+        let expr = Expression::function(
+            "none_direct_dst".to_string(),
+            vec![
                 Expression::Variable(edge_alias.to_string()),
                 Expression::Variable(vertex_alias.to_string()),
             ],
-        };
+        );
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);

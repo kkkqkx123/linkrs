@@ -23,6 +23,7 @@
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::PropertyContainsChecker;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::Expression;
@@ -149,7 +150,13 @@ fn rewrite_expression_with_map(
             name: name.clone(),
             args: args
                 .iter()
-                .map(|arg| rewrite_expression_with_map(arg, rewrite_map, expr_context.clone()))
+                .map(|arg| {
+                    FunctionArg::Positional(rewrite_expression_with_map(
+                        arg.as_expr(),
+                        rewrite_map,
+                        expr_context.clone(),
+                    ))
+                })
                 .collect(),
         },
         Expression::Aggregate {

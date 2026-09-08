@@ -245,6 +245,7 @@ pub(super) fn execute_tag_manage(
     let tag_name = match command {
         TagManageCommand::Create { tag_name, .. }
         | TagManageCommand::Alter { tag_name, .. }
+        | TagManageCommand::Rename { old_name: tag_name, .. }
         | TagManageCommand::Desc { tag_name }
         | TagManageCommand::Drop { tag_name, .. }
         | TagManageCommand::ShowCreate { tag_name } => Some(tag_name.clone()),
@@ -313,6 +314,17 @@ pub(super) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             }
             Ok(())
+        }),
+        TagManageCommand::Rename {
+            old_name,
+            new_name,
+        } => super::exec_ddl(storage, |_s| {
+            // TODO: Implement tag rename in storage layer
+            // For now, return an error indicating the feature is not yet supported
+            Err(QueryError::execution(format!(
+                "RENAME TAG is not yet supported: {} -> {}",
+                old_name, new_name
+            )))
         }),
         TagManageCommand::Desc { .. } => {
             let reader = super::get_reader(storage)?;
@@ -461,6 +473,7 @@ pub(super) fn execute_edge_manage(
     let edge_type = match command {
         EdgeManageCommand::Create { edge_name, .. }
         | EdgeManageCommand::Alter { edge_name, .. }
+        | EdgeManageCommand::Rename { old_name: edge_name, .. }
         | EdgeManageCommand::Desc { edge_name }
         | EdgeManageCommand::Drop { edge_name, .. }
         | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
@@ -522,6 +535,17 @@ pub(super) fn execute_edge_manage(
             )
             .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
+        }),
+        EdgeManageCommand::Rename {
+            old_name,
+            new_name,
+        } => super::exec_ddl(storage, |_s| {
+            // TODO: Implement edge rename in storage layer
+            // For now, return an error indicating the feature is not yet supported
+            Err(QueryError::execution(format!(
+                "RENAME EDGE is not yet supported: {} -> {}",
+                old_name, new_name
+            )))
         }),
         EdgeManageCommand::Desc { .. } | EdgeManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;

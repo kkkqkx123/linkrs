@@ -106,6 +106,11 @@ pub enum DataType {
     /// Interval type
     Interval,
 
+    /// Parameterized decimal type with specified precision and scale.
+    Decimal { precision: u8, scale: u8 },
+    /// Union (tagged union / discriminated union) of types.
+    Union(Vec<DataType>),
+
     /// STRUCT: named-field composite type with metadata.
     Struct(Arc<StructTypeInfo>),
     /// ARRAY: element-homogeneous composite type with metadata.
@@ -166,6 +171,19 @@ impl std::fmt::Display for DataType {
             DataType::JsonB => write!(f, "JSONB"),
             DataType::Uuid => write!(f, "UUID"),
             DataType::Interval => write!(f, "INTERVAL"),
+            DataType::Decimal { precision, scale } => {
+                write!(f, "DECIMAL({}, {})", precision, scale)
+            }
+            DataType::Union(types) => {
+                write!(f, "UNION(")?;
+                for (i, t) in types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ")")
+            }
             DataType::Struct(info) => {
                 write!(f, "STRUCT<")?;
                 for (i, (name, field_type)) in info.fields.iter().enumerate() {
@@ -232,6 +250,8 @@ impl DataType {
             DataType::Interval => 31,
             DataType::Struct(_) => 64,
             DataType::Array(_) => 65,
+            DataType::Decimal { .. } => 66,
+            DataType::Union(_) => 67,
         }
     }
 
@@ -282,6 +302,8 @@ impl DataType {
             // block and rebuild the DataType.
             64 => Err(TypeCodecError::ParameterizedTypeCode(64)),
             65 => Err(TypeCodecError::ParameterizedTypeCode(65)),
+            66 => Err(TypeCodecError::ParameterizedTypeCode(66)),
+            67 => Err(TypeCodecError::ParameterizedTypeCode(67)),
             _ => Err(TypeCodecError::UnknownTypeCode(value)),
         }
     }
@@ -335,6 +357,8 @@ mod tests {
                 DataType::String,
             )]))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
+            DataType::Decimal { precision: 10, scale: 2 },
+            DataType::Union(vec![DataType::Int, DataType::String]),
         ]
     }
 
@@ -345,8 +369,8 @@ mod tests {
         for data_type in all_data_types() {
             let code = data_type.as_u8();
             assert!(
-                code <= 31 || code == 32 || (64..=65).contains(&code),
-                "assigned code {code} for {data_type:?} must stay within 0-32 or 64-65"
+                code <= 31 || code == 32 || (64..=67).contains(&code),
+                "assigned code {code} for {data_type:?} must stay within 0-32 or 64-67"
             );
         }
     }
@@ -372,11 +396,11 @@ mod tests {
 
     #[test]
     fn test_parameterized_codes_require_metadata() {
-        // Codes 16/17/18 (List/Map/Set) and 64/65 (Struct/Array) are known but
+        // Codes 16/17/18 (List/Map/Set) and 64/65/66/67 (Struct/Array/Decimal/Union) are known but
         // parameterized: decoding the bare code must fail with the explicit
         // `ParameterizedTypeCode` error, never silently yield a
         // parameter-free type.
-        for code in [16u8, 17, 18, 64, 65] {
+        for code in [16u8, 17, 18, 64, 65, 66, 67] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::ParameterizedTypeCode(code)),
@@ -384,7 +408,7 @@ mod tests {
             );
         }
         // Unknown codes in the 64+ range still error as unknown.
-        for code in [66u8, 100, 255] {
+        for code in [100u8, 255] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::UnknownTypeCode(code)),
@@ -411,7 +435,7 @@ mod tests {
     fn test_from_u8_rejects_unknown_codes_instead_of_empty() {
         // The reserved expansion range (64+) and any unassigned code must fail
         // loudly instead of silently degrading to `Empty`.
-        for code in [33u8, 63, 66, 100, 128, 255] {
+        for code in [33u8, 63, 100, 128, 255] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::UnknownTypeCode(code)),
@@ -419,7 +443,7 @@ mod tests {
             );
         }
         // Parameterized codes fail with a distinct, explicit error.
-        for code in [16u8, 17, 18, 64, 65] {
+        for code in [16u8, 17, 18, 64, 65, 66, 67] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::ParameterizedTypeCode(code))

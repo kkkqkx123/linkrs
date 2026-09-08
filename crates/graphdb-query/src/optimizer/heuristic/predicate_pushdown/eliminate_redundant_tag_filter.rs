@@ -38,6 +38,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::scan_predicate::and_of;
 use graphdb_core::types::expr::ContextualExpression;
 use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::types::Expression;
 use graphdb_core::Value;
@@ -70,17 +71,17 @@ fn tag_membership(expr: &Expression) -> Option<(String, String)> {
     let Expression::Function {
         name: labels_name,
         args: labels_args,
-    } = &args[0]
+    } = args[0].as_expr()
     else {
         return None;
     };
     if labels_name != "labels" || labels_args.len() != 1 {
         return None;
     }
-    let Expression::Variable(var) = &labels_args[0] else {
+    let Expression::Variable(var) = labels_args[0].as_expr() else {
         return None;
     };
-    let Expression::Literal(Value::String(tag)) = &args[1] else {
+    let Expression::Literal(Value::String(tag)) = args[1].as_expr() else {
         return None;
     };
     Some((var.clone(), tag.to_string()))
@@ -219,11 +220,11 @@ mod tests {
         Expression::Function {
             name: "contains".to_string(),
             args: vec![
-                Expression::Function {
+                FunctionArg::Positional(Expression::Function {
                     name: "labels".to_string(),
-                    args: vec![Expression::Variable("n".to_string())],
-                },
-                Expression::Literal(Value::string("Node")),
+                    args: vec![FunctionArg::Positional(Expression::Variable("n".to_string()))],
+                }),
+                FunctionArg::Positional(Expression::Literal(Value::string("Node"))),
             ],
         }
     }
@@ -311,11 +312,11 @@ mod tests {
         let condition = Expression::Function {
             name: "contains".to_string(),
             args: vec![
-                Expression::Function {
+                FunctionArg::Positional(Expression::Function {
                     name: "labels".to_string(),
-                    args: vec![Expression::Variable("m".to_string())],
-                },
-                Expression::Literal(Value::string("Node")),
+                    args: vec![FunctionArg::Positional(Expression::Variable("m".to_string()))],
+                }),
+                FunctionArg::Positional(Expression::Literal(Value::string("Node"))),
             ],
         };
         let node = filter(condition, PlanNodeEnum::ScanVertices(scan));

@@ -179,6 +179,45 @@ fn parse_parameterized(
         let len = parse_optional_length(rest, full)?;
         return Ok(DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))));
     }
+    if let Some(rest) = upper.strip_prefix("DECIMAL(") {
+        let inner = rest.strip_suffix(')').ok_or_else(|| {
+            ParseDataTypeError::new(full, "DECIMAL requires ')' after parameters".to_string())
+        })?;
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() != 2 {
+            return Err(ParseDataTypeError::new(
+                full,
+                "DECIMAL requires exactly two parameters: precision and scale".to_string(),
+            ));
+        }
+        let precision = parts[0].trim().parse::<u8>().map_err(|_| {
+            ParseDataTypeError::new(full, "DECIMAL precision must be an integer".to_string())
+        })?;
+        let scale = parts[1].trim().parse::<u8>().map_err(|_| {
+            ParseDataTypeError::new(full, "DECIMAL scale must be an integer".to_string())
+        })?;
+        return Ok(DataType::Decimal { precision, scale });
+    }
+    if let Some(rest) = upper.strip_prefix("UNION(") {
+        let inner = rest.strip_suffix(')').ok_or_else(|| {
+            ParseDataTypeError::new(full, "UNION requires ')' after types".to_string())
+        })?;
+        let mut types = Vec::new();
+        for part in split_top_level_commas(inner) {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            types.push(parse_type(part, depth + 1, full)?);
+        }
+        if types.is_empty() {
+            return Err(ParseDataTypeError::new(
+                full,
+                "UNION requires at least one type".to_string(),
+            ));
+        }
+        return Ok(DataType::Union(types));
+    }
     for (prefix, kind) in [
         ("FIXEDSTRING(", SizedKind::FixedString),
         ("FIXED_STRING(", SizedKind::FixedString),
@@ -387,6 +426,9 @@ mod tests {
             ]))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::String, None))),
+            DataType::Decimal { precision: 10, scale: 2 },
+            DataType::Decimal { precision: 38, scale: 0 },
+            DataType::Union(vec![DataType::Int, DataType::String]),
         ]
     }
 
@@ -428,7 +470,9 @@ mod tests {
                 | DataType::Uuid
                 | DataType::Interval
                 | DataType::Struct(_)
-                | DataType::Array(_) => {}
+                | DataType::Array(_)
+                | DataType::Decimal { .. }
+                | DataType::Union(_) => {}
             }
         }
     }

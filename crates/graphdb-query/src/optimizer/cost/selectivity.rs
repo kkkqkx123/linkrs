@@ -364,7 +364,10 @@ impl SelectivityEstimator {
             Expression::Unary { op, operand } => {
                 self.estimate_unary_expression(space, op, operand, tag_name)
             }
-            Expression::Function { name, args } => self.estimate_function_expression(name, args),
+            Expression::Function { name, args } => {
+                let exprs: Vec<Expression> = args.iter().map(|a| a.as_expr().clone()).collect();
+                self.estimate_function_expression(name, &exprs)
+            }
             Expression::Literal(_) => {
                 // The selectivity of literal value conditions depends on the specific values; such conditions are generally considered to be highly selective.
                 0.1

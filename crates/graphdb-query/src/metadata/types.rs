@@ -169,7 +169,8 @@ impl From<DataType> for PropertyType {
             D::Map(_) => Self::Map,
             D::Geography => Self::Geography,
             D::Vector | D::VectorDense(_) | D::VectorSparse(_) => Self::Vector,
-            D::Struct(_) | D::Array(_) => Self::List,
+            D::Struct(_) | D::Array(_) | D::Union(_) => Self::List,
+            D::Decimal { .. } => Self::Float,
             D::Empty | D::Null | D::Unknown => Self::String,
         }
     }

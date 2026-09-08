@@ -68,9 +68,9 @@ impl ExpressionVisitor for PropertyCollector {
         self.visit(operand);
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 
@@ -315,9 +315,9 @@ impl ExpressionVisitor for OrConditionCollector {
 
     fn visit_unary(&mut self, _op: UnaryOperator, _operand: &Expression) {}
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 
@@ -544,9 +544,9 @@ impl ExpressionVisitor for PropertyPredicateCollector {
 
     fn visit_unary(&mut self, _op: UnaryOperator, _operand: &Expression) {}
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 
@@ -724,9 +724,9 @@ impl ExpressionVisitor for VariableCollector {
         self.visit(operand);
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 
@@ -904,13 +904,13 @@ impl ExpressionVisitor for FunctionCollector {
         self.visit(operand);
     }
 
-    fn visit_function(&mut self, name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, name: &str, args: &[crate::types::expr::FunctionArg]) {
         let func_name = name.to_string();
         if !self.functions.contains(&func_name) {
             self.functions.push(func_name);
         }
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 

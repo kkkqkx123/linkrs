@@ -129,7 +129,7 @@ impl ExpressionParser {
             }
             Expression::Function { name, args } => {
                 let folded_args: Vec<Expression> =
-                    args.iter().map(|arg| self.fold_constants(arg)).collect();
+                    args.iter().map(|arg| self.fold_constants(arg.as_expr())).collect();
 
                 // If all arguments are constants, try to compute the function
                 if folded_args
@@ -149,10 +149,7 @@ impl ExpressionParser {
                     }
                 }
 
-                Expression::Function {
-                    name: name.clone(),
-                    args: folded_args,
-                }
+                Expression::function(name.clone(), folded_args)
             }
             Expression::List(items) => {
                 let folded_items: Vec<Expression> =

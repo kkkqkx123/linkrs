@@ -1,9 +1,9 @@
 use super::subquery::match_identifier_token;
-use super::{parse_expression, parse_expression_list, ParseResult};
+use super::{parse_expression, ParseResult};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
-use graphdb_core::types::expr::Expression;
+use graphdb_core::types::expr::{Expression, FunctionArg};
 use graphdb_core::types::Span;
 
 pub(crate) fn parse_function_call(
@@ -35,10 +35,10 @@ pub(crate) fn parse_function_call(
         }
     }
 
-    let args = if ctx.match_token(TokenKind::RParen) {
+    let func_args = if ctx.match_token(TokenKind::RParen) {
         Vec::new()
     } else {
-        let args = parse_expression_list(ctx)?;
+        let args = parse_function_args(ctx)?;
         ctx.expect_token(TokenKind::RParen)?;
         args
     };
@@ -73,15 +73,13 @@ pub(crate) fn parse_function_call(
 
     if is_aggregate {
         let distinct = ctx.match_token(TokenKind::Distinct);
-        let mut agg_args: Vec<Expression> = args.iter().map(|a| a.expr.clone()).collect();
+        let mut agg_args: Vec<Expression> = func_args.iter().map(|a| a.as_expr().clone()).collect();
         if agg_args.is_empty() {
             agg_args.push(Expression::Literal(graphdb_core::Value::Null(
                 graphdb_core::NullType::Null,
             )));
         }
 
-        // Parameterized aggregates carry their extra parameters (e.g. the
-        // percentile fraction of PERCENTILE_CONT) in `args` after the field.
         let func = match name_upper.as_str() {
             "COUNT" => graphdb_core::types::operators::AggregateFunction::Count,
             "SUM" => graphdb_core::types::operators::AggregateFunction::Sum,
@@ -95,7 +93,7 @@ pub(crate) fn parse_function_call(
             "STDDEV_SAMP" => graphdb_core::types::operators::AggregateFunction::StddevSamp,
             "PRODUCT" => graphdb_core::types::operators::AggregateFunction::Product,
             "PERCENTILE_CONT" | "PERCENTILE" => {
-                if args.len() < 2 {
+                if func_args.len() < 2 {
                     agg_args.push(Expression::Literal(graphdb_core::Value::Double(50.0)));
                 }
                 graphdb_core::types::operators::AggregateFunction::PercentileCont
@@ -129,7 +127,10 @@ pub(crate) fn parse_function_call(
             span,
         })
     } else {
-        let func_args: Vec<Expression> = args.into_iter().map(|e| e.expr).collect();
+        let positional_args: Vec<Expression> = func_args
+            .iter()
+            .map(|a| a.as_expr().clone())
+            .collect();
         if ctx.match_token(TokenKind::Over) {
             ctx.expect_token(TokenKind::LParen)?;
             let mut partition_by = Vec::new();
@@ -173,7 +174,7 @@ pub(crate) fn parse_function_call(
             Ok(ParseResult {
                 expr: Expression::WindowFunction {
                     name,
-                    args: func_args,
+                    args: positional_args,
                     over_partition_by: partition_by,
                     over_order_by: order_by,
                     over_order_desc: order_desc,
@@ -182,12 +183,59 @@ pub(crate) fn parse_function_call(
             })
         } else {
             Ok(ParseResult {
-                expr: Expression::Function {
-                    name,
-                    args: func_args,
-                },
+                expr: Expression::function_with_args(name, func_args),
                 span,
             })
         }
     }
+}
+
+fn parse_function_args(ctx: &mut ParseContext<'_>) -> Result<Vec<FunctionArg>, ParseError> {
+    let mut args = Vec::new();
+
+    loop {
+        if ctx.check_token(TokenKind::RParen) {
+            break;
+        }
+
+        if let Some(arg) = try_parse_named_arg(ctx)? {
+            args.push(arg);
+        } else {
+            let result = super::parse_expression(ctx)?;
+            args.push(FunctionArg::Positional(result.expr));
+        }
+
+        if !ctx.match_token(TokenKind::Comma) {
+            break;
+        }
+    }
+
+    Ok(args)
+}
+
+fn try_parse_named_arg(ctx: &mut ParseContext<'_>) -> Result<Option<FunctionArg>, ParseError> {
+    if !matches!(ctx.current_token().kind, TokenKind::Identifier(_)) {
+        return Ok(None);
+    }
+
+    let name = match ctx.current_token().kind {
+        TokenKind::Identifier(ref n) => n.clone(),
+        _ => unreachable!(),
+    };
+
+    if !matches!(
+        ctx.peek_token().kind,
+        TokenKind::Assign | TokenKind::Colon
+    ) {
+        return Ok(None);
+    }
+
+    ctx.next_token();
+    ctx.next_token();
+
+    let value = super::parse_expression(ctx)?;
+    Ok(Some(FunctionArg::Named {
+        name,
+        value: value.expr,
+    }))
 }

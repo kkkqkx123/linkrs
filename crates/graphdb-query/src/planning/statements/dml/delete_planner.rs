@@ -94,6 +94,7 @@ impl Planner for DeletePlanner {
                     space_name,
                     vertex_ids: converted_ids,
                     with_edge: delete.with_edge,
+                    cascade: delete.detach,
                     condition,
                 };
                 LogicalNodeEnum::DeleteVertices(LogicalDeleteVerticesNode {
@@ -269,6 +270,7 @@ impl DeletePlanner {
                     space_name,
                     vertex_ids: vertex_ids.clone(),
                     with_edge: delete_stmt.with_edge,
+                    cascade: delete_stmt.detach,
                     condition: delete_stmt.where_clause.clone(),
                 };
 

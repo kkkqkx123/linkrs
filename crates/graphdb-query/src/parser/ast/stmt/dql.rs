@@ -248,6 +248,10 @@ pub struct LoadFromStmt {
 pub enum ScanSource {
     File(String),
     Glob(String),
+    TableFunc {
+        name: String,
+        args: Vec<ContextualExpression>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

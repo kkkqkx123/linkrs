@@ -12,6 +12,7 @@
 
 use crate::storage::ScanPredicate;
 use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::Value;
 
@@ -314,7 +315,7 @@ mod tests {
             BinaryOperator::Equal,
             Expression::Function {
                 name: "abs".to_string(),
-                args: vec![lit(Value::Int(30))],
+                args: vec![FunctionArg::Positional(lit(Value::Int(30)))],
             },
         );
         let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);

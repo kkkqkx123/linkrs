@@ -7,6 +7,7 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::slot::SlotLayout;
+use crate::parser::ast::pattern::PathSemantic;
 use crate::storage::QueryStorage;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
@@ -51,6 +52,7 @@ pub enum GraphOperatorKind {
         count_only: bool,
         emit_raw_ids: bool,
         lightweight_source: bool,
+        path_semantic: Option<PathSemantic>,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -61,6 +63,7 @@ pub enum GraphOperatorKind {
         max_depth: u32,
         filter_expr: Option<Expression>,
         visited: VisitedSet,
+        path_semantic: Option<PathSemantic>,
     },
     TraverseAll {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -71,6 +74,7 @@ pub enum GraphOperatorKind {
         max_depth: u32,
         filter_expr: Option<Expression>,
         visited: VisitedSet,
+        path_semantic: Option<PathSemantic>,
     },
     BiExpand {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -185,6 +189,7 @@ impl GraphOperator {
                 count_only,
                 emit_raw_ids,
                 lightweight_source,
+                path_semantic,
             } => GraphOperatorKind::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -197,6 +202,7 @@ impl GraphOperator {
                 count_only: *count_only,
                 emit_raw_ids: *emit_raw_ids,
                 lightweight_source: *lightweight_source,
+                path_semantic: *path_semantic,
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -204,6 +210,7 @@ impl GraphOperator {
                 min_depth,
                 max_depth,
                 filter_expr,
+                path_semantic,
             } => GraphOperatorKind::Traverse {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -213,6 +220,7 @@ impl GraphOperator {
                 max_depth: *max_depth,
                 filter_expr: filter_expr.clone(),
                 visited: VisitedSet::new(),
+                path_semantic: *path_semantic,
             },
             GraphSpec::BiExpand {
                 edge_types,

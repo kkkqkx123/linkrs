@@ -149,7 +149,8 @@ impl QueryGraphBuilder {
                 }
                 PathElement::Alternative(_)
                 | PathElement::Optional(_)
-                | PathElement::Repeated(_, _) => return false,
+                | PathElement::Repeated(_, _)
+                | PathElement::Recursive(_) => return false,
             }
         }
         // A trailing edge without its endpoint is not plannable here.

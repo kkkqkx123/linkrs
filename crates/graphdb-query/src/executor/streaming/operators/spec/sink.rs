@@ -48,6 +48,7 @@ pub enum SinkSpec {
     DeleteVertices {
         space_name: String,
         vertex_id_col: String,
+        cascade: bool,
     },
     DeleteEdges {
         space_name: String,
@@ -58,6 +59,7 @@ pub enum SinkSpec {
     PipeDeleteVertices {
         space_name: String,
         vertex_id_col: String,
+        cascade: bool,
     },
     PipeDeleteEdges {
         space_name: String,

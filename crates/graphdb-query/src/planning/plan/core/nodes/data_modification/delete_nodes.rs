@@ -51,6 +51,10 @@ impl DeleteVerticesNode {
         self.info.with_edge
     }
 
+    pub fn cascade(&self) -> bool {
+        self.info.cascade
+    }
+
     pub fn condition(&self) -> Option<&ContextualExpression> {
         self.info.condition.as_ref()
     }
@@ -238,6 +242,10 @@ impl PipeDeleteVerticesNode {
 
     pub fn with_edge(&self) -> bool {
         self.info.with_edge
+    }
+
+    pub fn cascade(&self) -> bool {
+        self.info.cascade
     }
 
     pub fn condition(&self) -> Option<&ContextualExpression> {

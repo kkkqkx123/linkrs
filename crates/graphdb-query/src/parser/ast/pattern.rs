@@ -170,6 +170,19 @@ pub enum PathElement {
     Alternative(Vec<Pattern>),
     Optional(Box<PathElement>),
     Repeated(Box<PathElement>, RepetitionType),
+    Recursive(RecursiveComprehension),
+}
+
+/// Recursive comprehension for variable-length path queries
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecursiveComprehension {
+    pub span: Span,
+    pub variable: String,
+    pub path_pattern: Box<Pattern>,
+    pub base_predicate: Option<ContextualExpression>,
+    pub height_limit: Option<ContextualExpression>,
+    pub filter_predicate: Option<ContextualExpression>,
+    pub output_expressions: Vec<ContextualExpression>,
 }
 
 /// Duplicate type
@@ -276,6 +289,22 @@ impl PatternUtils {
             PathElement::Repeated(elem, _) => {
                 Self::find_variables_in_element(elem, variables);
             }
+            PathElement::Recursive(rc) => {
+                variables.push(rc.variable.clone());
+                Self::find_variables_recursive(&rc.path_pattern, variables);
+                if let Some(ref pred) = rc.base_predicate {
+                    variables.extend(collect_variables_from_contextual(pred));
+                }
+                if let Some(ref limit) = rc.height_limit {
+                    variables.extend(collect_variables_from_contextual(limit));
+                }
+                if let Some(ref filter) = rc.filter_predicate {
+                    variables.extend(collect_variables_from_contextual(filter));
+                }
+                for expr in &rc.output_expressions {
+                    variables.extend(collect_variables_from_contextual(expr));
+                }
+            }
         }
     }
 
@@ -320,6 +349,9 @@ impl PatternUtils {
             }
             PathElement::Repeated(elem, _) => {
                 Self::get_labels_in_element(elem, labels);
+            }
+            PathElement::Recursive(rc) => {
+                Self::get_labels_recursive(&rc.path_pattern, labels);
             }
             _ => {}
         }

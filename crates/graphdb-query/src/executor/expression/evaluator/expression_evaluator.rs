@@ -68,7 +68,7 @@ impl ExpressionEvaluator {
             Expression::Function { name, args } => {
                 let arg_values: Result<Vec<Value>, ExpressionError> = args
                     .iter()
-                    .map(|arg| Self::evaluate_recursive(arg, context))
+                    .map(|arg| Self::evaluate_recursive(arg.as_expr(), context))
                     .collect();
                 let arg_values = arg_values?;
 

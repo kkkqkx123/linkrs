@@ -18,6 +18,14 @@ pub struct Lexer<'a> {
     errors: Vec<LexError>,
 }
 
+pub struct LexerCheckpoint {
+    position: usize,
+    line: usize,
+    column: usize,
+    current_token: Token,
+    chars: Vec<char>,
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         let chars: Vec<char> = input.chars().collect();
@@ -82,6 +90,24 @@ impl<'a> Lexer<'a> {
 
     pub fn errors(&self) -> &[LexError] {
         &self.errors
+    }
+
+    pub fn checkpoint(&self) -> LexerCheckpoint {
+        LexerCheckpoint {
+            position: self.position,
+            line: self.line,
+            column: self.column,
+            current_token: self.current_token.clone(),
+            chars: self.chars.clone().collect(),
+        }
+    }
+
+    pub fn restore(&mut self, ckpt: LexerCheckpoint) {
+        self.position = ckpt.position;
+        self.line = ckpt.line;
+        self.column = ckpt.column;
+        self.current_token = ckpt.current_token;
+        self.chars = ckpt.chars.into_iter().peekable();
     }
 
     pub fn current_token(&self) -> &Token {
@@ -705,6 +731,10 @@ impl<'a> Lexer<'a> {
                         self.read_char();
                         Token::new(Tk::Ne, "<>".to_string(), self.line, self.column)
                     }
+                    Some(&'<') => {
+                        self.read_char();
+                        Token::new(Tk::ShiftLeft, "<<".to_string(), self.line, self.column)
+                    }
                     _ => Token::new(Tk::Lt, "<".to_string(), self.line, self.column),
                 }
             }
@@ -713,6 +743,9 @@ impl<'a> Lexer<'a> {
                 if let Some(&'=') = self.peek_char() {
                     self.read_char();
                     Token::new(Tk::Ge, ">=".to_string(), self.line, self.column)
+                } else if let Some(&'>') = self.peek_char() {
+                    self.read_char();
+                    Token::new(Tk::ShiftRight, ">>".to_string(), self.line, self.column)
                 } else {
                     Token::new(Tk::Gt, ">".to_string(), self.line, self.column)
                 }
@@ -783,7 +816,12 @@ impl<'a> Lexer<'a> {
             }
             Some(&'|') => {
                 self.read_char();
-                Token::new(Tk::Pipe, "|".to_string(), self.line, self.column)
+                if let Some(&'|') = self.peek_char() {
+                    self.read_char();
+                    Token::new(Tk::DoublePipe, "||".to_string(), self.line, self.column)
+                } else {
+                    Token::new(Tk::Pipe, "|".to_string(), self.line, self.column)
+                }
             }
             Some(&'@') => {
                 self.read_char();
@@ -995,6 +1033,10 @@ impl<'a> Lexer<'a> {
                         start_col,
                     )
                 }
+            }
+            Some(&'&') => {
+                self.read_char();
+                Token::new(Tk::Ampersand, "&".to_string(), self.line, self.column)
             }
             Some(&ch) => {
                 let start_col = self.column;

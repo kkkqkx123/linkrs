@@ -2,7 +2,7 @@
 //!
 //! Provide methods for creating various types of expressions.
 
-use crate::types::expr::{Expression, SubqueryBody};
+use crate::types::expr::{Expression, FunctionArg, SubqueryBody};
 use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::types::DataType;
 use crate::{NullType, Value};
@@ -51,8 +51,16 @@ impl Expression {
         }
     }
 
-    /// Create a function call expression.
+    /// Create a function call expression with positional arguments.
     pub fn function(name: impl Into<String>, args: Vec<Expression>) -> Self {
+        Expression::Function {
+            name: name.into(),
+            args: args.into_iter().map(FunctionArg::Positional).collect(),
+        }
+    }
+
+    /// Create a function call expression with mixed positional and named arguments.
+    pub fn function_with_args(name: impl Into<String>, args: Vec<FunctionArg>) -> Self {
         Expression::Function {
             name: name.into(),
             args,

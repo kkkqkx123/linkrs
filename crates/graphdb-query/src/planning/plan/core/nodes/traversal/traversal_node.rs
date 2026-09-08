@@ -497,6 +497,7 @@ define_plan_node_with_deps! {
         v_filter_serializable: Option<SerializableExpression>,
         first_step_filter: Option<ContextualExpression>,
         first_step_filter_serializable: Option<SerializableExpression>,
+        path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     }
     enum: Traverse
     input: SingleInputNode
@@ -523,6 +524,7 @@ impl TraverseNode {
             v_filter_serializable: None,
             first_step_filter: None,
             first_step_filter_serializable: None,
+            path_semantic: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -539,6 +541,14 @@ impl TraverseNode {
 
     pub fn set_direction(&mut self, direction: EdgeDirection) {
         self.direction = direction;
+    }
+
+    pub fn set_path_semantic(&mut self, path_semantic: Option<crate::parser::ast::pattern::PathSemantic>) {
+        self.path_semantic = path_semantic;
+    }
+
+    pub fn path_semantic(&self) -> Option<crate::parser::ast::pattern::PathSemantic> {
+        self.path_semantic
     }
 
     pub fn start_vids(&self) -> &str {

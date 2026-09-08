@@ -13,6 +13,7 @@ use crate::parser::parsing::{
 };
 use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
 
 /// Statement parser - namespace for statement parsing functions.
 pub struct StmtParser;
@@ -643,16 +644,27 @@ impl StmtParser {
             ctx.expect_token(TokenKind::Return)?;
             let distinct = ctx.match_token(TokenKind::Distinct);
             let mut items = Vec::new();
-            loop {
-                let expression = Self::parse_expression(ctx)?;
-                let alias = if ctx.match_token(TokenKind::As) {
-                    Some(ctx.expect_identifier()?)
-                } else {
-                    None
-                };
-                items.push(ReturnItem::Expression { expression, alias });
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
+            if ctx.match_token(TokenKind::Star) {
+                let expr = CoreExpression::variable("*");
+                let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
+                let id = ctx.expression_context().register_expression(expr_meta);
+                let ctx_expr = ContextualExpression::new(id, ctx.expression_context_clone());
+                items.push(ReturnItem::Expression {
+                    expression: ctx_expr,
+                    alias: None,
+                });
+            } else {
+                loop {
+                    let expression = Self::parse_expression(ctx)?;
+                    let alias = if ctx.match_token(TokenKind::As) {
+                        Some(ctx.expect_identifier()?)
+                    } else {
+                        None
+                    };
+                    items.push(ReturnItem::Expression { expression, alias });
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
                 }
             }
             Some(ReturnClause {

@@ -5,6 +5,7 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::context::ValueRowContext;
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::traversal::config::TraversalConfig;
+use crate::parser::ast::pattern::PathSemantic;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::{EdgeDirection, Value};
@@ -25,6 +26,7 @@ pub(super) fn handle_traverse(
         min_depth,
         max_depth,
         visited,
+        path_semantic,
         ..
     } = &mut op.kind
     else {
@@ -37,8 +39,10 @@ pub(super) fn handle_traverse(
     let min_depth = *min_depth;
     let max_depth = *max_depth;
     let visited = &mut *visited;
+    let path_semantic = *path_semantic;
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
+    let skip_visited = !matches!(path_semantic, Some(PathSemantic::Walk));
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
@@ -49,12 +53,13 @@ pub(super) fn handle_traverse(
                 max_depth,
                 edge_types.to_vec(),
             );
-            if let Some(output) = common::traverse_on_chunk(
+            if let Some(output) = common::traverse_on_chunk_with_semantic(
                 chunk,
                 Arc::clone(&op.output_layout),
                 &*reader,
                 &tc,
                 visited,
+                skip_visited,
                 cancel_token.clone(),
             )? {
                 return Ok(Some(output));

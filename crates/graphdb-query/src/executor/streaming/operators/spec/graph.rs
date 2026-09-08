@@ -3,6 +3,8 @@
 use graphdb_core::types::expr::Expression;
 use graphdb_core::{EdgeDirection, Value};
 
+use crate::parser::ast::pattern::PathSemantic;
+
 /// Immutable config for graph traversal operators.
 #[derive(Debug, Clone)]
 pub enum GraphSpec {
@@ -32,6 +34,7 @@ pub enum GraphSpec {
         /// column is also emitted as a `Value::VertexId` instead of cloning
         /// the full `Value::Vertex(Box)` carried in from upstream.
         lightweight_source: bool,
+        path_semantic: Option<PathSemantic>,
     },
     Traverse {
         edge_types: Vec<String>,
@@ -39,6 +42,7 @@ pub enum GraphSpec {
         min_depth: u32,
         max_depth: u32,
         filter_expr: Option<Expression>,
+        path_semantic: Option<PathSemantic>,
     },
     BiExpand {
         edge_types: Vec<String>,

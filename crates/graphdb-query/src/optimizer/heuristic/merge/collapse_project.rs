@@ -101,7 +101,7 @@ impl CollapseProjectRule {
             Expression::Function { args, .. } => {
                 let ctx = Arc::new(ExpressionAnalysisContext::new());
                 for arg in args {
-                    let arg_meta = ExpressionMeta::new(arg.clone());
+                    let arg_meta = ExpressionMeta::new(arg.as_expr().clone());
                     let id = ctx.register_expression(arg_meta);
                     let arg_expr = ContextualExpression::new(id, ctx.clone());
                     Self::collect_property_refs(&arg_expr, refs);

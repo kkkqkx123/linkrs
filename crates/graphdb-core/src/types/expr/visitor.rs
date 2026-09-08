@@ -167,7 +167,8 @@ pub trait ExpressionVisitor {
                 self.visit_vector(data);
             }
             Expression::WindowFunction { name, args, .. } => {
-                self.visit_function(name, args);
+                let wrapped: Vec<crate::types::expr::FunctionArg> = args.iter().cloned().map(crate::types::expr::FunctionArg::Positional).collect();
+                self.visit_function(name, &wrapped);
             }
             Expression::Exists { body } => {
                 self.visit_exists(body);
@@ -216,9 +217,9 @@ pub trait ExpressionVisitor {
     }
 
     /// Accessing function call expressions
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 

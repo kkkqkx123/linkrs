@@ -61,6 +61,10 @@ pub enum CreateTarget {
         max_value: Option<i64>,
         cycle: bool,
     },
+    TagAsQuery {
+        name: String,
+        query_text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +152,14 @@ pub enum AlterTarget {
         min_value: Option<i64>,
         max_value: Option<i64>,
         cycle: Option<bool>,
+    },
+    RenameTag {
+        old_name: String,
+        new_name: String,
+    },
+    RenameEdge {
+        old_name: String,
+        new_name: String,
     },
 }
 

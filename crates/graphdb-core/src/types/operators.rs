@@ -37,6 +37,10 @@ pub enum BinaryOperator {
     JsonGetText,     // ->>
     JsonPathGet,     // #>
     JsonPathGetText, // #>>
+    BitwiseOr,
+    BitwiseAnd,
+    ShiftLeft,
+    ShiftRight,
     Union,
     Intersect,
     Except,
@@ -76,6 +80,10 @@ impl BinaryOperator {
             BinaryOperator::Union => "UNION",
             BinaryOperator::Intersect => "INTERSECT",
             BinaryOperator::Except => "EXCEPT",
+            BinaryOperator::BitwiseOr => "|",
+            BinaryOperator::BitwiseAnd => "&",
+            BinaryOperator::ShiftLeft => "<<",
+            BinaryOperator::ShiftRight => ">>",
         }
     }
 
@@ -95,17 +103,21 @@ impl BinaryOperator {
             | BinaryOperator::Contains
             | BinaryOperator::StartsWith
             | BinaryOperator::EndsWith => 4,
-            BinaryOperator::Union | BinaryOperator::Intersect | BinaryOperator::Except => 5,
-            BinaryOperator::Add | BinaryOperator::Subtract => 6,
-            BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => 7,
-            BinaryOperator::Exponent => 8,
-            BinaryOperator::StringConcat => 9,
+            BinaryOperator::BitwiseOr
+            | BinaryOperator::BitwiseAnd
+            | BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight => 5,
+            BinaryOperator::Union | BinaryOperator::Intersect | BinaryOperator::Except => 6,
+            BinaryOperator::Add | BinaryOperator::Subtract => 7,
+            BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => 8,
+            BinaryOperator::Exponent => 9,
+            BinaryOperator::StringConcat => 10,
             BinaryOperator::Subscript
             | BinaryOperator::Attribute
             | BinaryOperator::JsonGet
             | BinaryOperator::JsonGetText
             | BinaryOperator::JsonPathGet
-            | BinaryOperator::JsonPathGetText => 10,
+            | BinaryOperator::JsonPathGetText => 11,
         }
     }
 
@@ -145,6 +157,16 @@ impl BinaryOperator {
         matches!(
             self,
             BinaryOperator::And | BinaryOperator::Or | BinaryOperator::Xor
+        )
+    }
+
+    pub fn is_bitwise(&self) -> bool {
+        matches!(
+            self,
+            BinaryOperator::BitwiseOr
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
         )
     }
 }

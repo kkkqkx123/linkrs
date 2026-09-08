@@ -66,6 +66,12 @@ impl BinaryOperationEvaluator {
             BinaryOperator::Union => Self::eval_union(left, right),
             BinaryOperator::Intersect => Self::eval_intersect(left, right),
             BinaryOperator::Except => Self::eval_except(left, right),
+
+            // Bitwise operations
+            BinaryOperator::BitwiseOr => left.bit_or(right).map_err(ExpressionError::runtime_error),
+            BinaryOperator::BitwiseAnd => left.bit_and(right).map_err(ExpressionError::runtime_error),
+            BinaryOperator::ShiftLeft => left.bit_shl(right).map_err(ExpressionError::runtime_error),
+            BinaryOperator::ShiftRight => left.bit_shr(right).map_err(ExpressionError::runtime_error),
         }
     }
 

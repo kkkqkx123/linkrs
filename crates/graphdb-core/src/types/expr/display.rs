@@ -33,7 +33,7 @@ impl Expression {
             Expression::Function { name, args } => {
                 let args_str = args
                     .iter()
-                    .map(|e| e.to_expression_string())
+                    .map(|e| e.as_expr().to_expression_string())
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{}({})", name, args_str)

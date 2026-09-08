@@ -7,6 +7,62 @@ pub use crate::types::DataType;
 use crate::Value;
 use serde::{Deserialize, Serialize};
 
+/// Function call argument — either positional or named.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FunctionArg {
+    /// Positional argument: `func(expr)`
+    Positional(Expression),
+    /// Named argument: `func(name := expr)`
+    Named { name: String, value: Expression },
+}
+
+impl FunctionArg {
+    /// Create a positional argument.
+    pub fn positional(expr: Expression) -> Self {
+        FunctionArg::Positional(expr)
+    }
+
+    /// Create a named argument.
+    pub fn named(name: impl Into<String>, value: Expression) -> Self {
+        FunctionArg::Named {
+            name: name.into(),
+            value,
+        }
+    }
+
+    /// Extract the inner expression, regardless of whether positional or named.
+    pub fn into_expr(self) -> Expression {
+        match self {
+            FunctionArg::Positional(e) => e,
+            FunctionArg::Named { value, .. } => value,
+        }
+    }
+
+    /// Borrow the inner expression.
+    pub fn as_expr(&self) -> &Expression {
+        match self {
+            FunctionArg::Positional(e) => e,
+            FunctionArg::Named { value, .. } => value,
+        }
+    }
+
+    /// Mutably borrow the inner expression.
+    pub fn as_expr_mut(&mut self) -> &mut Expression {
+        match self {
+            FunctionArg::Positional(e) => e,
+            FunctionArg::Named { value, .. } => value,
+        }
+    }
+
+    /// Get the name if this is a named argument.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            FunctionArg::Positional(_) => None,
+            FunctionArg::Named { name, .. } => Some(name.as_str()),
+        }
+    }
+}
+
 /// Unified Expression Type
 ///
 /// An enumeration of expressions containing location information (`span` fields) for:
@@ -49,7 +105,10 @@ pub enum Expression {
     },
 
     /// function call
-    Function { name: String, args: Vec<Expression> },
+    Function {
+        name: String,
+        args: Vec<FunctionArg>,
+    },
 
     /// aggregate function (math.)
     Aggregate {

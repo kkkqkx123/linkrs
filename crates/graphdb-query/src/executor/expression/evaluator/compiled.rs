@@ -212,7 +212,7 @@ impl CompiledExpr {
 
             Expression::Function { name, args } => {
                 let args: Vec<CompiledExpr> =
-                    args.iter().map(|a| Self::compile(a, layout)).collect();
+                    args.iter().map(|a| Self::compile(a.as_expr(), layout)).collect();
                 // Compile-time folding only for pure functions with constant
                 // arguments; unregistered functions are conservatively kept
                 // for runtime resolution (identical error semantics).

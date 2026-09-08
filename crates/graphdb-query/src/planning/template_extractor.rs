@@ -8,7 +8,7 @@ use crate::parser::ast::stmt::{
     DeleteStmt, FetchStmt, FromClause, GoStmt, InsertStmt, LookupStmt, MatchStmt, Pattern,
     ReturnClause, ReturnItem, SetClause, Stmt, UpdateStmt, YieldClause,
 };
-use graphdb_core::types::expr::{ContextualExpression, Expression};
+use graphdb_core::types::expr::{ContextualExpression, Expression, FunctionArg};
 use graphdb_core::{NullType, Value};
 
 /// Parameterized results
@@ -111,9 +111,9 @@ impl ParameterizingTransformer {
                 }
             }
             Expression::Function { name, args } => {
-                let new_args: Vec<Expression> = args
+                let new_args: Vec<FunctionArg> = args
                     .iter()
-                    .map(|arg| self.transform_with_params(arg, result))
+                    .map(|arg| FunctionArg::Positional(self.transform_with_params(arg.as_expr(), result)))
                     .collect();
                 Expression::Function {
                     name: name.clone(),
@@ -939,6 +939,9 @@ impl TemplateExtractor {
                             };
                             format!("{}{}", Self::path_element_to_template(elem), rep_str)
                         }
+                        crate::parser::ast::PathElement::Recursive(_) => {
+                            todo!("Recursive comprehension not yet supported")
+                        }
                     })
                     .collect();
                 elements.join("")
@@ -985,7 +988,7 @@ impl TemplateExtractor {
             }
             Expression::Function { name, args } => {
                 let arg_strs: Vec<String> =
-                    args.iter().map(Self::expr_to_template_string).collect();
+                    args.iter().map(|a| Self::expr_to_template_string(a.as_expr())).collect();
                 format!("{}({})", name, arg_strs.join(", "))
             }
             Expression::Aggregate {

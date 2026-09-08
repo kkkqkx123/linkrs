@@ -10,6 +10,7 @@ use graphdb_core::types::expr::visitor_collectors::{
     FunctionCollector, PropertyCollector, VariableCollector,
 };
 use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Expression analysis results
@@ -164,7 +165,7 @@ impl NondeterministicChecker {
                 if Self::is_nondeterministic(name) {
                     return true;
                 }
-                args.iter().any(Self::contains_nondeterministic)
+                args.iter().any(|a| Self::contains_nondeterministic(a.as_expr()))
             }
             _ => expr
                 .children()
@@ -190,7 +191,7 @@ impl NondeterministicChecker {
                 if Self::is_random(name) {
                     return true;
                 }
-                args.iter().any(Self::contains_random)
+                args.iter().any(|a| Self::contains_random(a.as_expr()))
             }
             _ => expr.children().iter().any(|c| Self::contains_random(c)),
         }
@@ -362,7 +363,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
         self.visit(operand);
     }
 
-    fn visit_function(&mut self, name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, name: &str, args: &[graphdb_core::types::expr::FunctionArg]) {
         if self.options.check_deterministic && NondeterministicChecker::is_nondeterministic(name) {
             self.analysis.is_deterministic = false;
         }
@@ -371,7 +372,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
         }
         self.analysis.node_count += 1;
         for arg in args {
-            self.visit(arg);
+            self.visit(arg.as_expr());
         }
     }
 
@@ -652,11 +653,11 @@ mod tests {
             &Expression::Function {
                 name: "concat".to_string(),
                 args: vec![
-                    Expression::Literal(Value::Int(1)),
-                    Expression::Function {
+                    FunctionArg::Positional(Expression::Literal(Value::Int(1))),
+                    FunctionArg::Positional(Expression::Function {
                         name: "rand".to_string(),
                         args: vec![],
-                    },
+                    }),
                 ],
             }
         ));
@@ -664,7 +665,7 @@ mod tests {
         assert!(!NondeterministicChecker::contains_nondeterministic(
             &Expression::Function {
                 name: "abs".to_string(),
-                args: vec![Expression::Literal(Value::Int(-5))],
+                args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(-5)))],
             }
         ));
         assert!(!NondeterministicChecker::contains_nondeterministic(
@@ -698,10 +699,10 @@ mod tests {
         assert!(NondeterministicChecker::contains_random(
             &Expression::Function {
                 name: "abs".to_string(),
-                args: vec![Expression::Function {
+                args: vec![FunctionArg::Positional(Expression::Function {
                     name: "rand".to_string(),
                     args: vec![],
-                }],
+                })],
             }
         ));
         assert!(!NondeterministicChecker::contains_random(
@@ -714,7 +715,7 @@ mod tests {
         let analyzer = ExpressionAnalyzer::new();
         let expr = Expression::Function {
             name: "abs".to_string(),
-            args: vec![Expression::Literal(Value::Int(-5))],
+            args: vec![FunctionArg::Positional(Expression::Literal(Value::Int(-5)))],
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
@@ -756,15 +757,15 @@ mod tests {
         let complex = Expression::Function {
             name: "coalesce".to_string(),
             args: vec![
-                Expression::Property {
+                FunctionArg::Positional(Expression::Property {
                     object: Box::new(Expression::Variable("a".to_string())),
                     property: "x".to_string(),
-                },
-                Expression::Property {
+                }),
+                FunctionArg::Positional(Expression::Property {
                     object: Box::new(Expression::Variable("b".to_string())),
                     property: "y".to_string(),
-                },
-                Expression::Literal(Value::Null(graphdb_core::value::NullType::Null)),
+                }),
+                FunctionArg::Positional(Expression::Literal(Value::Null(graphdb_core::value::NullType::Null))),
             ],
         };
         let complex_meta = graphdb_core::types::expr::ExpressionMeta::new(complex);

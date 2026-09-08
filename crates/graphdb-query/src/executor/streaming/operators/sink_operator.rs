@@ -88,6 +88,7 @@ pub enum SinkOperatorKind {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_id_col: String,
+        cascade: bool,
         rows_deleted: u64,
         summary_returned: bool,
     },
@@ -104,6 +105,7 @@ pub enum SinkOperatorKind {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_id_col: String,
+        cascade: bool,
         rows_deleted: u64,
         summary_returned: bool,
     },
@@ -325,10 +327,12 @@ impl SinkOperator {
             super::spec::SinkSpec::DeleteVertices {
                 space_name,
                 vertex_id_col,
+                cascade,
             } => SinkOperatorKind::DeleteVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
+                cascade: *cascade,
                 rows_deleted: 0,
                 summary_returned: false,
             },
@@ -349,10 +353,12 @@ impl SinkOperator {
             super::spec::SinkSpec::PipeDeleteVertices {
                 space_name,
                 vertex_id_col,
+                cascade,
             } => SinkOperatorKind::PipeDeleteVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
+                cascade: *cascade,
                 rows_deleted: 0,
                 summary_returned: false,
             },
@@ -860,6 +866,7 @@ impl SinkOperator {
                 storage,
                 space_name,
                 vertex_id_col,
+                cascade,
                 rows_deleted,
                 summary_returned,
                 ..
@@ -878,12 +885,37 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
-                                    StorageWriter::delete_vertex_with_edges(
-                                        &mut *writer,
-                                        space_name,
-                                        &vid,
-                                    )
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    if *cascade {
+                                        StorageWriter::delete_vertex_with_edges(
+                                            &mut *writer,
+                                            space_name,
+                                            &vid,
+                                        )
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    } else {
+                                        let edges = writer
+                                            .get_node_edges(
+                                                space_name,
+                                                &vid,
+                                                graphdb_core::EdgeDirection::Both,
+                                            )
+                                            .map_err(|e| {
+                                                QueryError::execution(e.to_string())
+                                            })?;
+                                        if !edges.is_empty() {
+                                            return Err(QueryError::execution(format!(
+                                                "Vertex {} has {} edges, use DETACH DELETE",
+                                                vid,
+                                                edges.len()
+                                            )));
+                                        }
+                                        StorageWriter::delete_vertex(
+                                            &mut *writer,
+                                            space_name,
+                                            &vid,
+                                        )
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    }
                                     *rows_deleted += 1;
                                 }
                             }
@@ -1019,6 +1051,7 @@ impl SinkOperator {
                 storage,
                 space_name,
                 vertex_id_col,
+                cascade,
                 rows_deleted,
                 summary_returned,
                 ..
@@ -1040,12 +1073,37 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
-                                    StorageWriter::delete_vertex_with_edges(
-                                        &mut *writer,
-                                        space_name,
-                                        &vid,
-                                    )
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    if *cascade {
+                                        StorageWriter::delete_vertex_with_edges(
+                                            &mut *writer,
+                                            space_name,
+                                            &vid,
+                                        )
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    } else {
+                                        let edges = writer
+                                            .get_node_edges(
+                                                space_name,
+                                                &vid,
+                                                graphdb_core::EdgeDirection::Both,
+                                            )
+                                            .map_err(|e| {
+                                                QueryError::execution(e.to_string())
+                                            })?;
+                                        if !edges.is_empty() {
+                                            return Err(QueryError::execution(format!(
+                                                "Vertex {} has {} edges, use DETACH DELETE",
+                                                vid,
+                                                edges.len()
+                                            )));
+                                        }
+                                        StorageWriter::delete_vertex(
+                                            &mut *writer,
+                                            space_name,
+                                            &vid,
+                                        )
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    }
                                     *rows_deleted += 1;
                                 }
                             }

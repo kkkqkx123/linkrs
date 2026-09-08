@@ -753,6 +753,7 @@ fn convert_traverse(
     }
     node.set_edge_types(n.edge_types);
     node.set_direction(n.direction);
+    node.set_path_semantic(n.path_semantic);
     if let Some(expr) = n.e_filter {
         node.set_e_filter(expr);
     }

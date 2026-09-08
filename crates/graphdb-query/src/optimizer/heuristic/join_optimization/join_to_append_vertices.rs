@@ -31,6 +31,7 @@ use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::visitor::ExpressionVisitor;
 use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 use graphdb_core::types::expr::ExpressionAnalysisContext;
@@ -125,7 +126,7 @@ impl JoinToAppendVerticesRule {
             } else {
                 "src".to_string()
             },
-            args: vec![Expression::Variable(edge_var)],
+            args: vec![FunctionArg::Positional(Expression::Variable(edge_var))],
         };
 
         let mut append_vertices = AppendVerticesNode::new(scan_vertices.space_id(), &vertex_tag);

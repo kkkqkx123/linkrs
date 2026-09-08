@@ -126,7 +126,7 @@ fn extract_group_suite_recursive(expression: &Expression, group_suite: &mut Grou
                 group_suite.add_group_key(func_expression);
             }
             for arg in args {
-                extract_group_suite_recursive(arg, group_suite);
+                extract_group_suite_recursive(arg.as_expr(), group_suite);
             }
         }
         Expression::Aggregate {

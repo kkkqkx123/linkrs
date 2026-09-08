@@ -71,14 +71,10 @@ impl DdlParser {
             }));
         }
 
-        let (is_tag, name, additions, deletions, changes) = if ctx.match_token(TokenKind::Tag) {
-            let tag_name = ctx.expect_identifier()?;
-            let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
-            (true, tag_name, additions, deletions, changes)
+        let (is_tag, name) = if ctx.match_token(TokenKind::Tag) {
+            (true, ctx.expect_identifier()?)
         } else if ctx.match_token(TokenKind::Edge) {
-            let edge_name = ctx.expect_identifier()?;
-            let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
-            (false, edge_name, additions, deletions, changes)
+            (false, ctx.expect_identifier()?)
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
@@ -86,6 +82,23 @@ impl DdlParser {
                 ctx.current_position(),
             ));
         };
+
+        if ctx.match_token(TokenKind::Rename) {
+            ctx.expect_token(TokenKind::To)?;
+            let new_name = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::Alter(AlterStmt {
+                span,
+                target: if is_tag {
+                    AlterTarget::RenameTag { old_name: name, new_name }
+                } else {
+                    AlterTarget::RenameEdge { old_name: name, new_name }
+                },
+            }));
+        }
+
+        let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);

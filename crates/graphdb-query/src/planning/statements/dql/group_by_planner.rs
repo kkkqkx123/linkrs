@@ -80,7 +80,7 @@ impl GroupByPlanner {
             }
             Expression::Function { args, .. } => {
                 for arg in args {
-                    self.collect_aggregate_functions_recursive(arg, functions);
+                    self.collect_aggregate_functions_recursive(arg.as_expr(), functions);
                 }
             }
             Expression::List(items) => {
@@ -648,7 +648,7 @@ impl GroupByPlanner {
             }
             Expression::Function { args, .. } => {
                 for arg in args {
-                    Self::collect_aggregate_args_recursive(arg, args_out);
+                    Self::collect_aggregate_args_recursive(arg.as_expr(), args_out);
                 }
             }
             Expression::List(items) => {

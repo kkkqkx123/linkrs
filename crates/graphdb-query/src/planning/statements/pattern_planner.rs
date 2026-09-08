@@ -293,6 +293,9 @@ pub fn plan_path_pattern(
                         };
                         i += 1;
                     }
+                    PathElement::Recursive(_) => {
+                        todo!("Recursive comprehension not yet supported")
+                    }
                 }
             }
 
@@ -651,6 +654,7 @@ pub fn plan_match_delete(
                 space_name: space_name.to_string(),
                 vertex_ids: vertex_exprs.clone(),
                 with_edge: delete_clause.with_edge,
+                cascade: false,
                 condition: None,
             };
             PipeDeleteVerticesNode::new(next_node_id(), info, input_node.clone()).into_enum()

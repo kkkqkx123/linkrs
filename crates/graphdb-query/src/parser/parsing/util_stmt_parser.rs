@@ -32,48 +32,6 @@ impl UtilStmtParser {
         }))
     }
 
-    /// Analysis of the SHOW statement
-    pub fn parse_show_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Show)?;
-
-        // Check the “SHOW CREATE” command.
-        if ctx.check_token(TokenKind::Create) {
-            return self.parse_show_create_internal(ctx, start_span);
-        }
-
-        // Check the SHOW USERS command.
-        if ctx.check_token(TokenKind::Users) {
-            return self.parse_show_users_internal(ctx, start_span);
-        }
-
-        // Check “SHOW ROLES”.
-        if ctx.check_token(TokenKind::Roles) {
-            return self.parse_show_roles_internal(ctx, start_span);
-        }
-
-        let target = if ctx.match_token(TokenKind::Spaces) {
-            ShowTarget::Spaces
-        } else if ctx.match_token(TokenKind::Tags) {
-            ShowTarget::Tags
-        } else if ctx.match_token(TokenKind::Edges) {
-            ShowTarget::Edges
-        } else if ctx.match_token(TokenKind::Functions) {
-            ShowTarget::Functions
-        } else if ctx.match_token(TokenKind::Graphs) {
-            ShowTarget::Graphs
-        } else if ctx.match_token(TokenKind::Macros) {
-            ShowTarget::Macros
-        } else {
-            ShowTarget::Spaces
-        };
-
-        Ok(Stmt::Show(ShowStmt {
-            span: start_span,
-            target,
-        }))
-    }
-
     /// Analyzing the internal methods of the SHOW CREATE statement
     pub fn parse_show_create_internal(
         &mut self,
@@ -102,20 +60,6 @@ impl UtilStmtParser {
         let span = ctx.merge_span(start_span.start, end_span.end);
 
         Ok(Stmt::ShowCreate(ShowCreateStmt { span, target }))
-    }
-
-    /// Analysis of the internal methods of the SHOW USERS command
-    fn parse_show_users_internal(
-        &mut self,
-        ctx: &mut ParseContext,
-        start_span: crate::parser::ast::types::Span,
-    ) -> Result<Stmt, ParseError> {
-        ctx.expect_token(TokenKind::Users)?;
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::ShowUsers(ShowUsersStmt { span }))
     }
 
     /// Analysis of the internal methods of the SHOW ROLES command

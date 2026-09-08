@@ -60,12 +60,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_insert_edges_sp
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_vertices_spec(
-    _node: &crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode,
+    node: &crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
     Ok(SinkSpec::DeleteVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_id_col: "vid".to_string(),
+        cascade: node.cascade(),
     })
 }
 
@@ -122,6 +123,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_pipe_delete_ver
     Ok(SinkSpec::PipeDeleteVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_id_col,
+        cascade: node.cascade(),
     })
 }
 

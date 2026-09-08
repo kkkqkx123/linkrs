@@ -118,6 +118,7 @@ pub mod visitor_collectors;
 pub use contextual::create_contextual_expression;
 pub use contextual::ContextualExpression;
 pub use def::Expression;
+pub use def::FunctionArg;
 pub use def::SubqueryBody;
 pub use expression::{ExpressionId, ExpressionMeta};
 pub use serializable::SerializableExpression;

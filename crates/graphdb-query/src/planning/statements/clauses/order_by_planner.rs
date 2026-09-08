@@ -18,6 +18,7 @@ use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
 use graphdb_core::types::ContextualExpression;
+use graphdb_core::types::expr::FunctionArg;
 use std::sync::Arc;
 
 /// The ORDER BY clause planner
@@ -238,8 +239,8 @@ mod tests {
         let expr = Expression::Function {
             name: "cosine_similarity".to_string(),
             args: vec![
-                Expression::Variable("a".to_string()),
-                Expression::Variable("b".to_string()),
+                FunctionArg::Positional(Expression::Variable("a".to_string())),
+                FunctionArg::Positional(Expression::Variable("b".to_string())),
             ],
         };
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr.clone());

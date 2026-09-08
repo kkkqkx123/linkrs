@@ -117,3 +117,101 @@ impl ShowMacrosNode {
         }
     }
 }
+
+define_plan_node! {
+    pub struct LoadFromNode {
+        source_kind: String,
+        source_value: String,
+        func_name: Option<String>,
+        func_args_json: Option<String>,
+        options: Vec<(String, String)>,
+    }
+    enum: LoadFrom
+    input: ZeroInputNode
+}
+
+impl LoadFromNode {
+    pub fn new(
+        id: i64,
+        source_kind: String,
+        source_value: String,
+        func_name: Option<String>,
+        func_args_json: Option<String>,
+        options: Vec<(String, String)>,
+        col_names: Vec<String>,
+    ) -> Self {
+        Self {
+            id,
+            source_kind,
+            source_value,
+            func_name,
+            func_args_json,
+            options,
+            output_var: None,
+            col_names,
+            column_types: vec![],
+        }
+    }
+
+    pub fn source_kind(&self) -> &str {
+        &self.source_kind
+    }
+
+    pub fn source_value(&self) -> &str {
+        &self.source_value
+    }
+
+    pub fn func_name(&self) -> Option<&str> {
+        self.func_name.as_deref()
+    }
+
+    pub fn func_args_json(&self) -> Option<&str> {
+        self.func_args_json.as_deref()
+    }
+
+    pub fn options(&self) -> &[(String, String)] {
+        &self.options
+    }
+}
+
+define_plan_node! {
+    pub struct InQueryCallNode {
+        func_name: String,
+        args_json: String,
+        yield_items: Vec<(String, String)>,
+    }
+    enum: InQueryCall
+    input: ZeroInputNode
+}
+
+impl InQueryCallNode {
+    pub fn new(
+        id: i64,
+        func_name: String,
+        args_json: String,
+        yield_items: Vec<(String, String)>,
+        col_names: Vec<String>,
+    ) -> Self {
+        Self {
+            id,
+            func_name,
+            args_json,
+            yield_items,
+            output_var: None,
+            col_names,
+            column_types: vec![],
+        }
+    }
+
+    pub fn func_name(&self) -> &str {
+        &self.func_name
+    }
+
+    pub fn args_json(&self) -> &str {
+        &self.args_json
+    }
+
+    pub fn yield_items(&self) -> &[(String, String)] {
+        &self.yield_items
+    }
+}

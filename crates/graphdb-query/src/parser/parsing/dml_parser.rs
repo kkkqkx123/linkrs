@@ -295,7 +295,7 @@ impl DmlParser {
                     BinaryOperator::Equal => {
                         if let CoreExpression::Function { name, args } = left.as_ref() {
                             if name == "id" && args.len() == 1 {
-                                if let CoreExpression::Variable(v) = &args[0] {
+                                if let CoreExpression::Variable(v) = args[0].as_expr() {
                                     if var_names.iter().any(|n| *n == *v) {
                                         if let CoreExpression::Literal(value) = right.as_ref() {
                                             return Some(value.clone());

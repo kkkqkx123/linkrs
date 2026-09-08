@@ -28,6 +28,7 @@ use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::ExpressionMeta;
 use graphdb_core::{Expression, Value};
@@ -299,7 +300,7 @@ impl MergePlanner {
     ) -> Result<ContextualExpression, PlannerError> {
         let condition = Expression::Function {
             name: "exists".to_string(),
-            args: vec![Expression::Variable("merged_vertex".to_string())],
+            args: vec![FunctionArg::Positional(Expression::Variable("merged_vertex".to_string()))],
         };
         let meta = ExpressionMeta::new(condition);
         let id = expr_context.register_expression(meta);

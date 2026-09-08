@@ -84,10 +84,10 @@ impl ExpressionVisitor for ConstantChecker {
         }
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         if self.is_constant {
             for arg in args {
-                self.visit(arg);
+                self.visit(arg.as_expr());
                 if !self.is_constant {
                     break;
                 }
@@ -362,10 +362,10 @@ impl ExpressionVisitor for PropertyContainsChecker {
         }
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         if !self.contains {
             for arg in args {
-                self.visit(arg);
+                self.visit(arg.as_expr());
                 if self.contains {
                     break;
                 }
@@ -641,7 +641,7 @@ impl WildcardReplacer {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(|arg| self.replace_internal(arg)).collect(),
+                args: args.iter().map(|arg| crate::types::expr::FunctionArg::Positional(self.replace_internal(arg.as_expr()))).collect(),
             },
             Expression::Aggregate {
                 func,
@@ -869,10 +869,10 @@ impl ExpressionVisitor for AggregateFunctionChecker {
         }
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         if !self.contains_aggregate {
             for arg in args {
-                self.visit(arg);
+                self.visit(arg.as_expr());
                 if self.contains_aggregate {
                     break;
                 }
@@ -1148,10 +1148,10 @@ impl ExpressionVisitor for VariableContainsChecker {
         }
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         if !self.contains {
             for arg in args {
-                self.visit(arg);
+                self.visit(arg.as_expr());
                 if self.contains {
                     break;
                 }
@@ -1419,10 +1419,10 @@ impl ExpressionVisitor for PathBuildContainsChecker {
         }
     }
 
-    fn visit_function(&mut self, _name: &str, args: &[Expression]) {
+    fn visit_function(&mut self, _name: &str, args: &[crate::types::expr::FunctionArg]) {
         if !self.contains_path_build {
             for arg in args {
-                self.visit(arg);
+                self.visit(arg.as_expr());
                 if self.contains_path_build {
                     break;
                 }

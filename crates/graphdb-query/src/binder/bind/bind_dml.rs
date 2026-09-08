@@ -269,6 +269,7 @@ impl Binder {
             target,
             where_clause,
             with_edge: stmt.with_edge,
+            detach: stmt.detach,
         }))
     }
 

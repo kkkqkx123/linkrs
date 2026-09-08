@@ -161,10 +161,15 @@ pub(super) fn execute_show_functions(
         return Ok(None);
     }
     *emitted = true;
-    Ok(Some(super::make_single_row(
-        super::make_single_col_schema("functions", "string"),
-        vec![],
-    )))
+
+    let registry = crate::executor::expression::functions::registry::global_registry();
+    let names = registry.function_names();
+    let schema = super::make_single_col_schema("functions", "string");
+    let rows: Vec<Vec<Value>> = names
+        .into_iter()
+        .map(|name| vec![Value::string(name.to_string())])
+        .collect();
+    Ok(Some(DataChunk::new(rows, schema)))
 }
 
 pub(super) fn execute_show_graphs(
@@ -178,15 +183,25 @@ pub(super) fn execute_show_graphs(
     else {
         return Ok(None);
     };
-    let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    Ok(Some(super::make_single_row(
-        super::make_single_col_schema("graphs", "string"),
-        vec![],
-    )))
+
+    let schema = super::make_single_col_schema("graphs", "string");
+    if let Some(storage_lock) = storage {
+        let reader = storage_lock.read();
+        let spaces = reader
+            .list_spaces()
+            .map_err(|e| QueryError::execution(e.to_string()))?;
+        let rows: Vec<Vec<Value>> = spaces
+            .into_iter()
+            .map(|s| vec![Value::string(s.space_name)])
+            .collect();
+        Ok(Some(DataChunk::new(rows, schema)))
+    } else {
+        Ok(Some(DataChunk::new(vec![], schema)))
+    }
 }
 
 pub(super) fn execute_show_macros(
@@ -205,10 +220,157 @@ pub(super) fn execute_show_macros(
         return Ok(None);
     }
     *emitted = true;
+    // Macros are not yet stored in the catalog; return empty results.
+    // When CREATE MACRO storage is implemented, query the macro registry here.
     Ok(Some(super::make_single_row(
         super::make_single_col_schema("macros", "string"),
         vec![],
     )))
+}
+
+pub(super) fn execute_load_from(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::LoadFrom {
+        source_kind,
+        source_value,
+        func_name,
+        func_args_json,
+        options,
+        col_names,
+        emitted,
+        ..
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+
+    if source_kind == "table_func" {
+        let name = func_name.clone().unwrap_or_default();
+        let args_json = func_args_json.clone().unwrap_or_else(|| "[]".to_string());
+        return Err(QueryError::execution(format!(
+            "LOAD FROM table function '{name}'(args: {args_json}) is not yet supported"
+        )));
+    }
+
+    if source_kind != "file" {
+        return Err(QueryError::execution(format!(
+            "LOAD FROM source kind '{source_kind}' is not yet supported"
+        )));
+    }
+
+    let header = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("header"))
+        .map(|(_, v)| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(true);
+    let delimiter = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("delimiter"))
+        .and_then(|(_, v)| v.as_bytes().first().copied())
+        .unwrap_or(b',');
+
+    let file_path = source_value.clone();
+    let file = std::fs::File::open(&file_path)
+        .map_err(|e| QueryError::execution(format!("LOAD FROM failed to open '{file_path}': {e}")))?;
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(header)
+        .delimiter(delimiter)
+        .trim(csv::Trim::All)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file));
+
+    let headers: Vec<String> = if header {
+        reader
+            .headers()
+            .map_err(|e| QueryError::execution(format!("LOAD FROM header error: {e}")))?
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else if !col_names.is_empty() {
+        col_names.clone()
+    } else {
+        Vec::new()
+    };
+
+    let schema_cols: Vec<ColumnInfo> = if headers.is_empty() {
+        col_names
+            .iter()
+            .map(|n| ColumnInfo {
+                name: n.clone(),
+                data_type: "string".to_string(),
+            })
+            .collect()
+    } else {
+        headers
+            .iter()
+            .map(|n| ColumnInfo {
+                name: n.clone(),
+                data_type: "string".to_string(),
+            })
+            .collect()
+    };
+    let schema = Arc::new(Schema::new(schema_cols));
+
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    for result in reader.records() {
+        let record = result.map_err(|e| QueryError::execution(format!("LOAD FROM row error: {e}")))?;
+        let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
+        rows.push(row);
+    }
+
+    Ok(Some(DataChunk::new(rows, schema)))
+}
+
+pub(super) fn execute_in_query_call(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::InQueryCall {
+        func_name,
+        yield_items,
+        col_names,
+        emitted,
+        ..
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+
+    let names: Vec<String> = if !yield_items.is_empty() {
+        yield_items
+            .iter()
+            .map(|(alias, _)| alias.clone())
+            .collect()
+    } else if !col_names.is_empty() {
+        col_names.clone()
+    } else {
+        vec!["result".to_string()]
+    };
+    let schema = Arc::new(Schema::new(
+        names
+            .iter()
+            .map(|n| ColumnInfo {
+                name: n.clone(),
+                data_type: "string".to_string(),
+            })
+            .collect(),
+    ));
+
+    match func_name.as_str() {
+        "db_version" => Ok(Some(super::make_single_row(
+            schema,
+            vec![Value::String(env!("CARGO_PKG_VERSION").into())],
+        ))),
+        _ => Ok(Some(DataChunk::new(Vec::new(), schema))),
+    }
 }
 
 pub(super) fn execute_analyze(
