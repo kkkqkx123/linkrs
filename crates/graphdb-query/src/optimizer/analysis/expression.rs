@@ -10,7 +10,6 @@ use graphdb_core::types::expr::visitor_collectors::{
     FunctionCollector, PropertyCollector, VariableCollector,
 };
 use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Expression analysis results

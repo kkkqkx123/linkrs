@@ -489,7 +489,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
         // Snapshot the label owning each position before draining; the owner
         // map alone cannot recover labels.
         let mut pos_labels: Vec<Option<LabelId>> = vec![None; self.nbr_list.len()];
-        for (_v, ranges) in self.label_ranges.iter().enumerate() {
+        for ranges in self.label_ranges.iter() {
             for lr in ranges {
                 let end = (lr.offset + lr.count) as usize;
                 let start = lr.offset as usize;

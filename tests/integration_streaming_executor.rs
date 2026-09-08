@@ -5,6 +5,7 @@
 
 use graphdb::core::error::QueryError;
 use graphdb::core::types::expr::Expression;
+use graphdb::core::types::expr::FunctionArg;
 use graphdb::core::types::operators::AggregateFunction;
 use graphdb::core::types::operators::BinaryOperator;
 use graphdb::core::Value;
@@ -175,7 +176,7 @@ fn test_limit_in_chain() {
     if let Some(mut chunk_data) = chunk {
         // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
-        chunk_data.materialize_selection();
+        chunk_data.materialize_selection_by("Test");
         assert_eq!(chunk_data.len(), 10);
     }
     let chunk2 = limit.advance().unwrap();
@@ -277,7 +278,7 @@ fn test_pipeline_scan_limit() {
     if let Some(mut chunk) = result {
         // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Test");
         assert_eq!(chunk.len(), 5);
     }
     pipeline.close().unwrap();
@@ -348,7 +349,7 @@ fn test_pipeline_scan_filter_limit() {
     if let Some(mut chunk) = result {
         // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Test");
         assert_eq!(chunk.len(), 8);
     }
     pipeline.close().unwrap();
@@ -427,7 +428,7 @@ fn test_hash_join_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::HashJoin {
                 join_condition: None,
                 hash_keys: vec![],
@@ -440,7 +441,7 @@ fn test_hash_join_in_chain() {
                 grace: graphdb::query::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             empty_layout(),
-        ),
+        )),
     );
     join.open().unwrap();
     let _result = join.advance().unwrap();
@@ -456,7 +457,7 @@ fn test_nested_loop_join_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::NestedLoopJoin {
                 join_condition: None,
                 build_side_tuples: vec![],
@@ -465,7 +466,7 @@ fn test_nested_loop_join_in_chain() {
                 right_col_names: vec![],
             },
             empty_layout(),
-        ),
+        )),
     );
     join.open().unwrap();
     let _result = join.advance().unwrap();
@@ -978,7 +979,7 @@ fn test_columnar_stats_realistic_workload() {
 
     let fn_expr = Expression::Function {
         name: "upper".into(),
-        args: vec![Expression::Variable("name".into())],
+        args: vec![FunctionArg::Positional(Expression::Variable("name".into()))],
     };
     chunk.evaluate_expression(&fn_expr, None).unwrap();
     assert_eq!(

@@ -24,7 +24,7 @@ impl Expression {
             Expression::StructField { base, field } => Self::deduce_struct_field_type(base, field),
             Expression::Binary { op, left, right } => Self::deduce_binary_type(op, left, right),
             Expression::Unary { op, operand } => Self::deduce_unary_type(op, operand),
-            Expression::Function { name, args } => Self::deduce_function_type(name, &args),
+            Expression::Function { name, args } => Self::deduce_function_type(name, args),
             Expression::Aggregate { func, .. } => Self::deduce_aggregate_type(func),
             Expression::List(items) => {
                 DataType::List(Box::new(Self::deduce_expression_container_element(items)))

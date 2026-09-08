@@ -274,13 +274,6 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn set_current_lsn(&self, lsn: Lsn) -> StorageResult<()> {
-        if let Some(ref writer) = self.local_writer {
-            writer.lock().set_current_lsn(lsn);
-        }
-        Ok(())
-    }
-
     /// Restore the logical WAL baseline covered by a durable checkpoint.
     pub fn set_recovery_baseline_lsn(&self, lsn: Lsn) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {

@@ -57,10 +57,6 @@ pub struct ColumnChunk {
     pub updates_since_encode: u64,
     /// Memory residency state (resident vs evicted to disk).
     pub residency: ChunkResidency,
-    /// Path to the spill file when evicted (`None` when resident).
-    pub spill_path: Option<std::path::PathBuf>,
-    /// Byte size of the spill file for memory accounting (0 when resident).
-    pub spill_size: u64,
 }
 
 impl ColumnChunk {
@@ -92,8 +88,6 @@ impl ColumnChunk {
             encoding_meta: ChunkEncodingMeta::default(),
             updates_since_encode: 0,
             residency: ChunkResidency::Resident,
-            spill_path: None,
-            spill_size: 0,
         }
     }
 
@@ -120,8 +114,6 @@ impl ColumnChunk {
             encoding_meta: ChunkEncodingMeta::default(),
             updates_since_encode: 0,
             residency: ChunkResidency::Resident,
-            spill_path: None,
-            spill_size: 0,
         }
     }
 
@@ -177,30 +169,6 @@ impl ColumnChunk {
         self.overlay.is_full() || self.updates_since_encode > hot_threshold
     }
 
-    /// Returns the encoding type of this chunk.
-    pub fn encoding_type(&self) -> crate::encoding::EncodingType {
-        self.encoding.encoding_type()
-    }
-
-    /// Whether this chunk is resident (in memory) rather than evicted.
-    pub fn is_resident(&self) -> bool {
-        matches!(self.residency, ChunkResidency::Resident)
-    }
-
-    /// Memory footprint of this chunk in bytes (data + offsets + bitmap + overlay + meta).
-    pub fn resident_memory_usage(&self) -> usize {
-        self.data.len()
-            + self.offsets.len() * std::mem::size_of::<u64>()
-            + self
-                .null_bitmap
-                .as_ref()
-                .map(|b| b.as_raw_slice().len())
-                .unwrap_or(0)
-            + self.overlay.memory_usage()
-            + self.encoding_meta.memory_usage()
-            + self.encoding.memory_usage()
-    }
-
     /// Refresh the cached compression metadata after re-encoding.
     pub fn refresh_encoding_meta(
         &mut self,
@@ -238,8 +206,6 @@ impl Clone for ColumnChunk {
             encoding_meta: self.encoding_meta.clone(),
             updates_since_encode: self.updates_since_encode,
             residency: self.residency.clone(),
-            spill_path: self.spill_path.clone(),
-            spill_size: self.spill_size,
         }
     }
 }

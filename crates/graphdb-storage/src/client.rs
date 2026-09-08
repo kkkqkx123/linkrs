@@ -903,6 +903,7 @@ pub trait QueryStorage:
     + CatalogStore
     + StorageAuthOps
     + StorageAdmin
+    + StoragePersistenceOps
     + crate::stats_reader::ColumnStatsReader
     + crate::AutoCommitBatchOps
     + crate::AutoCommitGroupOps
@@ -931,12 +932,161 @@ pub trait QueryStorage:
                 .unwrap_or_else(|| SnapshotHandle::new(ts, 0)),
         )
     }
+
+    /// Export the given space to CSV files under `path/<space_name>/`.
+    ///
+    /// Each tag produces a `<tag>.csv` file; each edge type produces a
+    /// `<edge_type>.csv` file.  A `schema.json` metadata file records the
+    /// space, tags, and edge types with their property schemas.
+    fn export_space(
+        &self,
+        space: &str,
+        path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        use std::io::Write;
+
+        let base = path.join(space);
+        std::fs::create_dir_all(&base)
+            .map_err(|e| StorageError::io_error(format!("Failed to create export dir: {e}")))?;
+
+        // Export schema metadata
+        let tags = self.list_tags(space)?;
+        let edge_types = self.list_edge_types(space)?;
+
+        let schema_meta = serde_json::json!({
+            "space": space,
+            "tags": tags.iter().map(|t| serde_json::json!({
+                "name": t.tag_name,
+                "properties": t.properties.iter().map(|p| serde_json::json!({
+                    "name": p.name,
+                    "type": p.data_type.to_string(),
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "edge_types": edge_types.iter().map(|e| serde_json::json!({
+                "name": e.edge_type_name,
+                "src_tag": e.src_tag_name,
+                "dst_tag": e.dst_tag_name,
+                "properties": e.properties.iter().map(|p| serde_json::json!({
+                    "name": p.name,
+                    "type": p.data_type.to_string(),
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        });
+
+        let schema_path = base.join("schema.json");
+        let mut schema_file = std::fs::File::create(&schema_path)
+            .map_err(|e| StorageError::io_error(format!("Failed to create schema.json: {e}")))?;
+        schema_file
+            .write_all(serde_json::to_string_pretty(&schema_meta).unwrap_or_default().as_bytes())
+            .map_err(|e| StorageError::io_error(format!("Failed to write schema.json: {e}")))?;
+
+        // Export vertices by tag
+        for tag_info in &tags {
+            let vertices = self.scan_vertices_by_tag(space, &tag_info.tag_name)?;
+            if vertices.is_empty() {
+                continue;
+            }
+
+            // Collect all property keys across all vertices
+            let mut prop_keys: Vec<String> = vertices
+                .iter()
+                .flat_map(|v| v.properties.keys())
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            prop_keys.sort();
+
+            let csv_path = base.join(format!("{}.csv", tag_info.tag_name));
+            let mut file = std::fs::File::create(&csv_path)
+                .map_err(|e| StorageError::io_error(format!("Failed to create {}.csv: {e}", tag_info.tag_name)))?;
+
+            // Write header
+            let mut header = vec!["vid".to_string(), "id".to_string()];
+            header.extend(prop_keys.clone());
+            writeln!(file, "{}", header.join(","))
+                .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
+
+            // Write rows
+            for vertex in &vertices {
+                let mut row = vec![vertex.vid.to_string(), vertex.id.to_string()];
+                for key in &prop_keys {
+                    let val = vertex
+                        .properties
+                        .get(key)
+                        .map(format_csv_value)
+                        .unwrap_or_default();
+                    row.push(val);
+                }
+                writeln!(file, "{}", row.join(","))
+                    .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
+            }
+        }
+
+        // Export edges by type
+        for edge_info in &edge_types {
+            let edges = self.scan_edges_by_type(space, &edge_info.edge_type_name)?;
+            if edges.is_empty() {
+                continue;
+            }
+
+            let mut prop_keys: Vec<String> = edges
+                .iter()
+                .flat_map(|e| e.props.keys())
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            prop_keys.sort();
+
+            let csv_path = base.join(format!("{}.csv", edge_info.edge_type_name));
+            let mut file = std::fs::File::create(&csv_path)
+                .map_err(|e| StorageError::io_error(format!("Failed to create {}.csv: {e}", edge_info.edge_type_name)))?;
+
+            let mut header = vec!["src".to_string(), "dst".to_string(), "ranking".to_string()];
+            header.extend(prop_keys.clone());
+            writeln!(file, "{}", header.join(","))
+                .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
+
+            for edge in &edges {
+                let mut row = vec![
+                    edge.src.to_string(),
+                    edge.dst.to_string(),
+                    edge.ranking.to_string(),
+                ];
+                for key in &prop_keys {
+                    let val = edge
+                        .props
+                        .get(key)
+                        .map(format_csv_value)
+                        .unwrap_or_default();
+                    row.push(val);
+                }
+                writeln!(file, "{}", row.join(","))
+                    .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Import a space from CSV files under `path/<space_name>/`.
+    ///
+    /// Expects a `schema.json` metadata file and `<tag>.csv` / `<edge_type>.csv` data files.
+    fn import_space(
+        &mut self,
+        space: &str,
+        path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        import_space_impl(self, space, path)
+    }
 }
 impl<T> QueryStorage for T where
     T: GraphStore
         + CatalogStore
         + StorageAuthOps
         + StorageAdmin
+        + StoragePersistenceOps
         + crate::stats_reader::ColumnStatsReader
         + crate::AutoCommitBatchOps
         + crate::AutoCommitGroupOps
@@ -1055,4 +1205,322 @@ pub struct StorageStats {
     pub data_size_bytes: u64,
     /// Property index structure size in bytes
     pub index_size_bytes: u64,
+}
+
+/// Standalone import implementation to avoid `Self: ?Sized` issues in trait default methods.
+fn import_space_impl<S: QueryStorage + ?Sized>(
+    storage: &mut S,
+    space: &str,
+    path: &std::path::Path,
+) -> Result<(), StorageError> {
+    let base = path.join(space);
+    if !base.exists() {
+        return Err(StorageError::not_found(format!(
+            "Import directory '{}' does not exist",
+            base.display()
+        )));
+    }
+
+    let schema_path = base.join("schema.json");
+    let schema_content = if schema_path.exists() {
+        std::fs::read_to_string(&schema_path)
+            .map_err(|e| StorageError::io_error(format!("Failed to read schema.json: {e}")))?
+    } else {
+        return Err(StorageError::not_found(
+            "schema.json not found in import directory".to_string(),
+        ));
+    };
+
+    let schema_meta: serde_json::Value = serde_json::from_str(&schema_content)
+        .map_err(|e| StorageError::parse_error(format!("Invalid schema.json: {e}")))?;
+
+    let vid_type = graphdb_core::types::DataType::String;
+    let mut space_info = graphdb_core::types::space::SpaceInfo::new(space.to_string())
+        .with_vid_type(vid_type);
+    let _ = StorageSchemaOps::create_space(storage, &mut space_info);
+
+    if let Some(tags) = schema_meta.get("tags").and_then(|t| t.as_array()) {
+        for tag_meta in tags {
+            let tag_name = tag_meta
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            if tag_name.is_empty() {
+                continue;
+            }
+
+            let mut tag_info = graphdb_core::types::tag::TagInfo::new(tag_name.to_string());
+            if let Some(props) = tag_meta.get("properties").and_then(|p| p.as_array()) {
+                for prop in props {
+                    let prop_name = prop.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let prop_type = prop.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+                    let data_type = parse_data_type(prop_type);
+                    tag_info.properties.push(
+                        graphdb_core::types::property::PropertyDef::new(
+                            prop_name.to_string(),
+                            data_type,
+                        ),
+                    );
+                }
+            }
+            let _ = StorageSchemaOps::create_tag(storage, space, &tag_info);
+
+            let csv_path = base.join(format!("{tag_name}.csv"));
+            if csv_path.exists() {
+                import_vertex_csv_from_path(space, tag_name, &csv_path, storage)?;
+            }
+        }
+    }
+
+    if let Some(edge_types) = schema_meta.get("edge_types").and_then(|t| t.as_array()) {
+        for et_meta in edge_types {
+            let et_name = et_meta.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if et_name.is_empty() {
+                continue;
+            }
+
+            let mut et_info = graphdb_core::types::edge::EdgeTypeInfo::new(et_name.to_string());
+            et_info.src_tag_name = et_meta
+                .get("src_tag")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            et_info.dst_tag_name = et_meta
+                .get("dst_tag")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(props) = et_meta.get("properties").and_then(|p| p.as_array()) {
+                for prop in props {
+                    let prop_name = prop.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let prop_type = prop.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+                    let data_type = parse_data_type(prop_type);
+                    et_info.properties.push(
+                        graphdb_core::types::property::PropertyDef::new(
+                            prop_name.to_string(),
+                            data_type,
+                        ),
+                    );
+                }
+            }
+            let _ = StorageSchemaOps::create_edge_type(storage, space, &et_info);
+
+            let csv_path = base.join(format!("{et_name}.csv"));
+            if csv_path.exists() {
+                import_edge_csv_from_path(space, et_name, &csv_path, storage)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Format a `Value` for CSV export (handles commas and quotes).
+fn format_csv_value(v: &graphdb_core::Value) -> String {
+    match v {
+        graphdb_core::Value::Null(_) => String::new(),
+        graphdb_core::Value::Bool(b) => b.to_string(),
+        graphdb_core::Value::SmallInt(i) => i.to_string(),
+        graphdb_core::Value::Int(i) => i.to_string(),
+        graphdb_core::Value::BigInt(i) => i.to_string(),
+        graphdb_core::Value::Float(f) => f.to_string(),
+        graphdb_core::Value::Double(f) => f.to_string(),
+        graphdb_core::Value::String(s) => {
+            let s: &str = s.as_ref();
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s.to_string()
+            }
+        }
+        other => format!("{}", other),
+    }
+}
+
+/// Parse a type name string into a `DataType`.
+fn parse_data_type(s: &str) -> graphdb_core::types::DataType {
+    let upper = s.trim().to_uppercase();
+    match upper.as_str() {
+        "INT8" | "TINYINT" => graphdb_core::types::DataType::SmallInt,
+        "INT16" | "SMALLINT" => graphdb_core::types::DataType::SmallInt,
+        "INT32" | "INT" | "INTEGER" => graphdb_core::types::DataType::Int,
+        "INT64" | "BIGINT" => graphdb_core::types::DataType::BigInt,
+        "FLOAT" | "FLOAT32" => graphdb_core::types::DataType::Float,
+        "DOUBLE" | "FLOAT64" => graphdb_core::types::DataType::Double,
+        "BOOL" | "BOOLEAN" => graphdb_core::types::DataType::Bool,
+        "STRING" | "TEXT" | "VARCHAR" => graphdb_core::types::DataType::String,
+        _ => graphdb_core::types::DataType::String,
+    }
+}
+
+/// Import vertex data from a CSV file into the given space and tag.
+fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
+    space: &str,
+    tag_name: &str,
+    csv_path: &std::path::Path,
+    writer: &mut W,
+) -> Result<(), StorageError> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(csv_path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display())))?;
+    let reader = std::io::BufReader::new(file);
+    let mut lines = reader.lines();
+
+    // Read header
+    let header_line = match lines.next() {
+        Some(Ok(line)) => line,
+        _ => return Ok(()),
+    };
+    let headers: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .collect();
+
+    // Find vid and id column indices
+    let vid_idx = headers.iter().position(|h| h.as_str() == "vid");
+    let id_idx = headers.iter().position(|h| h.as_str() == "id");
+
+    // Property columns (everything that's not vid or id)
+    let prop_cols: Vec<(usize, String)> = headers
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.as_str() != "vid" && h.as_str() != "id")
+        .map(|(i, h)| (i, h.clone()))
+        .collect();
+
+    let mut vertices = Vec::new();
+    for line in lines {
+        let line = line.map_err(|e| StorageError::io_error(format!("CSV read error: {e}")))?;
+        let fields: Vec<&str> = line.split(',').collect();
+
+        let vid = vid_idx
+            .and_then(|i| fields.get(i))
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
+            .unwrap_or(0);
+        let id = id_idx
+            .and_then(|i| fields.get(i))
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
+            .unwrap_or(vid);
+
+        let mut properties = std::collections::HashMap::new();
+        for (col_idx, col_name) in &prop_cols {
+            if let Some(val_str) = fields.get(*col_idx) {
+                let val_str = val_str.trim().trim_matches('"');
+                if !val_str.is_empty() {
+                    properties.insert(
+                        col_name.clone(),
+                        graphdb_core::Value::string(val_str),
+                    );
+                }
+            }
+        }
+
+        let vertex = graphdb_core::Vertex {
+            vid: graphdb_core::types::VertexId::from_int64(id),
+            id,
+            tags: vec![graphdb_core::Tag::new(tag_name.to_string(), std::collections::HashMap::new())],
+            properties,
+        };
+        vertices.push(vertex);
+
+        if vertices.len() >= 1000 {
+            writer.batch_insert_vertices(space, vertices.clone())?;
+            vertices.clear();
+        }
+    }
+
+    if !vertices.is_empty() {
+        writer.batch_insert_vertices(space, vertices)?;
+    }
+
+    Ok(())
+}
+
+/// Import edge data from a CSV file into the given space and edge type.
+fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
+    space: &str,
+    edge_type: &str,
+    csv_path: &std::path::Path,
+    writer: &mut W,
+) -> Result<(), StorageError> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(csv_path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display())))?;
+    let reader = std::io::BufReader::new(file);
+    let mut lines = reader.lines();
+
+    // Read header
+    let header_line = match lines.next() {
+        Some(Ok(line)) => line,
+        _ => return Ok(()),
+    };
+    let headers: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .collect();
+
+    let src_idx = headers.iter().position(|h| h.as_str() == "src");
+    let dst_idx = headers.iter().position(|h| h.as_str() == "dst");
+    let rank_idx = headers.iter().position(|h| h.as_str() == "ranking");
+
+    let prop_cols: Vec<(usize, String)> = headers
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.as_str() != "src" && h.as_str() != "dst" && h.as_str() != "ranking")
+        .map(|(i, h)| (i, h.clone()))
+        .collect();
+
+    let mut edges = Vec::new();
+    for line in lines {
+        let line = line.map_err(|e| StorageError::io_error(format!("CSV read error: {e}")))?;
+        let fields: Vec<&str> = line.split(',').collect();
+
+        let src = src_idx
+            .and_then(|i| fields.get(i))
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
+            .unwrap_or(0);
+        let dst = dst_idx
+            .and_then(|i| fields.get(i))
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
+            .unwrap_or(0);
+        let ranking = rank_idx
+            .and_then(|i| fields.get(i))
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
+            .unwrap_or(0);
+
+        let mut props = std::collections::HashMap::new();
+        for (col_idx, col_name) in &prop_cols {
+            if let Some(val_str) = fields.get(*col_idx) {
+                let val_str = val_str.trim().trim_matches('"');
+                if !val_str.is_empty() {
+                    props.insert(
+                        col_name.clone(),
+                        graphdb_core::Value::string(val_str),
+                    );
+                }
+            }
+        }
+
+        let edge = graphdb_core::Edge {
+            src: graphdb_core::types::VertexId::from_int64(src),
+            dst: graphdb_core::types::VertexId::from_int64(dst),
+            edge_type: edge_type.to_string(),
+            ranking,
+            props,
+        };
+        edges.push(edge);
+
+        if edges.len() >= 1000 {
+            writer.batch_insert_edges(space, edges.clone())?;
+            edges.clear();
+        }
+    }
+
+    if !edges.is_empty() {
+        writer.batch_insert_edges(space, edges)?;
+    }
+
+    Ok(())
 }

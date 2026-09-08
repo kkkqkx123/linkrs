@@ -28,7 +28,6 @@
 //! The Filter criteria do not involve aggregate functions (they only relate to the input columns that are being aggregated).
 
 use crate::optimizer::heuristic::context::RewriteContext;
-use graphdb_core::types::expr::FunctionArg;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{PushDownRule, RewriteRule};

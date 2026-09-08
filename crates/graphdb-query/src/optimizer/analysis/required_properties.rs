@@ -25,7 +25,6 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::expr::visitor::ExpressionVisitor;
 use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Property requirement for one variable binding.

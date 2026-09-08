@@ -367,18 +367,16 @@ impl DdlParser {
                 }
                 let (element, child_extra) = self.parse_data_type_inner_ex(ctx, depth + 1)?;
                 let mut extra_gt = child_extra;
-                if !extra_gt {
-                    if !ctx.match_token(TokenKind::Gt) {
-                        if ctx.check_token(TokenKind::ShiftRight) {
-                            ctx.next_token();
-                            extra_gt = true;
-                        } else {
-                            return Err(ParseError::new(
-                                ParseErrorKind::SyntaxError,
-                                "ARRAY expects '>' after element type".to_string(),
-                                ctx.current_position(),
-                            ));
-                        }
+                if !extra_gt && !ctx.match_token(TokenKind::Gt) {
+                    if ctx.check_token(TokenKind::ShiftRight) {
+                        ctx.next_token();
+                        extra_gt = true;
+                    } else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "ARRAY expects '>' after element type".to_string(),
+                            ctx.current_position(),
+                        ));
                     }
                 }
                 let len = if ctx.match_token(TokenKind::LParen) {

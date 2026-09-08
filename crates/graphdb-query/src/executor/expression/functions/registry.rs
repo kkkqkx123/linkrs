@@ -5,6 +5,7 @@
 
 use super::BuiltinFunction;
 use super::CustomFunction;
+use super::TableFunction;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use graphdb_core::DataType;
@@ -31,6 +32,8 @@ pub struct FunctionRegistry {
     aliases: HashMap<String, String>,
     /// Custom function mapping (function name -> CustomFunction)
     custom_functions: HashMap<String, CustomFunction>,
+    /// Table function mapping (function name -> Box<dyn TableFunction>)
+    table_functions: HashMap<String, Box<dyn TableFunction>>,
 }
 
 impl Default for FunctionRegistry {
@@ -45,8 +48,10 @@ impl FunctionRegistry {
             builtin_functions: HashMap::new(),
             aliases: HashMap::new(),
             custom_functions: HashMap::new(),
+            table_functions: HashMap::new(),
         };
         registry.register_all_builtin_functions();
+        registry.register_builtin_table_functions();
         registry
     }
 
@@ -171,6 +176,44 @@ impl FunctionRegistry {
             ExpressionErrorType::UndefinedFunction,
             format!("Undefined function: {}", name),
         ))
+    }
+
+    /// Register a table function
+    pub fn register_table_function(&mut self, func: Box<dyn TableFunction>) {
+        let upper_name = func.name().to_uppercase();
+        self.table_functions.insert(upper_name, func);
+    }
+
+    /// Check if a table function exists
+    pub fn contains_table_function(&self, name: &str) -> bool {
+        self.table_functions.contains_key(&name.to_uppercase())
+    }
+
+    /// Execute a table function by name
+    pub fn execute_table_function(
+        &self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Vec<Vec<Value>>, ExpressionError> {
+        let upper_name = name.to_uppercase();
+        if let Some(func) = self.table_functions.get(&upper_name) {
+            return func.execute(args);
+        }
+        Err(ExpressionError::new(
+            ExpressionErrorType::UndefinedFunction,
+            format!("Undefined table function: {}", name),
+        ))
+    }
+
+    /// Get all table function names
+    pub fn table_function_names(&self) -> Vec<&str> {
+        self.table_functions.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Register built-in table functions
+    fn register_builtin_table_functions(&mut self) {
+        use super::BuiltinTableFunction;
+        self.register_table_function(Box::new(BuiltinTableFunction::ReadCsv));
     }
 
     /// Register all built-in functions

@@ -518,15 +518,9 @@ impl ColumnStore {
     }
 
     /// Collect all dirty pages across columns.
-    /// Skips columns with evicted chunks (they have no in-memory dirty state).
     pub fn collect_dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
         let mut pages = Vec::new();
         for col in &self.columns {
-            // If any chunk is evicted, skip dirty-page collection for this
-            // column (evicted chunks cannot have dirty in-memory state).
-            if col.chunks.iter().any(|c| !c.is_resident()) {
-                continue;
-            }
             for pid in col.dirty_pages() {
                 pages.push(crate::persistence::dirty_page::PageId::new(
                     crate::persistence::dirty_page::ComponentType::VertexColumns,
@@ -653,38 +647,6 @@ impl ColumnStore {
         }
 
         total
-    }
-
-    /// Evict idle chunks across all columns to free memory.
-    ///
-    /// Chunks with empty overlays and no active version chains are candidates.
-    /// Evicted chunks are spilled to `spill_dir` and can be reloaded on demand.
-    /// Returns the total number of chunks evicted.
-    pub fn evict_idle_chunks(&mut self, spill_dir: &std::path::Path) -> usize {
-        let mut evicted = 0;
-        for col in &mut self.columns {
-            evicted += col.evict_idle_chunks(spill_dir);
-        }
-        evicted
-    }
-
-    /// Total memory used by evicted chunks across all columns (spill_size accounting).
-    pub fn evicted_memory_usage(&self) -> usize {
-        self.columns.iter().map(|c| c.evicted_memory_usage()).sum()
-    }
-
-    /// Ensure all resident chunks in a column are reloaded.
-    /// Useful after bulk eviction to re-warm the cache for a specific column.
-    pub fn ensure_column_resident(&mut self, col_name: &str) -> bool {
-        if let Some(col) = self.get_column_mut(col_name) {
-            let n = col.chunk_count();
-            for idx in 0..n {
-                col.ensure_chunk_resident(idx);
-            }
-            true
-        } else {
-            false
-        }
     }
 }
 

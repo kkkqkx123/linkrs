@@ -4,7 +4,6 @@
 
 use crate::define_plan_node_with_deps;
 use graphdb_core::types::graph_schema::OrderDirection;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 
 /// Sorting item definition

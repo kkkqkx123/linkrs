@@ -167,7 +167,7 @@ pub(super) fn execute_show_functions(
     let schema = super::make_single_col_schema("functions", "string");
     let rows: Vec<Vec<Value>> = names
         .into_iter()
-        .map(|name| vec![Value::string(name.to_string())])
+        .map(|name| vec![Value::string(name)])
         .collect();
     Ok(Some(DataChunk::new(rows, schema)))
 }
@@ -251,10 +251,136 @@ pub(super) fn execute_load_from(
 
     if source_kind == "table_func" {
         let name = func_name.clone().unwrap_or_default();
-        let args_json = func_args_json.clone().unwrap_or_else(|| "[]".to_string());
-        return Err(QueryError::execution(format!(
-            "LOAD FROM table function '{name}'(args: {args_json}) is not yet supported"
-        )));
+        let args_json_str = func_args_json.clone().unwrap_or_else(|| "[]".to_string());
+
+        let arg_strings: Vec<String> = serde_json::from_str(&args_json_str)
+            .map_err(|e| QueryError::execution(format!(
+                "LOAD FROM table function args parse error: {e}"
+            )))?;
+        let func_args: Vec<Value> = arg_strings.into_iter().map(Value::string).collect();
+
+        let registry =
+            crate::executor::expression::functions::registry::global_registry();
+
+        if !registry.contains_table_function(&name) {
+            return Err(QueryError::execution(format!(
+                "LOAD FROM unknown table function '{name}'"
+            )));
+        }
+
+        let rows = registry
+            .execute_table_function(&name, &func_args)
+            .map_err(|e| QueryError::execution(format!(
+                "LOAD FROM table function '{name}' failed: {e}"
+            )))?;
+
+        if rows.is_empty() {
+            let schema = Arc::new(Schema::new(vec![]));
+            return Ok(Some(DataChunk::new(vec![], schema)));
+        }
+
+        let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let schema_cols: Vec<ColumnInfo> = (0..num_cols)
+            .map(|i| ColumnInfo {
+                name: format!("col{}", i),
+                data_type: "string".to_string(),
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(schema_cols));
+
+        return Ok(Some(DataChunk::new(rows, schema)));
+    }
+
+    if source_kind == "glob" {
+        let pattern = source_value.clone();
+        let mut matched_paths: Vec<std::path::PathBuf> = glob::glob(&pattern)
+            .map_err(|e| QueryError::execution(format!("LOAD FROM glob pattern error: {e}")))?
+            .filter_map(|entry| entry.ok())
+            .filter(|path| path.is_file())
+            .collect();
+        matched_paths.sort();
+
+        if matched_paths.is_empty() {
+            return Err(QueryError::execution(format!(
+                "LOAD FROM glob '{pattern}' matched no files"
+            )));
+        }
+
+        let header = options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("header"))
+            .map(|(_, v)| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
+        let delimiter = options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("delimiter"))
+            .and_then(|(_, v)| v.as_bytes().first().copied())
+            .unwrap_or(b',');
+
+        let mut all_rows: Vec<Vec<Value>> = Vec::new();
+        let mut schema: Option<Arc<Schema>> = None;
+
+        for file_path in &matched_paths {
+            let file = std::fs::File::open(file_path).map_err(|e| {
+                QueryError::execution(format!(
+                    "LOAD FROM glob failed to open '{}': {e}",
+                    file_path.display()
+                ))
+            })?;
+            let mut reader = csv::ReaderBuilder::new()
+                .has_headers(header)
+                .delimiter(delimiter)
+                .trim(csv::Trim::All)
+                .flexible(true)
+                .from_reader(std::io::BufReader::new(file));
+
+            if schema.is_none() {
+                let headers: Vec<String> = if header {
+                    reader
+                        .headers()
+                        .map_err(|e| {
+                            QueryError::execution(format!("LOAD FROM glob header error: {e}"))
+                        })?
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                } else if !col_names.is_empty() {
+                    col_names.clone()
+                } else {
+                    Vec::new()
+                };
+
+                let schema_cols: Vec<ColumnInfo> = if headers.is_empty() {
+                    col_names
+                        .iter()
+                        .map(|n| ColumnInfo {
+                            name: n.clone(),
+                            data_type: "string".to_string(),
+                        })
+                        .collect()
+                } else {
+                    headers
+                        .iter()
+                        .map(|n| ColumnInfo {
+                            name: n.clone(),
+                            data_type: "string".to_string(),
+                        })
+                        .collect()
+                };
+                schema = Some(Arc::new(Schema::new(schema_cols)));
+            }
+
+            for result in reader.records() {
+                let record = result.map_err(|e| {
+                    QueryError::execution(format!("LOAD FROM glob row error: {e}"))
+                })?;
+                let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
+                all_rows.push(row);
+            }
+        }
+
+        let schema = schema.unwrap_or_else(|| Arc::new(Schema::new(vec![])));
+        return Ok(Some(DataChunk::new(all_rows, schema)));
     }
 
     if source_kind != "file" {
@@ -330,6 +456,8 @@ pub(super) fn execute_in_query_call(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
     let super::DdlOperatorKind::InQueryCall {
+        storage,
+        space_name,
         func_name,
         yield_items,
         col_names,
@@ -369,7 +497,94 @@ pub(super) fn execute_in_query_call(
             schema,
             vec![Value::String(env!("CARGO_PKG_VERSION").into())],
         ))),
-        _ => Ok(Some(DataChunk::new(Vec::new(), schema))),
+        "db_current_space" => Ok(Some(super::make_single_row(
+            schema,
+            vec![Value::string(space_name.clone())],
+        ))),
+        "db_property_graph" => {
+            let reader = match storage {
+                Some(lock) => lock.read(),
+                None => {
+                    return Err(QueryError::execution(
+                        "No storage available for db_property_graph()".to_string(),
+                    ));
+                }
+            };
+            match reader.get_space(space_name) {
+                Ok(Some(info)) => {
+                    let schema_str = format!(
+                        "Space: {}, Tags: {}, EdgeTypes: {}",
+                        info.space_name,
+                        reader
+                            .list_tags(space_name)
+                            .map(|t| t.len())
+                            .unwrap_or(0),
+                        reader
+                            .list_edge_types(space_name)
+                            .map(|e| e.len())
+                            .unwrap_or(0),
+                    );
+                    Ok(Some(super::make_single_row(
+                        schema,
+                        vec![Value::string(schema_str)],
+                    )))
+                }
+                Ok(None) => Err(QueryError::execution(format!(
+                    "Space '{}' not found",
+                    space_name
+                ))),
+                Err(e) => Err(QueryError::execution(format!(
+                    "Failed to get space info: {}",
+                    e
+                ))),
+            }
+        }
+        "list_labels" => {
+            let reader = match storage {
+                Some(lock) => lock.read(),
+                None => {
+                    return Err(QueryError::execution(
+                        "No storage available for list_labels()".to_string(),
+                    ));
+                }
+            };
+            let tags = reader
+                .list_tags(space_name)
+                .map_err(|e| QueryError::execution(format!("Failed to list tags: {}", e)))?;
+            let rows: Vec<Vec<Value>> = tags
+                .into_iter()
+                .map(|t| vec![Value::string(t.tag_name)])
+                .collect();
+            let tag_schema = super::make_single_col_schema("label", "string");
+            Ok(Some(DataChunk::new(rows, tag_schema)))
+        }
+        "list_relationship_types" | "list.relationship_types" => {
+            let reader = match storage {
+                Some(lock) => lock.read(),
+                None => {
+                    return Err(QueryError::execution(
+                        "No storage available for list_relationship_types()".to_string(),
+                    ));
+                }
+            };
+            let edges = reader
+                .list_edge_types(space_name)
+                .map_err(|e| QueryError::execution(format!("Failed to list edge types: {}", e)))?;
+            let rows: Vec<Vec<Value>> = edges
+                .into_iter()
+                .map(|e| vec![Value::string(e.edge_type_name)])
+                .collect();
+            let edge_schema = super::make_single_col_schema("relationship_type", "string");
+            Ok(Some(DataChunk::new(rows, edge_schema)))
+        }
+        _ => {
+            let registry =
+                crate::executor::expression::functions::registry::global_registry();
+            match registry.execute(func_name, &[]) {
+                Ok(value) => Ok(Some(super::make_single_row(schema, vec![value]))),
+                Err(_) => Ok(Some(DataChunk::new(Vec::new(), schema))),
+            }
+        }
     }
 }
 

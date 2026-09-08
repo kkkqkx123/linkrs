@@ -573,7 +573,7 @@ impl TypeUtils {
             DataType::Interval => "interval".to_string(),
             DataType::Decimal { precision, scale } => format!("decimal({}, {})", precision, scale),
             DataType::Union(types) => {
-                let type_strs: Vec<String> = types.iter().map(|t| Self::type_to_string(t)).collect();
+                let type_strs: Vec<String> = types.iter().map(Self::type_to_string).collect();
                 format!("union({})", type_strs.join(", "))
             }
             DataType::Struct(_) => "struct".to_string(),

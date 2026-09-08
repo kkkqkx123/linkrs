@@ -340,7 +340,11 @@ mod tests {
         {
             let wal = coordinator.read().wal_manager().unwrap();
             wal.write()
-                .set_current_lsn(graphdb_transaction::wal::Lsn::new(20))
+                .append_entry(
+                    graphdb_core::wal::types::WalOpType::InsertVertex,
+                    0 as graphdb_core::types::Timestamp,
+                    &[],
+                )
                 .unwrap();
         }
         let pool = Arc::new(StorageThreadPool::new().unwrap());

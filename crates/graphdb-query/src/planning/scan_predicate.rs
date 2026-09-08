@@ -12,7 +12,6 @@
 
 use crate::storage::ScanPredicate;
 use graphdb_core::types::expr::{ContextualExpression, Expression};
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::Value;
 

@@ -38,7 +38,6 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::scan_predicate::and_of;
 use graphdb_core::types::expr::ContextualExpression;
 use graphdb_core::types::expr::ExpressionMeta;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::types::Expression;
 use graphdb_core::Value;

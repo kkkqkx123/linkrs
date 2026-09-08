@@ -226,6 +226,7 @@ pub struct CommentOnStmt {
 pub enum CommentTarget {
     Tag(String),
     Edge(String),
+    Table(String),
 }
 
 /// `EXPORT DATABASE '<path>' [WITH OPTIONS (...)]` statement.

@@ -227,7 +227,7 @@ impl MVCCManager {
         let cold_before = self.cold_tombstones.len();
         self.cold_tombstones
             .retain(|&(_, ts)| ts >= min_active_snapshot_ts);
-        removed += (cold_before - self.cold_tombstones.len()) as usize;
+        removed += cold_before - self.cold_tombstones.len();
         self.cold_gc_cursor = 0;
 
         // Tombstones is the single authoritative table; no mirrored layers

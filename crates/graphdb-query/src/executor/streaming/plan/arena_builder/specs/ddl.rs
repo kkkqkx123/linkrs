@@ -341,6 +341,7 @@ fn space_manage_to_command(
             let target_name = match target {
                 crate::parser::ast::stmt::CommentTarget::Tag(name) => name.clone(),
                 crate::parser::ast::stmt::CommentTarget::Edge(name) => name.clone(),
+                crate::parser::ast::stmt::CommentTarget::Table(name) => name.clone(),
             };
             SpaceManageCommand::CommentOn {
                 space_name: target_name,

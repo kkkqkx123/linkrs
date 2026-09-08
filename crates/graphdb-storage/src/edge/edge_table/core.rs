@@ -22,6 +22,13 @@ use std::sync::{Arc, Mutex};
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByOffsetParams};
 pub use super::iterator::EdgeTableScanIterator;
 
+/// Borrowed context for segment-based edge lookups.
+struct SegmentLookup<'a> {
+    segments: &'a [CsrSegment],
+    segment_index: &'a [(Timestamp, usize)],
+    sparse_index: Option<&'a HashMap<u32, Vec<usize>>>,
+}
+
 /// TimeTravel edge store: multi-segment CSR with freeze/merge/MVCC (full history).
 pub struct TimeTravelEdgeStore {
     pub label: LabelId,
@@ -285,41 +292,40 @@ impl TimeTravelEdgeStore {
 
     fn base_get_edge(
         &self,
-        segments: &[CsrSegment],
-        segment_index: &[(Timestamp, usize)],
-        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
+        lookup: SegmentLookup<'_>,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
     ) -> Option<Nbr> {
         // Build relevant segment set for sparse index filtering
-        let relevant_set: Option<std::collections::HashSet<usize>> = sparse_index
+        let relevant_set: Option<std::collections::HashSet<usize>> = lookup
+            .sparse_index
             .and_then(|idx| idx.get(&src))
             .map(|indices| indices.iter().copied().collect());
 
         // Binary search to find earliest relevant segment (create_ts_min <= ts)
-        let max_index_pos = if !segment_index.is_empty() {
-            match segment_index
+        let max_index_pos = if !lookup.segment_index.is_empty() {
+            match lookup.segment_index
                 .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
             {
                 Ok(pos) | Err(pos) => pos.saturating_sub(1),
             }
         } else {
-            segments.len().saturating_sub(1)
+            lookup.segments.len().saturating_sub(1)
         };
 
         let mut candidates: Vec<usize> = Vec::new();
-        if !segment_index.is_empty() {
-            for i in 0..=max_index_pos {
-                candidates.push(segment_index[i].1);
+        if !lookup.segment_index.is_empty() {
+            for item in lookup.segment_index.iter().take(max_index_pos + 1) {
+                candidates.push(item.1);
             }
         } else {
-            candidates = (0..segments.len()).rev().collect();
+            candidates = (0..lookup.segments.len()).rev().collect();
         }
         candidates.sort_by(|a, b| b.cmp(a));
 
         for forward_idx in candidates {
-            let segment = &segments[forward_idx];
+            let segment = &lookup.segments[forward_idx];
 
             // Sparse vertex index skip
             if let Some(ref set) = relevant_set {
@@ -365,16 +371,15 @@ impl TimeTravelEdgeStore {
 
     fn base_edges_of(
         &self,
-        segments: &[CsrSegment],
-        segment_index: &[(Timestamp, usize)],
-        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
+        lookup: SegmentLookup<'_>,
         src: u32,
         ts: Timestamp,
     ) -> Vec<Nbr> {
         let mut edges = Vec::new();
 
         // Build a set of segment indices that contain this vertex (for O(1) lookup)
-        let relevant_set: Option<std::collections::HashSet<usize>> = sparse_index
+        let relevant_set: Option<std::collections::HashSet<usize>> = lookup
+            .sparse_index
             .and_then(|idx| idx.get(&src))
             .map(|indices| indices.iter().copied().collect());
 
@@ -382,8 +387,8 @@ impl TimeTravelEdgeStore {
         // Index is sorted by create_ts_min descending; find the last position
         // where create_ts_min <= ts, then iterate from the end of the index
         // (newest segment) up to that position.
-        let max_index_pos = if !segment_index.is_empty() {
-            match segment_index
+        let max_index_pos = if !lookup.segment_index.is_empty() {
+            match lookup.segment_index
                 .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
             {
                 Ok(pos) | Err(pos) => {
@@ -394,25 +399,25 @@ impl TimeTravelEdgeStore {
             }
         } else {
             // No index: fall back to scanning all segments.
-            segments.len().saturating_sub(1)
+            lookup.segments.len().saturating_sub(1)
         };
 
         // Collect relevant segment indices from the index (those with
         // create_ts_min <= ts), in newest-first order.
         let mut candidates: Vec<usize> = Vec::new();
-        if !segment_index.is_empty() {
-            for i in 0..=max_index_pos {
-                candidates.push(segment_index[i].1);
+        if !lookup.segment_index.is_empty() {
+            for item in lookup.segment_index.iter().take(max_index_pos + 1) {
+                candidates.push(item.1);
             }
         } else {
-            candidates = (0..segments.len()).rev().collect();
+            candidates = (0..lookup.segments.len()).rev().collect();
         }
         // candidates is in descending index order (newest first), which is
         // the correct traversal order.
         candidates.sort_by(|a, b| b.cmp(a));
 
         for forward_idx in candidates {
-            let segment = &segments[forward_idx];
+            let segment = &lookup.segments[forward_idx];
 
             // Sparse vertex index skip: if this segment does NOT contain the vertex, skip
             if let Some(ref set) = relevant_set {
@@ -468,9 +473,7 @@ impl TimeTravelEdgeStore {
     fn merged_edges_of(
         &self,
         delta: &CsrVariant,
-        segments: &[CsrSegment],
-        segment_index: &[(Timestamp, usize)],
-        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
+        lookup: SegmentLookup<'_>,
         src: u32,
         ts: Timestamp,
     ) -> Vec<Nbr> {
@@ -491,7 +494,7 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        for nbr in self.base_edges_of(segments, segment_index, sparse_index, src, ts) {
+        for nbr in self.base_edges_of(lookup, src, ts) {
             if seen.insert(nbr.edge_id) {
                 result.push(nbr);
             }
@@ -503,9 +506,7 @@ impl TimeTravelEdgeStore {
     fn merged_get_edge(
         &self,
         delta: &CsrVariant,
-        segments: &[CsrSegment],
-        segment_index: &[(Timestamp, usize)],
-        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
+        lookup: SegmentLookup<'_>,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
@@ -516,7 +517,7 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        self.base_get_edge(segments, segment_index, sparse_index, src, dst, ts)
+        self.base_get_edge(lookup, src, dst, ts)
     }
 
     pub(crate) fn edge_record_from_nbr(
@@ -749,9 +750,11 @@ impl TimeTravelEdgeStore {
         }
 
         if let Some(nbr) = self.base_get_edge(
-            &self.out_segments,
-            &self.out_segment_index,
-            Some(&self.sparse_vertex_index_out),
+            SegmentLookup {
+                segments: &self.out_segments,
+                segment_index: &self.out_segment_index,
+                sparse_index: Some(&self.sparse_vertex_index_out),
+            },
             src,
             dst_key,
             ts,
@@ -922,9 +925,11 @@ impl TimeTravelEdgeStore {
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let nbr = self.merged_get_edge(
             &self.out_csr,
-            &self.out_segments,
-            &self.out_segment_index,
-            Some(&self.sparse_vertex_index_out),
+            SegmentLookup {
+                segments: &self.out_segments,
+                segment_index: &self.out_segment_index,
+                sparse_index: Some(&self.sparse_vertex_index_out),
+            },
             src,
             dst_key,
             ts,
@@ -972,9 +977,11 @@ impl TimeTravelEdgeStore {
         } else {
             self.merged_edges_of(
                 &self.out_csr,
-                &self.out_segments,
-                &self.out_segment_index,
-                Some(&self.sparse_vertex_index_out),
+                SegmentLookup {
+                    segments: &self.out_segments,
+                    segment_index: &self.out_segment_index,
+                    sparse_index: Some(&self.sparse_vertex_index_out),
+                },
                 src,
                 ts,
             )
@@ -1013,9 +1020,11 @@ impl TimeTravelEdgeStore {
         } else {
             self.merged_edges_of(
                 &self.in_csr,
-                &self.in_segments,
-                &self.in_segment_index,
-                Some(&self.sparse_vertex_index_in),
+                SegmentLookup {
+                    segments: &self.in_segments,
+                    segment_index: &self.in_segment_index,
+                    sparse_index: Some(&self.sparse_vertex_index_in),
+                },
                 dst,
                 ts,
             )
@@ -1030,9 +1039,11 @@ impl TimeTravelEdgeStore {
         let dst_key = Self::edge_endpoint_key(dst, rank);
         self.merged_get_edge(
             &self.out_csr,
-            &self.out_segments,
-            &self.out_segment_index,
-            Some(&self.sparse_vertex_index_out),
+            SegmentLookup {
+                segments: &self.out_segments,
+                segment_index: &self.out_segment_index,
+                sparse_index: Some(&self.sparse_vertex_index_out),
+            },
             src,
             dst_key,
             ts,
@@ -1229,9 +1240,11 @@ impl TimeTravelEdgeStore {
         let dst_key = Self::edge_endpoint_key(dst, rank);
         if let Some(nbr) = self.merged_get_edge(
             &self.out_csr,
-            &self.out_segments,
-            &self.out_segment_index,
-            Some(&self.sparse_vertex_index_out),
+            SegmentLookup {
+                segments: &self.out_segments,
+                segment_index: &self.out_segment_index,
+                sparse_index: Some(&self.sparse_vertex_index_out),
+            },
             src,
             dst_key,
             ts,
@@ -1257,9 +1270,11 @@ impl TimeTravelEdgeStore {
         let dst_key = Self::edge_endpoint_key(params.dst, params.rank);
         if let Some(nbr) = self.merged_get_edge(
             &self.out_csr,
-            &self.out_segments,
-            &self.out_segment_index,
-            Some(&self.sparse_vertex_index_out),
+            SegmentLookup {
+                segments: &self.out_segments,
+                segment_index: &self.out_segment_index,
+                sparse_index: Some(&self.sparse_vertex_index_out),
+            },
             params.src,
             dst_key,
             params.ts,
@@ -1278,9 +1293,11 @@ impl TimeTravelEdgeStore {
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(
                 &self.in_csr,
-                &self.in_segments,
-                &self.in_segment_index,
-                Some(&self.sparse_vertex_index_in),
+                SegmentLookup {
+                    segments: &self.in_segments,
+                    segment_index: &self.in_segment_index,
+                    sparse_index: Some(&self.sparse_vertex_index_in),
+                },
                 params.dst,
                 src_key,
                 params.ts,

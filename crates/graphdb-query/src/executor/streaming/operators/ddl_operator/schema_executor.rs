@@ -214,13 +214,69 @@ pub(super) fn execute_space_manage(
             })
         }
         SpaceManageCommand::Checkpoint => {
-            Ok(Some(super::make_manage_result("checkpoint", None, "ok")))
+            super::exec_auth(storage, |s| {
+                let result = s
+                    .create_checkpoint()
+                    .map_err(|e| QueryError::execution(format!("Checkpoint failed: {}", e)))?;
+                match result {
+                    Some(_stats) => Ok(()),
+                    None => Ok(()),
+                }
+            })
         }
         SpaceManageCommand::ExportDatabase { path } => {
-            Ok(Some(super::make_manage_result("export_database", Some(path), "ok")))
+            super::exec_auth(storage, |s| {
+                let export_path = std::path::Path::new(path);
+                // Export all spaces or a specific one if path encodes a space name
+                let reader: &dyn crate::storage::StorageReader = s;
+                let spaces = reader
+                    .list_spaces()
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                for space_info in &spaces {
+                    s.export_space(&space_info.space_name, export_path)
+                        .map_err(|e| {
+                            QueryError::execution(format!(
+                                "Export failed for space '{}': {}",
+                                space_info.space_name, e
+                            ))
+                        })?;
+                }
+                Ok(())
+            })
         }
         SpaceManageCommand::ImportDatabase { path } => {
-            Ok(Some(super::make_manage_result("import_database", Some(path), "ok")))
+            super::exec_auth(storage, |s| {
+                let import_path = std::path::Path::new(path);
+                // Import all spaces found in the import directory
+                let entries = std::fs::read_dir(import_path).map_err(|e| {
+                    QueryError::execution(format!(
+                        "Failed to read import directory '{}': {e}",
+                        path
+                    ))
+                })?;
+                for entry in entries {
+                    let entry = entry.map_err(|e| {
+                        QueryError::execution(format!("Failed to read dir entry: {e}"))
+                    })?;
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        let space_name = entry_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+                        if !space_name.is_empty() {
+                            s.import_space(space_name, import_path)
+                                .map_err(|e| {
+                                    QueryError::execution(format!(
+                                        "Import failed for space '{}': {}",
+                                        space_name, e
+                                    ))
+                                })?;
+                        }
+                    }
+                }
+                Ok(())
+            })
         }
     };
     result

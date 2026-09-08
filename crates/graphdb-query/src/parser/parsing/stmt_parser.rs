@@ -572,10 +572,14 @@ impl StmtParser {
             ctx.consume_keyword("EDGE")?;
             let name = ctx.expect_identifier()?;
             CommentTarget::Edge(name)
+        } else if ctx.check_keyword("TABLE") {
+            ctx.consume_keyword("TABLE")?;
+            let name = ctx.expect_identifier()?;
+            CommentTarget::Table(name)
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::SyntaxError,
-                "COMMENT ON expects TAG or EDGE".to_string(),
+                "COMMENT ON expects TAG, EDGE, or TABLE".to_string(),
                 ctx.current_position(),
             ));
         };

@@ -18,7 +18,6 @@ use crate::planning::statements::plan_combiner::wrap_logical;
 use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
 use graphdb_core::types::ContextualExpression;
-use graphdb_core::types::expr::FunctionArg;
 use std::sync::Arc;
 
 /// The ORDER BY clause planner

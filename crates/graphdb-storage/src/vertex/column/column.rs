@@ -271,21 +271,6 @@ impl Column {
         if chunk_idx >= self.chunks.len() {
             return false;
         }
-        // Ensure the target chunk is resident before writing.
-        if !self.chunks[chunk_idx].is_resident() {
-            let spill_path = self.chunks[chunk_idx].spill_path.clone();
-            if let Some(path) = spill_path {
-                use super::chunk_residency::{reload_chunk, ChunkResidency};
-                if let Ok(bytes) = std::fs::read(&path) {
-                    if let Ok(reloaded) = reload_chunk(&bytes) {
-                        self.chunks[chunk_idx] = reloaded;
-                        self.chunks[chunk_idx].residency = ChunkResidency::Resident;
-                        self.chunks[chunk_idx].spill_path = None;
-                        self.chunks[chunk_idx].spill_size = 0;
-                    }
-                }
-            }
-        }
         let local = (row_idx - self.chunks[chunk_idx].row_offset) as u32;
         let data_type = self.data_type.clone();
         let decision = self.chunks[chunk_idx].set_value(local, value.cloned(), &data_type);
@@ -381,14 +366,6 @@ impl Column {
         row_idx: usize,
         value: Option<&Value>,
     ) -> StorageResult<()> {
-        // Ensure the target chunk is resident before any write path.
-        if !self.chunks.is_empty() {
-            let capacity = self.chunk_capacity.max(1);
-            let chunk_idx = row_idx / capacity;
-            if chunk_idx < self.chunks.len() && !self.chunks[chunk_idx].is_resident() {
-                self.ensure_chunk_resident(chunk_idx);
-            }
-        }
         // Large-string overflow routing happens before encoding checks so the
         // main buffers only ever hold the small inline placeholder.
         if matches!(self.data_type, DataType::String | DataType::Blob) {
@@ -492,20 +469,14 @@ impl Column {
             let capacity = self.chunk_capacity.max(1);
             let chunk_idx = row_idx / capacity;
             if let Some(chunk) = self.chunks.get(chunk_idx) {
-                // Evicted chunks: this is a &self method, so we cannot reload
-                // in-place. The caller must use ensure_chunk_resident() before
-                // calling get() on a column that may have evicted chunks.
-                // Fall through to inner/encoding path for evicted chunks.
-                if chunk.is_resident() {
-                    let local = (row_idx.saturating_sub(chunk.row_offset)) as u32;
-                    if let Some(hit) = chunk.overlay.get(local) {
-                        return hit;
-                    }
-                    // Chunk-local encodings are authoritative when present;
-                    // raw chunks fall through to the inner buffer below.
-                    if chunk.encoding.is_encoded() {
-                        return chunk.encoding.get(local as usize);
-                    }
+                let local = (row_idx.saturating_sub(chunk.row_offset)) as u32;
+                if let Some(hit) = chunk.overlay.get(local) {
+                    return hit;
+                }
+                // Chunk-local encodings are authoritative when present;
+                // raw chunks fall through to the inner buffer below.
+                if chunk.encoding.is_encoded() {
+                    return chunk.encoding.get(local as usize);
                 }
             }
         }
@@ -561,14 +532,7 @@ impl Column {
         let chunk_bytes: usize = self
             .chunks
             .iter()
-            .map(|c| {
-                if c.is_resident() {
-                    c.overlay.memory_usage() + c.encoding_meta.memory_usage()
-                } else {
-                    // Evicted chunks: account for spill_size as "still占用" for memory pressure
-                    c.spill_size as usize
-                }
-            })
+            .map(|c| c.overlay.memory_usage() + c.encoding_meta.memory_usage())
             .sum();
         let hll_bytes = self.hll.as_ref().map(|_| 64usize).unwrap_or(0);
         self.inner().memory_usage()
@@ -791,137 +755,6 @@ impl Column {
     // -----------------------------------------------------------------------
     // Chunk eviction / reload (lazy loading)
     // -----------------------------------------------------------------------
-
-    /// Evict a single chunk to disk. The chunk's data is serialized to a
-    /// sidecar file under `spill_dir` and its in-memory buffers are freed.
-    /// Chunks with dirty overlays, active version chains, or dirty pages
-    /// are skipped (returns `false`).
-    ///
-    /// On success the chunk transitions to `Evicted` state and reads targeting
-    /// its row range will trigger an on-demand reload.
-    pub fn evict_chunk(&mut self, chunk_idx: usize, spill_dir: &std::path::Path) -> bool {
-        use super::chunk_residency::{spill_chunk, ChunkResidency};
-
-        let chunk = match self.chunks.get(chunk_idx) {
-            Some(c) => c,
-            None => return false,
-        };
-
-        // Don't evict chunks that are dirty or have active MVCC state.
-        if chunk.overlay.len() > 0 {
-            return false;
-        }
-        if chunk.version_chains.as_ref().is_some_and(|chains| {
-            chains
-                .get(chunk.row_offset / self.chunk_capacity.max(1))
-                .is_some_and(|c| !c.is_empty())
-        }) {
-            return false;
-        }
-        if !chunk.is_resident() {
-            return false; // already evicted
-        }
-
-        // Serialize the chunk to a spill file.
-        let file_name = format!("{}_{}.spill", self.name, chunk_idx);
-        let spill_path = spill_dir.join(&file_name);
-        let data = match spill_chunk(chunk, &self.data_type) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-        let spill_size = data.len() as u64;
-
-        // Write to disk.
-        if std::fs::write(&spill_path, &data).is_err() {
-            return false;
-        }
-
-        // Transition the chunk to evicted state, dropping in-memory buffers.
-        let chunk = &mut self.chunks[chunk_idx];
-        chunk.data = Vec::new();
-        chunk.offsets = Vec::new();
-        chunk.null_bitmap = None;
-        chunk.encoding = ColumnEncoding::None;
-        chunk.overlay.clear();
-        chunk.version_chains = None;
-        chunk.residency = ChunkResidency::Evicted {
-            spill_path: spill_path.clone(),
-            spill_size,
-        };
-        chunk.spill_path = Some(spill_path);
-        chunk.spill_size = spill_size;
-
-        true
-    }
-
-    /// Ensure the chunk at `chunk_idx` is resident in memory. If it is
-    /// currently evicted, reload it from the spill file. Returns `true`
-    /// if the chunk is (or was made) resident.
-    pub fn ensure_chunk_resident(&mut self, chunk_idx: usize) -> bool {
-        use super::chunk_residency::{reload_chunk, ChunkResidency};
-
-        let chunk = match self.chunks.get(chunk_idx) {
-            Some(c) => c,
-            None => return false,
-        };
-
-        if chunk.is_resident() {
-            return true;
-        }
-
-        let spill_path = match &chunk.residency {
-            ChunkResidency::Evicted { spill_path, .. } => spill_path.clone(),
-            ChunkResidency::Resident => return true,
-        };
-
-        // Read the spill file.
-        let bytes = match std::fs::read(&spill_path) {
-            Ok(b) => b,
-            Err(_) => return false,
-        };
-
-        let reloaded = match reload_chunk(&bytes) {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-
-        // Preserve the original row_offset (reload_chunk restores it, but be safe).
-        self.chunks[chunk_idx] = reloaded;
-        self.chunks[chunk_idx].residency = ChunkResidency::Resident;
-        self.chunks[chunk_idx].spill_path = None;
-        self.chunks[chunk_idx].spill_size = 0;
-
-        true
-    }
-
-    /// Evict idle chunks to free memory. Iterates all chunks and evicts
-    /// those that are clean (no overlay, no dirty version chains). Returns
-    /// the number of chunks evicted. Caller should provide a `spill_dir`.
-    pub fn evict_idle_chunks(&mut self, spill_dir: &std::path::Path) -> usize {
-        let n = self.chunks.len();
-        let mut evicted = 0;
-        for idx in 0..n {
-            if self.evict_chunk(idx, spill_dir) {
-                evicted += 1;
-            }
-        }
-        evicted
-    }
-
-    /// Evict all chunks that are resident and clean. Returns the number
-    /// of chunks evicted.
-    pub fn evict_all_clean_chunks(&mut self, spill_dir: &std::path::Path) -> usize {
-        self.evict_idle_chunks(spill_dir)
-    }
-
-    /// Total memory used by evicted chunks (spill_size accounting).
-    pub fn evicted_memory_usage(&self) -> usize {
-        self.chunks
-            .iter()
-            .filter(|c| !c.is_resident())
-            .map(|c| c.spill_size as usize)
-            .sum()
-    }
 
     /// Base value for encoding inputs and persisted buffers: overflow rows
     /// contribute their inline placeholder (the payload travels in the

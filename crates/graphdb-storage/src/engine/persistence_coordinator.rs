@@ -330,8 +330,12 @@ mod tests {
         {
             let wal = coordinator.wal_manager().expect("WAL should be enabled");
             wal.write()
-                .set_current_lsn(Lsn::new(12))
-                .expect("test LSN should be accepted");
+                .append_entry(
+                    graphdb_core::wal::types::WalOpType::InsertVertex,
+                    0 as graphdb_core::types::Timestamp,
+                    &[],
+                )
+                .expect("test WAL append should succeed");
         }
 
         assert!(coordinator.should_flush());
@@ -365,11 +369,17 @@ mod tests {
         let coordinator =
             PersistenceCoordinator::new(config).expect("Failed to create coordinator");
 
+        let lsn_before;
         {
             let wal = coordinator.wal_manager().expect("WAL should be enabled");
             wal.write()
-                .set_current_lsn(Lsn::new(12))
-                .expect("test LSN should be accepted");
+                .append_entry(
+                    graphdb_core::wal::types::WalOpType::InsertVertex,
+                    0 as graphdb_core::types::Timestamp,
+                    &[],
+                )
+                .expect("test WAL append should succeed");
+            lsn_before = wal.read().current_lsn();
         }
 
         coordinator.mark_checkpointed(Lsn::new(24));
@@ -380,7 +390,7 @@ mod tests {
                 .expect("WAL should be enabled")
                 .read()
                 .current_lsn(),
-            Lsn::new(12)
+            lsn_before
         );
         assert_eq!(*coordinator.last_checkpoint_lsn.read(), Lsn::new(24));
     }
