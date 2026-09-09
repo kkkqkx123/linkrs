@@ -250,52 +250,6 @@ pub struct ImportDatabaseStmt {
     pub path: String,
 }
 
-/// `ATTACH '<path>' AS <alias> [DBTYPE <type>] [OPTIONS (...)]` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AttachDatabaseStmt {
-    pub span: Span,
-    pub path: String,
-    pub alias: String,
-    pub db_type: Option<String>,
-    pub options: Vec<AttachOption>,
-}
-
-/// Option for ATTACH DATABASE statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AttachOption {
-    pub key: String,
-    pub value: String,
-}
-
-/// `DETACH <alias>` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DetachDatabaseStmt {
-    pub span: Span,
-    pub alias: String,
-}
-
-/// `LOAD EXTENSION '<path>'` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoadExtensionStmt {
-    pub span: Span,
-    pub path: String,
-}
-
-/// `INSTALL EXTENSION <name> [FROM '<repo>']` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstallExtensionStmt {
-    pub span: Span,
-    pub name: String,
-    pub repo: Option<String>,
-}
-
-/// `UNINSTALL EXTENSION <name>` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UninstallExtensionStmt {
-    pub span: Span,
-    pub name: String,
-}
-
 pub struct StmtUtils;
 
 impl StmtUtils {

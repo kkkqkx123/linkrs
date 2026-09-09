@@ -167,7 +167,11 @@ pub trait ExpressionVisitor {
                 self.visit_vector(data);
             }
             Expression::WindowFunction { name, args, .. } => {
-                let wrapped: Vec<crate::types::expr::FunctionArg> = args.iter().cloned().map(crate::types::expr::FunctionArg::Positional).collect();
+                let wrapped: Vec<crate::types::expr::FunctionArg> = args
+                    .iter()
+                    .cloned()
+                    .map(crate::types::expr::FunctionArg::Positional)
+                    .collect();
                 self.visit_function(name, &wrapped);
             }
             Expression::Exists { body } => {

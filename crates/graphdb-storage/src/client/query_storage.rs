@@ -1,7 +1,5 @@
 use super::import_export::{format_csv_value, import_space_impl};
-use super::{
-    CatalogStore, GraphStore, StorageAdmin, StorageAuthOps, StoragePersistenceOps,
-};
+use super::{CatalogStore, GraphStore, StorageAdmin, StorageAuthOps, StoragePersistenceOps};
 use crate::stats_reader::ColumnStatsReader;
 use crate::{AutoCommitBatchOps, AutoCommitGroupOps, SnapshotHandle};
 use graphdb_core::StorageError;
@@ -48,11 +46,7 @@ pub trait QueryStorage:
     /// Each tag produces a `<tag>.csv` file; each edge type produces a
     /// `<edge_type>.csv` file.  A `schema.json` metadata file records the
     /// space, tags, and edge types with their property schemas.
-    fn export_space(
-        &self,
-        space: &str,
-        path: &std::path::Path,
-    ) -> Result<(), StorageError> {
+    fn export_space(&self, space: &str, path: &std::path::Path) -> Result<(), StorageError> {
         let base = path.join(space);
         std::fs::create_dir_all(&base)
             .map_err(|e| StorageError::io_error(format!("Failed to create export dir: {e}")))?;
@@ -85,7 +79,11 @@ pub trait QueryStorage:
         let mut schema_file = std::fs::File::create(&schema_path)
             .map_err(|e| StorageError::io_error(format!("Failed to create schema.json: {e}")))?;
         schema_file
-            .write_all(serde_json::to_string_pretty(&schema_meta).unwrap_or_default().as_bytes())
+            .write_all(
+                serde_json::to_string_pretty(&schema_meta)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            )
             .map_err(|e| StorageError::io_error(format!("Failed to write schema.json: {e}")))?;
 
         // Export vertices by tag
@@ -106,8 +104,9 @@ pub trait QueryStorage:
             prop_keys.sort();
 
             let csv_path = base.join(format!("{}.csv", tag_info.tag_name));
-            let mut file = std::fs::File::create(&csv_path)
-                .map_err(|e| StorageError::io_error(format!("Failed to create {}.csv: {e}", tag_info.tag_name)))?;
+            let mut file = std::fs::File::create(&csv_path).map_err(|e| {
+                StorageError::io_error(format!("Failed to create {}.csv: {e}", tag_info.tag_name))
+            })?;
 
             // Write header
             let mut header = vec!["vid".to_string(), "id".to_string()];
@@ -148,8 +147,12 @@ pub trait QueryStorage:
             prop_keys.sort();
 
             let csv_path = base.join(format!("{}.csv", edge_info.edge_type_name));
-            let mut file = std::fs::File::create(&csv_path)
-                .map_err(|e| StorageError::io_error(format!("Failed to create {}.csv: {e}", edge_info.edge_type_name)))?;
+            let mut file = std::fs::File::create(&csv_path).map_err(|e| {
+                StorageError::io_error(format!(
+                    "Failed to create {}.csv: {e}",
+                    edge_info.edge_type_name
+                ))
+            })?;
 
             let mut header = vec!["src".to_string(), "dst".to_string(), "ranking".to_string()];
             header.extend(prop_keys.clone());
@@ -181,11 +184,7 @@ pub trait QueryStorage:
     /// Import a space from CSV files under `path/<space_name>/`.
     ///
     /// Expects a `schema.json` metadata file and `<tag>.csv` / `<edge_type>.csv` data files.
-    fn import_space(
-        &mut self,
-        space: &str,
-        path: &std::path::Path,
-    ) -> Result<(), StorageError> {
+    fn import_space(&mut self, space: &str, path: &std::path::Path) -> Result<(), StorageError> {
         import_space_impl(self, space, path)
     }
 }

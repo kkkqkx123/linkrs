@@ -110,19 +110,21 @@ pub enum WalOpType {
     DeleteEdgeProp = 13,
     RenameVertexProp = 14,
     RenameEdgeProp = 15,
-    Compact = 16,
-    CreateSpace = 17,
-    DropSpace = 18,
-    ClearSpace = 19,
-    AlterSpaceComment = 20,
-    OutboxIntent = 21,
-    TransactionCommit = 22,
-    TransactionAbort = 23,
-    CreateTagIndex = 24,
-    DropTagIndex = 25,
-    CreateEdgeIndex = 26,
-    DropEdgeIndex = 27,
-    UpdateSequence = 28,
+    RenameTag = 16,
+    RenameEdgeType = 17,
+    Compact = 18,
+    CreateSpace = 19,
+    DropSpace = 20,
+    ClearSpace = 21,
+    AlterSpaceComment = 22,
+    OutboxIntent = 23,
+    TransactionCommit = 24,
+    TransactionAbort = 25,
+    CreateTagIndex = 26,
+    DropTagIndex = 27,
+    CreateEdgeIndex = 28,
+    DropEdgeIndex = 29,
+    UpdateSequence = 30,
 }
 
 impl TryFrom<u8> for WalOpType {
@@ -146,19 +148,21 @@ impl TryFrom<u8> for WalOpType {
             13 => Ok(WalOpType::DeleteEdgeProp),
             14 => Ok(WalOpType::RenameVertexProp),
             15 => Ok(WalOpType::RenameEdgeProp),
-            16 => Ok(WalOpType::Compact),
-            17 => Ok(WalOpType::CreateSpace),
-            18 => Ok(WalOpType::DropSpace),
-            19 => Ok(WalOpType::ClearSpace),
-            20 => Ok(WalOpType::AlterSpaceComment),
-            21 => Ok(WalOpType::OutboxIntent),
-            22 => Ok(WalOpType::TransactionCommit),
-            23 => Ok(WalOpType::TransactionAbort),
-            24 => Ok(WalOpType::CreateTagIndex),
-            25 => Ok(WalOpType::DropTagIndex),
-            26 => Ok(WalOpType::CreateEdgeIndex),
-            27 => Ok(WalOpType::DropEdgeIndex),
-            28 => Ok(WalOpType::UpdateSequence),
+            16 => Ok(WalOpType::RenameTag),
+            17 => Ok(WalOpType::RenameEdgeType),
+            18 => Ok(WalOpType::Compact),
+            19 => Ok(WalOpType::CreateSpace),
+            20 => Ok(WalOpType::DropSpace),
+            21 => Ok(WalOpType::ClearSpace),
+            22 => Ok(WalOpType::AlterSpaceComment),
+            23 => Ok(WalOpType::OutboxIntent),
+            24 => Ok(WalOpType::TransactionCommit),
+            25 => Ok(WalOpType::TransactionAbort),
+            26 => Ok(WalOpType::CreateTagIndex),
+            27 => Ok(WalOpType::DropTagIndex),
+            28 => Ok(WalOpType::CreateEdgeIndex),
+            29 => Ok(WalOpType::DropEdgeIndex),
+            30 => Ok(WalOpType::UpdateSequence),
             _ => Err(WalError::InvalidOpType(value)),
         }
     }
@@ -183,6 +187,8 @@ impl fmt::Display for WalOpType {
             WalOpType::DeleteEdgeProp => write!(f, "DeleteEdgeProp"),
             WalOpType::RenameVertexProp => write!(f, "RenameVertexProp"),
             WalOpType::RenameEdgeProp => write!(f, "RenameEdgeProp"),
+            WalOpType::RenameTag => write!(f, "RenameTag"),
+            WalOpType::RenameEdgeType => write!(f, "RenameEdgeType"),
             WalOpType::Compact => write!(f, "Compact"),
             WalOpType::CreateSpace => write!(f, "CreateSpace"),
             WalOpType::DropSpace => write!(f, "DropSpace"),
@@ -1110,7 +1116,7 @@ mod tests {
     fn test_wal_op_type() {
         assert_eq!(WalOpType::try_from(0).unwrap(), WalOpType::InsertVertex);
         assert_eq!(WalOpType::try_from(6).unwrap(), WalOpType::UpdateVertexProp);
-        assert_eq!(WalOpType::try_from(17).unwrap(), WalOpType::CreateSpace);
+        assert_eq!(WalOpType::try_from(19).unwrap(), WalOpType::CreateSpace);
         assert!(WalOpType::try_from(100).is_err());
     }
 

@@ -848,6 +848,84 @@ impl GraphDataStore {
         Ok(label)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn rename_vertex_label(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
+        let mut names = self.write_vertex_label_names();
+        let label = *names
+            .get(old_name)
+            .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
+        if names.contains_key(new_name) {
+            return Err(StorageError::db_error(format!(
+                "Vertex label \"{}\" already exists",
+                new_name
+            )));
+        }
+        names.remove(old_name);
+        names.insert(new_name.to_string(), label);
+        Ok(())
+    }
+
+    pub(crate) fn rename_vertex_label_by_id(
+        &self,
+        label: LabelId,
+        new_name: &str,
+    ) -> StorageResult<()> {
+        let mut names = self.write_vertex_label_names();
+        let old_name = names
+            .iter()
+            .find(|(_, id)| **id == label)
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| StorageError::label_not_found(format!("label {}", label)))?;
+        if names.contains_key(new_name) {
+            return Err(StorageError::db_error(format!(
+                "Vertex label \"{}\" already exists",
+                new_name
+            )));
+        }
+        names.remove(&old_name);
+        names.insert(new_name.to_string(), label);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn rename_edge_label(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
+        let mut names = self.write_edge_label_names();
+        let label = *names
+            .get(old_name)
+            .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
+        if names.contains_key(new_name) {
+            return Err(StorageError::db_error(format!(
+                "Edge label \"{}\" already exists",
+                new_name
+            )));
+        }
+        names.remove(old_name);
+        names.insert(new_name.to_string(), label);
+        Ok(())
+    }
+
+    pub(crate) fn rename_edge_label_by_id(
+        &self,
+        label: LabelId,
+        new_name: &str,
+    ) -> StorageResult<()> {
+        let mut names = self.write_edge_label_names();
+        let old_name = names
+            .iter()
+            .find(|(_, id)| **id == label)
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", label)))?;
+        if names.contains_key(new_name) {
+            return Err(StorageError::db_error(format!(
+                "Edge label \"{}\" already exists",
+                new_name
+            )));
+        }
+        names.remove(&old_name);
+        names.insert(new_name.to_string(), label);
+        Ok(())
+    }
+
     pub(crate) fn drop_vertex_type_by_label(&self, label: LabelId) -> StorageResult<()> {
         let mut vertex_names = self.write_vertex_label_names();
         let mut edge_names = self.write_edge_label_names();

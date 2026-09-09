@@ -321,7 +321,8 @@ impl DdlParser {
                 let mut extra_gt = false;
                 loop {
                     let field_name = ctx.expect_identifier()?;
-                    let (field_type, child_extra) = self.parse_data_type_inner_ex(ctx, depth + 1)?;
+                    let (field_type, child_extra) =
+                        self.parse_data_type_inner_ex(ctx, depth + 1)?;
                     extra_gt |= child_extra;
                     fields.push((field_name, field_type));
                     if extra_gt {
@@ -344,7 +345,10 @@ impl DdlParser {
                         ctx.current_position(),
                     ));
                 }
-                Ok((DataType::Struct(Arc::new(StructTypeInfo::new(fields))), extra_gt))
+                Ok((
+                    DataType::Struct(Arc::new(StructTypeInfo::new(fields))),
+                    extra_gt,
+                ))
             }
             TokenKind::Array => {
                 ctx.next_token();
@@ -400,7 +404,10 @@ impl DdlParser {
                 } else {
                     None
                 };
-                Ok((DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))), extra_gt))
+                Ok((
+                    DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))),
+                    extra_gt,
+                ))
             }
             TokenKind::Identifier(ref s) if s.eq_ignore_ascii_case("DECIMAL") => {
                 ctx.next_token();
@@ -615,13 +622,16 @@ impl DdlParser {
                     // All other type names (including aliases) are resolved by
                     // the core `DataType::from_str` parser (single source of
                     // truth for the keyword -> type mapping).
-                    _ => Ok((type_name.parse::<DataType>().map_err(|e| {
-                        ParseError::new(
-                            ParseErrorKind::SyntaxError,
-                            format!("Unknown data type: {}", e.name),
-                            ctx.current_position(),
-                        )
-                    })?, false)),
+                    _ => Ok((
+                        type_name.parse::<DataType>().map_err(|e| {
+                            ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                format!("Unknown data type: {}", e.name),
+                                ctx.current_position(),
+                            )
+                        })?,
+                        false,
+                    )),
                 }
             }
             _ => Err(ParseError::new(

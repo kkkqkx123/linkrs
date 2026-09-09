@@ -211,6 +211,7 @@ mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use graphdb_core::types::expr::FunctionArg;
 
     #[test]
     fn test_sort_node_creation() {

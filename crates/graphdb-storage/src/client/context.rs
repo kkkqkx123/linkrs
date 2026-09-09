@@ -23,8 +23,7 @@ pub struct StorageOperationContext {
     /// Lazily registered vertex labels with their snapshot handles (for unregistration on finalize)
     pub registered_vertex_labels: parking_lot::RwLock<std::collections::HashSet<LabelId>>,
     /// Lazily registered edge partitions (for snapshot unregistration on finalize)
-    pub registered_edge_partitions:
-        parking_lot::RwLock<std::collections::HashSet<EdgeTableKey>>,
+    pub registered_edge_partitions: parking_lot::RwLock<std::collections::HashSet<EdgeTableKey>>,
     /// Undo log entry count at the start of this statement's segment (group
     /// mode only). Used by `finalize_operation` to roll back only the failed
     /// statement's segment when a shared undo log is in use.

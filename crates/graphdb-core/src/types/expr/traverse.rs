@@ -355,9 +355,14 @@ impl Expression {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(|arg| {
-                    crate::types::expr::FunctionArg::Positional(arg.as_expr().transform(transformer))
-                }).collect(),
+                args: args
+                    .iter()
+                    .map(|arg| {
+                        crate::types::expr::FunctionArg::Positional(
+                            arg.as_expr().transform(transformer),
+                        )
+                    })
+                    .collect(),
             },
             Expression::Aggregate {
                 func,

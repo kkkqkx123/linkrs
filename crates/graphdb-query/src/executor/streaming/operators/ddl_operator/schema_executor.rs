@@ -37,7 +37,9 @@ pub(super) fn execute_space_manage(
         | SpaceManageCommand::Clear { space_name }
         | SpaceManageCommand::CommentOn { space_name, .. } => Some(space_name.clone()),
         SpaceManageCommand::Show | SpaceManageCommand::Checkpoint => None,
-        SpaceManageCommand::ExportDatabase { .. } | SpaceManageCommand::ImportDatabase { .. } => None,
+        SpaceManageCommand::ExportDatabase { .. } | SpaceManageCommand::ImportDatabase { .. } => {
+            None
+        }
     };
     let result = match command {
         SpaceManageCommand::Create {
@@ -206,24 +208,23 @@ pub(super) fn execute_space_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        SpaceManageCommand::CommentOn { space_name: _, comment } => {
-            super::exec_ddl(storage, |s| {
-                StorageSchemaOps::alter_space_comment(s, 0, comment.clone())
-                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                Ok(())
-            })
-        }
-        SpaceManageCommand::Checkpoint => {
-            super::exec_auth(storage, |s| {
-                let result = s
-                    .create_checkpoint()
-                    .map_err(|e| QueryError::execution(format!("Checkpoint failed: {}", e)))?;
-                match result {
-                    Some(_stats) => Ok(()),
-                    None => Ok(()),
-                }
-            })
-        }
+        SpaceManageCommand::CommentOn {
+            space_name: _,
+            comment,
+        } => super::exec_ddl(storage, |s| {
+            StorageSchemaOps::alter_space_comment(s, 0, comment.clone())
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
+        }),
+        SpaceManageCommand::Checkpoint => super::exec_auth(storage, |s| {
+            let result = s
+                .create_checkpoint()
+                .map_err(|e| QueryError::execution(format!("Checkpoint failed: {}", e)))?;
+            match result {
+                Some(_stats) => Ok(()),
+                None => Ok(()),
+            }
+        }),
         SpaceManageCommand::ExportDatabase { path } => {
             super::exec_auth(storage, |s| {
                 let export_path = std::path::Path::new(path);
@@ -265,13 +266,12 @@ pub(super) fn execute_space_manage(
                             .and_then(|n| n.to_str())
                             .unwrap_or("");
                         if !space_name.is_empty() {
-                            s.import_space(space_name, import_path)
-                                .map_err(|e| {
-                                    QueryError::execution(format!(
-                                        "Import failed for space '{}': {}",
-                                        space_name, e
-                                    ))
-                                })?;
+                            s.import_space(space_name, import_path).map_err(|e| {
+                                QueryError::execution(format!(
+                                    "Import failed for space '{}': {}",
+                                    space_name, e
+                                ))
+                            })?;
                         }
                     }
                 }
@@ -301,7 +301,9 @@ pub(super) fn execute_tag_manage(
     let tag_name = match command {
         TagManageCommand::Create { tag_name, .. }
         | TagManageCommand::Alter { tag_name, .. }
-        | TagManageCommand::Rename { old_name: tag_name, .. }
+        | TagManageCommand::Rename {
+            old_name: tag_name, ..
+        }
         | TagManageCommand::Desc { tag_name }
         | TagManageCommand::Drop { tag_name, .. }
         | TagManageCommand::ShowCreate { tag_name } => Some(tag_name.clone()),
@@ -371,16 +373,10 @@ pub(super) fn execute_tag_manage(
             }
             Ok(())
         }),
-        TagManageCommand::Rename {
-            old_name,
-            new_name,
-        } => super::exec_ddl(storage, |_s| {
-            // TODO: Implement tag rename in storage layer
-            // For now, return an error indicating the feature is not yet supported
-            Err(QueryError::execution(format!(
-                "RENAME TAG is not yet supported: {} -> {}",
-                old_name, new_name
-            )))
+        TagManageCommand::Rename { old_name, new_name } => super::exec_ddl(storage, |s| {
+            StorageSchemaOps::rename_tag(s, space_name, &old_name, &new_name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
         }),
         TagManageCommand::Desc { .. } => {
             let reader = super::get_reader(storage)?;
@@ -529,7 +525,10 @@ pub(super) fn execute_edge_manage(
     let edge_type = match command {
         EdgeManageCommand::Create { edge_name, .. }
         | EdgeManageCommand::Alter { edge_name, .. }
-        | EdgeManageCommand::Rename { old_name: edge_name, .. }
+        | EdgeManageCommand::Rename {
+            old_name: edge_name,
+            ..
+        }
         | EdgeManageCommand::Desc { edge_name }
         | EdgeManageCommand::Drop { edge_name, .. }
         | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
@@ -592,16 +591,10 @@ pub(super) fn execute_edge_manage(
             .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        EdgeManageCommand::Rename {
-            old_name,
-            new_name,
-        } => super::exec_ddl(storage, |_s| {
-            // TODO: Implement edge rename in storage layer
-            // For now, return an error indicating the feature is not yet supported
-            Err(QueryError::execution(format!(
-                "RENAME EDGE is not yet supported: {} -> {}",
-                old_name, new_name
-            )))
+        EdgeManageCommand::Rename { old_name, new_name } => super::exec_ddl(storage, |s| {
+            StorageSchemaOps::rename_edge_type(s, space_name, &old_name, &new_name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
         }),
         EdgeManageCommand::Desc { .. } | EdgeManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;

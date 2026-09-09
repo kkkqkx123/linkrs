@@ -121,7 +121,10 @@ impl FoldConstantsRule {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(|a| FunctionArg::Positional(Self::fold_expression(a.as_expr()))).collect(),
+                args: args
+                    .iter()
+                    .map(|a| FunctionArg::Positional(Self::fold_expression(a.as_expr())))
+                    .collect(),
             },
             Expression::List(items) => {
                 Expression::List(items.iter().map(Self::fold_expression).collect())

@@ -12,9 +12,9 @@ mod string_id_tests;
 mod vertex_tests;
 
 use crate::{
-    GraphStorage, PersistenceConfig, PropertyGraphConfig, ScanOptions, StorageAdmin, StorageAuthOps,
-    StorageCommitOps, StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps,
-    StorageReader, StorageSchemaOps, StorageWriter,
+    GraphStorage, PersistenceConfig, PropertyGraphConfig, ScanOptions, StorageAdmin,
+    StorageAuthOps, StorageCommitOps, StorageOperationContext, StorageOperationContextOps,
+    StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 use graphdb_core::types::{
     AutoCompactConfig, EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef,

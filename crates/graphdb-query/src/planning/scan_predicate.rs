@@ -218,6 +218,7 @@ fn build_predicate(column: &str, op: BinaryOperator, literal: &Expression) -> Sc
 mod tests {
     use super::*;
     use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::expr::FunctionArg;
 
     fn lit(value: Value) -> Expression {
         Expression::Literal(value)

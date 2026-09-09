@@ -436,10 +436,7 @@ pub enum DdlState {
     SequenceManage,
     MacroManage,
     TypeManage,
-    DatabaseManage,
-    ExtensionManage,
 }
-
 impl DdlState {
     pub fn from_spec(spec: &super::spec::DdlSpec) -> Self {
         match spec {
@@ -466,8 +463,6 @@ impl DdlState {
             super::spec::DdlSpec::SequenceManage { .. } => DdlState::SequenceManage,
             super::spec::DdlSpec::MacroManage { .. } => DdlState::MacroManage,
             super::spec::DdlSpec::TypeManage { .. } => DdlState::TypeManage,
-            super::spec::DdlSpec::DatabaseManage { .. } => DdlState::DatabaseManage,
-            super::spec::DdlSpec::ExtensionManage { .. } => DdlState::ExtensionManage,
         }
     }
 }

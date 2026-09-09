@@ -204,8 +204,7 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
 
     // Edges only between vertices that will survive compaction:
     // odd pairs (1,3), (3,5), ..., (77,79) and (79,81), ..., (97,99).
-    let expected_edges: Vec<(i64, i64)> =
-        (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
+    let expected_edges: Vec<(i64, i64)> = (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
     for (src, dst) in &expected_edges {
         let edge = Edge::new(
             VertexId::from_int64(*src),
@@ -313,8 +312,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     for i in 1..=100i64 {
         insert_test_vertex(&mut storage, i, &format!("v{i}"));
     }
-    let expected_edges: Vec<(i64, i64)> =
-        (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
+    let expected_edges: Vec<(i64, i64)> = (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
     for (src, dst) in &expected_edges {
         let edge = Edge::new(
             VertexId::from_int64(*src),

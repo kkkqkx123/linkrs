@@ -143,8 +143,6 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             DdlOperatorKind::SequenceManage { .. } => "SequenceManage",
             DdlOperatorKind::MacroManage { .. } => "MacroManage",
             DdlOperatorKind::TypeManage { .. } => "TypeManage",
-            DdlOperatorKind::DatabaseManage { .. } => "DatabaseManage",
-            DdlOperatorKind::ExtensionManage { .. } => "ExtensionManage",
         },
         Fulltext(_, _, op) => match &op.kind {
             FulltextOperatorKind::FulltextManage { .. } => "FulltextManage",

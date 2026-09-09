@@ -544,6 +544,12 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         old_name: &str,
         new_name: &str,
     ) -> Result<bool, StorageError>;
+    fn rename_tag(
+        &mut self,
+        space: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError>;
     fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError>;
 
     fn create_edge_type(&mut self, space: &str, edge: &EdgeTypeInfo) -> Result<u32, StorageError>;
@@ -553,6 +559,12 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         edge_type: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+    ) -> Result<bool, StorageError>;
+    fn rename_edge_type(
+        &mut self,
+        space: &str,
+        old_name: &str,
+        new_name: &str,
     ) -> Result<bool, StorageError>;
     fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
 

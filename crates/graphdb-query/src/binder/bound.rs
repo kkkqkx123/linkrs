@@ -6,6 +6,7 @@
 //! downstream phases never need to re-parse or re-resolve the AST.
 
 use crate::parser::ast::{LimitClause, SampleClause, SkipClause, Steps};
+use graphdb_core::types::expr::SubqueryBody;
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::types::semantic::{ColumnDef, ValueType};
 use graphdb_core::types::{EdgeDirection, OrderDirection};
@@ -97,7 +98,10 @@ pub enum BoundExpression {
     },
 
     /// Exists predicate
-    Exists { query: Box<BoundStatement> },
+    Exists {
+        query: Box<BoundStatement>,
+        original_body: Option<Box<SubqueryBody>>,
+    },
 
     /// Pattern expression (path pattern in expression context)
     Pattern(QueryGraph),
@@ -148,11 +152,13 @@ pub enum BoundExpression {
         expr: Box<BoundExpression>,
         subquery: Box<BoundStatement>,
         negated: bool,
+        original_body: Option<Box<SubqueryBody>>,
     },
 
     /// COUNT subquery: evaluates to the number of rows returned by the subquery
     CountSubquery {
         query: Box<BoundStatement>,
+        original_body: Option<Box<SubqueryBody>>,
     },
 
     /// Lambda expression: anonymous function used as callback for higher-order list functions

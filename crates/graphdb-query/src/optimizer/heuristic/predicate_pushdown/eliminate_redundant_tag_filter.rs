@@ -194,6 +194,7 @@ mod tests {
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::ScanVerticesNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::FunctionArg;
     use graphdb_core::types::ContextualExpression;
     use std::sync::Arc;
 
@@ -221,7 +222,9 @@ mod tests {
             args: vec![
                 FunctionArg::Positional(Expression::Function {
                     name: "labels".to_string(),
-                    args: vec![FunctionArg::Positional(Expression::Variable("n".to_string()))],
+                    args: vec![FunctionArg::Positional(Expression::Variable(
+                        "n".to_string(),
+                    ))],
                 }),
                 FunctionArg::Positional(Expression::Literal(Value::string("Node"))),
             ],
@@ -313,7 +316,9 @@ mod tests {
             args: vec![
                 FunctionArg::Positional(Expression::Function {
                     name: "labels".to_string(),
-                    args: vec![FunctionArg::Positional(Expression::Variable("m".to_string()))],
+                    args: vec![FunctionArg::Positional(Expression::Variable(
+                        "m".to_string(),
+                    ))],
                 }),
                 FunctionArg::Positional(Expression::Literal(Value::string("Node"))),
             ],

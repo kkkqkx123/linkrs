@@ -164,7 +164,8 @@ impl NondeterministicChecker {
                 if Self::is_nondeterministic(name) {
                     return true;
                 }
-                args.iter().any(|a| Self::contains_nondeterministic(a.as_expr()))
+                args.iter()
+                    .any(|a| Self::contains_nondeterministic(a.as_expr()))
             }
             _ => expr
                 .children()
@@ -589,6 +590,7 @@ impl Default for ExpressionAnalyzer {
 mod tests {
     use super::*;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::FunctionArg;
     use graphdb_core::Value;
     use std::sync::Arc;
 
@@ -764,7 +766,9 @@ mod tests {
                     object: Box::new(Expression::Variable("b".to_string())),
                     property: "y".to_string(),
                 }),
-                FunctionArg::Positional(Expression::Literal(Value::Null(graphdb_core::value::NullType::Null))),
+                FunctionArg::Positional(Expression::Literal(Value::Null(
+                    graphdb_core::value::NullType::Null,
+                ))),
             ],
         };
         let complex_meta = graphdb_core::types::expr::ExpressionMeta::new(complex);

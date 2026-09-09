@@ -144,6 +144,7 @@ mod tests {
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::FunctionArg;
     use graphdb_core::types::OrderDirection;
     use graphdb_core::Expression;
     use std::sync::Arc;

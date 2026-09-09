@@ -77,10 +77,7 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 
     if let Some(tags) = schema_meta.get("tags").and_then(|t| t.as_array()) {
         for tag_meta in tags {
-            let tag_name = tag_meta
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("");
+            let tag_name = tag_meta.get("name").and_then(|n| n.as_str()).unwrap_or("");
             if tag_name.is_empty() {
                 continue;
             }
@@ -89,7 +86,10 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
             if let Some(props) = tag_meta.get("properties").and_then(|p| p.as_array()) {
                 for prop in props {
                     let prop_name = prop.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let prop_type = prop.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+                    let prop_type = prop
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("string");
                     let data_type = parse_data_type(prop_type);
                     tag_info
                         .properties
@@ -126,7 +126,10 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
             if let Some(props) = et_meta.get("properties").and_then(|p| p.as_array()) {
                 for prop in props {
                     let prop_name = prop.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let prop_type = prop.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+                    let prop_type = prop
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("string");
                     let data_type = parse_data_type(prop_type);
                     et_info
                         .properties
@@ -152,8 +155,9 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
     csv_path: &Path,
     writer: &mut W,
 ) -> Result<(), StorageError> {
-    let file = std::fs::File::open(csv_path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display())))?;
+    let file = std::fs::File::open(csv_path).map_err(|e| {
+        StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
+    })?;
     let reader = std::io::BufReader::new(file);
     let mut lines = reader.lines();
 
@@ -198,10 +202,7 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    properties.insert(
-                        col_name.clone(),
-                        graphdb_core::Value::string(val_str),
-                    );
+                    properties.insert(col_name.clone(), graphdb_core::Value::string(val_str));
                 }
             }
         }
@@ -209,7 +210,10 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
         let vertex = graphdb_core::Vertex {
             vid: graphdb_core::types::VertexId::from_int64(id),
             id,
-            tags: vec![graphdb_core::Tag::new(tag_name.to_string(), std::collections::HashMap::new())],
+            tags: vec![graphdb_core::Tag::new(
+                tag_name.to_string(),
+                std::collections::HashMap::new(),
+            )],
             properties,
         };
         vertices.push(vertex);
@@ -234,8 +238,9 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
     csv_path: &Path,
     writer: &mut W,
 ) -> Result<(), StorageError> {
-    let file = std::fs::File::open(csv_path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display())))?;
+    let file = std::fs::File::open(csv_path).map_err(|e| {
+        StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
+    })?;
     let reader = std::io::BufReader::new(file);
     let mut lines = reader.lines();
 
@@ -283,10 +288,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    props.insert(
-                        col_name.clone(),
-                        graphdb_core::Value::string(val_str),
-                    );
+                    props.insert(col_name.clone(), graphdb_core::Value::string(val_str));
                 }
             }
         }

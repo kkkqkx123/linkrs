@@ -296,8 +296,8 @@ impl<'a> GroupDependencyAnalyzer<'a> {
 mod tests {
     use super::*;
     use crate::planning::plan::factorization::FactorizedSchema;
-use graphdb_core::types::expr::ExpressionId;
-use graphdb_core::types::expr::FunctionArg;
+    use graphdb_core::types::expr::ExpressionId;
+    use graphdb_core::types::expr::FunctionArg;
 
     fn expr(id: u64) -> ExpressionId {
         ExpressionId::new(id)
@@ -437,7 +437,10 @@ use graphdb_core::types::expr::FunctionArg;
         };
         let the_expr = graphdb_core::Expression::Function {
             name: "list_filter".to_string(),
-            args: vec![FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())), FunctionArg::Positional(body)],
+            args: vec![
+                FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())),
+                FunctionArg::Positional(body),
+            ],
         };
         let mut store = HashMap::new();
         let fake_id = expr(999);
@@ -486,7 +489,10 @@ use graphdb_core::types::expr::FunctionArg;
             };
             let the_expr = graphdb_core::Expression::Function {
                 name: name.to_string(),
-                args: vec![FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())), FunctionArg::Positional(body)],
+                args: vec![
+                    FunctionArg::Positional(graphdb_core::Expression::Variable("a".to_string())),
+                    FunctionArg::Positional(body),
+                ],
             };
             let mut store = HashMap::new();
             let fake_id = expr(999);

@@ -294,7 +294,9 @@ pub fn plan_path_pattern(
                         i += 1;
                     }
                     PathElement::Recursive(_) => {
-                        todo!("Recursive comprehension not yet supported")
+                        return Err(PlannerError::UnsupportedOperation(
+                            "Recursive comprehension is not yet supported".to_string(),
+                        ));
                     }
                 }
             }

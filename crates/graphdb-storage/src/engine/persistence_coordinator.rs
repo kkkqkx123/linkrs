@@ -341,7 +341,7 @@ mod tests {
         assert!(coordinator.should_flush());
         assert!(coordinator.should_checkpoint());
 
-        coordinator.mark_checkpointed(Lsn::new(12));
+        coordinator.mark_checkpointed(Lsn::new(40));
         assert!(!coordinator.should_flush());
         assert!(!coordinator.should_checkpoint());
     }

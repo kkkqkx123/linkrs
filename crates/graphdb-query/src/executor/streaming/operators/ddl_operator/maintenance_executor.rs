@@ -253,14 +253,12 @@ pub(super) fn execute_load_from(
         let name = func_name.clone().unwrap_or_default();
         let args_json_str = func_args_json.clone().unwrap_or_else(|| "[]".to_string());
 
-        let arg_strings: Vec<String> = serde_json::from_str(&args_json_str)
-            .map_err(|e| QueryError::execution(format!(
-                "LOAD FROM table function args parse error: {e}"
-            )))?;
+        let arg_strings: Vec<String> = serde_json::from_str(&args_json_str).map_err(|e| {
+            QueryError::execution(format!("LOAD FROM table function args parse error: {e}"))
+        })?;
         let func_args: Vec<Value> = arg_strings.into_iter().map(Value::string).collect();
 
-        let registry =
-            crate::executor::expression::functions::registry::global_registry();
+        let registry = crate::executor::expression::functions::registry::global_registry();
 
         if !registry.contains_table_function(&name) {
             return Err(QueryError::execution(format!(
@@ -270,9 +268,9 @@ pub(super) fn execute_load_from(
 
         let rows = registry
             .execute_table_function(&name, &func_args)
-            .map_err(|e| QueryError::execution(format!(
-                "LOAD FROM table function '{name}' failed: {e}"
-            )))?;
+            .map_err(|e| {
+                QueryError::execution(format!("LOAD FROM table function '{name}' failed: {e}"))
+            })?;
 
         if rows.is_empty() {
             let schema = Arc::new(Schema::new(vec![]));
@@ -371,9 +369,8 @@ pub(super) fn execute_load_from(
             }
 
             for result in reader.records() {
-                let record = result.map_err(|e| {
-                    QueryError::execution(format!("LOAD FROM glob row error: {e}"))
-                })?;
+                let record = result
+                    .map_err(|e| QueryError::execution(format!("LOAD FROM glob row error: {e}")))?;
                 let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
                 all_rows.push(row);
             }
@@ -401,8 +398,9 @@ pub(super) fn execute_load_from(
         .unwrap_or(b',');
 
     let file_path = source_value.clone();
-    let file = std::fs::File::open(&file_path)
-        .map_err(|e| QueryError::execution(format!("LOAD FROM failed to open '{file_path}': {e}")))?;
+    let file = std::fs::File::open(&file_path).map_err(|e| {
+        QueryError::execution(format!("LOAD FROM failed to open '{file_path}': {e}"))
+    })?;
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(header)
         .delimiter(delimiter)
@@ -444,7 +442,8 @@ pub(super) fn execute_load_from(
 
     let mut rows: Vec<Vec<Value>> = Vec::new();
     for result in reader.records() {
-        let record = result.map_err(|e| QueryError::execution(format!("LOAD FROM row error: {e}")))?;
+        let record =
+            result.map_err(|e| QueryError::execution(format!("LOAD FROM row error: {e}")))?;
         let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
         rows.push(row);
     }
@@ -459,6 +458,7 @@ pub(super) fn execute_in_query_call(
         storage,
         space_name,
         func_name,
+        args_json,
         yield_items,
         col_names,
         emitted,
@@ -473,10 +473,7 @@ pub(super) fn execute_in_query_call(
     *emitted = true;
 
     let names: Vec<String> = if !yield_items.is_empty() {
-        yield_items
-            .iter()
-            .map(|(alias, _)| alias.clone())
-            .collect()
+        yield_items.iter().map(|(alias, _)| alias.clone()).collect()
     } else if !col_names.is_empty() {
         col_names.clone()
     } else {
@@ -515,10 +512,7 @@ pub(super) fn execute_in_query_call(
                     let schema_str = format!(
                         "Space: {}, Tags: {}, EdgeTypes: {}",
                         info.space_name,
-                        reader
-                            .list_tags(space_name)
-                            .map(|t| t.len())
-                            .unwrap_or(0),
+                        reader.list_tags(space_name).map(|t| t.len()).unwrap_or(0),
                         reader
                             .list_edge_types(space_name)
                             .map(|e| e.len())
@@ -578,9 +572,9 @@ pub(super) fn execute_in_query_call(
             Ok(Some(DataChunk::new(rows, edge_schema)))
         }
         _ => {
-            let registry =
-                crate::executor::expression::functions::registry::global_registry();
-            match registry.execute(func_name, &[]) {
+            let registry = crate::executor::expression::functions::registry::global_registry();
+            let args = parse_call_args(args_json);
+            match registry.execute(func_name, &args) {
                 Ok(value) => Ok(Some(super::make_single_row(schema, vec![value]))),
                 Err(_) => Ok(Some(DataChunk::new(Vec::new(), schema))),
             }
@@ -693,4 +687,51 @@ pub(super) fn execute_migrate(
         }
     };
     result
+}
+
+fn parse_call_args(args_json: &str) -> Vec<Value> {
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(args_json).unwrap_or_default();
+    parsed.into_iter().map(|v| json_to_value(&v)).collect()
+}
+
+fn json_to_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null(graphdb_core::NullType::Null),
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::BigInt(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Double(f)
+            } else {
+                Value::string(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Ok(i) = s.parse::<i64>() {
+                Value::BigInt(i)
+            } else if let Ok(f) = s.parse::<f64>() {
+                Value::Double(f)
+            } else if s.eq_ignore_ascii_case("true") {
+                Value::Bool(true)
+            } else if s.eq_ignore_ascii_case("false") {
+                Value::Bool(false)
+            } else if s.eq_ignore_ascii_case("null") {
+                Value::Null(graphdb_core::NullType::Null)
+            } else {
+                Value::string(s.clone())
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            let values: Vec<Value> = arr.iter().map(json_to_value).collect();
+            Value::list(graphdb_core::value::list::List::from(values))
+        }
+        serde_json::Value::Object(map) => {
+            let entries: std::collections::HashMap<Value, Value> = map
+                .iter()
+                .map(|(k, v)| (Value::string(k.clone()), json_to_value(v)))
+                .collect();
+            Value::Map(Box::new(entries))
+        }
+    }
 }

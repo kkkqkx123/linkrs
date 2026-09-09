@@ -163,11 +163,6 @@ pub enum Stmt {
     DropMacro(DropMacroStmt),
     CreateType(CreateTypeStmt),
     DropType(DropTypeStmt),
-    AttachDatabase(AttachDatabaseStmt),
-    DetachDatabase(DetachDatabaseStmt),
-    LoadExtension(LoadExtensionStmt),
-    InstallExtension(InstallExtensionStmt),
-    UninstallExtension(UninstallExtensionStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -249,11 +244,6 @@ crate::define_stmt_helpers! {
     DropMacro => Ddl,
     CreateType => Ddl,
     DropType => Ddl,
-    AttachDatabase => Admin,
-    DetachDatabase => Admin,
-    LoadExtension => Admin,
-    InstallExtension => Admin,
-    UninstallExtension => Admin,
 }
 
 impl Stmt {
@@ -358,11 +348,6 @@ impl Stmt {
             Stmt::DropMacro(_) => "DROP MACRO",
             Stmt::CreateType(_) => "CREATE TYPE",
             Stmt::DropType(_) => "DROP TYPE",
-            Stmt::AttachDatabase(_) => "ATTACH DATABASE",
-            Stmt::DetachDatabase(_) => "DETACH DATABASE",
-            Stmt::LoadExtension(_) => "LOAD EXTENSION",
-            Stmt::InstallExtension(_) => "INSTALL EXTENSION",
-            Stmt::UninstallExtension(_) => "UNINSTALL EXTENSION",
         }
     }
 
@@ -1108,47 +1093,8 @@ mod tests {
                 }),
                 Ddl,
             ),
-            (
-                Stmt::AttachDatabase(AttachDatabaseStmt {
-                    span,
-                    path: "/tmp/other.db".to_string(),
-                    alias: "other".to_string(),
-                    db_type: None,
-                    options: vec![],
-                }),
-                Admin,
-            ),
-            (
-                Stmt::DetachDatabase(DetachDatabaseStmt {
-                    span,
-                    alias: "other".to_string(),
-                }),
-                Admin,
-            ),
-            (
-                Stmt::LoadExtension(LoadExtensionStmt {
-                    span,
-                    path: "my_ext".to_string(),
-                }),
-                Admin,
-            ),
-            (
-                Stmt::InstallExtension(InstallExtensionStmt {
-                    span,
-                    name: "my_ext".to_string(),
-                    repo: None,
-                }),
-                Admin,
-            ),
-            (
-                Stmt::UninstallExtension(UninstallExtensionStmt {
-                    span,
-                    name: "my_ext".to_string(),
-                }),
-                Admin,
-            ),
         ];
-        assert_eq!(cases.len(), 84, "Stmt has 84 variants; update this test");
+        assert_eq!(cases.len(), 79, "Stmt has 79 variants; update this test");
         for (stmt, expected) in cases {
             assert_eq!(
                 stmt.category(),

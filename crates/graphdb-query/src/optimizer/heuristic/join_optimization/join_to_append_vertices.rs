@@ -31,10 +31,10 @@ use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::expr::contextual::ContextualExpression;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::visitor::ExpressionVisitor;
 use graphdb_core::types::expr::visitor_collectors::VariableCollector;
 use graphdb_core::types::expr::ExpressionAnalysisContext;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::Expression;
 use std::sync::Arc;
 

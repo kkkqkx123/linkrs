@@ -127,10 +127,8 @@ pub(crate) fn parse_function_call(
             span,
         })
     } else {
-        let positional_args: Vec<Expression> = func_args
-            .iter()
-            .map(|a| a.as_expr().clone())
-            .collect();
+        let positional_args: Vec<Expression> =
+            func_args.iter().map(|a| a.as_expr().clone()).collect();
         if ctx.match_token(TokenKind::Over) {
             ctx.expect_token(TokenKind::LParen)?;
             let mut partition_by = Vec::new();
@@ -223,10 +221,7 @@ fn try_parse_named_arg(ctx: &mut ParseContext<'_>) -> Result<Option<FunctionArg>
         _ => unreachable!(),
     };
 
-    if !matches!(
-        ctx.peek_token().kind,
-        TokenKind::Assign | TokenKind::Colon
-    ) {
+    if !matches!(ctx.peek_token().kind, TokenKind::Assign | TokenKind::Colon) {
         return Ok(None);
     }
 

@@ -6,9 +6,9 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::{
-    DatabaseManageCommand, EdgeManageCommand, ExtensionManageCommand, IndexManageCommand,
-    MacroManageCommand, MigrateAction, SequenceManageCommand, SpaceManageCommand, TagManageCommand,
-    TypeManageCommand, UserManageCommand,
+    EdgeManageCommand, IndexManageCommand, MacroManageCommand, MigrateAction,
+    SequenceManageCommand, SpaceManageCommand, TagManageCommand, TypeManageCommand,
+    UserManageCommand,
 };
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::{SlotInfo, SlotLayout};
@@ -256,16 +256,6 @@ pub enum DdlOperatorKind {
         command: TypeManageCommand,
         emitted: bool,
     },
-    DatabaseManage {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        command: DatabaseManageCommand,
-        emitted: bool,
-    },
-    ExtensionManage {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        command: ExtensionManageCommand,
-        emitted: bool,
-    },
 }
 
 /// DDL operator.
@@ -463,18 +453,6 @@ impl DdlOperator {
                 command: command.clone(),
                 emitted: false,
             },
-            super::spec::DdlSpec::DatabaseManage { command } => DdlOperatorKind::DatabaseManage {
-                storage,
-                command: command.clone(),
-                emitted: false,
-            },
-            super::spec::DdlSpec::ExtensionManage { command } => {
-                DdlOperatorKind::ExtensionManage {
-                    storage,
-                    command: command.clone(),
-                    emitted: false,
-                }
-            }
         };
         Self::new(kind, output_layout)
     }
@@ -542,8 +520,6 @@ impl DdlOperator {
             DdlOperatorKind::SequenceManage { .. } => self.execute_sequence_manage(),
             DdlOperatorKind::MacroManage { .. } => self.execute_macro_manage(),
             DdlOperatorKind::TypeManage { .. } => self.execute_type_manage(),
-            DdlOperatorKind::DatabaseManage { .. } => self.execute_database_manage(),
-            DdlOperatorKind::ExtensionManage { .. } => self.execute_extension_manage(),
         }
     }
 
@@ -690,65 +666,6 @@ impl DdlOperator {
             }
         } else {
             unreachable!("execute_type_manage called with non-TypeManage kind")
-        }
-    }
-
-    fn execute_database_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        if let DdlOperatorKind::DatabaseManage {
-            ref command,
-            ref mut emitted,
-            ..
-        } = self.kind
-        {
-            if *emitted {
-                return Ok(None);
-            }
-            *emitted = true;
-
-            match command {
-                DatabaseManageCommand::Attach {
-                    path,
-                    alias,
-                    db_type: _,
-                } => Ok(Some(make_manage_result(
-                    "attach",
-                    Some(alias),
-                    &format!("ok: {}", path),
-                ))),
-                DatabaseManageCommand::Detach { alias } => {
-                    Ok(Some(make_manage_result("detach", Some(alias), "ok")))
-                }
-            }
-        } else {
-            unreachable!("execute_database_manage called with non-DatabaseManage kind")
-        }
-    }
-
-    fn execute_extension_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        if let DdlOperatorKind::ExtensionManage {
-            ref command,
-            ref mut emitted,
-            ..
-        } = self.kind
-        {
-            if *emitted {
-                return Ok(None);
-            }
-            *emitted = true;
-
-            match command {
-                ExtensionManageCommand::Load { path } => {
-                    Ok(Some(make_manage_result("load", Some(path), "ok")))
-                }
-                ExtensionManageCommand::Install { name, repo: _ } => {
-                    Ok(Some(make_manage_result("install", Some(name), "ok")))
-                }
-                ExtensionManageCommand::Uninstall { name } => {
-                    Ok(Some(make_manage_result("uninstall", Some(name), "ok")))
-                }
-            }
-        } else {
-            unreachable!("execute_extension_manage called with non-ExtensionManage kind")
         }
     }
 }

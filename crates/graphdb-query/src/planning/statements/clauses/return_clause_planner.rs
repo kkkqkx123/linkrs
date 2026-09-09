@@ -584,7 +584,9 @@ fn expression_contains_aggregate(expr: &graphdb_core::Expression) -> bool {
             expression_contains_aggregate(left) || expression_contains_aggregate(right)
         }
         Expression::Unary { operand, .. } => expression_contains_aggregate(operand),
-        Expression::Function { args, .. } => args.iter().any(|a| expression_contains_aggregate(a.as_expr())),
+        Expression::Function { args, .. } => args
+            .iter()
+            .any(|a| expression_contains_aggregate(a.as_expr())),
         _ => false,
     }
 }
@@ -597,7 +599,9 @@ fn expression_contains_window_function(expr: &graphdb_core::Expression) -> bool 
             expression_contains_window_function(left) || expression_contains_window_function(right)
         }
         Expression::Unary { operand, .. } => expression_contains_window_function(operand),
-        Expression::Function { args, .. } => args.iter().any(|a| expression_contains_window_function(a.as_expr())),
+        Expression::Function { args, .. } => args
+            .iter()
+            .any(|a| expression_contains_window_function(a.as_expr())),
         _ => false,
     }
 }
@@ -701,7 +705,9 @@ fn extract_aggregate_function(
             extract_aggregate_function(left).or_else(|| extract_aggregate_function(right))
         }
         Expression::Unary { operand, .. } => extract_aggregate_function(operand),
-        Expression::Function { args, .. } => args.iter().find_map(|a| extract_aggregate_function(a.as_expr())),
+        Expression::Function { args, .. } => args
+            .iter()
+            .find_map(|a| extract_aggregate_function(a.as_expr())),
         _ => None,
     }
 }

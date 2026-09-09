@@ -641,7 +641,6 @@ impl VectorSearchPlanner {
 
         result
     }
-
 }
 
 #[cfg(test)]

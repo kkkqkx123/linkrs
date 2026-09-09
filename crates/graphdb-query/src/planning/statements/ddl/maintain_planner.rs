@@ -12,6 +12,9 @@ use crate::planning::plan::core::nodes::management::space_nodes::{
     CheckpointNode, CommentOnNode, CreateSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
     SpaceManageInfo,
 };
+use crate::planning::plan::core::nodes::management::system_nodes::{
+    InQueryCallNode, LoadFromNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
+};
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
 use crate::planning::plan::core::nodes::{
     AlterEdgeNode, AlterTagNode, CreateEdgeNode, CreateTagNode, EdgeManageInfo, ShowCreateEdgeNode,
@@ -21,9 +24,6 @@ use crate::planning::plan::core::nodes::{
 use crate::planning::plan::core::{
     node_id_generator::next_node_id, AlterSpaceNode, ClearSpaceNode, PlanNodeEnum, ShowSpacesNode,
     ShowStatsNode, ShowStatsType, ShowUsersNode,
-};
-use crate::planning::plan::core::nodes::management::system_nodes::{
-    InQueryCallNode, LoadFromNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
 };
 use crate::planning::plan::SubPlan;
 use crate::planning::plan::{
@@ -234,12 +234,9 @@ impl MaintainPlanner {
                 // Sequence creation will be handled by the executor in S-7
                 Ok(None)
             }
-            CreateTarget::TagAsQuery { name, .. } => {
-                Err(PlannerError::UnsupportedOperation(format!(
-                    "CREATE TAG {} AS (query) is not yet supported",
-                    name
-                )))
-            }
+            CreateTarget::TagAsQuery { name, .. } => Err(PlannerError::UnsupportedOperation(
+                format!("CREATE TAG {} AS (query) is not yet supported", name),
+            )),
         }
     }
 
@@ -301,7 +298,10 @@ impl MaintainPlanner {
                 // Return a placeholder for now
                 unreachable!("ALTER SEQUENCE planning not yet implemented")
             }
-            AlterTarget::RenameTag { old_name, new_name: _ } => {
+            AlterTarget::RenameTag {
+                old_name,
+                new_name: _,
+            } => {
                 let node = crate::planning::plan::core::nodes::management::tag_nodes::AlterTagNode::new(
                     next_node_id(),
                     crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo::new(
@@ -311,7 +311,10 @@ impl MaintainPlanner {
                 );
                 PlanNodeEnum::TagManage(TagManageNode::Alter(node))
             }
-            AlterTarget::RenameEdge { old_name, new_name: _ } => {
+            AlterTarget::RenameEdge {
+                old_name,
+                new_name: _,
+            } => {
                 let node = crate::planning::plan::core::nodes::management::edge_nodes::AlterEdgeNode::new(
                     next_node_id(),
                     crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo::new(
@@ -685,21 +688,10 @@ impl Planner for MaintainPlanner {
 
             Stmt::LoadFrom(load_stmt) => {
                 use crate::parser::ast::stmt::ScanSource;
-                let (source_kind, source_value, func_name, func_args_json) = match &load_stmt
-                    .source
+                let (source_kind, source_value, func_name, func_args_json) = match &load_stmt.source
                 {
-                    ScanSource::File(path) => (
-                        "file".to_string(),
-                        path.clone(),
-                        None,
-                        None,
-                    ),
-                    ScanSource::Glob(pattern) => (
-                        "glob".to_string(),
-                        pattern.clone(),
-                        None,
-                        None,
-                    ),
+                    ScanSource::File(path) => ("file".to_string(), path.clone(), None, None),
+                    ScanSource::Glob(pattern) => ("glob".to_string(), pattern.clone(), None, None),
                     ScanSource::TableFunc { name, args } => {
                         let args_json = serde_json::to_string(
                             &args
@@ -708,7 +700,12 @@ impl Planner for MaintainPlanner {
                                 .collect::<Vec<_>>(),
                         )
                         .unwrap_or_else(|_| "[]".to_string());
-                        ("table_func".to_string(), String::new(), Some(name.clone()), Some(args_json))
+                        (
+                            "table_func".to_string(),
+                            String::new(),
+                            Some(name.clone()),
+                            Some(args_json),
+                        )
                     }
                 };
                 let options: Vec<(String, String)> = load_stmt
@@ -726,7 +723,9 @@ impl Planner for MaintainPlanner {
                                 crate::parser::ast::stmt::ReturnItem::Expression {
                                     expression,
                                     alias,
-                                } => alias.clone().unwrap_or_else(|| expression.to_expression_string()),
+                                } => alias
+                                    .clone()
+                                    .unwrap_or_else(|| expression.to_expression_string()),
                             })
                             .collect()
                     })

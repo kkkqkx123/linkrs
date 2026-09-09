@@ -659,6 +659,109 @@ impl SchemaManager {
         Ok(false)
     }
 
+    pub fn rename_tag(
+        &self,
+        space_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError> {
+        let space_info = self.get_space(space_name)?.ok_or_else(|| {
+            StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
+        })?;
+
+        let mut tags = self.tags.write();
+
+        let tag_key = tags
+            .iter()
+            .find(|((sid, _), data)| *sid == space_info.space_id && data.info.tag_name == old_name)
+            .map(|(k, _)| *k);
+
+        if let Some(old_key) = tag_key {
+            let data = tags
+                .remove(&old_key)
+                .ok_or_else(|| StorageError::db_error(format!("Tag \"{}\" not found", old_name)))?;
+
+            if tags
+                .iter()
+                .any(|((sid, _), d)| *sid == space_info.space_id && d.info.tag_name == new_name)
+            {
+                tags.insert(old_key, data);
+                return Err(StorageError::db_error(format!(
+                    "Tag \"{}\" already exists",
+                    new_name
+                )));
+            }
+
+            let mut new_data = data;
+            new_data.info.tag_name = new_name.to_string();
+
+            let new_key = (old_key.0, old_key.1);
+            tags.insert(new_key, new_data);
+
+            let mut edge_types = self.edge_types.write();
+            for ((sid, _), data) in edge_types.iter_mut() {
+                if *sid == space_info.space_id {
+                    if data.info.src_tag_name == old_name {
+                        data.info.src_tag_name = new_name.to_string();
+                    }
+                    if data.info.dst_tag_name == old_name {
+                        data.info.dst_tag_name = new_name.to_string();
+                    }
+                }
+            }
+
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub fn rename_edge_type(
+        &self,
+        space_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError> {
+        let space_info = self.get_space(space_name)?.ok_or_else(|| {
+            StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
+        })?;
+
+        let mut edge_types = self.edge_types.write();
+
+        let key = edge_types
+            .iter()
+            .find(|((sid, _), data)| {
+                *sid == space_info.space_id && data.info.edge_type_name == old_name
+            })
+            .map(|(k, _)| *k);
+
+        if let Some(old_key) = key {
+            let data = edge_types.remove(&old_key).ok_or_else(|| {
+                StorageError::db_error(format!("Edge type \"{}\" not found", old_name))
+            })?;
+
+            if edge_types.iter().any(|((sid, _), d)| {
+                *sid == space_info.space_id && d.info.edge_type_name == new_name
+            }) {
+                edge_types.insert(old_key, data);
+                return Err(StorageError::db_error(format!(
+                    "Edge type \"{}\" already exists",
+                    new_name
+                )));
+            }
+
+            let mut new_data = data;
+            new_data.info.edge_type_name = new_name.to_string();
+
+            let new_key = (old_key.0, old_key.1);
+            edge_types.insert(new_key, new_data);
+
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     pub fn alter_edge_type(
         &self,
         space_name: &str,

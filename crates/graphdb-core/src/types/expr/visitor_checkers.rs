@@ -641,7 +641,14 @@ impl WildcardReplacer {
             },
             Expression::Function { name, args } => Expression::Function {
                 name: name.clone(),
-                args: args.iter().map(|arg| crate::types::expr::FunctionArg::Positional(self.replace_internal(arg.as_expr()))).collect(),
+                args: args
+                    .iter()
+                    .map(|arg| {
+                        crate::types::expr::FunctionArg::Positional(
+                            self.replace_internal(arg.as_expr()),
+                        )
+                    })
+                    .collect(),
             },
             Expression::Aggregate {
                 func,

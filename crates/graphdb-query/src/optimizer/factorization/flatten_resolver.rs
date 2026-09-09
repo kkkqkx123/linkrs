@@ -274,8 +274,8 @@ impl FlattenResolver {
 mod tests {
     use super::*;
     use crate::planning::plan::factorization::FactorizedSchema;
-use graphdb_core::types::expr::ExpressionId;
-use graphdb_core::types::expr::FunctionArg;
+    use graphdb_core::types::expr::ExpressionId;
+    use graphdb_core::types::expr::FunctionArg;
     use std::collections::HashSet;
 
     fn expr(id: u64) -> ExpressionId {
@@ -347,9 +347,9 @@ use graphdb_core::types::expr::FunctionArg;
         let the_expr = graphdb_core::Expression::Function {
             name: "list_extract".to_string(),
             args: vec![
-                FunctionArg::Positional(graphdb_core::Expression::List(vec![graphdb_core::Expression::Literal(
-                    graphdb_core::Value::BigInt(1),
-                )])),
+                FunctionArg::Positional(graphdb_core::Expression::List(vec![
+                    graphdb_core::Expression::Literal(graphdb_core::Value::BigInt(1)),
+                ])),
                 FunctionArg::Positional(graphdb_core::Expression::Variable("x".to_string())),
             ],
         };

@@ -167,8 +167,7 @@ impl CompositeValidator {
         if arg_count > MAX_FUNCTION_ARGS {
             return Err(DBError::from(QueryError::invalid_query(format!(
                 "The function {:?} has too many arguments: {}",
-                name,
-                arg_count
+                name, arg_count
             ))));
         }
 
@@ -180,17 +179,13 @@ impl CompositeValidator {
                 if arg_count < expected {
                     return Err(DBError::from(QueryError::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
-                        name,
-                        expected,
-                        arg_count
+                        name, expected, arg_count
                     ))));
                 }
             } else if arg_count != expected {
                 return Err(DBError::from(QueryError::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
-                    name,
-                    expected,
-                    arg_count
+                    name, expected, arg_count
                 ))));
             }
         } else if let Some(func) = registry.get_custom(name) {
@@ -200,17 +195,13 @@ impl CompositeValidator {
                 if arg_count < expected {
                     return Err(DBError::from(QueryError::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
-                        name,
-                        expected,
-                        arg_count
+                        name, expected, arg_count
                     ))));
                 }
             } else if arg_count != expected {
                 return Err(DBError::from(QueryError::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
-                    name,
-                    expected,
-                    arg_count
+                    name, expected, arg_count
                 ))));
             }
         }

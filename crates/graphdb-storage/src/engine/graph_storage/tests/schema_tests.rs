@@ -244,11 +244,10 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
             .save_to_disk()
             .expect("Failed to persist base schema");
 
-        let tag =
-            graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("age".to_string(), DataType::BigInt),
-            ]);
+        let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            PropertyDef::new("name".to_string(), DataType::String),
+            PropertyDef::new("age".to_string(), DataType::BigInt),
+        ]);
         storage
             .create_tag("test_space", &tag)
             .expect("Failed to create tag");
@@ -281,8 +280,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
         storage.flush().expect("Failed to sync WAL");
     }
 
-    let storage =
-        GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
+    let storage = GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
     let tag = storage
         .get_tag("test_space", "Person")
@@ -342,8 +340,7 @@ fn test_schema_wal_replays_drop_after_restart() {
         storage.flush().expect("Failed to sync WAL");
     }
 
-    let storage =
-        GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
+    let storage = GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
     assert!(storage
         .get_tag("test_space", "Person")
@@ -370,8 +367,7 @@ fn test_space_wal_replays_create_alter_and_clear_after_restart() {
     }
 
     {
-        let mut storage =
-            GraphStorage::open(work_dir.clone()).expect("Failed to reopen storage");
+        let mut storage = GraphStorage::open(work_dir.clone()).expect("Failed to reopen storage");
         let space_id = storage
             .get_space_id("test_space")
             .expect("space id should exist");
@@ -405,8 +401,7 @@ fn test_space_wal_replays_create_alter_and_clear_after_restart() {
         storage.flush().expect("Failed to sync WAL");
     }
 
-    let storage =
-        GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
+    let storage = GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
     let space = storage
         .get_space("test_space")
@@ -446,8 +441,7 @@ fn test_space_wal_replays_drop_after_restart() {
         storage.flush().expect("Failed to sync WAL");
     }
 
-    let storage =
-        GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
+    let storage = GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
     assert!(!storage.space_exists("test_space"));
     assert!(storage

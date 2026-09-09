@@ -161,7 +161,7 @@ mod tests {
         };
         let where_clause = stmt.where_clause.expect("where clause expected");
         match where_clause.condition {
-            BoundExpression::Exists { query } => {
+            BoundExpression::Exists { query, .. } => {
                 let sub = query.as_match().expect("subquery should be a Match");
                 assert!(sub.where_clause.is_some(), "subquery WHERE must be bound");
                 assert_eq!(sub.query_graph.nodes.len(), 1);
@@ -182,7 +182,7 @@ mod tests {
         };
         let where_clause = stmt.where_clause.expect("where clause expected");
         match where_clause.condition {
-            BoundExpression::Exists { query } => {
+            BoundExpression::Exists { query, .. } => {
                 let sub = query.as_match().expect("subquery should be a Match");
                 assert_eq!(sub.query_graph.nodes.len(), 2, "two nodes in pattern");
                 assert_eq!(sub.query_graph.edges.len(), 1, "one edge in pattern");
@@ -291,7 +291,7 @@ mod tests {
         };
         let where_clause = stmt.where_clause.expect("where clause expected");
         match where_clause.condition {
-            BoundExpression::Exists { query } => {
+            BoundExpression::Exists { query, .. } => {
                 let sub = query.as_match().expect("outer subquery");
                 let sub_where = sub.where_clause.as_ref().expect("inner WHERE");
                 assert!(matches!(

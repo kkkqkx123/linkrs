@@ -48,18 +48,6 @@ impl StmtParser {
         if ctx.check_keyword("IMPORT") {
             return Self::parse_import_database_statement(ctx);
         }
-        if ctx.check_keyword("ATTACH") {
-            return Self::parse_attach_database_statement(ctx);
-        }
-        if ctx.check_keyword("DETACH") {
-            return Self::parse_detach_database_statement(ctx);
-        }
-        if ctx.check_keyword("INSTALL") {
-            return Self::parse_install_extension_statement(ctx);
-        }
-        if ctx.check_keyword("UNINSTALL") {
-            return Self::parse_uninstall_extension_statement(ctx);
-        }
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
@@ -783,108 +771,6 @@ impl StmtParser {
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
         Ok(Stmt::ImportDatabase(ImportDatabaseStmt { span, path }))
-    }
-
-    /// Parse `ATTACH '<path>' AS <alias> [DBTYPE <type>] [OPTIONS (key=value, ...)]`.
-    fn parse_attach_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::{AttachDatabaseStmt, AttachOption};
-
-        let start_span = ctx.current_span();
-        ctx.consume_keyword("ATTACH")?;
-        let path = ctx.expect_string_literal()?;
-        ctx.consume_keyword("AS")?;
-        let alias = ctx.expect_identifier()?;
-
-        let db_type = if ctx.check_keyword("DBTYPE") {
-            ctx.consume_keyword("DBTYPE")?;
-            Some(ctx.expect_identifier()?)
-        } else {
-            None
-        };
-
-        let options = if ctx.check_keyword("OPTIONS") {
-            ctx.consume_keyword("OPTIONS")?;
-            ctx.expect_token(TokenKind::LParen)?;
-            let mut opts = Vec::new();
-            loop {
-                let key = ctx.expect_identifier()?;
-                ctx.expect_token(TokenKind::Assign)?;
-                let value = ctx.expect_string_literal()?;
-                opts.push(AttachOption { key, value });
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
-                }
-            }
-            ctx.expect_token(TokenKind::RParen)?;
-            opts
-        } else {
-            vec![]
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::AttachDatabase(AttachDatabaseStmt {
-            span,
-            path,
-            alias,
-            db_type,
-            options,
-        }))
-    }
-
-    /// Parse `DETACH <alias>`.
-    fn parse_detach_database_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::DetachDatabaseStmt;
-
-        let start_span = ctx.current_span();
-        ctx.consume_keyword("DETACH")?;
-        let alias = ctx.expect_identifier()?;
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::DetachDatabase(DetachDatabaseStmt { span, alias }))
-    }
-
-    /// Parse `INSTALL EXTENSION <name> [FROM '<repo>']`.
-    fn parse_install_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::InstallExtensionStmt;
-
-        let start_span = ctx.current_span();
-        ctx.consume_keyword("INSTALL")?;
-        ctx.consume_keyword("EXTENSION")?;
-        let name = ctx.expect_identifier()?;
-
-        let repo = if ctx.check_keyword("FROM") {
-            ctx.consume_keyword("FROM")?;
-            Some(ctx.expect_string_literal()?)
-        } else {
-            None
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::InstallExtension(InstallExtensionStmt {
-            span,
-            name,
-            repo,
-        }))
-    }
-
-    /// Parse `UNINSTALL EXTENSION <name>`.
-    fn parse_uninstall_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::parser::ast::stmt::UninstallExtensionStmt;
-
-        let start_span = ctx.current_span();
-        ctx.consume_keyword("UNINSTALL")?;
-        ctx.consume_keyword("EXTENSION")?;
-        let name = ctx.expect_identifier()?;
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-        Ok(Stmt::UninstallExtension(UninstallExtensionStmt {
-            span,
-            name,
-        }))
     }
 
     /// Pipeline after parsing set operation statements, or end of the process.

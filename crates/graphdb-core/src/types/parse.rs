@@ -426,8 +426,14 @@ mod tests {
             ]))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::String, None))),
-            DataType::Decimal { precision: 10, scale: 2 },
-            DataType::Decimal { precision: 38, scale: 0 },
+            DataType::Decimal {
+                precision: 10,
+                scale: 2,
+            },
+            DataType::Decimal {
+                precision: 38,
+                scale: 0,
+            },
             DataType::Union(vec![DataType::Int, DataType::String]),
         ]
     }

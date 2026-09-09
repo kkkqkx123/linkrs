@@ -543,7 +543,10 @@ impl TraverseNode {
         self.direction = direction;
     }
 
-    pub fn set_path_semantic(&mut self, path_semantic: Option<crate::parser::ast::pattern::PathSemantic>) {
+    pub fn set_path_semantic(
+        &mut self,
+        path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+    ) {
         self.path_semantic = path_semantic;
     }
 

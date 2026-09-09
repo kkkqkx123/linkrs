@@ -399,7 +399,15 @@ pub(super) fn _traverse_on_chunk(
     visited: &mut VisitedSet,
     cancel_token: Option<CancelToken>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    traverse_on_chunk_with_semantic(chunk, output_layout, reader, config, visited, true, cancel_token)
+    traverse_on_chunk_with_semantic(
+        chunk,
+        output_layout,
+        reader,
+        config,
+        visited,
+        true,
+        cancel_token,
+    )
 }
 
 pub(super) fn traverse_on_chunk_with_semantic(

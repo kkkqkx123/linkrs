@@ -10,8 +10,8 @@ use crate::optimizer::analysis::{
 };
 use crate::planning::plan::core::nodes::{FilterNode, GetVerticesNode, PlanNodeEnum, ProjectNode};
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::{Expression, ExpressionMeta};
 use graphdb_core::types::expr::FunctionArg;
+use graphdb_core::types::expr::{Expression, ExpressionMeta};
 use graphdb_core::Value;
 
 /// Create an expression context for testing purposes.

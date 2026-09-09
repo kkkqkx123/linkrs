@@ -12,7 +12,8 @@ use graphdb_transaction::wal::{
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 
 impl RecoveryApplier for GraphStorageContext {
@@ -152,6 +153,18 @@ impl RecoveryApplier for GraphStorageContext {
         ts: Timestamp,
     ) -> StorageResult<()> {
         schema::replay_rename_edge_prop(self, redo, ts)
+    }
+
+    fn replay_rename_tag(&self, redo: &RenameTagRedo, _ts: Timestamp) -> StorageResult<()> {
+        schema::replay_rename_tag(self, redo)
+    }
+
+    fn replay_rename_edge_type(
+        &self,
+        redo: &RenameEdgeTypeRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        schema::replay_rename_edge_type(self, redo)
     }
 
     fn replay_create_tag_index(

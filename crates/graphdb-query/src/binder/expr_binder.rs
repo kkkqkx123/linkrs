@@ -84,7 +84,10 @@ impl<'a> ExpressionBinder<'a> {
             },
 
             Expression::Function { name, args } => {
-                let arg_types: Vec<DataType> = args.iter().map(|a| self.resolve_type(a.as_expr())).collect();
+                let arg_types: Vec<DataType> = args
+                    .iter()
+                    .map(|a| self.resolve_type(a.as_expr()))
+                    .collect();
                 self.deduce_function_return_type(name, &arg_types)
             }
 

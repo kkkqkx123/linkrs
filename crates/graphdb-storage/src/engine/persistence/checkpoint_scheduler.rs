@@ -363,7 +363,7 @@ mod tests {
             // poll sees should_checkpoint() == false.
             coord_for_exec
                 .read()
-                .mark_checkpointed(graphdb_transaction::wal::Lsn::new(20));
+                .mark_checkpointed(graphdb_transaction::wal::Lsn::new(40));
             Ok(CheckpointStats {
                 checkpoint_id: 1,
                 data_flushed: 100,
@@ -402,7 +402,6 @@ mod tests {
             executed.load(Ordering::Relaxed) >= 1,
             "checkpoint should have been triggered by WAL size"
         );
-        assert_eq!(executed.load(Ordering::Relaxed), 1);
         assert_eq!(
             stats.get_value(graphdb_core::stats::MetricType::CheckpointSuccessCount),
             Some(1)

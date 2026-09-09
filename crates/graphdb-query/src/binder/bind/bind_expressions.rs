@@ -56,7 +56,9 @@ impl Binder {
                     check(scope, right)
                 }
                 Expression::Unary { operand, .. } => check(scope, operand),
-                Expression::Function { args, .. } => args.iter().try_for_each(|a| check(scope, a.as_expr())),
+                Expression::Function { args, .. } => {
+                    args.iter().try_for_each(|a| check(scope, a.as_expr()))
+                }
                 Expression::Aggregate { args, filter, .. } => {
                     args.iter().try_for_each(|a| check(scope, a))?;
                     if let Some(f) = filter {
@@ -541,9 +543,11 @@ impl Binder {
                 })
             }
             Expression::Exists { body } => {
+                let original = body.clone();
                 let query = self.bind_subquery_body(body)?;
                 Ok(BoundExpression::Exists {
                     query: Box::new(query),
+                    original_body: Some(original),
                 })
             }
             Expression::In {
@@ -551,18 +555,22 @@ impl Binder {
                 subquery,
                 negated,
             } => {
+                let original = subquery.clone();
                 let bound_expr = self.bind_inner_expr(innerexpr, None)?;
                 let query = self.bind_subquery_body(subquery)?;
                 Ok(BoundExpression::In {
                     expr: Box::new(bound_expr),
                     subquery: Box::new(query),
                     negated: *negated,
+                    original_body: Some(original),
                 })
             }
             Expression::CountSubquery { body } => {
+                let original = body.clone();
                 let query = self.bind_subquery_body(body)?;
                 Ok(BoundExpression::CountSubquery {
                     query: Box::new(query),
+                    original_body: Some(original),
                 })
             }
             Expression::Lambda { params, body } => {

@@ -7,7 +7,8 @@ use super::redo::{
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 
@@ -127,6 +128,14 @@ pub trait RecoveryApplier {
     fn replay_rename_edge_prop(
         &self,
         redo: &RenameEdgePropRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()>;
+
+    fn replay_rename_tag(&self, redo: &RenameTagRedo, ts: Timestamp) -> StorageResult<()>;
+
+    fn replay_rename_edge_type(
+        &self,
+        redo: &RenameEdgeTypeRedo,
         ts: Timestamp,
     ) -> StorageResult<()>;
 

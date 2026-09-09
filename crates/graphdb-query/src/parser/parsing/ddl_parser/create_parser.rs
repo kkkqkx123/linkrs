@@ -64,10 +64,7 @@ impl DdlParser {
                 let span = ctx.merge_span(start_span.start, end_span.end);
                 return Ok(Stmt::Create(CreateStmt {
                     span,
-                    target: CreateTarget::TagAsQuery {
-                        name,
-                        query_text,
-                    },
+                    target: CreateTarget::TagAsQuery { name, query_text },
                     if_not_exists,
                 }));
             }
@@ -554,7 +551,8 @@ impl DdlParser {
         } else {
             Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected TAG, EDGE, SPACE, INDEX, SEQUENCE, MACRO, or TYPE after CREATE".to_string(),
+                "Expected TAG, EDGE, SPACE, INDEX, SEQUENCE, MACRO, or TYPE after CREATE"
+                    .to_string(),
                 ctx.current_position(),
             ))
         }

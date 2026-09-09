@@ -409,7 +409,11 @@ impl Binder {
             PathElement::Repeated(elem, _rep) => {
                 self.process_path_element(elem, graph, prev_node_var)
             }
-            PathElement::Recursive(_) => todo!("Recursive comprehension not yet supported"),
+            PathElement::Recursive(_) => Err(DBError::from(
+                graphdb_core::error::QueryError::invalid_query(
+                    "Recursive comprehension is not yet supported".to_string(),
+                ),
+            )),
         }
     }
 

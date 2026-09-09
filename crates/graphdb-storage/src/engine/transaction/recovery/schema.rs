@@ -10,7 +10,8 @@ use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeTypeRedo,
     CreateSpaceRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, RenameEdgePropRedo, RenameVertexPropRedo,
+    DeleteVertexPropRedo, DeleteVertexTypeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
+    RenameTagRedo, RenameVertexPropRedo,
 };
 
 pub(crate) fn replay_create_space(
@@ -499,6 +500,28 @@ pub(crate) fn replay_rename_edge_prop(
     ctx.schema_manager()
         .update_edge_type(&space_name, &edge_type)?;
     ctx.rename_edge_property(redo.edge_label, &redo.old_name, &redo.new_name)?;
+    Ok(())
+}
+
+pub(crate) fn replay_rename_tag(
+    ctx: &GraphStorageContext,
+    redo: &RenameTagRedo,
+) -> StorageResult<()> {
+    let space_info = ctx.schema_manager().get_space_by_id(redo.space_id)?;
+    let space_name = space_info.map(|s| s.space_name.clone()).unwrap_or_default();
+    ctx.schema_manager()
+        .rename_tag(&space_name, &redo.old_name, &redo.new_name)?;
+    Ok(())
+}
+
+pub(crate) fn replay_rename_edge_type(
+    ctx: &GraphStorageContext,
+    redo: &RenameEdgeTypeRedo,
+) -> StorageResult<()> {
+    let space_info = ctx.schema_manager().get_space_by_id(redo.space_id)?;
+    let space_name = space_info.map(|s| s.space_name.clone()).unwrap_or_default();
+    ctx.schema_manager()
+        .rename_edge_type(&space_name, &redo.old_name, &redo.new_name)?;
     Ok(())
 }
 

@@ -113,7 +113,9 @@ impl ParameterizingTransformer {
             Expression::Function { name, args } => {
                 let new_args: Vec<FunctionArg> = args
                     .iter()
-                    .map(|arg| FunctionArg::Positional(self.transform_with_params(arg.as_expr(), result)))
+                    .map(|arg| {
+                        FunctionArg::Positional(self.transform_with_params(arg.as_expr(), result))
+                    })
                     .collect();
                 Expression::Function {
                     name: name.clone(),
@@ -328,20 +330,14 @@ impl ParameterizingTransformer {
         body: &graphdb_core::types::expr::SubqueryBody,
         result: &mut ParameterizedResult,
     ) -> graphdb_core::types::expr::SubqueryBody {
-        let where_clause = body
-            .where_clause
-            .as_ref()
-            .map(|expr| {
-                let transformed = self.transform_with_params(expr, result);
-                Box::new(transformed)
-            });
-        let return_expr = body
-            .return_expr
-            .as_ref()
-            .map(|expr| {
-                let transformed = self.transform_with_params(expr, result);
-                Box::new(transformed)
-            });
+        let where_clause = body.where_clause.as_ref().map(|expr| {
+            let transformed = self.transform_with_params(expr, result);
+            Box::new(transformed)
+        });
+        let return_expr = body.return_expr.as_ref().map(|expr| {
+            let transformed = self.transform_with_params(expr, result);
+            Box::new(transformed)
+        });
         graphdb_core::types::expr::SubqueryBody {
             id: body.id,
             patterns: body.patterns.clone(),
@@ -939,9 +935,7 @@ impl TemplateExtractor {
                             };
                             format!("{}{}", Self::path_element_to_template(elem), rep_str)
                         }
-                        crate::parser::ast::PathElement::Recursive(_) => {
-                            todo!("Recursive comprehension not yet supported")
-                        }
+                        crate::parser::ast::PathElement::Recursive(_) => "(recursive)".to_string(),
                     })
                     .collect();
                 elements.join("")
@@ -987,8 +981,10 @@ impl TemplateExtractor {
                 format!("({}{})", op, Self::expr_to_template_string(operand))
             }
             Expression::Function { name, args } => {
-                let arg_strs: Vec<String> =
-                    args.iter().map(|a| Self::expr_to_template_string(a.as_expr())).collect();
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(|a| Self::expr_to_template_string(a.as_expr()))
+                    .collect();
                 format!("{}({})", name, arg_strs.join(", "))
             }
             Expression::Aggregate {

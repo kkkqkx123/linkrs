@@ -305,7 +305,8 @@ impl TimeTravelEdgeStore {
 
         // Binary search to find earliest relevant segment (create_ts_min <= ts)
         let max_index_pos = if !lookup.segment_index.is_empty() {
-            match lookup.segment_index
+            match lookup
+                .segment_index
                 .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
             {
                 Ok(pos) | Err(pos) => pos.saturating_sub(1),
@@ -369,12 +370,7 @@ impl TimeTravelEdgeStore {
         None
     }
 
-    fn base_edges_of(
-        &self,
-        lookup: SegmentLookup<'_>,
-        src: u32,
-        ts: Timestamp,
-    ) -> Vec<Nbr> {
+    fn base_edges_of(&self, lookup: SegmentLookup<'_>, src: u32, ts: Timestamp) -> Vec<Nbr> {
         let mut edges = Vec::new();
 
         // Build a set of segment indices that contain this vertex (for O(1) lookup)
@@ -388,7 +384,8 @@ impl TimeTravelEdgeStore {
         // where create_ts_min <= ts, then iterate from the end of the index
         // (newest segment) up to that position.
         let max_index_pos = if !lookup.segment_index.is_empty() {
-            match lookup.segment_index
+            match lookup
+                .segment_index
                 .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
             {
                 Ok(pos) | Err(pos) => {

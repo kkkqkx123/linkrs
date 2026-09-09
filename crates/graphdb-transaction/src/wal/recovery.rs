@@ -9,8 +9,9 @@ use crate::wal::{
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo,
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
     InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult,
-    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
-    UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType, WalParser,
+    WalRecoveryMode,
 };
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
@@ -544,6 +545,30 @@ impl RecoveryManager {
                         replay_rename_edge_prop
                     )
                 }
+                WalOpType::RenameTag => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        RenameTagRedo,
+                        replay_rename_tag
+                    )
+                }
+                WalOpType::RenameEdgeType => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        RenameEdgeTypeRedo,
+                        replay_rename_edge_type
+                    )
+                }
                 WalOpType::CreateTagIndex => {
                     recovery_arm_ref!(
                         applier,
@@ -655,7 +680,8 @@ mod tests {
     use crate::wal::writer::LocalWalWriter;
     use crate::wal::writer::WalWriter;
     use crate::wal::{
-        InsertVertexRedo, LabelId, Timestamp, TransactionWalEntry, VertexId, WalOpType,
+        InsertVertexRedo, LabelId, RenameEdgeTypeRedo, RenameTagRedo, Timestamp,
+        TransactionWalEntry, VertexId, WalOpType,
     };
     use graphdb_core::Value;
     use postcard::to_allocvec;
@@ -729,6 +755,8 @@ mod tests {
             replay_delete_edge_prop(redo: &DeleteEdgePropRedo, ts: Timestamp),
             replay_rename_vertex_prop(redo: &RenameVertexPropRedo, ts: Timestamp),
             replay_rename_edge_prop(redo: &RenameEdgePropRedo, ts: Timestamp),
+            replay_rename_tag(redo: &RenameTagRedo, ts: Timestamp),
+            replay_rename_edge_type(redo: &RenameEdgeTypeRedo, ts: Timestamp),
             replay_create_tag_index(redo: &CreateTagIndexRedo, ts: Timestamp),
             replay_drop_tag_index(redo: &DropTagIndexRedo, ts: Timestamp),
             replay_create_edge_index(redo: &CreateEdgeIndexRedo, ts: Timestamp),

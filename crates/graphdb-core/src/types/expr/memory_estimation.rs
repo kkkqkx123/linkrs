@@ -73,7 +73,10 @@ impl MemoryEstimatable for Expression {
             Expression::Function { name, args } => {
                 base_size
                     + estimate_string_memory(name)
-                    + args.iter().map(|e| e.as_expr().estimate_memory()).sum::<usize>()
+                    + args
+                        .iter()
+                        .map(|e| e.as_expr().estimate_memory())
+                        .sum::<usize>()
             }
             Expression::Predicate { func, args } => {
                 base_size
@@ -674,8 +677,12 @@ mod tests {
             left: Box::new(Expression::Function {
                 name: "add".to_string(),
                 args: vec![
-                    crate::types::expr::FunctionArg::positional(Expression::Variable("a".to_string())),
-                    crate::types::expr::FunctionArg::positional(Expression::Variable("b".to_string())),
+                    crate::types::expr::FunctionArg::positional(Expression::Variable(
+                        "a".to_string(),
+                    )),
+                    crate::types::expr::FunctionArg::positional(Expression::Variable(
+                        "b".to_string(),
+                    )),
                 ],
             }),
             op: BinaryOperator::Add,

@@ -844,8 +844,6 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::SequenceManage { .. } => "SequenceManage",
         DdlSpec::MacroManage { .. } => "MacroManage",
         DdlSpec::TypeManage { .. } => "TypeManage",
-        DdlSpec::DatabaseManage { .. } => "DatabaseManage",
-        DdlSpec::ExtensionManage { .. } => "ExtensionManage",
     }
 }
 

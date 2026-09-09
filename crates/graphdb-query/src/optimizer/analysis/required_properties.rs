@@ -609,6 +609,7 @@ mod tests {
     use crate::planning::plan::core::nodes::PlanNodeEnum;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
     use graphdb_core::types::expr::ExpressionMeta;
+    use graphdb_core::types::expr::FunctionArg;
     use graphdb_core::types::operators::BinaryOperator;
     use graphdb_core::{Value, YieldColumn};
     use std::sync::Arc;
@@ -720,7 +721,9 @@ mod tests {
                 vec![yield_column(
                     Expression::Function {
                         name: "id".to_string(),
-                        args: vec![FunctionArg::Positional(Expression::Variable("v".to_string()))],
+                        args: vec![FunctionArg::Positional(Expression::Variable(
+                            "v".to_string(),
+                        ))],
                     },
                     "id",
                 )],

@@ -204,7 +204,10 @@ impl ExpressionAnalysisContext {
     ) -> Option<ContextualExpression> {
         let arg_exprs: Vec<crate::types::expr::FunctionArg> = args
             .iter()
-            .filter_map(|arg| arg.expression().map(|meta| crate::types::expr::FunctionArg::Positional(meta.inner().clone())))
+            .filter_map(|arg| {
+                arg.expression()
+                    .map(|meta| crate::types::expr::FunctionArg::Positional(meta.inner().clone()))
+            })
             .collect();
 
         if arg_exprs.len() != args.len() {

@@ -67,9 +67,11 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let mut initial_writer = storage.bind_operation_context(
-        StorageOperationContext::transaction(TransactionId::from(1), 10, false),
-    );
+    let mut initial_writer = storage.bind_operation_context(StorageOperationContext::transaction(
+        TransactionId::from(1),
+        10,
+        false,
+    ));
     initial_writer
         .insert_vertex(
             "test_space",
@@ -89,9 +91,11 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
         .create_vertex_cursor("test_space", &ScanOptions::default())
         .expect("Failed to create cursor");
 
-    let mut later_writer = storage.bind_operation_context(
-        StorageOperationContext::transaction(TransactionId::from(3), 20, false),
-    );
+    let mut later_writer = storage.bind_operation_context(StorageOperationContext::transaction(
+        TransactionId::from(3),
+        20,
+        false,
+    ));
     later_writer
         .insert_vertex(
             "test_space",

@@ -899,9 +899,7 @@ impl SinkOperator {
                                                 &vid,
                                                 graphdb_core::EdgeDirection::Both,
                                             )
-                                            .map_err(|e| {
-                                                QueryError::execution(e.to_string())
-                                            })?;
+                                            .map_err(|e| QueryError::execution(e.to_string()))?;
                                         if !edges.is_empty() {
                                             return Err(QueryError::execution(format!(
                                                 "Vertex {} has {} edges, use DETACH DELETE",
@@ -1087,9 +1085,7 @@ impl SinkOperator {
                                                 &vid,
                                                 graphdb_core::EdgeDirection::Both,
                                             )
-                                            .map_err(|e| {
-                                                QueryError::execution(e.to_string())
-                                            })?;
+                                            .map_err(|e| QueryError::execution(e.to_string()))?;
                                         if !edges.is_empty() {
                                             return Err(QueryError::execution(format!(
                                                 "Vertex {} has {} edges, use DETACH DELETE",

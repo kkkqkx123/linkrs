@@ -162,7 +162,7 @@ impl TraversalStartSelector {
                     }
                     _ => {}
                 },
-                PathElement::Recursive(_) => todo!("Recursive comprehension not yet supported"),
+                PathElement::Recursive(_) => {}
             }
         }
 

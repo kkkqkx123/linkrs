@@ -295,6 +295,7 @@ mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use graphdb_core::types::expr::FunctionArg;
     use std::sync::Arc;
 
     #[test]
@@ -353,7 +354,9 @@ mod tests {
     fn test_has_aggregate_function_reference_with_function() {
         let condition = Expression::Function {
             name: "sum".to_string(),
-            args: vec![FunctionArg::Positional(Expression::Variable("amount".to_string()))],
+            args: vec![FunctionArg::Positional(Expression::Variable(
+                "amount".to_string(),
+            ))],
         };
 
         assert!(

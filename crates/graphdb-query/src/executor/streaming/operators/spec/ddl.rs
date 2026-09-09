@@ -165,34 +165,6 @@ pub enum TypeManageCommand {
     },
 }
 
-/// Database management command payload.
-#[derive(Debug, Clone)]
-pub enum DatabaseManageCommand {
-    Attach {
-        path: String,
-        alias: String,
-        db_type: Option<String>,
-    },
-    Detach {
-        alias: String,
-    },
-}
-
-/// Extension management command payload.
-#[derive(Debug, Clone)]
-pub enum ExtensionManageCommand {
-    Load {
-        path: String,
-    },
-    Install {
-        name: String,
-        repo: Option<String>,
-    },
-    Uninstall {
-        name: String,
-    },
-}
-
 /// Index DDL command payload.
 #[derive(Debug, Clone)]
 pub enum IndexManageCommand {
@@ -368,12 +340,6 @@ pub enum DdlSpec {
     TypeManage {
         command: TypeManageCommand,
     },
-    DatabaseManage {
-        command: DatabaseManageCommand,
-    },
-    ExtensionManage {
-        command: ExtensionManageCommand,
-    },
 }
 
 impl SpaceManageCommand {
@@ -400,7 +366,9 @@ impl TagManageCommand {
     /// Whether the command mutates stored state.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => true,
+            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => {
+                true
+            }
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
         }
     }
@@ -410,7 +378,9 @@ impl EdgeManageCommand {
     /// Whether the command mutates stored state.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => true,
+            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => {
+                true
+            }
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
         }
     }
@@ -439,24 +409,6 @@ impl TypeManageCommand {
     pub fn is_write(&self) -> bool {
         match self {
             Self::Create { .. } | Self::Drop { .. } => true,
-        }
-    }
-}
-
-impl DatabaseManageCommand {
-    /// Whether the command mutates stored state.
-    pub fn is_write(&self) -> bool {
-        match self {
-            Self::Attach { .. } | Self::Detach { .. } => true,
-        }
-    }
-}
-
-impl ExtensionManageCommand {
-    /// Whether the command mutates stored state.
-    pub fn is_write(&self) -> bool {
-        match self {
-            Self::Load { .. } | Self::Install { .. } | Self::Uninstall { .. } => true,
         }
     }
 }
@@ -530,8 +482,6 @@ impl DdlSpec {
             Self::SequenceManage { command } => command.is_write(),
             Self::MacroManage { command } => command.is_write(),
             Self::TypeManage { command } => command.is_write(),
-            Self::DatabaseManage { command } => command.is_write(),
-            Self::ExtensionManage { command } => command.is_write(),
         }
     }
 }

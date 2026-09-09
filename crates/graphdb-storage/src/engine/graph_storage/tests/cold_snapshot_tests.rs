@@ -106,14 +106,13 @@ fn cold_snapshot_delta_time_machine_merge_flow() {
     let reconstructed = storage.apply_cold_delta(base.label(), &delta_path).unwrap();
     assert_eq!(reconstructed.edge_count(), 2);
     // Structural equality with the latest snapshot: same (src, dst) rows.
-    let edge_set =
-        |snapshot: &crate::cold::ColdSnapshot| -> std::collections::HashSet<(u32, i64)> {
-            snapshot
-                .scan_edges()
-                .iter()
-                .map(|r| (r.src_internal, r.dst_vid.as_int64().unwrap_or(0)))
-                .collect()
-        };
+    let edge_set = |snapshot: &crate::cold::ColdSnapshot| -> std::collections::HashSet<(u32, i64)> {
+        snapshot
+            .scan_edges()
+            .iter()
+            .map(|r| (r.src_internal, r.dst_vid.as_int64().unwrap_or(0)))
+            .collect()
+    };
     assert_eq!(edge_set(&reconstructed), edge_set(&latest));
 
     // v9: consolidate the shelf into a single merged snapshot.
@@ -127,8 +126,8 @@ fn cold_snapshot_delta_time_machine_merge_flow() {
 
     // Re-export of the merged snapshot is portable.
     let reexport_path = temp_dir.path().join("reexport.lkcs");
-    let info = StorageSnapshotOps::export_cold_snapshot(&storage, base.label(), &reexport_path)
-        .unwrap();
+    let info =
+        StorageSnapshotOps::export_cold_snapshot(&storage, base.label(), &reexport_path).unwrap();
     assert_eq!(info.edge_count, 2);
     assert_eq!(
         info.file_size,

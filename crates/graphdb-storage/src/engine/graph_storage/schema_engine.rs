@@ -289,6 +289,33 @@ pub fn rename_edge_property(
     Ok(())
 }
 
+pub fn rename_vertex_label(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    new_name: &str,
+) -> StorageResult<()> {
+    if !ctx.is_open_flag().load(Ordering::Acquire) {
+        return Err(StorageError::storage_not_open());
+    }
+
+    ctx.data_store()
+        .rename_vertex_label_by_id(label, new_name)?;
+    Ok(())
+}
+
+pub fn rename_edge_label(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    new_name: &str,
+) -> StorageResult<()> {
+    if !ctx.is_open_flag().load(Ordering::Acquire) {
+        return Err(StorageError::storage_not_open());
+    }
+
+    ctx.data_store().rename_edge_label_by_id(label, new_name)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::edge::EdgeStrategy;

@@ -91,9 +91,15 @@ impl DdlParser {
             return Ok(Stmt::Alter(AlterStmt {
                 span,
                 target: if is_tag {
-                    AlterTarget::RenameTag { old_name: name, new_name }
+                    AlterTarget::RenameTag {
+                        old_name: name,
+                        new_name,
+                    }
                 } else {
-                    AlterTarget::RenameEdge { old_name: name, new_name }
+                    AlterTarget::RenameEdge {
+                        old_name: name,
+                        new_name,
+                    }
                 },
             }));
         }

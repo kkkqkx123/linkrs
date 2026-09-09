@@ -98,8 +98,8 @@ fn test_serial_allocates_per_tag_and_per_space() {
         SpaceInfo::new("second_space".to_string()).with_vid_type(DataType::BigInt);
     storage.create_space(&mut second_space).unwrap();
 
-    let second_person = graphdb_core::types::TagInfo::new("Person".to_string())
-        .with_properties(vec![
+    let second_person =
+        graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
             PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
             PropertyDef::new("name".to_string(), DataType::String),
         ]);
@@ -155,9 +155,9 @@ fn test_serial_edge_type_auto_allocates() {
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string())
-        .with_properties(vec![
-            PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true)
+    let edge_type =
+        graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string()).with_properties(vec![
+            PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
         ]);
     storage
         .create_edge_type("test_space", &edge_type)
@@ -197,17 +197,19 @@ fn test_serial_validation_rejects_default_and_multiple_columns() {
     let mut storage = create_test_storage();
     setup_space(&mut storage);
 
-    let with_default = graphdb_core::types::TagInfo::new("BadDefault".to_string())
-        .with_properties(vec![PropertyDef::new("id".to_string(), DataType::BigInt)
-            .with_serial(true)
-            .with_default(Some(Value::BigInt(1)))]);
+    let with_default =
+        graphdb_core::types::TagInfo::new("BadDefault".to_string()).with_properties(vec![
+            PropertyDef::new("id".to_string(), DataType::BigInt)
+                .with_serial(true)
+                .with_default(Some(Value::BigInt(1))),
+        ]);
     let error = storage
         .create_tag("test_space", &with_default)
         .expect_err("SERIAL with DEFAULT must be rejected");
     assert!(error.to_string().contains("DEFAULT"));
 
-    let two_serials = graphdb_core::types::TagInfo::new("BadMultiple".to_string())
-        .with_properties(vec![
+    let two_serials =
+        graphdb_core::types::TagInfo::new("BadMultiple".to_string()).with_properties(vec![
             PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
             PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
         ]);
@@ -223,8 +225,7 @@ fn test_serial_survives_save_load_round_trip() {
     let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
         .expect("Failed to create persistent storage");
     {
-        let mut space =
-            SpaceInfo::new("test_space".to_string()).with_vid_type(DataType::BigInt);
+        let mut space = SpaceInfo::new("test_space".to_string()).with_vid_type(DataType::BigInt);
         storage.create_space(&mut space).unwrap();
         setup_serial_person_tag(&mut storage);
         insert_serial_vertex(&mut storage, 101, "Alice");

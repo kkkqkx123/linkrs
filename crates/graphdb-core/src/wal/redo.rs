@@ -172,6 +172,20 @@ pub struct RenameEdgePropRedo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameTagRedo {
+    pub space_id: u64,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameEdgeTypeRedo {
+    pub space_id: u64,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTagIndexRedo {
     pub space_id: u64,
     pub index_name: String,

@@ -284,15 +284,38 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         BoundExpression::Subquery(_) => {
             Err("Subquery expression conversion requires original AST context".to_string())
         }
-        BoundExpression::Exists { .. } => {
-            Err("Exists expression conversion requires original AST context".to_string())
-        }
-        BoundExpression::In { .. } => {
-            Err("In expression conversion requires original AST context".to_string())
-        }
-        BoundExpression::CountSubquery { .. } => {
-            Err("CountSubquery expression conversion requires original AST context".to_string())
-        }
+        BoundExpression::Exists {
+            query: _,
+            original_body,
+        } => match original_body {
+            Some(body) => Ok(Expression::Exists { body: body.clone() }),
+            None => Err("Exists expression conversion requires original AST context".to_string()),
+        },
+        BoundExpression::In {
+            expr,
+            subquery: _,
+            negated,
+            original_body,
+        } => match original_body {
+            Some(body) => {
+                let inner = convert_bound_to_expression(expr)?;
+                Ok(Expression::In {
+                    expr: Box::new(inner),
+                    subquery: body.clone(),
+                    negated: *negated,
+                })
+            }
+            None => Err("In expression conversion requires original AST context".to_string()),
+        },
+        BoundExpression::CountSubquery {
+            query: _,
+            original_body,
+        } => match original_body {
+            Some(body) => Ok(Expression::CountSubquery { body: body.clone() }),
+            None => {
+                Err("CountSubquery expression conversion requires original AST context".to_string())
+            }
+        },
         BoundExpression::Lambda { params, body } => {
             let body_expr = convert_bound_to_expression(body)?;
             Ok(Expression::Lambda {

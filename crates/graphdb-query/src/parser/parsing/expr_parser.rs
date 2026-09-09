@@ -517,6 +517,13 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 ),
                 span,
             };
+        } else if ctx.check_token(TokenKind::NotOp) {
+            ctx.next_token();
+            let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            expression = ParseResult {
+                expr: Expression::function("factorial".to_string(), vec![expression.expr]),
+                span,
+            };
         } else {
             break;
         }

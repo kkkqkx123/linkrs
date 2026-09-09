@@ -107,7 +107,10 @@ pub enum DataType {
     Interval,
 
     /// Parameterized decimal type with specified precision and scale.
-    Decimal { precision: u8, scale: u8 },
+    Decimal {
+        precision: u8,
+        scale: u8,
+    },
     /// Union (tagged union / discriminated union) of types.
     Union(Vec<DataType>),
 
@@ -357,7 +360,10 @@ mod tests {
                 DataType::String,
             )]))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
-            DataType::Decimal { precision: 10, scale: 2 },
+            DataType::Decimal {
+                precision: 10,
+                scale: 2,
+            },
             DataType::Union(vec![DataType::Int, DataType::String]),
         ]
     }
