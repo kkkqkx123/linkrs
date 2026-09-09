@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::ExpressionMeta;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::{contextual::ContextualExpression, ExpressionId};
 use graphdb_core::Expression;
 use graphdb_query::optimizer::factorization::{

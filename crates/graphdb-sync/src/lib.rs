@@ -63,6 +63,8 @@ pub use types::{IndexOpKey, IndexOperation};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]
+pub use graphdb_fulltext::{IndexEvent, IndexEventCallback};
+#[cfg(feature = "vector")]
 pub use vector_index_manager::VectorIndexManager;
 #[cfg(feature = "vector")]
 pub use vector_sync::{

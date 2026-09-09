@@ -29,8 +29,8 @@ impl TestScenario {
         let test_storage = TestStorage::new()?;
         let storage = test_storage.storage();
 
-        use graphdb_metrics::StatsManager;
         use crate::query::optimizer::OptimizerEngine;
+        use graphdb_metrics::StatsManager;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

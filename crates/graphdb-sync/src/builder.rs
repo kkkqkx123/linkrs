@@ -118,10 +118,7 @@ impl SyncCoordinatorBuilder {
         self
     }
 
-    pub fn with_stats_manager(
-        mut self,
-        stats_manager: Arc<graphdb_metrics::StatsManager>,
-    ) -> Self {
+    pub fn with_stats_manager(mut self, stats_manager: Arc<graphdb_metrics::StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self
     }

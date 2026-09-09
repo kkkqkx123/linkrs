@@ -111,4 +111,19 @@ impl GraphStorageContext {
     ) -> StorageResult<()> {
         super::super::schema_engine::rename_edge_property(self, edge_label, old_name, new_name)
     }
+
+    /// Register a schema-change observer on both the schema manager and
+    /// the index metadata manager.
+    ///
+    /// Index DDL (`TagIndexCreated/Dropped`, `EdgeIndexCreated/Dropped`)
+    /// is emitted by `IndexManager`, everything else by `SchemaManager`;
+    /// subscribing through this bridge avoids missing half of the events.
+    /// External subsystems (fulltext rebuild, vector sync, cache
+    /// invalidation, monitoring) should subscribe here.
+    pub fn register_schema_callback(&self, callback: graphdb_core::metadata::SchemaChangeCallback) {
+        self.schema_manager()
+            .register_schema_callback(callback.clone());
+        self.index_metadata_manager()
+            .register_schema_callback(callback);
+    }
 }

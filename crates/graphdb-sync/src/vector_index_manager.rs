@@ -15,6 +15,8 @@ use tracing::info;
 
 use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
+use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
+pub use graphdb_fulltext::{IndexEvent, IndexEventCallback};
 pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use vector_search::{
     types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,
@@ -50,6 +52,7 @@ pub struct VectorIndexManager {
     /// Collection granularity. Space-level is default for backward
     /// compatibility; Field-level gives physical isolation per (tag,field).
     granularity: parking_lot::RwLock<CollectionGranularity>,
+    index_callbacks: EventSubscriptions<IndexEvent>,
 }
 
 impl std::fmt::Debug for VectorIndexManager {
@@ -58,6 +61,7 @@ impl std::fmt::Debug for VectorIndexManager {
             .field("backend", &self.backend)
             .field("logical_index_count", &self.logical_indexes.len())
             .field("granularity", &*self.granularity.read())
+            .field("index_callbacks", &self.index_callbacks.len())
             .finish()
     }
 }
@@ -69,7 +73,36 @@ impl VectorIndexManager {
             backend,
             logical_indexes: DashMap::new(),
             granularity: parking_lot::RwLock::new(CollectionGranularity::default()),
+            index_callbacks: EventSubscriptions::new(),
         }
+    }
+
+    /// Register a runtime observer for vector index lifecycle events.
+    pub fn register_index_callback(&self, callback: IndexEventCallback) -> SubscriptionId {
+        self.index_callbacks.add(callback)
+    }
+
+    /// Register a filtered observer invoked only when `filter` returns true.
+    pub fn register_index_callback_filtered(
+        &self,
+        callback: IndexEventCallback,
+        filter: EventFilter<IndexEvent>,
+    ) -> SubscriptionId {
+        self.index_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered observer. Returns true if present.
+    pub fn unregister_index_callback(&self, id: SubscriptionId) -> bool {
+        self.index_callbacks.remove(id)
+    }
+
+    /// Number of registered vector index observers.
+    pub fn index_callback_count(&self) -> usize {
+        self.index_callbacks.len()
+    }
+
+    fn emit_index_event(&self, event: IndexEvent) {
+        self.index_callbacks.dispatch("index", &event);
     }
 
     /// Get a reference to the underlying vector backend.
@@ -116,6 +149,10 @@ impl VectorIndexManager {
 
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
+        let logical_index_name = format!("vec_{space_id}_{tag_name}_{field_name}");
+        self.emit_index_event(IndexEvent::VectorBuildStarted {
+            index_name: logical_index_name.clone(),
+        });
 
         if self.is_disabled_engine() {
             let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
@@ -128,6 +165,10 @@ impl VectorIndexManager {
                 "Logical vector index created in disabled mode: space={} tag={} field={} in collection {}",
                 space_id, tag_name, field_name, collection_name
             );
+            self.emit_index_event(IndexEvent::VectorBuildCompleted {
+                index_name: logical_index_name,
+                vectors_count: 0,
+            });
             return Ok(collection_name);
         }
 
@@ -202,6 +243,10 @@ impl VectorIndexManager {
             "Logical vector index created: space={} tag={} field={} in collection {}",
             space_id, tag_name, field_name, collection_name
         );
+        self.emit_index_event(IndexEvent::VectorBuildCompleted {
+            index_name: logical_index_name,
+            vectors_count: 0,
+        });
         Ok(collection_name)
     }
 
@@ -217,6 +262,10 @@ impl VectorIndexManager {
 
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
+        let logical_index_name = format!("vec_{space_id}_{tag_name}_{field_name}");
+        self.emit_index_event(IndexEvent::VectorBuildStarted {
+            index_name: logical_index_name.clone(),
+        });
 
         if !self.backend.index_exists(&collection_name) {
             self.backend
@@ -282,6 +331,10 @@ impl VectorIndexManager {
             "Logical vector index created with config: space={} tag={} field={} in collection {}",
             space_id, tag_name, field_name, collection_name
         );
+        self.emit_index_event(IndexEvent::VectorBuildCompleted {
+            index_name: logical_index_name,
+            vectors_count: 0,
+        });
         Ok(collection_name)
     }
 
@@ -343,6 +396,9 @@ impl VectorIndexManager {
             "Logical vector index dropped: space={} tag={} field={}",
             space_id, tag_name, field_name
         );
+        self.emit_index_event(IndexEvent::VectorDropped {
+            index_name: format!("vec_{space_id}_{tag_name}_{field_name}"),
+        });
         Ok(())
     }
 

@@ -271,13 +271,26 @@ pub unsafe extern "C" fn graphdb_txn_commit(txn: *mut graphdb_txn_t) -> c_int {
     // Get session pointer for later use
     let session_ptr = handle.session;
 
-    // Execute commit hook if present
+    // Execute commit hook if present.
+    // Decision-hook semantics: a non-zero return vetoes the commit and the
+    // transaction is rolled back instead. A panicking callback is isolated,
+    // logged, and treated as no-veto so a broken observer cannot block
+    // commits forever.
     {
         let session = &*session_ptr;
         if let Some(callback) = session.commit_hook {
-            let result = callback(session.commit_hook_user_data);
-            if result != 0 {
-                return graphdb_txn_rollback(txn);
+            let user_data = session.commit_hook_user_data;
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(user_data)));
+            match outcome {
+                Ok(result) => {
+                    if result != 0 {
+                        return graphdb_txn_rollback(txn);
+                    }
+                }
+                Err(_) => {
+                    log::error!("commit hook panicked; continuing commit");
+                }
             }
         }
     }
@@ -341,11 +354,19 @@ pub unsafe extern "C" fn graphdb_txn_rollback(txn: *mut graphdb_txn_t) -> c_int 
     // Get session pointer for later use
     let session_ptr = handle.session;
 
-    // Execute rollback hook if present
+    // Execute rollback hook if present, with panic isolation so a broken
+    // observer can never block the rollback itself.
     {
         let session = &*session_ptr;
         if let Some(callback) = session.rollback_hook {
-            callback(session.rollback_hook_user_data);
+            let user_data = session.rollback_hook_user_data;
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                callback(user_data);
+            }))
+            .is_err()
+            {
+                log::error!("rollback hook panicked; continuing rollback");
+            }
         }
     }
 

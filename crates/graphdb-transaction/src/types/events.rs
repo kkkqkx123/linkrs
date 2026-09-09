@@ -15,6 +15,9 @@ pub enum TransactionEvent {
         commit_timestamp: Timestamp,
         write_set: Box<WriteSet>,
         schema_catalog_version: u64,
+        /// True when re-emitted by recovery replay (`recover_pending_finalization`).
+        /// Consumers counting commits should deduplicate on this flag.
+        replayed: bool,
     },
     Aborted {
         txn_id: TransactionId,

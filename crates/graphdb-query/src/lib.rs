@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod planning;
 pub mod query_core;
 pub mod query_manager;
+pub mod session_events;
 
 // Re-export DataSet for convenience
 pub use graphdb_core::DataSet;
@@ -32,6 +33,7 @@ pub use pipeline::QueryPipelineManager;
 pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
 // Re-export QueryManager
 pub use query_manager::{QueryInfo, QueryManager, QueryStatus};
+pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;
 

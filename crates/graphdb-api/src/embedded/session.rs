@@ -7,11 +7,11 @@ use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
 use crate::storage::StorageClient;
-use graphdb_core::Value;
 use graphdb_core::SessionStatistics;
-use graphdb_metrics::StatsManager;
+use graphdb_core::Value;
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;
+use graphdb_metrics::StatsManager;
 use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use graphdb_query::parser::ast::Stmt;
 use graphdb_query::parser::{Parser, ParserResult};

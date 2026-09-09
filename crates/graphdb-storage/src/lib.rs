@@ -46,8 +46,9 @@ pub use cursor::{
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};
 pub use engine::persistence_coordinator::{
-    CatalogLockDiagnostic, CheckpointDiagnostics, CheckpointStats, PersistenceConfig,
-    PersistenceDiagnostics, PersistenceFaultPoint, SnapshotStats,
+    CatalogLockDiagnostic, CheckpointDiagnostics, CheckpointStats, GcEventSink, PersistenceConfig,
+    PersistenceDiagnostics, PersistenceFaultPoint, SnapshotStats, StorageEvent,
+    StorageEventCallback,
 };
 pub use engine::resource_budget::{
     MemoryAccounting, MemoryBudget, MemoryCategory, MemoryReservation, MemoryUsage,

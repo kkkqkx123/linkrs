@@ -9,11 +9,11 @@ use crate::outbox::OutboxPayload;
 use crate::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::types::ChangeType;
 use dashmap::DashMap;
-use graphdb_metrics::{OutboxState, StatsManager};
 use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use graphdb_core::Value;
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::SyncConfig;
+use graphdb_metrics::{OutboxState, StatsManager};
 #[cfg(feature = "vector")]
 use std::collections::HashMap;
 use std::path::Path;

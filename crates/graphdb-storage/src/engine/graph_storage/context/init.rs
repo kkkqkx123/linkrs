@@ -8,8 +8,8 @@ use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::PersistenceConfig;
 use crate::index::IndexGcConfig;
 use crate::vertex::VertexGcConfig;
-use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
 use graphdb_core::StorageResult;
+use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
 
 use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};
 
@@ -70,6 +70,7 @@ impl GraphStorageContext {
             config,
         );
         self.runtime = runtime;
+        self.forward_gc_events_to_persistence();
         self
     }
 
@@ -80,7 +81,29 @@ impl GraphStorageContext {
             config,
         );
         self.runtime = runtime;
+        self.forward_gc_events_to_persistence();
         self
+    }
+
+    /// Forward index/vertex GC reclamation counts to the persistence
+    /// coordinator so `StorageEvent::GcRun` observers are notified from
+    /// both opportunistic and background GC passes.
+    fn forward_gc_events_to_persistence(&self) {
+        let Some(persistence) = self.persistent.persistence.clone() else {
+            return;
+        };
+        if let Some(gc) = self.runtime.index_gc_manager.clone() {
+            let forward = persistence.clone();
+            gc.set_gc_event_sink(Arc::new(move |reclaimed| {
+                forward.read().notify_gc_run(reclaimed);
+            }));
+        }
+        if let Some(gc) = self.runtime.vertex_gc_manager.clone() {
+            let forward = persistence.clone();
+            gc.set_gc_event_sink(Arc::new(move |reclaimed| {
+                forward.read().notify_gc_run(reclaimed);
+            }));
+        }
     }
 
     pub fn with_background_freeze(&self, manager: Arc<BackgroundFreezeManager>) -> Self {

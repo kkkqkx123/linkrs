@@ -10,8 +10,8 @@ use crate::wal::{
     DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo,
     DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, InsertVertexRedo,
     LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult, RenameEdgePropRedo,
-    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
-    UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
+    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
 };
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};

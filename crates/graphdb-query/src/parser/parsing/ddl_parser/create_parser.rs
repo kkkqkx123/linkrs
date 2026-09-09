@@ -14,7 +14,10 @@ use super::DdlParser;
 fn is_identifier_spelled_builtin_type(name: &str) -> bool {
     match name.to_uppercase().as_str() {
         "DECIMAL" | "UNION" | "FIXED_STRING" | "FIXEDSTRING" | "VECTOR" => true,
-        _ => name.to_uppercase().parse::<crate::parser::ast::types::DataType>().is_ok(),
+        _ => name
+            .to_uppercase()
+            .parse::<crate::parser::ast::types::DataType>()
+            .is_ok(),
     }
 }
 

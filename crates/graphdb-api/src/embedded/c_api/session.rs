@@ -69,28 +69,48 @@ impl GraphDbSessionHandle {
         }
     }
 
-    /// Call the update hook
+    /// Call the update hook.
+    ///
+    /// Graph semantics: `database` carries the space name and `table` is an
+    /// empty string (there is no table concept). `rowid` carries the affected
+    /// row count from the result metadata, not a stable row id.
+    ///
+    /// The callback runs with panic isolation: a panicking C callback is
+    /// caught, logged, and skipped so the query result is still returned.
+    /// C callbacks must not unwind across the FFI boundary.
     pub(crate) fn invoke_update_hook(&self, operation: i32, space_name: &str, rowid: i64) {
         if let Some(callback) = self.update_hook {
             if let Ok(c_space) = CString::new(space_name) {
                 // For graph databases, the `table` parameter should be set to an empty string.
-                let empty_table = CString::new("").expect("Failed to create empty table CString");
-                callback(
-                    self.update_hook_user_data,
-                    operation,
-                    c_space.as_ptr(),
-                    empty_table.as_ptr(),
-                    rowid,
-                );
+                if let Ok(empty_table) = CString::new("") {
+                    let user_data = self.update_hook_user_data;
+                    let space_ptr = c_space.as_ptr();
+                    let table_ptr = empty_table.as_ptr();
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        callback(user_data, operation, space_ptr, table_ptr, rowid);
+                    }))
+                    .is_err()
+                    {
+                        log::error!("update hook panicked; continuing query");
+                    }
+                }
             }
         }
     }
 
-    /// Calling the SQL tracing callback
+    /// Calling the SQL tracing callback with panic isolation.
     pub(crate) fn trace(&self, sql: &str) {
         if let Some(callback) = self.trace_callback {
             if let Ok(c_sql) = CString::new(sql) {
-                callback(c_sql.as_ptr(), self.trace_user_data);
+                let user_data = self.trace_user_data;
+                let sql_ptr = c_sql.as_ptr();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    callback(sql_ptr, user_data);
+                }))
+                .is_err()
+                {
+                    log::error!("trace callback panicked; continuing query");
+                }
             }
         }
     }

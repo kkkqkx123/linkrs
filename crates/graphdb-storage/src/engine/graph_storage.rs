@@ -44,11 +44,11 @@ use crate::{
     StorageStats, StorageSyncContextOps,
 };
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_metrics::StatsManager;
 use graphdb_core::types::{
     CommitLsn, LabelId, PasswordInfo, SnapshotTimestamp, Timestamp, UserAlterInfo, UserInfo,
 };
 use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value};
+use graphdb_metrics::StatsManager;
 
 #[derive(Clone)]
 pub struct GraphStorage {
@@ -870,6 +870,22 @@ impl GraphStorage {
 
     pub fn stop_vertex_gc(&self) {
         self.ctx.stop_vertex_gc();
+    }
+
+    /// Register a schema-change observer on both the schema manager and
+    /// the index metadata manager (see `GraphStorageContext` bridge).
+    pub fn register_schema_callback(&self, callback: graphdb_core::metadata::SchemaChangeCallback) {
+        self.ctx.register_schema_callback(callback);
+    }
+
+    /// Register a storage-lifecycle observer on the persistence coordinator.
+    pub fn register_storage_callback(
+        &self,
+        callback: crate::engine::persistence_coordinator::StorageEventCallback,
+    ) {
+        if let Some(persistence) = self.ctx.persistence() {
+            persistence.read().register_storage_callback(callback);
+        }
     }
 
     /// Batch delete vertices by external string IDs.

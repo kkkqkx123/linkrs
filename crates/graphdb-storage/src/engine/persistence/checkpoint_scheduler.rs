@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
 use graphdb_core::StorageResult;
+use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
 
 use crate::engine::persistence_coordinator::{
     CheckpointStats, PersistenceCoordinator, PersistenceStateGuard,

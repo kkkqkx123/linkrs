@@ -6,9 +6,9 @@ use parking_lot::RwLock;
 use crate::cold::ColdSnapshot;
 use crate::engine::graph_storage::context::VertexIdDomainEvidence;
 use crate::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
-use graphdb_metrics::StatsManager;
 use graphdb_core::types::{LabelId, TableId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
+use graphdb_metrics::StatsManager;
 
 use crate::SnapshotHandle;
 use crate::StorageOperationContext;

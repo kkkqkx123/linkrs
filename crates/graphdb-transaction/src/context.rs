@@ -108,6 +108,8 @@ pub struct TransactionContext {
     mutation_warning_emitted: AtomicCell<bool>,
     /// Whether a budget warning has already been emitted for undo bytes.
     undo_warning_emitted: AtomicCell<bool>,
+    /// Pending budget warnings queued for fan-out as `TransactionEvent::BudgetWarning`.
+    budget_warnings: Mutex<Vec<TransactionEvent>>,
     /// Whether this transaction holds the pessimistic write exclusion lock.
     pessimistic_lock_held: AtomicCell<bool>,
     /// Concurrency mode used by this transaction.
@@ -242,6 +244,7 @@ impl TransactionContext {
             budget_warning_threshold: config.budget_warning_threshold,
             mutation_warning_emitted: AtomicCell::new(false),
             undo_warning_emitted: AtomicCell::new(false),
+            budget_warnings: Mutex::new(Vec::new()),
             pessimistic_lock_held: AtomicCell::new(false),
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
@@ -297,6 +300,7 @@ impl TransactionContext {
             budget_warning_threshold: config.budget_warning_threshold,
             mutation_warning_emitted: AtomicCell::new(false),
             undo_warning_emitted: AtomicCell::new(false),
+            budget_warnings: Mutex::new(Vec::new()),
             pessimistic_lock_held: AtomicCell::new(false),
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
@@ -356,6 +360,19 @@ impl TransactionContext {
     /// Set the snapshot timestamp for time-travel reads
     pub fn set_snapshot_timestamp(&self, ts: Timestamp) {
         *self.snapshot_timestamp.write() = Some(ts);
+    }
+
+    /// Drain pending budget warnings queued during mutation recording.
+    ///
+    /// Exactly-once: each warning is returned at most once. The manager
+    /// fans drained events out through the commit observers on the commit path.
+    pub fn drain_budget_warnings(&self) -> Vec<TransactionEvent> {
+        std::mem::take(&mut *self.budget_warnings.lock())
+    }
+
+    /// Number of pending budget warnings not yet drained.
+    pub fn pending_budget_warnings(&self) -> usize {
+        self.budget_warnings.lock().len()
     }
 
     /// Check if transaction has expired
@@ -863,6 +880,14 @@ impl TransactionContext {
                 self.budget_warning_threshold * 100.0,
                 self.max_mutation_count,
             );
+            self.budget_warnings
+                .lock()
+                .push(TransactionEvent::BudgetWarning {
+                    txn_id: self.id,
+                    resource: "mutation count".to_string(),
+                    current: new_count,
+                    limit: self.max_mutation_count,
+                });
         }
 
         let undo_estimate = self.undo_bytes.fetch_add(64, Ordering::Relaxed) + 64;
@@ -887,6 +912,14 @@ impl TransactionContext {
                 self.budget_warning_threshold * 100.0,
                 self.max_undo_bytes,
             );
+            self.budget_warnings
+                .lock()
+                .push(TransactionEvent::BudgetWarning {
+                    txn_id: self.id,
+                    resource: "undo bytes".to_string(),
+                    current: undo_estimate,
+                    limit: self.max_undo_bytes,
+                });
         }
 
         let resource = if mutation.resource != MutationResource::Unknown {
@@ -1338,6 +1371,25 @@ impl TransactionMutationRecorder for TransactionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_warnings_drain_exactly_once() {
+        let config = TransactionConfig::default().with_max_mutation_count(10);
+        let ctx = TransactionContext::new(TransactionId(1), 1, config);
+        // Threshold defaults to 0.8, so the 8th mutation queues a warning.
+        for _ in 0..8 {
+            ctx.record_mutation(MutationResult::default()).unwrap();
+        }
+        assert_eq!(ctx.pending_budget_warnings(), 1);
+        let drained = ctx.drain_budget_warnings();
+        assert_eq!(drained.len(), 1);
+        assert!(matches!(
+            &drained[0],
+            TransactionEvent::BudgetWarning { resource, current: 8, limit: 10, .. }
+            if resource == "mutation count"
+        ));
+        assert!(ctx.drain_budget_warnings().is_empty());
+    }
 
     #[test]
     fn test_transaction_context_basic() {

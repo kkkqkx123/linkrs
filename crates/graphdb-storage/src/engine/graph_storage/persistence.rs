@@ -495,8 +495,14 @@ pub(crate) fn compact_transactional(
         StorageError::db_error(format!("Failed to acquire compaction timestamp: {}", e))
     })?;
 
+    // Transactional compaction is global across spaces, so observers see the
+    // global-compaction sentinel space id.
+    persistence
+        .read()
+        .notify_compaction_started(crate::engine::storage_events::GLOBAL_COMPACTION_SPACE_ID);
+
+    let before_stats = ctx.get_compact_stats();
     let result = {
-        let before_stats = ctx.get_compact_stats();
         log::info!(
             "Starting transactional compaction: enable_structure_compaction={}, config={{ segment_merge_enabled: {} }}, size={}/{}",
             config.enable_structure_compaction,
@@ -529,6 +535,9 @@ pub(crate) fn compact_transactional(
             version_manager.commit_write_timestamp(timestamp);
 
             let after_stats = ctx.get_compact_stats();
+            let reclaimed_bytes = before_stats
+                .total_size
+                .saturating_sub(after_stats.total_size) as u64;
             log::info!(
                 "Compaction completed: size={}/{} (freed {} bytes)",
                 after_stats.used_size,
@@ -536,6 +545,10 @@ pub(crate) fn compact_transactional(
                 ctx.get_compact_stats()
                     .total_size
                     .saturating_sub(after_stats.used_size)
+            );
+            persistence.read().notify_compaction_completed(
+                crate::engine::storage_events::GLOBAL_COMPACTION_SPACE_ID,
+                reclaimed_bytes,
             );
 
             Ok(())

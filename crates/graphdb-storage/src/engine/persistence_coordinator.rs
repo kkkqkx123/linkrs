@@ -40,6 +40,7 @@ use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
 use crate::engine::snapshot_manager::SnapshotManager;
 use crate::engine::WalManager;
 use crate::index::shard_runtime::IndexBarrierRegistry;
+use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::wal::{CheckpointManager, Lsn, WalConfig};
 
@@ -98,6 +99,8 @@ impl Drop for PersistenceStateGuard {
     }
 }
 
+pub use crate::engine::storage_events::{GcEventSink, StorageEvent, StorageEventCallback};
+
 pub struct PersistenceCoordinator {
     pub(crate) config: PersistenceConfig,
     pub(crate) wal_manager: Option<Arc<RwLock<WalManager>>>,
@@ -115,6 +118,7 @@ pub struct PersistenceCoordinator {
     pub(crate) state: Arc<RwLock<PersistenceState>>,
     pub(crate) fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
     pub(crate) outbox_frontier_provider: RwLock<Option<OutboxFrontierProvider>>,
+    storage_callbacks: EventSubscriptions<StorageEvent>,
 }
 
 impl PersistenceCoordinator {
@@ -201,7 +205,64 @@ impl PersistenceCoordinator {
             state: Arc::new(RwLock::new(PersistenceState::Idle)),
             fault_points: Arc::new(RwLock::new(HashSet::new())),
             outbox_frontier_provider: RwLock::new(None),
+            storage_callbacks: EventSubscriptions::new(),
         })
+    }
+
+    /// Register a runtime observer for storage lifecycle events.
+    pub fn register_storage_callback(&self, callback: StorageEventCallback) -> SubscriptionId {
+        let id = self.storage_callbacks.add(callback);
+        log::debug!(
+            "registered storage callback (total={})",
+            self.storage_callback_count()
+        );
+        id
+    }
+
+    /// Register a filtered observer invoked only when `filter` returns true.
+    pub fn register_storage_callback_filtered(
+        &self,
+        callback: StorageEventCallback,
+        filter: EventFilter<StorageEvent>,
+    ) -> SubscriptionId {
+        self.storage_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered observer. Returns true if present.
+    pub fn unregister_storage_callback(&self, id: SubscriptionId) -> bool {
+        self.storage_callbacks.remove(id)
+    }
+
+    /// Number of registered storage observers.
+    pub fn storage_callback_count(&self) -> usize {
+        self.storage_callbacks.len()
+    }
+
+    fn emit_storage_event(&self, event: StorageEvent) {
+        self.storage_callbacks.dispatch("storage", &event);
+    }
+
+    /// Notify observers that WAL was truncated (call after `WalManager::truncate`).
+    pub fn notify_wal_truncated(&self, up_to_lsn: u64) {
+        self.emit_storage_event(StorageEvent::WalTruncated { up_to_lsn });
+    }
+
+    /// Notify observers that a GC pass reclaimed entries.
+    pub fn notify_gc_run(&self, reclaimed_entries: u64) {
+        self.emit_storage_event(StorageEvent::GcRun { reclaimed_entries });
+    }
+
+    /// Notify observers of a compaction lifecycle for a space.
+    pub fn notify_compaction_started(&self, space_id: u64) {
+        self.emit_storage_event(StorageEvent::CompactionStarted { space_id });
+    }
+
+    /// Notify observers that a compaction completed for a space.
+    pub fn notify_compaction_completed(&self, space_id: u64, reclaimed_bytes: u64) {
+        self.emit_storage_event(StorageEvent::CompactionCompleted {
+            space_id,
+            reclaimed_bytes,
+        });
     }
 
     /// Enable a deterministic failure at a persistence boundary.
@@ -300,6 +361,27 @@ mod tests {
         let config = PersistenceConfig::default();
         assert_eq!(config.data_dir, PathBuf::from("data"));
         assert_eq!(config.auto_flush_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn storage_callbacks_dispatch_with_panic_isolation() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig::for_work_dir(temp_dir.path());
+        let coordinator = PersistenceCoordinator::new(config).expect("coordinator");
+        assert_eq!(coordinator.storage_callback_count(), 0);
+
+        let received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let probe = received.clone();
+        coordinator.register_storage_callback(Arc::new(move |event| {
+            if matches!(event, StorageEvent::GcRun { .. }) {
+                probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+        coordinator.register_storage_callback(Arc::new(|_| panic!("observer boom")));
+        assert_eq!(coordinator.storage_callback_count(), 2);
+
+        coordinator.notify_gc_run(7);
+        assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

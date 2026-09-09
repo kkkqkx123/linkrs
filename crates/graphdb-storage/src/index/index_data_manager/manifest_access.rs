@@ -13,13 +13,13 @@ use crate::index::shard_runtime::{
 };
 use crate::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use crate::persistence::{read_versioned_payload, write_versioned_payload};
-use graphdb_metrics::StatsManager;
 use graphdb_core::types::{
     CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
 };
 use graphdb_core::value::ordered_codec::OrderedCodec;
 use graphdb_core::wal::{EntityRef, OutboxIntent};
 use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

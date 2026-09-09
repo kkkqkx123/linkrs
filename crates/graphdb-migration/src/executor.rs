@@ -13,7 +13,7 @@ use graphdb_storage::{
 use crate::config::MigrationConfig;
 use crate::converter::convert_value;
 use crate::error::MigrationError;
-use crate::event::{MigrationEvent, MigrationEventListener};
+use crate::event::{notify_migration_listener, MigrationEvent, MigrationEventListener};
 use crate::lock::MigrationFileLock;
 use crate::metrics::global_migration_metrics;
 use crate::plan::{MigrationPlan, MigrationReport, MigrationStep, SafetyLevel};
@@ -306,7 +306,7 @@ where
     }
 
     if let Some(listener) = event_listener {
-        listener.on_event(MigrationEvent::Started { plan: plan.clone() });
+        notify_migration_listener(listener, MigrationEvent::Started { plan: plan.clone() });
     }
     progress.on_plan_start(plan);
 
@@ -338,13 +338,19 @@ where
         let report = execute_dry_run(storage, plan)?;
         if let Some(listener) = event_listener {
             if report.success {
-                listener.on_event(MigrationEvent::Completed {
-                    report: report.clone(),
-                });
+                notify_migration_listener(
+                    listener,
+                    MigrationEvent::Completed {
+                        report: report.clone(),
+                    },
+                );
             } else {
-                listener.on_event(MigrationEvent::Failed {
-                    error: report.errors.join("; "),
-                });
+                notify_migration_listener(
+                    listener,
+                    MigrationEvent::Failed {
+                        error: report.errors.join("; "),
+                    },
+                );
             }
         }
         progress.on_plan_complete(plan, report.rows_migrated);
@@ -364,7 +370,10 @@ where
                         rec.to_version, rec.plan_hash, plan.plan_hash
                     );
                     if let Some(listener) = event_listener {
-                        listener.on_event(MigrationEvent::Failed { error: err.clone() });
+                        notify_migration_listener(
+                            listener,
+                            MigrationEvent::Failed { error: err.clone() },
+                        );
                     }
                     global_migration_metrics().record_failure(start.elapsed().as_millis() as u64);
                     return Err(MigrationError::Plan(err));
@@ -393,9 +402,12 @@ where
             completed_step_indices: all_done.clone(),
         };
         if let Some(listener) = event_listener {
-            listener.on_event(MigrationEvent::Completed {
-                report: report.clone(),
-            });
+            notify_migration_listener(
+                listener,
+                MigrationEvent::Completed {
+                    report: report.clone(),
+                },
+            );
         }
         progress.on_plan_complete(plan, 0);
         if let Some(dir) = checkpoint_dir {
@@ -457,9 +469,12 @@ where
         };
         record_migration_history(storage, plan, 0, MigrationStatus::Applied, None);
         if let Some(listener) = event_listener {
-            listener.on_event(MigrationEvent::Completed {
-                report: report.clone(),
-            });
+            notify_migration_listener(
+                listener,
+                MigrationEvent::Completed {
+                    report: report.clone(),
+                },
+            );
         }
         progress.on_plan_complete(plan, 0);
         global_migration_metrics()
@@ -507,7 +522,7 @@ where
         let step = &plan.steps[idx];
         progress.on_step_start(idx, step);
         if let Some(listener) = event_listener {
-            listener.on_event(MigrationEvent::StepStarted { step_idx: idx });
+            notify_migration_listener(listener, MigrationEvent::StepStarted { step_idx: idx });
         }
 
         let single_slice = vec![idx];
@@ -549,9 +564,12 @@ where
                 Some(step_report.errors.join("; ")),
             );
             if let Some(listener) = event_listener {
-                listener.on_event(MigrationEvent::Failed {
-                    error: step_report.errors.join("; "),
-                });
+                notify_migration_listener(
+                    listener,
+                    MigrationEvent::Failed {
+                        error: step_report.errors.join("; "),
+                    },
+                );
             }
             for err in &step_report.errors {
                 progress.on_error(err);
@@ -578,10 +596,13 @@ where
 
         progress.on_step_complete(idx, step);
         if let Some(listener) = event_listener {
-            listener.on_event(MigrationEvent::StepCompleted {
-                step_idx: idx,
-                rows: step_report.rows_migrated,
-            });
+            notify_migration_listener(
+                listener,
+                MigrationEvent::StepCompleted {
+                    step_idx: idx,
+                    rows: step_report.rows_migrated,
+                },
+            );
         }
 
         let cp = crate::plan::MigrationCheckpoint {
@@ -623,9 +644,12 @@ where
     };
     record_migration_history(storage, plan, final_rows, MigrationStatus::Applied, None);
     if let Some(listener) = event_listener {
-        listener.on_event(MigrationEvent::Completed {
-            report: report.clone(),
-        });
+        notify_migration_listener(
+            listener,
+            MigrationEvent::Completed {
+                report: report.clone(),
+            },
+        );
     }
     progress.on_plan_complete(plan, final_rows);
     global_migration_metrics().record_success(final_rows, start.elapsed().as_millis() as u64);
@@ -2236,6 +2260,22 @@ mod tests {
             Ok(true)
         }
         fn drop_tag(&mut self, _space: &str, _tag: &str) -> Result<bool, StorageError> {
+            Ok(true)
+        }
+        fn rename_tag(
+            &mut self,
+            _space: &str,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<bool, StorageError> {
+            Ok(true)
+        }
+        fn rename_edge_type(
+            &mut self,
+            _space: &str,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<bool, StorageError> {
             Ok(true)
         }
         fn create_edge_type(

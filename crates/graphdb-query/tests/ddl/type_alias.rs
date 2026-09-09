@@ -141,7 +141,9 @@ fn test_drop_alias_referenced_by_other_rejected() {
         .assert_success()
         .exec_ddl("DROP TYPE base");
 
-    let error = scenario.error().expect("DROP on referenced alias should fail");
+    let error = scenario
+        .error()
+        .expect("DROP on referenced alias should fail");
     assert!(
         error.contains("still referenced") || error.contains("dependency"),
         "error: {error}"

@@ -9,9 +9,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::engine::data_store::GraphDataStore;
+use crate::engine::storage_events::GcEventSink;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use graphdb_core::types::Timestamp;
 use graphdb_transaction::VersionManager;
+use parking_lot::RwLock;
 
 /// GC manager configuration
 #[derive(Debug, Clone)]
@@ -63,6 +65,7 @@ pub struct VertexGcManager {
     running: Arc<AtomicBool>,
     stats: AtomicU64,
     total_removed: AtomicU64,
+    gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
 }
 
 impl VertexGcManager {
@@ -80,6 +83,22 @@ impl VertexGcManager {
             running: Arc::new(AtomicBool::new(false)),
             stats: AtomicU64::new(0),
             total_removed: AtomicU64::new(0),
+            gc_event_sink: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Attach a sink for reclaimed-entry counts (forwarded as `GcRun`).
+    /// The sink is shared across clones so background tasks observe it.
+    pub fn set_gc_event_sink(&self, sink: GcEventSink) {
+        *self.gc_event_sink.write() = Some(sink);
+    }
+
+    fn emit_gc_event(&self, reclaimed_entries: u64) {
+        if reclaimed_entries == 0 {
+            return;
+        }
+        if let Some(sink) = self.gc_event_sink.read().clone() {
+            sink(reclaimed_entries);
         }
     }
 
@@ -139,6 +158,7 @@ impl VertexGcManager {
 
         self.total_removed
             .fetch_add(total_removed as u64, Ordering::Release);
+        self.emit_gc_event(total_removed as u64);
         total_removed
     }
 
@@ -200,6 +220,7 @@ impl Clone for VertexGcManager {
             running: self.running.clone(),
             stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
             total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
+            gc_event_sink: self.gc_event_sink.clone(),
         }
     }
 }

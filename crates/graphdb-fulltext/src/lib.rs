@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod error;
+pub mod index_events;
 #[cfg(feature = "jieba")]
 pub mod jieba_tokenizer;
 #[cfg(feature = "fulltext")]
@@ -23,6 +24,7 @@ pub use graphdb_config::fulltext::{
     TantivyConfig, TokenizerKind,
 };
 pub use graphdb_core::ConsistencyState;
+pub use index_events::{IndexEvent, IndexEventCallback};
 #[cfg(feature = "fulltext")]
 pub use manager::FulltextIndexManager;
 pub use metadata::{IndexKey, IndexMetadata, IndexStatus};

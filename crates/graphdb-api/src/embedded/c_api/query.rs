@@ -137,6 +137,9 @@ pub unsafe extern "C" fn graphdb_execute_params(
     unsafe {
         let handle = &mut *(session as *mut GraphDbSessionHandle);
 
+        // Calling the SQL tracing callback (matches `graphdb_execute`).
+        handle.trace(query_str);
+
         match handle.inner.execute_with_params(query_str, params_map) {
             Ok(query_result) => {
                 handle.clear_error();
@@ -200,35 +203,100 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
 
 /// Check whether the query represents a data modification operation.
 ///
-/// Return a tuple of (operation type, row ID). If it is not a data modification operation, return None.
+/// Return a tuple of (operation type, affected rows). If it is not a data
+/// modification operation, return None.
 /// Operation type: 1=INSERT, 2=UPDATE, 3=DELETE
+///
+/// This is a best-effort heuristic over the leading keyword (after skipping
+/// whitespace and `--` / `//` / `#` line comments and `/* */` block comments).
+/// The affected-rows count comes from the result metadata, so embedded
+/// observers should treat it as a row count rather than a stable row id.
 fn detect_data_modification(
     query: &str,
-    _result: &crate::embedded::result::QueryResult,
+    result: &crate::embedded::result::QueryResult,
 ) -> Option<(i32, i64)> {
-    let query_upper = query.trim().to_uppercase();
-
-    // Check whether it is an INSERT operation.
-    if query_upper.starts_with("INSERT") {
-        return Some((1, 0));
+    let keyword = leading_keyword(query);
+    let operation = match keyword {
+        // Row creation.
+        "INSERT" | "CREATE" | "MERGE" => 1,
+        // Property / structure modification.
+        "UPDATE" | "SET" | "REMOVE" | "ALTER" => 2,
+        // Removal.
+        "DELETE" | "DETACH" | "DROP" => 3,
+        _ => return None,
+    };
+    // `MATCH ... DELETE/SET/REMOVE/MERGE/CREATE` carries the write in its
+    // trailing clause rather than the leading keyword.
+    if keyword == "MATCH" || keyword == "WITH" || keyword == "UNWIND" || keyword == "OPTIONAL" {
+        let upper = query.to_uppercase();
+        if upper.contains("DELETE") || upper.contains("DETACH DELETE") {
+            return Some((3, result.metadata().rows_returned as i64));
+        }
+        if upper.contains("SET")
+            || upper.contains("REMOVE")
+            || upper.contains("MERGE")
+            || upper.contains("CREATE")
+        {
+            let op = if upper.contains("MERGE") || upper.contains("CREATE") {
+                1
+            } else {
+                2
+            };
+            return Some((op, result.metadata().rows_returned as i64));
+        }
+        return None;
     }
+    Some((operation, result.metadata().rows_returned as i64))
+}
 
-    // Check whether it is an UPDATE operation.
-    if query_upper.starts_with("UPDATE") {
-        return Some((2, 0));
+/// Extract the first keyword token, skipping whitespace and SQL/Cypher comments.
+fn leading_keyword(query: &str) -> &str {
+    let bytes = query.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        // Skip whitespace.
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            break;
+        }
+        // Line comments: `--`, `//`, `#`.
+        if query[pos..].starts_with("--")
+            || query[pos..].starts_with("//")
+            || query[pos..].starts_with('#')
+        {
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+            continue;
+        }
+        // Block comments: `/* ... */`.
+        if query[pos..].starts_with("/*") {
+            if let Some(end) = query[pos..].find("*/") {
+                pos += end + 2;
+                continue;
+            }
+            return "";
+        }
+        break;
     }
-
-    // Check whether it is a DELETE operation.
-    if query_upper.starts_with("DELETE") {
-        return Some((3, 0));
+    let rest = &query[pos..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+        .unwrap_or(rest.len());
+    let mut token = &rest[..end];
+    // Handle `OPTIONAL MATCH` / `DETACH DELETE` two-word openers.
+    if token.eq_ignore_ascii_case("OPTIONAL") || token.eq_ignore_ascii_case("DETACH") {
+        let after: &str = rest[end..].trim_start();
+        let after_end = after
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+            .unwrap_or(after.len());
+        if !after[..after_end].is_empty() {
+            token = &after[..after_end];
+        }
     }
-
-    // Check whether it is a REMOVE operation.
-    if query_upper.starts_with("REMOVE") {
-        return Some((2, 0));
-    }
-
-    None
+    token
 }
 
 #[cfg(test)]
@@ -258,6 +326,16 @@ mod tests {
         assert!(!db.is_null());
 
         db
+    }
+
+    #[test]
+    fn test_leading_keyword_skips_comments() {
+        assert_eq!(leading_keyword("  -- comment\nCREATE (n)"), "CREATE");
+        assert_eq!(leading_keyword("/* block */ MERGE (n)"), "MERGE");
+        assert_eq!(leading_keyword("# hash\n// slash\nSET n.x = 1"), "SET");
+        assert_eq!(leading_keyword("  match (n) return n"), "match");
+        assert_eq!(leading_keyword("OPTIONAL MATCH (n) RETURN n"), "MATCH");
+        assert_eq!(leading_keyword("DETACH DELETE n"), "DELETE");
     }
 
     #[test]

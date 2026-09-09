@@ -288,12 +288,14 @@ impl TransactionManager {
 
         context.transition_to(TransactionState::Committed)?;
         self.active_transactions.remove(&txn_id);
+        self.drain_context_budget_warnings(&context);
         self.emit_commit_event(TransactionEvent::Committed {
             txn_id,
             write_timestamp: context.timestamp(),
             commit_timestamp: commit_ts,
             write_set: Box::new(descriptor.write_set),
             schema_catalog_version: context.schema_catalog_version(),
+            replayed: false,
         });
 
         log::info!(
@@ -438,12 +440,14 @@ impl TransactionManager {
         context.transition_to(TransactionState::Committed)?;
         self.active_transactions.remove(&txn_id);
         self.certifier.unregister_reads(txn_id);
+        self.drain_context_budget_warnings(&context);
         self.emit_commit_event(TransactionEvent::Committed {
             txn_id,
             write_timestamp: context.timestamp(),
             commit_timestamp: commit_ts,
             write_set: Box::new(descriptor.write_set),
             schema_catalog_version: context.schema_catalog_version(),
+            replayed: true,
         });
         Ok(())
     }

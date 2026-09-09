@@ -74,7 +74,9 @@ fn test_macro_duplicate_creation_fails() {
         .assert_success()
         .exec_ddl("CREATE MACRO foo(y) AS y * 2");
 
-    let error = scenario.error().expect("Duplicate macro creation should fail");
+    let error = scenario
+        .error()
+        .expect("Duplicate macro creation should fail");
     assert!(error.contains("already exists"), "error: {error}");
 }
 
@@ -157,7 +159,9 @@ fn test_macro_direct_recursion_rejected() {
         .assert_success()
         .query("RETURN fact(5)");
 
-    let error = scenario.error().expect("Recursive macro should be rejected");
+    let error = scenario
+        .error()
+        .expect("Recursive macro should be rejected");
     assert!(
         error.contains("recursive") || error.contains("expansion"),
         "error: {error}"

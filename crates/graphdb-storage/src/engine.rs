@@ -13,6 +13,7 @@ pub mod persistence_coordinator;
 pub mod resource_budget;
 pub mod snapshot_manager;
 pub mod spiller;
+pub mod storage_events;
 pub mod sync_wrapper;
 pub mod transaction;
 pub mod wal_manager;

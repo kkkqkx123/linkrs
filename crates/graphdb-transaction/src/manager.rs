@@ -20,8 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use parking_lot::RwLock;
-
 use dashmap::DashMap;
 
 use super::certify::Certifier;
@@ -34,8 +32,9 @@ use super::mvcc::{VersionManager, VersionManagerConfig};
 use super::participant::{TransactionCommitSink, TransactionMutationRecorder};
 use super::recovery::RecoveryManager;
 use super::types::*;
-use graphdb_metrics::StatsManager;
+use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use graphdb_core::types::Timestamp;
+use graphdb_metrics::StatsManager;
 use graphdb_sync::SyncManager;
 
 /// Transaction Manager
@@ -54,8 +53,8 @@ pub struct TransactionManager {
     pub(super) id_generator: AtomicU64,
     /// Statistics
     pub(super) stats: Arc<TransactionStats>,
-    pub(super) commit_callbacks: RwLock<Arc<[CommitCallback]>>,
-    pub(super) rollback_callbacks: RwLock<Arc<[RollbackCallback]>>,
+    pub(super) commit_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
+    pub(super) rollback_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
     /// Whether shutdown
     pub(super) shutdown_flag: AtomicU64,
     /// Transaction monitor for metrics collection
@@ -94,8 +93,8 @@ impl TransactionManager {
             id_generator: AtomicU64::new(1),
             commits_since_checkpoint: AtomicU64::new(0),
             stats,
-            commit_callbacks: RwLock::new(Arc::from(Vec::new())),
-            rollback_callbacks: RwLock::new(Arc::from(Vec::new())),
+            commit_callbacks: Arc::new(EventSubscriptions::new()),
+            rollback_callbacks: Arc::new(EventSubscriptions::new()),
             shutdown_flag: AtomicU64::new(0),
             monitor,
             sync_manager: None,
@@ -125,49 +124,71 @@ impl TransactionManager {
         manager
     }
 
-    pub fn register_commit_callback(&self, callback: CommitCallback) {
-        let mut guard = self.commit_callbacks.write();
-        let mut buf = guard.to_vec();
-        buf.push(callback);
-        *guard = Arc::from(buf);
+    pub fn register_commit_callback(&self, callback: CommitCallback) -> SubscriptionId {
+        self.commit_callbacks.add(callback)
     }
 
-    pub fn register_rollback_callback(&self, callback: RollbackCallback) {
-        let mut guard = self.rollback_callbacks.write();
-        let mut buf = guard.to_vec();
-        buf.push(callback);
-        *guard = Arc::from(buf);
+    /// Register a filtered commit observer invoked only when `filter` returns true.
+    pub fn register_commit_callback_filtered(
+        &self,
+        callback: CommitCallback,
+        filter: EventFilter<TransactionEvent>,
+    ) -> SubscriptionId {
+        self.commit_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered commit observer. Returns true if present.
+    pub fn unregister_commit_callback(&self, id: SubscriptionId) -> bool {
+        self.commit_callbacks.remove(id)
+    }
+
+    /// Number of registered commit observers.
+    pub fn commit_callback_count(&self) -> usize {
+        self.commit_callbacks.len()
+    }
+
+    pub fn register_rollback_callback(&self, callback: RollbackCallback) -> SubscriptionId {
+        self.rollback_callbacks.add(callback)
+    }
+
+    /// Register a filtered rollback observer invoked only when `filter` returns true.
+    pub fn register_rollback_callback_filtered(
+        &self,
+        callback: RollbackCallback,
+        filter: EventFilter<TransactionEvent>,
+    ) -> SubscriptionId {
+        self.rollback_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered rollback observer. Returns true if present.
+    pub fn unregister_rollback_callback(&self, id: SubscriptionId) -> bool {
+        self.rollback_callbacks.remove(id)
+    }
+
+    /// Number of registered rollback observers.
+    pub fn rollback_callback_count(&self) -> usize {
+        self.rollback_callbacks.len()
     }
 
     pub(super) fn emit_commit_event(&self, event: TransactionEvent) {
-        let callbacks = Arc::clone(&self.commit_callbacks.read());
-        for (index, callback) in callbacks.iter().enumerate() {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                callback(&event);
-            })) {
-                log::error!(
-                    "commit callback #{} panicked: {}; continuing dispatch",
-                    index,
-                    panic_payload_message(&payload)
-                );
-                self.stats.increment_cleanup_failure();
-            }
+        let panics = self.commit_callbacks.dispatch("commit", &event);
+        for _ in 0..panics {
+            self.stats.increment_cleanup_failure();
         }
     }
 
     pub(super) fn emit_rollback_event(&self, event: TransactionEvent) {
-        let callbacks = Arc::clone(&self.rollback_callbacks.read());
-        for (index, callback) in callbacks.iter().enumerate() {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                callback(&event);
-            })) {
-                log::error!(
-                    "rollback callback #{} panicked: {}; continuing dispatch",
-                    index,
-                    panic_payload_message(&payload)
-                );
-                self.stats.increment_cleanup_failure();
-            }
+        let panics = self.rollback_callbacks.dispatch("rollback", &event);
+        for _ in 0..panics {
+            self.stats.increment_cleanup_failure();
+        }
+    }
+
+    /// Drain pending budget warnings from a context and fan them out as
+    /// `TransactionEvent::BudgetWarning` through the commit observers.
+    pub fn drain_context_budget_warnings(&self, context: &TransactionContext) {
+        for event in context.drain_budget_warnings() {
+            self.emit_commit_event(event);
         }
     }
 
@@ -916,6 +937,49 @@ mod tests {
         assert_eq!(commits.load(Ordering::SeqCst), 1);
         assert_eq!(aborts.load(Ordering::SeqCst), 1);
         assert!(manager.list_transactions().is_empty());
+    }
+
+    #[test]
+    fn unregistered_callback_stops_receiving_events() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let commits = Arc::new(AtomicUsize::new(0));
+        let probe = Arc::clone(&commits);
+        let id = manager.register_commit_callback(Arc::new(move |event| {
+            if let TransactionEvent::Committed { .. } = event {
+                probe.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        assert_eq!(manager.commit_callback_count(), 2);
+        assert!(manager.unregister_commit_callback(id));
+        assert!(!manager.unregister_commit_callback(id));
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .commit_transaction(txn_id)
+            .expect("transaction should commit");
+        assert_eq!(commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn committed_event_carries_replay_flag() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let replayed = Arc::new(AtomicUsize::new(0));
+        let probe = Arc::clone(&replayed);
+        manager.register_commit_callback(Arc::new(move |event| {
+            if let TransactionEvent::Committed { replayed: true, .. } = event {
+                probe.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .commit_transaction(txn_id)
+            .expect("transaction should commit");
+        assert_eq!(replayed.load(Ordering::SeqCst), 0);
     }
 
     #[test]

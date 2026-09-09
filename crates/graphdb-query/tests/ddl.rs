@@ -17,15 +17,15 @@ mod constraints;
 mod edge_alter;
 #[path = "ddl/edge_basic.rs"]
 mod edge_basic;
+#[path = "ddl/macro.rs"]
+mod macro_;
 #[path = "ddl/schema_evolution.rs"]
 mod schema_evolution;
 #[path = "ddl/tag_alter.rs"]
 mod tag_alter;
 #[path = "ddl/tag_basic.rs"]
 mod tag_basic;
-#[path = "ddl/macro.rs"]
-mod macro_;
-#[path = "ddl/type_system.rs"]
-mod type_system;
 #[path = "ddl/type_alias.rs"]
 mod type_alias;
+#[path = "ddl/type_system.rs"]
+mod type_system;

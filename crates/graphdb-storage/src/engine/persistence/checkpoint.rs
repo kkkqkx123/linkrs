@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use graphdb_metrics::CheckpointTriggerReason;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
+use graphdb_metrics::CheckpointTriggerReason;
 use graphdb_sync::checkpoint_manifest::{
     CheckpointManifest, CheckpointManifestManager, IndexManifestRef,
 };
@@ -181,8 +181,27 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     ) -> StorageResult<CheckpointStats> {
         let result = self.create_checkpoint_inner(flush_data, timestamp, reason);
         match &result {
-            Ok(_) => *self.last_checkpoint_error.write() = None,
-            Err(error) => *self.last_checkpoint_error.write() = Some(error.to_string()),
+            Ok(stats) => {
+                *self.last_checkpoint_error.write() = None;
+                self.emit_storage_event(
+                    crate::engine::storage_events::StorageEvent::CheckpointCompleted {
+                        sequence: stats.checkpoint_seq,
+                        duration_ms: stats.duration.as_millis() as u64,
+                        data_flushed: stats.data_flushed,
+                        wal_truncated: stats.wal_truncated,
+                        snapshot_created: stats.snapshot_created,
+                    },
+                );
+            }
+            Err(error) => {
+                *self.last_checkpoint_error.write() = Some(error.to_string());
+                self.emit_storage_event(
+                    crate::engine::storage_events::StorageEvent::CheckpointFailed {
+                        sequence: None,
+                        error: error.to_string(),
+                    },
+                );
+            }
         }
         result
     }
@@ -196,8 +215,27 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     ) -> StorageResult<CheckpointStats> {
         let result = self.create_checkpoint_inner_with_guard(guard, flush_data, timestamp, reason);
         match &result {
-            Ok(_) => *self.last_checkpoint_error.write() = None,
-            Err(error) => *self.last_checkpoint_error.write() = Some(error.to_string()),
+            Ok(stats) => {
+                *self.last_checkpoint_error.write() = None;
+                self.emit_storage_event(
+                    crate::engine::storage_events::StorageEvent::CheckpointCompleted {
+                        sequence: stats.checkpoint_seq,
+                        duration_ms: stats.duration.as_millis() as u64,
+                        data_flushed: stats.data_flushed,
+                        wal_truncated: stats.wal_truncated,
+                        snapshot_created: stats.snapshot_created,
+                    },
+                );
+            }
+            Err(error) => {
+                *self.last_checkpoint_error.write() = Some(error.to_string());
+                self.emit_storage_event(
+                    crate::engine::storage_events::StorageEvent::CheckpointFailed {
+                        sequence: None,
+                        error: error.to_string(),
+                    },
+                );
+            }
         }
         result
     }
@@ -252,6 +290,12 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
                 graphdb_core::StorageError::db_error(format!("Failed to create checkpoint: {}", e))
             })?
         };
+
+        self.emit_storage_event(
+            crate::engine::storage_events::StorageEvent::CheckpointStarted {
+                sequence: checkpoint.seq,
+            },
+        );
 
         let checkpoint_dir = self
             .config
@@ -396,10 +440,21 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             });
             let safe_wal_lsn = Lsn::new(safe_lsn);
             wal.read().truncate(safe_wal_lsn)?;
+            if safe_wal_lsn != Lsn::ZERO {
+                self.notify_wal_truncated(safe_wal_lsn.into());
+            }
             safe_wal_lsn
         } else {
             wal_lsn
         };
+
+        if snapshot_created {
+            self.emit_storage_event(
+                crate::engine::storage_events::StorageEvent::SnapshotCreated {
+                    sequence: checkpoint.seq,
+                },
+            );
+        }
 
         let stats = CheckpointStats {
             checkpoint_id: checkpoint.seq,

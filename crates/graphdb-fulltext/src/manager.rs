@@ -5,18 +5,19 @@ use std::sync::Arc;
 
 use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
+use crate::index_events::{IndexEvent, IndexEventCallback};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
 use crate::ConsistencyState;
 use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
+use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use graphdb_core::metadata::SchemaManager;
 use graphdb_metrics::StatsManager;
 
 const METADATA_FILE_NAME: &str = "fulltext_metadata.json";
 
-#[derive(Debug)]
 pub struct FulltextIndexManager {
     engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>,
     metadata: DashMap<IndexKey, IndexMetadata>,
@@ -27,6 +28,16 @@ pub struct FulltextIndexManager {
     config: FulltextConfig,
     schema_manager: Option<Arc<SchemaManager>>,
     stats_manager: Mutex<Option<Arc<StatsManager>>>,
+    index_callbacks: EventSubscriptions<IndexEvent>,
+}
+
+impl std::fmt::Debug for FulltextIndexManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FulltextIndexManager")
+            .field("engines_count", &self.engines.len())
+            .field("index_callbacks", &self.index_callbacks.len())
+            .finish()
+    }
 }
 
 impl FulltextIndexManager {
@@ -47,11 +58,40 @@ impl FulltextIndexManager {
             config,
             schema_manager: None,
             stats_manager: Mutex::new(None),
+            index_callbacks: EventSubscriptions::new(),
         };
 
         manager.discover_existing_indexes()?;
 
         Ok(manager)
+    }
+
+    /// Register a runtime observer for index lifecycle events.
+    pub fn register_index_callback(&self, callback: IndexEventCallback) -> SubscriptionId {
+        self.index_callbacks.add(callback)
+    }
+
+    /// Register a filtered observer invoked only when `filter` returns true.
+    pub fn register_index_callback_filtered(
+        &self,
+        callback: IndexEventCallback,
+        filter: EventFilter<IndexEvent>,
+    ) -> SubscriptionId {
+        self.index_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered observer. Returns true if present.
+    pub fn unregister_index_callback(&self, id: SubscriptionId) -> bool {
+        self.index_callbacks.remove(id)
+    }
+
+    /// Number of registered index observers.
+    pub fn index_callback_count(&self) -> usize {
+        self.index_callbacks.len()
+    }
+
+    fn emit_index_event(&self, event: IndexEvent) {
+        self.index_callbacks.dispatch("index", &event);
     }
 
     fn discover_existing_indexes(&self) -> Result<(), SearchError> {
@@ -338,6 +378,10 @@ impl FulltextIndexManager {
             let engine_type = _engine_type.unwrap_or(self.default_engine);
             let storage_path = self.get_space_storage_path(space_id)?;
 
+            self.emit_index_event(IndexEvent::FulltextBuildStarted {
+                index_name: index_id.clone(),
+            });
+
             let engine = TantivySearchEngine::open_or_create(
                 &storage_path.join(&index_id),
                 self.config.tantivy.clone(),
@@ -365,6 +409,11 @@ impl FulltextIndexManager {
             if let Err(e) = self.save_metadata_to_file() {
                 tracing::warn!("Failed to save metadata after creating index: {}", e);
             }
+
+            self.emit_index_event(IndexEvent::FulltextBuildCompleted {
+                index_name: index_id.clone(),
+                docs_count: 0,
+            });
 
             Ok(index_id)
         }
@@ -451,7 +500,33 @@ impl FulltextIndexManager {
             tokio::fs::remove_dir_all(&index_path).await?;
         }
 
+        self.emit_index_event(IndexEvent::FulltextDropped {
+            index_name: index_id,
+        });
+
         Ok(())
+    }
+
+    /// Notify observers that an existing index was refreshed/committed.
+    pub fn notify_fulltext_refresh(&self, index_name: String) {
+        self.emit_index_event(IndexEvent::FulltextRefresh { index_name });
+    }
+
+    /// Notify observers of a merge lifecycle for an index.
+    ///
+    /// Tantivy merges segments internally without an explicit maintenance
+    /// entry point, so this is a manual hook for operators wrapping an
+    /// explicit merge/optimize pass.
+    pub fn notify_merge_started(&self, index_name: String, segments: usize) {
+        self.emit_index_event(IndexEvent::IndexMergeStarted {
+            index_name,
+            segments,
+        });
+    }
+
+    /// Notify observers that a merge completed for an index.
+    pub fn notify_merge_completed(&self, index_name: String) {
+        self.emit_index_event(IndexEvent::IndexMergeCompleted { index_name });
     }
 
     pub async fn search(
@@ -487,8 +562,18 @@ impl FulltextIndexManager {
     }
 
     pub async fn commit_all(&self) -> Result<(), SearchError> {
-        for entry in self.engines.iter() {
-            entry.value().commit().await?;
+        let keys: Vec<IndexKey> = self
+            .engines
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for key in &keys {
+            if let Some(engine) = self.engines.get(key) {
+                engine.value().commit().await?;
+                self.emit_index_event(IndexEvent::FulltextRefresh {
+                    index_name: key.to_index_id(),
+                });
+            }
         }
         Ok(())
     }

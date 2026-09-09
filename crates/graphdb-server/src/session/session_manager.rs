@@ -1,4 +1,6 @@
 use dashmap::DashMap;
+use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
+use graphdb_query::{SessionEvent, SessionEventCallback};
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -80,7 +82,6 @@ impl SessionInfo {
     }
 }
 
-#[derive(Debug)]
 pub struct GraphSessionManager {
     // Use DashMap to achieve true concurrent access without the need for explicit locking.
     sessions: Arc<DashMap<i64, Arc<ClientSession>>>,
@@ -92,6 +93,18 @@ pub struct GraphSessionManager {
     session_idle_timeout: Duration,
     /// Is the background cleanup task currently running?
     cleanup_task_running: Arc<AtomicBool>,
+    session_callbacks: EventSubscriptions<SessionEvent>,
+}
+
+impl std::fmt::Debug for GraphSessionManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GraphSessionManager")
+            .field("sessions_count", &self.sessions.len())
+            .field("host_addr", &self.host_addr)
+            .field("max_connections", &self.max_connections)
+            .field("session_callbacks", &self.session_callbacks.len())
+            .finish()
+    }
 }
 
 impl GraphSessionManager {
@@ -112,7 +125,36 @@ impl GraphSessionManager {
             max_connections,
             session_idle_timeout,
             cleanup_task_running: Arc::new(AtomicBool::new(false)),
+            session_callbacks: EventSubscriptions::new(),
         })
+    }
+
+    /// Register a runtime observer for session lifecycle events.
+    pub fn register_session_callback(&self, callback: SessionEventCallback) -> SubscriptionId {
+        self.session_callbacks.add(callback)
+    }
+
+    /// Register a filtered observer invoked only when `filter` returns true.
+    pub fn register_session_callback_filtered(
+        &self,
+        callback: SessionEventCallback,
+        filter: EventFilter<SessionEvent>,
+    ) -> SubscriptionId {
+        self.session_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered observer. Returns true if present.
+    pub fn unregister_session_callback(&self, id: SubscriptionId) -> bool {
+        self.session_callbacks.remove(id)
+    }
+
+    /// Number of registered session observers.
+    pub fn session_callback_count(&self) -> usize {
+        self.session_callbacks.len()
+    }
+
+    fn emit_session_event(&self, event: SessionEvent) {
+        self.session_callbacks.dispatch("session", &event);
     }
 
     /// Start the background session cleanup task.
@@ -196,6 +238,10 @@ impl GraphSessionManager {
             "Successfully created session ID: {} for user: {}",
             session_id, user_name
         );
+        self.emit_session_event(SessionEvent::SessionCreated {
+            session_id,
+            user_name,
+        });
         Ok(client_session)
     }
 
@@ -215,7 +261,7 @@ impl GraphSessionManager {
         info!("Removing session ID: {}", session_id);
 
         // DashMap does not require explicit locking.
-        self.sessions.remove(&session_id);
+        let existed = self.sessions.remove(&session_id).is_some();
         self.active_sessions.remove(&session_id);
 
         // Write lock protection creation time
@@ -225,6 +271,9 @@ impl GraphSessionManager {
         }
 
         info!("Successfully removed session ID: {}", session_id);
+        if existed {
+            self.emit_session_event(SessionEvent::SessionDestroyed { session_id });
+        }
     }
 
     /// Gets all sessions from the local cache
