@@ -458,6 +458,36 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok(s)
             }
+            // Type-name keywords are accepted as identifiers so they can be
+            // used as macro/tag/property names (e.g. `CREATE MACRO double(x)`
+            // or a tag literally named `int`). This mirrors the expression
+            // parser's handling of type keywords as function/variable names.
+            TokenKind::Bool
+            | TokenKind::Int
+            | TokenKind::Int8
+            | TokenKind::Int16
+            | TokenKind::Int32
+            | TokenKind::Int64
+            | TokenKind::Float
+            | TokenKind::Double
+            | TokenKind::String
+            | TokenKind::FixedString
+            | TokenKind::Timestamp
+            | TokenKind::Date
+            | TokenKind::Time
+            | TokenKind::Datetime
+            | TokenKind::Serial
+            | TokenKind::Geography
+            | TokenKind::List
+            | TokenKind::Map
+            | TokenKind::Struct
+            | TokenKind::Array
+            | TokenKind::UUID
+            | TokenKind::Duration => {
+                let s = self.current_token.lexeme.clone();
+                self.next_token();
+                Ok(s)
+            }
             _ => {
                 let pos = self.current_position();
                 Err(ParseError::new(

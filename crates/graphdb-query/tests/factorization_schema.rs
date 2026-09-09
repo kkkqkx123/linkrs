@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+use graphdb_core::types::expr::FunctionArg;
 use graphdb_core::types::expr::ExpressionMeta;
 use graphdb_core::types::expr::{contextual::ContextualExpression, ExpressionId};
 use graphdb_core::Expression;
@@ -595,8 +596,8 @@ fn aggregate_lambda_payload_requires_flat() {
     let payload = Expression::Function {
         name: "list_transform".to_string(),
         args: vec![
-            Expression::List(vec![]),
-            Expression::Variable("b".to_string()),
+            FunctionArg::Positional(Expression::List(vec![])),
+            FunctionArg::Positional(Expression::Variable("b".to_string())),
         ],
     };
     let (_, to_flatten) =

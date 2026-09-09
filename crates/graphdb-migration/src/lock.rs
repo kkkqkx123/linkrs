@@ -37,7 +37,9 @@ impl MigrationFileLock {
 
 impl Drop for MigrationFileLock {
     fn drop(&mut self) {
-        let _ = self._file.unlock();
+        // Fully-qualified to avoid `unstable_name_collisions` once std adds
+        // `File::unlock`.
+        let _ = fs4::fs_std::FileExt::unlock(&self._file);
         let _ = std::fs::remove_file(&self.path);
     }
 }

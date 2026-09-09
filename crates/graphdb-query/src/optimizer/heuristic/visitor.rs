@@ -55,8 +55,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
-    UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
+    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 #[cfg(feature = "vector")]
 use crate::planning::plan::core::nodes::search::vector::data_access::{
@@ -67,7 +67,7 @@ use crate::planning::plan::core::nodes::RemoveNode;
 use crate::planning::plan::core::nodes::access::IndexScanNode;
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+    ShowConfigsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -279,6 +279,19 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_show_queries => ShowQueriesNode, ShowQueries,
         visit_show_sessions => ShowSessionsNode, ShowSessions,
     );
+
+    // Macro / Type / SHOW catalog nodes (leaf management nodes)
+    fn visit_macro_manage(&mut self, node: &MacroManageNode) -> Self::Result {
+        Ok(PlanNodeEnum::MacroManage(node.clone()))
+    }
+
+    fn visit_type_manage(&mut self, node: &TypeManageNode) -> Self::Result {
+        Ok(PlanNodeEnum::TypeManage(node.clone()))
+    }
+
+    fn visit_show_macros(&mut self, node: &ShowMacrosNode) -> Self::Result {
+        Ok(PlanNodeEnum::ShowMacros(node.clone()))
+    }
 
     // Management nodes (parameterized sub-enums)
     fn visit_space_manage(&mut self, node: &SpaceManageNode) -> Self::Result {

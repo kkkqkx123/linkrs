@@ -6,6 +6,18 @@ use crate::parser::TokenKind;
 
 use super::DdlParser;
 
+/// Whether a type identifier spelled with a leading identifier denotes a
+/// builtin type (including DECIMAL/UNION/FIXED_STRING/VECTOR, which carry
+/// parameters), as opposed to a user-defined type alias. Used to decide
+/// whether the original spelling — rather than the resolved canonical type —
+/// must be kept as the underlying text for alias dependency tracking.
+fn is_identifier_spelled_builtin_type(name: &str) -> bool {
+    match name.to_uppercase().as_str() {
+        "DECIMAL" | "UNION" | "FIXED_STRING" | "FIXEDSTRING" | "VECTOR" => true,
+        _ => name.to_uppercase().parse::<crate::parser::ast::types::DataType>().is_ok(),
+    }
+}
+
 type TagEdgeDefsResult = (
     Vec<graphdb_core::types::PropertyDef>,
     Option<i64>,
@@ -545,11 +557,28 @@ impl DdlParser {
             // resolved at plan time through the type-alias catalog, where
             // cycle detection also runs.
             let ckpt = ctx.checkpoint();
+            // Capture the original spelling of the underlying type. When it
+            // denotes a user-defined alias, `parse_data_type` resolves it to
+            // the underlying builtin and `parsed.to_string()` no longer
+            // mentions the alias. Preserving the original identifier text is
+            // required for alias-to-alias dependency tracking and the
+            // drop-referenced-alias check in the type-alias catalog.
             let leading_is_identifier =
                 matches!(ctx.current_token().kind, TokenKind::Identifier(_));
+            let leading_lexeme = ctx.current_token().lexeme.clone();
             let (underlying_type, underlying_type_text) = match self.parse_data_type(ctx) {
                 Ok(parsed) => {
-                    let text = parsed.to_string();
+                    // A leading identifier that is neither a builtin spelling
+                    // nor a DECIMAL/UNION/FIXED_STRING/VECTOR spelling must be
+                    // an alias reference — keep it verbatim. Genuine builtin
+                    // spellings retain their canonical `to_string()` form.
+                    let text = if leading_is_identifier
+                        && !is_identifier_spelled_builtin_type(&leading_lexeme)
+                    {
+                        leading_lexeme
+                    } else {
+                        parsed.to_string()
+                    };
                     (parsed, text)
                 }
                 Err(parse_err) => {

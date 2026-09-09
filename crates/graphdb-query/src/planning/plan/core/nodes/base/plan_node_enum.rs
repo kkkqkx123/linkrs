@@ -985,10 +985,10 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 90 variants. With `qdrant`: 93 variants.
-    #[cfg(not(feature = "qdrant"))]
+    /// Default build: 90 variants. With `vector-qdrant`: 93 variants.
+    #[cfg(not(feature = "vector-qdrant"))]
     const EXPECTED_VARIANT_COUNT: usize = 90;
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     const EXPECTED_VARIANT_COUNT: usize = 93;
 
     #[test]
