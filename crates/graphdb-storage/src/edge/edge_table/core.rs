@@ -54,7 +54,7 @@ pub struct TimeTravelEdgeStore {
     pub is_open: bool,
     pub next_edge_id: EdgeId,
     pub config: EdgeTableConfig,
-    pub stats_manager: Option<std::sync::Arc<graphdb_core::stats::StatsManager>>,
+    pub stats_manager: Option<std::sync::Arc<graphdb_metrics::StatsManager>>,
     /// Version history tracking for schema changes
     pub version_history: Arc<Mutex<LabelVersionHistory>>,
     /// Cache for property name → schema index mapping to avoid O(n) linear lookups.
@@ -221,7 +221,7 @@ impl TimeTravelEdgeStore {
         )
     }
 
-    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_core::stats::StatsManager>) {
+    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_metrics::StatsManager>) {
         self.stats_manager = Some(stats);
     }
 

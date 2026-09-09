@@ -125,6 +125,10 @@ pub enum WalOpType {
     CreateEdgeIndex = 28,
     DropEdgeIndex = 29,
     UpdateSequence = 30,
+    CreateMacro = 31,
+    DropMacro = 32,
+    CreateTypeAlias = 33,
+    DropTypeAlias = 34,
 }
 
 impl TryFrom<u8> for WalOpType {
@@ -163,6 +167,10 @@ impl TryFrom<u8> for WalOpType {
             28 => Ok(WalOpType::CreateEdgeIndex),
             29 => Ok(WalOpType::DropEdgeIndex),
             30 => Ok(WalOpType::UpdateSequence),
+            31 => Ok(WalOpType::CreateMacro),
+            32 => Ok(WalOpType::DropMacro),
+            33 => Ok(WalOpType::CreateTypeAlias),
+            34 => Ok(WalOpType::DropTypeAlias),
             _ => Err(WalError::InvalidOpType(value)),
         }
     }
@@ -202,6 +210,10 @@ impl fmt::Display for WalOpType {
             WalOpType::CreateEdgeIndex => write!(f, "CreateEdgeIndex"),
             WalOpType::DropEdgeIndex => write!(f, "DropEdgeIndex"),
             WalOpType::UpdateSequence => write!(f, "UpdateSequence"),
+            WalOpType::CreateMacro => write!(f, "CreateMacro"),
+            WalOpType::DropMacro => write!(f, "DropMacro"),
+            WalOpType::CreateTypeAlias => write!(f, "CreateTypeAlias"),
+            WalOpType::DropTypeAlias => write!(f, "DropTypeAlias"),
         }
     }
 }

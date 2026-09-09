@@ -46,6 +46,8 @@ impl Value {
             (String(a), FixedString(b)) => Ok(String(format!("{}{}", a, b).into())),
             (FixedString(a), String(b)) => Ok(String(format!("{}{}", a, b).into())),
             (FixedString(a), FixedString(b)) => Ok(String(format!("{}{}", a, b).into())),
+            // High-precision decimal addition
+            (Decimal128(a), Decimal128(b)) => a.add(b).map(Decimal128),
             _ => Err("Cannot perform addition on these value types".to_string()),
         }
     }

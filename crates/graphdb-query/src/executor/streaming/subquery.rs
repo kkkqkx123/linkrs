@@ -107,6 +107,8 @@ enum SubqueryCache {
     Exists(bool),
     /// IN result set (NULL values removed at collection time).
     Contains(HashSet<Value>),
+    /// Scalar result: first result value, or NULL for empty results.
+    Scalar(Value),
 }
 
 /// A compiled subquery with a reusable, resettable executor instance.
@@ -305,6 +307,50 @@ impl SubqueryExecutor {
             return Ok(found);
         }
         self.run_contains(runner, layout, row, value)
+    }
+
+    /// Scalar subquery: the first result value, or NULL when the subquery
+    /// returns no rows.
+    ///
+    /// Non-correlated: evaluated once on the first call and cached.
+    /// Correlated: re-executed per row with the current row as the frame.
+    /// Group-Join form: answered from the materialized key→aggregate table;
+    /// a missing key yields NULL.
+    pub fn execute_scalar(
+        &self,
+        body: &SubqueryBody,
+        layout: Arc<SlotLayout>,
+        row: Vec<Value>,
+    ) -> Result<Value, ExpressionError> {
+        let runner = self.runner(body)?;
+        if let Some(spec) = &runner.group_join {
+            let found = self.run_group_join_lookup(runner, spec, layout, row)?;
+            return Ok(found.unwrap_or(Value::Null(graphdb_core::NullType::Null)));
+        }
+        if !runner.correlated {
+            let mut cache = runner.cache.lock();
+            if let Some(SubqueryCache::Scalar(value)) = &*cache {
+                return Ok(value.clone());
+            }
+            let value = self.run_scalar(runner, layout, row)?;
+            *cache = Some(SubqueryCache::Scalar(value.clone()));
+            return Ok(value);
+        }
+        self.run_scalar(runner, layout, row)
+    }
+
+    /// Run the subquery and return its first result value (NULL when empty).
+    fn run_scalar(
+        &self,
+        runner: &SubqueryRunner,
+        layout: Arc<SlotLayout>,
+        row: Vec<Value>,
+    ) -> Result<Value, ExpressionError> {
+        let values = self.run_values(runner, layout, row)?;
+        Ok(values
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Null(graphdb_core::NullType::Null)))
     }
 
     fn runner(&self, body: &SubqueryBody) -> Result<&SubqueryRunner, ExpressionError> {
@@ -571,6 +617,8 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            macro_manager: None,
+            type_alias_manager: None,
             search: crate::executor::base::SearchContext::default(),
         });
         SubqueryExecutor::from_specs(runtime, bindings, &specs)

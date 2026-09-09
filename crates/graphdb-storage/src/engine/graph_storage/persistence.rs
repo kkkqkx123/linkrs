@@ -188,12 +188,12 @@ pub(crate) fn flush(ctx: &GraphStorageContext) -> StorageResult<()> {
 pub(crate) fn create_checkpoint(
     ctx: &GraphStorageContext,
 ) -> StorageResult<Option<CheckpointStats>> {
-    create_checkpoint_with_reason(ctx, graphdb_core::stats::CheckpointTriggerReason::Explicit)
+    create_checkpoint_with_reason(ctx, graphdb_metrics::CheckpointTriggerReason::Explicit)
 }
 
 pub(crate) fn create_checkpoint_with_reason(
     ctx: &GraphStorageContext,
-    reason: graphdb_core::stats::CheckpointTriggerReason,
+    reason: graphdb_metrics::CheckpointTriggerReason,
 ) -> StorageResult<Option<CheckpointStats>> {
     let persistence = match ctx.persistence().as_ref() {
         Some(p) => p,
@@ -280,7 +280,7 @@ pub(crate) fn create_checkpoint_with_reason(
 pub(crate) fn create_checkpoint_with_guard(
     ctx: &GraphStorageContext,
     guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
-    reason: graphdb_core::stats::CheckpointTriggerReason,
+    reason: graphdb_metrics::CheckpointTriggerReason,
 ) -> StorageResult<Option<CheckpointStats>> {
     let persistence = match ctx.persistence().as_ref() {
         Some(p) => p.clone(),
@@ -473,7 +473,7 @@ pub(crate) fn auto_checkpoint_if_needed(
         let reason = persistence
             .read()
             .checkpoint_trigger_reason()
-            .unwrap_or(graphdb_core::stats::CheckpointTriggerReason::Explicit);
+            .unwrap_or(graphdb_metrics::CheckpointTriggerReason::Explicit);
         ctx.request_async_checkpoint(reason);
         return Ok(None);
     }

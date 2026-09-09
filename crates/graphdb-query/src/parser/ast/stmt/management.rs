@@ -122,7 +122,7 @@ pub struct UnwindStmt {
     pub skip: Option<SkipClause>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WithStmt {
     pub span: Span,
     pub items: Vec<ReturnItem>,
@@ -132,6 +132,20 @@ pub struct WithStmt {
     pub skip: Option<SkipClause>,
     pub limit: Option<LimitClause>,
     pub recursive: bool,
+    pub ctes: Vec<CteDef>,
+}
+
+/// A common table expression defined in a WITH clause.
+///
+/// `name AS (<body>)` where the body is a single query, or — under
+/// `WITH RECURSIVE` — `anchor UNION ALL step`. V1 supports exactly one CTE
+/// per WITH and single-column anchors; the planner reports wider shapes
+/// with a precise error.
+#[derive(Debug, Clone)]
+pub struct CteDef {
+    pub span: Span,
+    pub name: String,
+    pub body: Box<Stmt>,
 }
 
 /// A standalone WHERE stage used as a pipe suffix (e.g. `GO ... | WHERE age > 25`).

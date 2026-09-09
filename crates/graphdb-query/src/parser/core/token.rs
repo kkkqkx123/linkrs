@@ -116,6 +116,7 @@ pub enum TokenKind {
     Alter,
     If,
     Exists,
+    Subquery,
     Change,
     CreateUser,
     AlterUser,

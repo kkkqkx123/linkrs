@@ -220,6 +220,7 @@ impl CostAssigner {
 
             // Control flow nodes
             PlanNodeEnum::Loop(_)
+            | PlanNodeEnum::RecursiveCte(_)
             | PlanNodeEnum::Select(_)
             | PlanNodeEnum::PassThrough(_)
             | PlanNodeEnum::Argument(_) => {

@@ -187,6 +187,9 @@ pub trait ExpressionVisitor {
             Expression::CountSubquery { body } => {
                 self.visit_count_subquery(body);
             }
+            Expression::ScalarSubquery { body } => {
+                self.visit_scalar_subquery(body);
+            }
             Expression::Lambda { params, body } => {
                 self.visit_lambda(params, body);
             }
@@ -376,6 +379,9 @@ pub trait ExpressionVisitor {
 
     /// Accessing COUNT subquery expressions
     fn visit_count_subquery(&mut self, _body: &SubqueryBody) {}
+
+    /// Accessing scalar subquery expressions
+    fn visit_scalar_subquery(&mut self, _body: &SubqueryBody) {}
 
     /// Accessing Lambda expressions
     fn visit_lambda(&mut self, _params: &[String], body: &Expression) {

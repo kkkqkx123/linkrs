@@ -267,6 +267,16 @@ pub enum Expression {
         body: Box<SubqueryBody>,
     },
 
+    /// Scalar subquery expression
+    ///
+    /// Evaluates to the first column of the first row returned by the
+    /// subquery, or NULL when the subquery returns no rows.
+    /// Syntax: `SUBQUERY { MATCH ... RETURN <single expr> }`
+    ScalarSubquery {
+        /// The subquery body (must carry a single-column `return_expr`)
+        body: Box<SubqueryBody>,
+    },
+
     /// Lambda expression
     ///
     /// Represents an anonymous function, e.g. `x -> x + 1` or `(x, y) -> x + y`.

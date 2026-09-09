@@ -6,7 +6,8 @@ use crate::parser::ast::{AlterTarget, CreateTarget, IndexType, ShowTarget, Stmt}
 use crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo;
 use crate::planning::plan::core::nodes::management::index_nodes::IndexManageInfo;
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
+    EdgeManageNode, IndexManageNode, MacroManageNode, SpaceManageNode, TagManageNode,
+    TypeManageNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
     CheckpointNode, CommentOnNode, CreateSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
@@ -17,9 +18,10 @@ use crate::planning::plan::core::nodes::management::system_nodes::{
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
 use crate::planning::plan::core::nodes::{
-    AlterEdgeNode, AlterTagNode, CreateEdgeNode, CreateTagNode, EdgeManageInfo, ShowCreateEdgeNode,
+    AlterEdgeNode, AlterTagNode, CreateEdgeNode, CreateMacroNode, CreateTagNode, CreateTypeNode,
+    DropMacroNode, DropTypeNode, EdgeManageInfo, MacroManageInfo, ShowCreateEdgeNode,
     ShowCreateIndexNode, ShowCreateSpaceNode, ShowCreateTagNode, ShowEdgesNode, ShowIndexesNode,
-    ShowTagsNode, TagManageInfo,
+    ShowTagsNode, TagManageInfo, TypeManageInfo,
 };
 use crate::planning::plan::core::{
     node_id_generator::next_node_id, AlterSpaceNode, ClearSpaceNode, PlanNodeEnum, ShowSpacesNode,
@@ -238,6 +240,97 @@ impl MaintainPlanner {
                 format!("CREATE TAG {} AS (query) is not yet supported", name),
             )),
         }
+    }
+
+    fn contextual_body(
+        body: &graphdb_core::types::expr::contextual::ContextualExpression,
+    ) -> Result<graphdb_core::Expression, PlannerError> {
+        body.expression()
+            .map(|meta| meta.inner().clone())
+            .ok_or_else(|| {
+                PlannerError::PlanGenerationFailed(
+                    "Macro body expression is missing analysis context".to_string(),
+                )
+            })
+    }
+
+    fn plan_create_macro(
+        &self,
+        stmt: &crate::parser::ast::stmt::CreateMacroStmt,
+    ) -> Result<PlanNodeEnum, PlannerError> {
+        use graphdb_core::metadata::MacroParamDef;
+
+        if stmt.name.trim().is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Macro name must not be empty".to_string(),
+            ));
+        }
+        let body = Self::contextual_body(&stmt.body)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut params = Vec::with_capacity(stmt.params.len());
+        for param in &stmt.params {
+            if param.name.trim().is_empty() {
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "Macro '{}' has an empty parameter name",
+                    stmt.name
+                )));
+            }
+            let key = param.name.to_ascii_uppercase();
+            if !seen.insert(key) {
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "Macro '{}' has duplicate parameter '{}'",
+                    stmt.name, param.name
+                )));
+            }
+            let default = param
+                .default_value
+                .as_ref()
+                .map(Self::contextual_body)
+                .transpose()?;
+            params.push(MacroParamDef {
+                name: param.name.clone(),
+                default,
+            });
+        }
+        let info = MacroManageInfo::new(stmt.name.clone(), params, body, stmt.if_not_exists);
+        let node = CreateMacroNode::new(next_node_id(), info);
+        Ok(PlanNodeEnum::MacroManage(MacroManageNode::Create(node)))
+    }
+
+    fn plan_drop_macro(&self, stmt: &crate::parser::ast::stmt::DropMacroStmt) -> PlanNodeEnum {
+        let node =
+            DropMacroNode::new(next_node_id(), stmt.name.clone()).with_if_exists(stmt.if_exists);
+        PlanNodeEnum::MacroManage(MacroManageNode::Drop(node))
+    }
+
+    fn plan_create_type(
+        &self,
+        stmt: &crate::parser::ast::stmt::CreateTypeStmt,
+    ) -> Result<PlanNodeEnum, PlannerError> {
+        if stmt.name.trim().is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Type name must not be empty".to_string(),
+            ));
+        }
+        if stmt.underlying_type_text.trim().is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(format!(
+                "Type '{}' has an empty underlying type",
+                stmt.name
+            )));
+        }
+        let info = TypeManageInfo::new(
+            stmt.name.clone(),
+            stmt.underlying_type_text.clone(),
+            stmt.if_not_exists,
+        );
+        let node = CreateTypeNode::new(next_node_id(), info);
+        Ok(PlanNodeEnum::TypeManage(TypeManageNode::Create(node)))
+    }
+
+    fn plan_drop_type(&self, stmt: &crate::parser::ast::stmt::DropTypeStmt) -> PlanNodeEnum {
+        let node =
+            DropTypeNode::new(next_node_id(), stmt.name.clone()).with_if_exists(stmt.if_exists);
+        PlanNodeEnum::TypeManage(TypeManageNode::Drop(node))
     }
 
     fn plan_alter(&self, target: &AlterTarget, current_space: &str) -> PlanNodeEnum {
@@ -587,6 +680,20 @@ impl Planner for MaintainPlanner {
                     "Create Node/Edge/Path is not supported by MaintainPlanner".to_string(),
                 ));
             }
+
+            Stmt::CreateMacro(create_macro_stmt) => {
+                let node = self.plan_create_macro(create_macro_stmt)?;
+                return Ok(SubPlan::from_single_node(node));
+            }
+
+            Stmt::DropMacro(drop_macro_stmt) => self.plan_drop_macro(drop_macro_stmt),
+
+            Stmt::CreateType(create_type_stmt) => {
+                let node = self.plan_create_type(create_type_stmt)?;
+                return Ok(SubPlan::from_single_node(node));
+            }
+
+            Stmt::DropType(drop_type_stmt) => self.plan_drop_type(drop_type_stmt),
 
             Stmt::Alter(alter_stmt) => self.plan_alter(&alter_stmt.target, &current_space),
 

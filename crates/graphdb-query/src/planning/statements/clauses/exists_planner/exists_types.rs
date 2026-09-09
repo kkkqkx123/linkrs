@@ -200,6 +200,10 @@ fn collect_expression_subqueries_inner(
             out.push(subquery.as_ref().clone());
             collect_expression_subqueries_inner(left, id_alloc, out);
         }
+        Expression::ScalarSubquery { body } => {
+            body.id = id_alloc.allocate();
+            out.push(body.as_ref().clone());
+        }
         Expression::Aggregate { args, filter, .. } => {
             for arg in args.iter_mut() {
                 collect_expression_subqueries_inner(arg, id_alloc, out);

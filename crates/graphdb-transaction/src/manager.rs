@@ -34,7 +34,7 @@ use super::mvcc::{VersionManager, VersionManagerConfig};
 use super::participant::{TransactionCommitSink, TransactionMutationRecorder};
 use super::recovery::RecoveryManager;
 use super::types::*;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_core::types::Timestamp;
 use graphdb_sync::SyncManager;
 

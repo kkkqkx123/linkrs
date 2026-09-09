@@ -382,7 +382,7 @@ impl GraphStorageContext {
         self.persistent
             .stats_manager
             .as_ref()
-            .and_then(|m| m.get_value(graphdb_core::stats::MetricType::OutboxPending))
+            .and_then(|m| m.get_value(graphdb_metrics::MetricType::OutboxPending))
             .unwrap_or(0)
     }
 

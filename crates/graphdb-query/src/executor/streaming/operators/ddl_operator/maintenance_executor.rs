@@ -207,25 +207,58 @@ pub(super) fn execute_show_graphs(
 pub(super) fn execute_show_macros(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let super::DdlOperatorKind::ShowMacros {
-        storage,
-        space_name: _,
-        emitted,
-    } = &mut op.kind
-    else {
-        return Ok(None);
+    let emitted = match &mut op.kind {
+        super::DdlOperatorKind::ShowMacros { emitted, .. } => emitted,
+        _ => return Ok(None),
     };
-    let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    // Macros are not yet stored in the catalog; return empty results.
-    // When CREATE MACRO storage is implemented, query the macro registry here.
-    Ok(Some(super::make_single_row(
-        super::make_single_col_schema("macros", "string"),
-        vec![],
-    )))
+
+    let defs = op
+        .runtime
+        .as_ref()
+        .and_then(|rt| rt.macro_manager())
+        .map(|manager| manager.list_macros())
+        .unwrap_or_default();
+
+    let schema = Arc::new(Schema::new(vec![
+        ColumnInfo {
+            name: "name".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "params".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "body".to_string(),
+            data_type: "string".to_string(),
+        },
+    ]));
+    let rows = defs
+        .iter()
+        .map(|def| {
+            let params = def
+                .params
+                .iter()
+                .map(|p| match &p.default {
+                    Some(default) => {
+                        format!("{} = {}", p.name, default.to_expression_string())
+                    }
+                    None => p.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            vec![
+                Value::string(&def.name),
+                Value::string(params),
+                Value::string(def.body.to_expression_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(DataChunk::new(rows, schema)))
 }
 
 pub(super) fn execute_load_from(

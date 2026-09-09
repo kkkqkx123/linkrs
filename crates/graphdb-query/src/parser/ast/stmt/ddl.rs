@@ -213,7 +213,11 @@ pub struct DropMacroStmt {
 pub struct CreateTypeStmt {
     pub span: Span,
     pub name: String,
+    /// Parsed underlying type. `DataType::Unknown` when the underlying type
+    /// is an alias reference resolved later (plan time) via the type catalog.
     pub underlying_type: DataType,
+    /// Raw underlying type text as written (builtin spelling or alias name).
+    pub underlying_type_text: String,
     pub if_not_exists: bool,
 }
 

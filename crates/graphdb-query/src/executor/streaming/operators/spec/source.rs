@@ -53,6 +53,15 @@ pub enum SourceSpec {
         rows: Vec<Vec<Value>>,
         col_names: Vec<String>,
     },
+    /// Recursive-CTE working-table scan.
+    ///
+    /// Reads the rows published by the enclosing fixpoint operator under the
+    /// mangled `cte_name` (see `crate::cte`). Produced when a step pattern
+    /// labels a node with the CTE name; never touches storage.
+    CteScan {
+        cte_name: String,
+        col_names: Vec<String>,
+    },
     /// Standalone DML values — evaluated once per execution in the source
     /// operator so that volatile expressions (e.g. `now()`) are resolved at
     /// execution time, not at plan build time.

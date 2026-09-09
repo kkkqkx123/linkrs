@@ -97,7 +97,6 @@ pub trait ExpressionContext {
         let results = self.execute_subquery(body)?;
         Ok(!results.is_empty())
     }
-
     /// IN semantics: whether `value` occurs in the subquery result.
     ///
     /// A NULL left operand, or NULL values inside the result set, never
@@ -113,6 +112,16 @@ pub trait ExpressionContext {
         let results = self.execute_subquery(body)?;
         Ok(Value::Bool(
             results.iter().any(|v| !v.is_null() && v == value),
+        ))
+    }
+
+    /// Scalar-subquery semantics: the first result value, or NULL when the
+    /// subquery returns no rows. Streaming contexts override this to dispatch
+    /// through the hosting operator's subquery executor.
+    fn execute_scalar_subquery(&mut self, body: &SubqueryBody) -> Result<Value, ExpressionError> {
+        let _ = body;
+        Err(ExpressionError::type_error(
+            "Scalar subquery execution not supported in this context",
         ))
     }
 

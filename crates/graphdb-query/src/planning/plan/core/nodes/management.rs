@@ -1,3 +1,4 @@
+pub mod catalog_nodes;
 pub mod edge_nodes;
 pub mod index_nodes;
 pub mod manage_node_enums;
@@ -6,6 +7,10 @@ pub mod stats_nodes;
 pub mod system_nodes;
 pub mod tag_nodes;
 pub mod user_nodes;
+
+pub use catalog_nodes::{
+    CreateMacroNode, CreateTypeNode, DropMacroNode, DropTypeNode, MacroManageInfo, TypeManageInfo,
+};
 
 pub use edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, EdgeAlterInfo, EdgeManageInfo,
@@ -18,8 +23,8 @@ pub use index_nodes::{
     ShowTagIndexesNode,
 };
 pub use manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
-    UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
+    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 pub use space_nodes::{
     AlterSpaceNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode,

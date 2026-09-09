@@ -208,6 +208,11 @@ impl Expression {
         matches!(self, Expression::CountSubquery { .. })
     }
 
+    /// Checks for a scalar subquery expression
+    pub fn is_scalar_subquery(&self) -> bool {
+        matches!(self, Expression::ScalarSubquery { .. })
+    }
+
     /// Checks for a Lambda expression
     pub fn is_lambda(&self) -> bool {
         matches!(self, Expression::Lambda { .. })

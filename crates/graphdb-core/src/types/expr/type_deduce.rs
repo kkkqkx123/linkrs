@@ -59,6 +59,9 @@ impl Expression {
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
             Expression::CountSubquery { .. } => DataType::BigInt,
+            // Scalar subquery result type depends on the RETURN expression;
+            // resolved at bind time, Unknown here.
+            Expression::ScalarSubquery { .. } => DataType::Unknown,
             Expression::Lambda { .. } => DataType::Unknown,
             Expression::WindowFunction { .. } => DataType::Unknown,
         }

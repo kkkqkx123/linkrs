@@ -8,7 +8,8 @@ use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
 use crate::storage::StorageClient;
 use graphdb_core::Value;
-use graphdb_core::{SessionStatistics, StatsManager};
+use graphdb_core::SessionStatistics;
+use graphdb_metrics::StatsManager;
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;
 use graphdb_query::executor::expression::functions::{CustomFunction, FunctionRegistry};

@@ -1,1 +1,1 @@
-pub use graphdb_core::stats::executor_stats::ExecutorStats;
+pub use graphdb_metrics::executor_stats::ExecutorStats;

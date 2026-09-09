@@ -49,6 +49,7 @@ pub fn operator_cardinality_shape_key(
             SourceSpec::GetNeighbors { direction, .. } => key("GetNeighbors", Some(direction)),
             SourceSpec::IndexScan { index_name, .. } => key("IndexScan", Some(index_name)),
             SourceSpec::GetProp { .. } => None,
+            SourceSpec::CteScan { .. } => None,
         },
         OperatorKindSpec::Unary(UnarySpec::Filter { .. }) => None,
         OperatorKindSpec::Unary(UnarySpec::AppendVertices { entity_var, .. }) => {

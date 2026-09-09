@@ -8,6 +8,7 @@ pub mod bound;
 pub mod error;
 pub mod expr_binder;
 pub mod expr_converter;
+pub mod macro_expansion;
 pub mod query_graph;
 pub mod scope;
 pub mod semantic_checker;

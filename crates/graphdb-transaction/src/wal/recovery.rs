@@ -5,13 +5,13 @@ use serde::de::DeserializeOwned;
 
 use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo,
-    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult,
-    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType, WalParser,
-    WalRecoveryMode,
+    CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo,
+    DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, InsertVertexRedo,
+    LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult, RenameEdgePropRedo,
+    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
 };
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
@@ -631,6 +631,54 @@ impl RecoveryManager {
                         self.stats,
                         UpdateSequenceRedo,
                         replay_update_sequence
+                    )
+                }
+                WalOpType::CreateMacro => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateMacroRedo,
+                        replay_create_macro
+                    )
+                }
+                WalOpType::DropMacro => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DropMacroRedo,
+                        replay_drop_macro
+                    )
+                }
+                WalOpType::CreateTypeAlias => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateTypeAliasRedo,
+                        replay_create_type_alias
+                    )
+                }
+                WalOpType::DropTypeAlias => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DropTypeAliasRedo,
+                        replay_drop_type_alias
                     )
                 }
                 WalOpType::OutboxIntent

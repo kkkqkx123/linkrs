@@ -12,7 +12,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
     StorageSyncContextOps,
 };
-use graphdb_core::stats::MetricType;
+use graphdb_metrics::MetricType;
 
 /// Obtaining session statistics
 pub async fn session<
@@ -100,8 +100,8 @@ pub async fn queries<
                 "query": profile.query_text,
                 "duration_ms": profile.total_duration_us as f64 / 1000.0,
                 "status": match profile.status {
-                    graphdb_core::stats::QueryStatus::Success => "success",
-                    graphdb_core::stats::QueryStatus::Failed => "failed",
+                    graphdb_metrics::QueryStatus::Success => "success",
+                    graphdb_metrics::QueryStatus::Failed => "failed",
                 },
             })
         })

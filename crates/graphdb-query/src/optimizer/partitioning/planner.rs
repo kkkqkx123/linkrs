@@ -689,6 +689,7 @@ impl PartitioningPlanner {
                 | PlanNodeEnum::AppendVertices(_)
                 | PlanNodeEnum::BiTraverse(_)
                 | PlanNodeEnum::Loop(_)
+                | PlanNodeEnum::RecursiveCte(_)
                 | PlanNodeEnum::MultiShortestPath(_)
                 | PlanNodeEnum::BFSShortest(_)
                 | PlanNodeEnum::AllPaths(_)

@@ -269,13 +269,22 @@ impl DdlParser {
         canonical: &str,
     ) -> Result<DataType, ParseError> {
         ctx.next_token();
-        canonical.parse::<DataType>().map_err(|e| {
-            ParseError::new(
-                ParseErrorKind::SyntaxError,
-                format!("Unknown data type: {}", e.name),
-                ctx.current_position(),
-            )
-        })
+        match canonical.parse::<DataType>() {
+            Ok(parsed) => Ok(parsed),
+            Err(e) => {
+                // Unknown builtin spellings may be user-defined type aliases.
+                if let Some(resolved) = ctx.resolve_named_type(canonical) {
+                    if resolved != DataType::Unknown {
+                        return Ok(resolved);
+                    }
+                }
+                Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    format!("Unknown data type: {}", e.name),
+                    ctx.current_position(),
+                ))
+            }
+        }
     }
 
     /// Maximum STRUCT/ARRAY nesting depth (prevents stack overflow on
@@ -621,17 +630,24 @@ impl DdlParser {
                     }
                     // All other type names (including aliases) are resolved by
                     // the core `DataType::from_str` parser (single source of
-                    // truth for the keyword -> type mapping).
-                    _ => Ok((
-                        type_name.parse::<DataType>().map_err(|e| {
-                            ParseError::new(
-                                ParseErrorKind::SyntaxError,
-                                format!("Unknown data type: {}", e.name),
-                                ctx.current_position(),
-                            )
-                        })?,
-                        false,
-                    )),
+                    // truth for the keyword -> type mapping), falling back to
+                    // user-defined type aliases.
+                    _ => {
+                        let parsed = match type_name.parse::<DataType>() {
+                            Ok(parsed) => parsed,
+                            Err(e) => match ctx.resolve_named_type(&type_name) {
+                                Some(resolved) if resolved != DataType::Unknown => resolved,
+                                _ => {
+                                    return Err(ParseError::new(
+                                        ParseErrorKind::SyntaxError,
+                                        format!("Unknown data type: {}", e.name),
+                                        ctx.current_position(),
+                                    ));
+                                }
+                            },
+                        };
+                        Ok((parsed, false))
+                    }
                 }
             }
             _ => Err(ParseError::new(

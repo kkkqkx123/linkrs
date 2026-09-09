@@ -409,6 +409,14 @@ impl BatchPlanAnalyzer {
                     .unwrap_or(0);
                 body_count
             }
+            PlanNodeEnum::RecursiveCte(n) => {
+                let anchor_count = self.analyze_recursive(n.anchor(), context, Some(node_id));
+                let step_count = n
+                    .step()
+                    .map(|step| self.analyze_recursive(step, context, Some(node_id)))
+                    .unwrap_or(0);
+                anchor_count + step_count
+            }
             PlanNodeEnum::Select(n) => {
                 let if_count = n
                     .if_branch()

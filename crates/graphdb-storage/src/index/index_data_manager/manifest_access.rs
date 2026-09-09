@@ -13,7 +13,7 @@ use crate::index::shard_runtime::{
 };
 use crate::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use crate::persistence::{read_versioned_payload, write_versioned_payload};
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_core::types::{
     CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
 };

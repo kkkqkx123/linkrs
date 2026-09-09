@@ -18,6 +18,17 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
             col_names: arg_node.col_names().to_vec(),
         }),
         PlanNodeEnum::ScanVertices(scan_node) => {
+            // A scan tagged with a mangled CTE name reads the enclosing
+            // fixpoint's working table instead of storage (recursive-step
+            // patterns labeled with the CTE name).
+            if let Some(tag) = scan_node.tag() {
+                if crate::cte::is_cte_tag(tag) {
+                    return Ok(SourceSpec::CteScan {
+                        cte_name: tag.to_string(),
+                        col_names: scan_node.col_names().to_vec(),
+                    });
+                }
+            }
             let limit = scan_node
                 .limit()
                 .and_then(|v| (v >= 0).then_some(v as usize));

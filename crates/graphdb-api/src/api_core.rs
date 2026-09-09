@@ -30,8 +30,8 @@ pub use types::*;
 #[cfg(feature = "vector")]
 pub use vector_api::{VectorApi, VectorSearchResult};
 
-// Re-export the statistical types from the core layer.
-pub use graphdb_core::{
+// Re-export the statistical types from the metrics layer.
+pub use graphdb_metrics::{
     ErrorInfo, ErrorSummary, ErrorType, MetricType, MetricValue, QueryMetrics, QueryPhase,
     QueryProfile, QueryStatus, StatsManager,
 };

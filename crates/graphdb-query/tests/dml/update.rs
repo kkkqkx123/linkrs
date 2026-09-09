@@ -481,7 +481,7 @@ fn test_update_edge_yield_execution() {
 #[test]
 fn test_update_divide_by_zero() {
     use crate::common::TestStorage;
-    use graphdb_core::stats::StatsManager;
+    use graphdb_metrics::StatsManager;
     use graphdb_query::optimizer::OptimizerEngine;
     use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::{StorageReader, StorageSchemaContextOps};

@@ -295,6 +295,17 @@ impl UtilStmtParser {
 
         let recursive = ctx.match_token(TokenKind::Recursive);
 
+        // Common table expressions: `name AS (<query>) [, ...]`.
+        // A `IDENT AS (` sequence can never start a plain WITH item (an
+        // alias after AS must be an identifier), so detection is unambiguous.
+        let mut ctes = Vec::new();
+        while let Some(cte) = Self::try_parse_cte_def(ctx)? {
+            ctes.push(cte);
+            if !ctx.match_token(TokenKind::Comma) {
+                break;
+            }
+        }
+
         let mut items = Vec::new();
         let distinct = ctx.match_token(TokenKind::Distinct);
 
@@ -374,6 +385,55 @@ impl UtilStmtParser {
             skip,
             limit,
             recursive,
+            ctes,
+        }))
+    }
+
+    /// Try to parse one `name AS (<query>)` CTE definition.
+    ///
+    /// Returns `Ok(None)` (without consuming input) when the upcoming tokens
+    /// do not form a CTE header.
+    fn try_parse_cte_def(ctx: &mut ParseContext) -> Result<Option<CteDef>, ParseError> {
+        let ckpt = ctx.checkpoint();
+        let name = match ctx.expect_identifier() {
+            Ok(name) => name,
+            Err(_) => {
+                ctx.restore(ckpt);
+                return Ok(None);
+            }
+        };
+        // V1 has no CTE column-alias list: `name(col, ...)` is rejected with
+        // a precise error instead of misparsing as a function call.
+        if ctx.check_token(TokenKind::LParen) {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "CTE column alias lists are not supported; the CTE columns are the anchor query's output columns".to_string(),
+                ctx.current_position(),
+            ));
+        }
+        if !ctx.check_keyword("AS") {
+            ctx.restore(ckpt);
+            return Ok(None);
+        }
+        ctx.consume_keyword("AS")?;
+        if !ctx.check_token(TokenKind::LParen) {
+            ctx.restore(ckpt);
+            return Ok(None);
+        }
+        let cte_span = ctx.current_span();
+        ctx.expect_token(TokenKind::LParen)?;
+        let body = crate::parser::parsing::StmtParser::parse_statement(ctx).map_err(|e| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                format!("Invalid CTE body for '{}': {}", name, e),
+                ctx.current_position(),
+            )
+        })?;
+        ctx.expect_token(TokenKind::RParen)?;
+        Ok(Some(CteDef {
+            span: cte_span,
+            name,
+            body: Box::new(body),
         }))
     }
 

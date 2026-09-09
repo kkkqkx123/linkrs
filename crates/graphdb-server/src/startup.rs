@@ -57,7 +57,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     let slow_query_config = config.to_slow_query_config();
     let m = &config.monitoring;
     let stats_manager = Arc::new(
-        graphdb_core::stats::StatsManager::with_slow_query_logger(
+        graphdb_metrics::StatsManager::with_slow_query_logger(
             m.enabled,
             m.memory_cache_size,
             m.slow_query_threshold_ms * 1000,

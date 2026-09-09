@@ -4,9 +4,12 @@ use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::traversal::config::{TraversalConfig, TraversalOrder, VisitedPolicy};
 use crate::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::executor::traversal::stats::TraversalStats;
+use crate::parser::ast::pattern::PathSemantic;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::{Edge, Vertex};
+
+type EdgeKey = (VertexId, VertexId, String, i64);
 
 #[derive(Debug, Clone)]
 pub struct TraversalItem {
@@ -14,6 +17,8 @@ pub struct TraversalItem {
     pub vertex: Vertex,
     pub depth: u32,
     pub edge: Option<Edge>,
+    path_vertices: HashSet<VertexId>,
+    path_edges: HashSet<EdgeKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +120,8 @@ impl<'a> TraversalRuntime<'a> {
             vertex,
             depth: 0,
             edge: None,
+            path_vertices: HashSet::from([vid]),
+            path_edges: HashSet::new(),
         });
     }
 
@@ -156,7 +163,26 @@ impl<'a> TraversalRuntime<'a> {
                     self.reader
                         .get_neighbor_id(edge, &item.vertex_id, self.config.direction);
 
-                if !self.should_visit(&neighbor_id) {
+                let edge_key = (
+                    *edge.src(),
+                    *edge.dst(),
+                    edge.edge_type().to_string(),
+                    edge.ranking(),
+                );
+                let parent_vertices = &item.path_vertices;
+                let parent_edges = &item.path_edges;
+                // Per-path repeat rules: Trail forbids revisiting a vertex
+                // within the same path, Acyclic forbids reusing an edge
+                // within the same path. Walk and Shortest impose no
+                // per-path check (Shortest relies on BFS global dedup).
+                let path_rejected = is_path_rejected(
+                    self.config.path_semantic,
+                    parent_vertices,
+                    parent_edges,
+                    &neighbor_id,
+                    &edge_key,
+                );
+                if path_rejected || !self.should_visit(&neighbor_id) {
                     continue;
                 }
 
@@ -182,11 +208,17 @@ impl<'a> TraversalRuntime<'a> {
                         self.stats.record_path_emitted();
                     }
 
+                    let mut path_vertices = item.path_vertices.clone();
+                    path_vertices.insert(neighbor_id);
+                    let mut path_edges = item.path_edges.clone();
+                    path_edges.insert(edge_key);
                     self.frontier.push_back(TraversalItem {
                         vertex_id: neighbor_id,
                         vertex,
                         depth: new_depth,
                         edge: Some(edge.clone()),
+                        path_vertices,
+                        path_edges,
                     });
                 }
             }
@@ -217,5 +249,99 @@ impl<'a> TraversalRuntime<'a> {
 
     pub fn stats(&self) -> &TraversalStats {
         &self.stats
+    }
+}
+
+fn is_path_rejected(
+    semantic: Option<PathSemantic>,
+    parent_vertices: &HashSet<VertexId>,
+    parent_edges: &HashSet<EdgeKey>,
+    neighbor: &VertexId,
+    edge_key: &EdgeKey,
+) -> bool {
+    match semantic {
+        Some(PathSemantic::Trail) => parent_vertices.contains(neighbor),
+        Some(PathSemantic::Acyclic) => parent_edges.contains(edge_key),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vid(n: i64) -> VertexId {
+        VertexId::from_int64(n)
+    }
+
+    fn edge_key(src: i64, dst: i64) -> EdgeKey {
+        (vid(src), vid(dst), "KNOWS".to_string(), 0)
+    }
+
+    #[test]
+    fn trail_rejects_repeated_vertex() {
+        let parents: HashSet<VertexId> = HashSet::from([vid(1), vid(2)]);
+        let edges: HashSet<EdgeKey> = HashSet::new();
+        assert!(is_path_rejected(
+            Some(PathSemantic::Trail),
+            &parents,
+            &edges,
+            &vid(2),
+            &edge_key(2, 3)
+        ));
+        assert!(!is_path_rejected(
+            Some(PathSemantic::Trail),
+            &parents,
+            &edges,
+            &vid(3),
+            &edge_key(2, 3)
+        ));
+    }
+
+    #[test]
+    fn acyclic_rejects_repeated_edge_only() {
+        let parents: HashSet<VertexId> = HashSet::from([vid(1), vid(2)]);
+        let edges: HashSet<EdgeKey> = HashSet::from([edge_key(1, 2)]);
+        // Same edge reused is rejected even though the neighbor is new.
+        assert!(is_path_rejected(
+            Some(PathSemantic::Acyclic),
+            &parents,
+            &edges,
+            &vid(3),
+            &edge_key(1, 2)
+        ));
+        // Revisiting a vertex via a fresh edge is allowed under Acyclic.
+        assert!(!is_path_rejected(
+            Some(PathSemantic::Acyclic),
+            &parents,
+            &edges,
+            &vid(1),
+            &edge_key(2, 1)
+        ));
+        // Trail would reject that vertex revisit.
+        assert!(is_path_rejected(
+            Some(PathSemantic::Trail),
+            &parents,
+            &edges,
+            &vid(1),
+            &edge_key(2, 1)
+        ));
+    }
+
+    #[test]
+    fn walk_and_shortest_impose_no_per_path_check() {
+        let parents: HashSet<VertexId> = HashSet::from([vid(1)]);
+        let edges: HashSet<EdgeKey> = HashSet::from([edge_key(1, 2)]);
+        for semantic in [
+            None,
+            Some(PathSemantic::Walk),
+            Some(PathSemantic::Shortest),
+            Some(PathSemantic::AllShortest),
+        ] {
+            assert!(
+                !is_path_rejected(semantic, &parents, &edges, &vid(1), &edge_key(1, 2)),
+                "unexpected per-path rejection for {semantic:?}"
+            );
+        }
     }
 }

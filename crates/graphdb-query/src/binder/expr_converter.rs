@@ -281,9 +281,12 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
 
         BoundExpression::Vector(v) => Ok(Expression::Vector(v.clone())),
 
-        BoundExpression::Subquery(_) => {
-            Err("Subquery expression conversion requires original AST context".to_string())
-        }
+        BoundExpression::Subquery { original_body, .. } => match original_body {
+            Some(body) => Ok(Expression::scalar_subquery(body.as_ref().clone())),
+            None => Err(
+                "Subquery expression conversion requires original AST context".to_string(),
+            ),
+        },
         BoundExpression::Exists {
             query: _,
             original_body,
@@ -324,7 +327,7 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
             })
         }
         BoundExpression::Pattern(_) => {
-            Err("Pattern expression conversion requires original AST context".to_string())
+            Err("Pattern expression conversion is intentionally unsupported without original AST context".to_string())
         }
     }
 }

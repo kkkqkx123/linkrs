@@ -149,7 +149,7 @@ impl EdgeStore {
         self.0.schema_mut()
     }
 
-    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_core::stats::StatsManager>) {
+    pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_metrics::StatsManager>) {
         self.0.set_stats_manager(stats)
     }
 

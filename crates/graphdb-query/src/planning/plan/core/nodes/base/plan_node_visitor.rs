@@ -7,8 +7,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
-    UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
+    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
@@ -28,7 +28,7 @@ pub use crate::planning::plan::core::nodes::access::graph_scan_node::{
 };
 pub use crate::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 pub use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RecursiveCteNode,
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
@@ -120,6 +120,7 @@ pub trait PlanNodeVisitor {
     impl_visitor_methods!(
         Argument, ArgumentNode, visit_argument;
         Loop, LoopNode, visit_loop;
+        RecursiveCte, RecursiveCteNode, visit_recursive_cte;
         PassThrough, PassThroughNode, visit_pass_through;
         Select, SelectNode, visit_select;
         BeginTransaction, BeginTransactionNode, visit_begin_transaction;
@@ -163,6 +164,8 @@ pub trait PlanNodeVisitor {
         UserManage, UserManageNode, visit_user_manage;
         FulltextManage, FulltextManageNode, visit_fulltext_manage;
         VectorManage, VectorManageNode, visit_vector_manage;
+        MacroManage, MacroManageNode, visit_macro_manage;
+        TypeManage, TypeManageNode, visit_type_manage;
     );
 
     impl_visitor_methods!(
@@ -252,6 +255,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::Window(node) => visitor.visit_window(node),
             PlanNodeEnum::Argument(node) => visitor.visit_argument(node),
             PlanNodeEnum::Loop(node) => visitor.visit_loop(node),
+            PlanNodeEnum::RecursiveCte(node) => visitor.visit_recursive_cte(node),
             PlanNodeEnum::PassThrough(node) => visitor.visit_pass_through(node),
             PlanNodeEnum::Select(node) => visitor.visit_select(node),
             PlanNodeEnum::BeginTransaction(node) => visitor.visit_begin_transaction(node),
@@ -285,6 +289,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::UserManage(node) => visitor.visit_user_manage(node),
             PlanNodeEnum::FulltextManage(node) => visitor.visit_fulltext_manage(node),
             PlanNodeEnum::VectorManage(node) => visitor.visit_vector_manage(node),
+            PlanNodeEnum::MacroManage(node) => visitor.visit_macro_manage(node),
+            PlanNodeEnum::TypeManage(node) => visitor.visit_type_manage(node),
 
             PlanNodeEnum::ShowStats(node) => visitor.visit_show_stats(node),
             PlanNodeEnum::ShowConfigs(node) => visitor.visit_show_configs(node),

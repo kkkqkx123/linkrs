@@ -516,7 +516,7 @@ mod factorization_fallback_tests {
     fn metrics_stats_collects_flatten_and_fallback_counts() {
         use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
 
-        let metrics = Arc::new(graphdb_core::stats::StatsManager::new());
+        let metrics = Arc::new(graphdb_metrics::StatsManager::new());
         let mut engine = OptimizerEngine::default();
         engine.set_metrics_stats(Arc::clone(&metrics));
 
@@ -534,7 +534,7 @@ mod factorization_fallback_tests {
             out.cbo_notes
         );
         assert_eq!(
-            metrics.get_value(graphdb_core::MetricType::FactorizationFlattenTotal),
+            metrics.get_value(graphdb_metrics::MetricType::FactorizationFlattenTotal),
             Some(1)
         );
 
@@ -549,7 +549,7 @@ mod factorization_fallback_tests {
             .optimize(plan, Some("test"))
             .expect("optimization should succeed");
         assert_eq!(
-            metrics.get_value(graphdb_core::MetricType::FactorizationFallbackTotal),
+            metrics.get_value(graphdb_metrics::MetricType::FactorizationFallbackTotal),
             Some(1)
         );
     }
@@ -558,7 +558,7 @@ mod factorization_fallback_tests {
     fn builder_with_metrics_stats_wires_sink() {
         use crate::optimizer::builder::OptimizerEngineBuilder;
 
-        let metrics = Arc::new(graphdb_core::stats::StatsManager::new());
+        let metrics = Arc::new(graphdb_metrics::StatsManager::new());
         let engine = OptimizerEngineBuilder::new()
             .with_metrics_stats(Arc::clone(&metrics))
             .build();

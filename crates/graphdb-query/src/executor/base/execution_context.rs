@@ -12,6 +12,7 @@ use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::JoinAlgorithm;
 use crate::storage::QueryStorage;
 use graphdb_core::metadata::SequenceManager;
+use graphdb_core::metadata::{MacroManager, TypeAliasManager};
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::Arena;
 use graphdb_core::Value;
@@ -97,6 +98,10 @@ pub struct ExecutionContext {
     pub ryw_config: Option<graphdb_core::types::ReadYourWritesConfig>,
     /// Sequence manager for curr_val/next_val functions.
     pub sequence_manager: Option<Arc<SequenceManager>>,
+    /// Macro catalog manager for user-defined macros (expansion + DDL).
+    pub macro_manager: Option<Arc<MacroManager>>,
+    /// Type-alias catalog manager for user-defined types.
+    pub type_alias_manager: Option<Arc<TypeAliasManager>>,
 }
 
 /// Internal: build the non-search portion of an `ExecutionContext`.
@@ -125,6 +130,8 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         isolation_level: None,
         ryw_config: None,
         sequence_manager: None,
+        macro_manager: None,
+        type_alias_manager: None,
     }
 }
 
@@ -209,6 +216,22 @@ impl ExecutionContext {
 
     pub fn set_sequence_manager(&mut self, manager: Arc<SequenceManager>) {
         self.sequence_manager = Some(manager);
+    }
+
+    pub fn macro_manager(&self) -> Option<&Arc<MacroManager>> {
+        self.macro_manager.as_ref()
+    }
+
+    pub fn set_macro_manager(&mut self, manager: Arc<MacroManager>) {
+        self.macro_manager = Some(manager);
+    }
+
+    pub fn type_alias_manager(&self) -> Option<&Arc<TypeAliasManager>> {
+        self.type_alias_manager.as_ref()
+    }
+
+    pub fn set_type_alias_manager(&mut self, manager: Arc<TypeAliasManager>) {
+        self.type_alias_manager = Some(manager);
     }
 }
 

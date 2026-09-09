@@ -45,7 +45,7 @@ use crate::planning::plan::core::nodes::traversal::traversal_node::{
 };
 
 use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RecursiveCteNode,
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
@@ -345,6 +345,21 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         } else {
             Ok(PlanNodeEnum::Loop(node.clone()))
         }
+    }
+
+    fn visit_recursive_cte(&mut self, node: &RecursiveCteNode) -> Self::Result {
+        let node_id = self.ctx.allocate_node_id();
+        let new_anchor = self
+            .rewriter
+            .rewrite_node(self.ctx, node.anchor(), node_id)?;
+        let mut new_node = node.clone();
+        new_node.set_anchor(new_anchor);
+        if let Some(step) = node.step().cloned() {
+            let step_id = self.ctx.allocate_node_id();
+            let new_step = self.rewriter.rewrite_node(self.ctx, &step, step_id)?;
+            new_node.set_step(new_step);
+        }
+        Ok(PlanNodeEnum::RecursiveCte(new_node))
     }
 
     fn visit_select(&mut self, node: &SelectNode) -> Self::Result {

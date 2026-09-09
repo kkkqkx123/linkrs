@@ -411,13 +411,20 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                     ));
                 }
             } else {
-                let target_type = type_name.parse::<DataType>().map_err(|e| {
-                    ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        format!("Unknown type cast target: {}", e),
-                        span.start,
-                    )
-                })?;
+                // User-defined type aliases resolve here as well as builtins.
+                let target_type = match type_name.parse::<DataType>() {
+                    Ok(parsed) => parsed,
+                    Err(e) => match ctx.resolve_named_type(&type_name) {
+                        Some(resolved) if resolved != DataType::Unknown => resolved,
+                        _ => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                format!("Unknown type cast target: {}", e),
+                                span.start,
+                            ));
+                        }
+                    },
+                };
                 expression = ParseResult {
                     expr: Expression::TypeCast {
                         expression: Box::new(expression.expr),
@@ -713,7 +720,23 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
         | TokenKind::Path
         | TokenKind::Vertex
         | TokenKind::Vertices
-        | TokenKind::Edges => {
+        | TokenKind::Edges
+        | TokenKind::Bool
+        | TokenKind::Int
+        | TokenKind::Int8
+        | TokenKind::Int16
+        | TokenKind::Int32
+        | TokenKind::Int64
+        | TokenKind::Float
+        | TokenKind::Double
+        | TokenKind::String
+        | TokenKind::FixedString
+        | TokenKind::Timestamp
+        | TokenKind::Date
+        | TokenKind::Time
+        | TokenKind::Datetime
+        | TokenKind::Serial
+        | TokenKind::Geography => {
             let name = token.lexeme.clone();
             ctx.next_token();
             let span = ctx.merge_span(start_pos, ctx.current_position());
@@ -895,6 +918,25 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             let span = ctx.merge_span(start_pos, ctx.current_position());
             Ok(ParseResult {
                 expr: Expression::exists(body),
+                span,
+            })
+        }
+        TokenKind::Subquery => {
+            ctx.next_token();
+            ctx.expect_token(TokenKind::LBrace)?;
+            let body = parse_subquery_body(ctx)?;
+            ctx.expect_token(TokenKind::RBrace)?;
+            if body.return_expr.is_none() {
+                return Err(ParseError::new(
+                    ParseErrorKind::SemanticError,
+                    "SUBQUERY { ... } requires a RETURN clause with a single expression"
+                        .to_string(),
+                    start_pos,
+                ));
+            }
+            let span = ctx.merge_span(start_pos, ctx.current_position());
+            Ok(ParseResult {
+                expr: Expression::scalar_subquery(body),
                 span,
             })
         }

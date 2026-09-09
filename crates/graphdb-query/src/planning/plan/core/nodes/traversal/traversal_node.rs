@@ -224,6 +224,10 @@ pub struct ExpandAllNode {
     /// source variable is not referenced by any ancestor.  Annotated by the
     /// optimizer's `ExpandPushdown` batch.
     lightweight_source: bool,
+    /// Path semantic parsed from the pattern (`*TRAIL`, `*ACYCLIC`,
+    /// `*SHORTEST`, `*ALL SHORTEST`); `None` means plain walk. Threaded
+    /// from `EdgePattern::path_semantic` through the logical node.
+    path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
 }
 
 impl ExpandAllNode {
@@ -251,6 +255,7 @@ impl ExpandAllNode {
             id_only: false,
             count_only: false,
             lightweight_source: false,
+            path_semantic: None,
         }
     }
 
@@ -399,6 +404,17 @@ impl ExpandAllNode {
 
     pub fn set_lightweight_source(&mut self, lightweight_source: bool) {
         self.lightweight_source = lightweight_source;
+    }
+
+    pub fn path_semantic(&self) -> Option<crate::parser::ast::pattern::PathSemantic> {
+        self.path_semantic
+    }
+
+    pub fn set_path_semantic(
+        &mut self,
+        path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+    ) {
+        self.path_semantic = path_semantic;
     }
 
     pub fn dependencies(

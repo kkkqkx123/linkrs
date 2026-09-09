@@ -113,7 +113,7 @@ impl<
     }
 
     /// Getting the Statistics Manager (via GraphService)
-    pub fn get_stats_manager(&self) -> &Arc<graphdb_core::StatsManager> {
+    pub fn get_stats_manager(&self) -> &Arc<graphdb_metrics::StatsManager> {
         self.graph_service.get_stats_manager()
     }
 

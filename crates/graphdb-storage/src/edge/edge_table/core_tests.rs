@@ -466,7 +466,7 @@ fn test_p0_multi_edge_segment_delete_consistency() {
 
 #[test]
 fn test_write_backpressure_requests_background_freeze() {
-    use graphdb_core::stats::StatsManager;
+    use graphdb_metrics::StatsManager;
     use std::sync::Arc;
 
     let schema = create_test_schema();
@@ -505,10 +505,10 @@ fn test_write_backpressure_requests_background_freeze() {
     assert!(table.needs_background_freeze());
 
     // Verify metrics were recorded
-    let freeze_count = stats.get_value(graphdb_core::stats::MetricType::MutableCsrFreezeCount);
+    let freeze_count = stats.get_value(graphdb_metrics::MetricType::MutableCsrFreezeCount);
     assert_eq!(freeze_count.unwrap_or(0), 0);
 
-    let mutable_size = stats.get_value(graphdb_core::stats::MetricType::MutableCsrBytes);
+    let mutable_size = stats.get_value(graphdb_metrics::MetricType::MutableCsrBytes);
     assert!(
         mutable_size.is_some(),
         "Mutable CSR size should be recorded"
@@ -517,7 +517,7 @@ fn test_write_backpressure_requests_background_freeze() {
 
 #[test]
 fn test_write_backpressure_disabled() {
-    use graphdb_core::stats::StatsManager;
+    use graphdb_metrics::StatsManager;
     use std::sync::Arc;
 
     let schema = create_test_schema();
@@ -553,7 +553,7 @@ fn test_write_backpressure_disabled() {
     // Verify no freeze was triggered from backpressure
     // (segments might exist from other freezes, but not from backpressure)
     let freeze_count = stats
-        .get_value(graphdb_core::stats::MetricType::MutableCsrFreezeCount)
+        .get_value(graphdb_metrics::MetricType::MutableCsrFreezeCount)
         .unwrap_or(0);
     // Should be 0 since backpressure is disabled
     assert_eq!(

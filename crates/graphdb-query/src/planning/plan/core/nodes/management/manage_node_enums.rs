@@ -15,6 +15,9 @@
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
+use crate::planning::plan::core::nodes::management::catalog_nodes::{
+    CreateMacroNode, CreateTypeNode, DropMacroNode, DropTypeNode,
+};
 use crate::planning::plan::core::nodes::management::edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, ShowCreateEdgeNode, ShowEdgesNode,
 };
@@ -262,5 +265,21 @@ define_manage_node_enum! {
     pub enum VectorManageNode as VectorManage {
         Create(CreateVectorIndexNode, "CreateVectorIndex", "create_vector_index", "Create Vector Index", "create_vector_index"),
         Drop(DropVectorIndexNode, "DropVectorIndex", "drop_vector_index", "Drop Vector Index", "drop_vector_index"),
+    }
+}
+
+define_manage_node_enum! {
+    /// Macro catalog management sub-enum
+    pub enum MacroManageNode as MacroManage {
+        Create(CreateMacroNode, "CreateMacro", "create_macro", "Create Macro", "create_macro"),
+        Drop(DropMacroNode, "DropMacro", "drop_macro", "Drop Macro", "drop_macro"),
+    }
+}
+
+define_manage_node_enum! {
+    /// Type-alias catalog management sub-enum
+    pub enum TypeManageNode as TypeManage {
+        Create(CreateTypeNode, "CreateType", "create_type", "Create Type", "create_type"),
+        Drop(DropTypeNode, "DropType", "drop_type", "Drop Type", "drop_type"),
     }
 }

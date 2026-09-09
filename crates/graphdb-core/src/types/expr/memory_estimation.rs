@@ -184,6 +184,14 @@ impl MemoryEstimatable for Expression {
                         .map(estimate_string_memory)
                         .sum::<usize>()
             }
+            Expression::ScalarSubquery { body } => {
+                base_size
+                    + body
+                        .patterns
+                        .iter()
+                        .map(estimate_string_memory)
+                        .sum::<usize>()
+            }
             Expression::Lambda { params, body } => {
                 base_size
                     + params.iter().map(estimate_string_memory).sum::<usize>()
@@ -425,6 +433,18 @@ impl Expression {
                     }
                 }
                 Expression::CountSubquery { body } => {
+                    total += std::mem::size_of::<SubqueryBody>();
+                    for p in &body.patterns {
+                        total += p.capacity();
+                    }
+                    if let Some(where_clause) = &body.where_clause {
+                        stack.push(where_clause);
+                    }
+                    if let Some(return_expr) = &body.return_expr {
+                        stack.push(return_expr);
+                    }
+                }
+                Expression::ScalarSubquery { body } => {
                     total += std::mem::size_of::<SubqueryBody>();
                     for p in &body.patterns {
                         total += p.capacity();

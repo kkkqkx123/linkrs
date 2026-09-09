@@ -9,7 +9,8 @@ use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use crate::storage::{GraphStorage, StorageClient};
-use graphdb_core::{StatsManager, Value};
+use graphdb_core::Value;
+use graphdb_metrics::StatsManager;
 use graphdb_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::FulltextIndexManager;

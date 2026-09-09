@@ -537,6 +537,15 @@ impl PhysicalPlanMaterializer {
             runtime.set_session_variable_values(bindings.session_variables.clone());
         }
 
+        // Catalog managers: DDL operators resolve CREATE/DROP MACRO/TYPE and
+        // SHOW MACROS through these shared engine-wide registries.
+        if bindings.macro_manager.is_some() {
+            runtime.set_macro_manager(bindings.macro_manager.clone());
+        }
+        if bindings.type_alias_manager.is_some() {
+            runtime.set_type_alias_manager(bindings.type_alias_manager.clone());
+        }
+
         // shared scheduler takes priority.
         if let Some(ref ss) = bindings.shared_scheduler {
             runtime.set_shared_scheduler(Some(ss.clone()));
@@ -733,6 +742,8 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            macro_manager: None,
+            type_alias_manager: None,
             search: crate::executor::base::SearchContext::default(),
         }
     }

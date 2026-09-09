@@ -424,6 +424,39 @@ impl Binder {
             return Ok(vec![]);
         }
 
+        // A pattern node labeled with a visible CTE name scans the CTE
+        // working table instead of storage. The bound tag is mangled so it
+        // can never collide with a real tag and the spec builder routes it
+        // to a CTE scan source. V1 requires the CTE label to stand alone.
+        let mut cte_resolved = Vec::new();
+        let mut plain_labels: Vec<&String> = Vec::new();
+        for label in labels {
+            if let Some(cte) = self
+                .cte_stack
+                .iter()
+                .rev()
+                .find(|c| c.eq_ignore_ascii_case(label))
+            {
+                cte_resolved.push(BoundTagRef {
+                    tag_name: self.interner.intern(&crate::cte::mangle_cte_name(cte)),
+                    properties: std::collections::HashMap::new(),
+                });
+            } else {
+                plain_labels.push(label);
+            }
+        }
+        if !cte_resolved.is_empty() {
+            if !plain_labels.is_empty() || cte_resolved.len() > 1 {
+                return Err(DBError::from(
+                    graphdb_core::error::QueryError::invalid_query(
+                        "A CTE working-table label must be the only label on its pattern node"
+                            .to_string(),
+                    ),
+                ));
+            }
+            return Ok(cte_resolved);
+        }
+
         let mut resolved = Vec::new();
         if let Some(ref sm) = self.schema_manager {
             if let Some(ref space_name) = self.space_name {

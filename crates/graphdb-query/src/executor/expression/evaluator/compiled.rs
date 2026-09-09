@@ -211,6 +211,16 @@ impl CompiledExpr {
             }
 
             Expression::Function { name, args } => {
+                // Higher-order lambda calls must run through the scalar
+                // interpreter, which binds lambda parameters per element.
+                // Compiling them would eager-evaluate the Lambda node and
+                // fail before the callee sees the closure.
+                if args
+                    .iter()
+                    .any(|a| matches!(a.as_expr(), Expression::Lambda { .. }))
+                {
+                    return CompiledExpr::Fallback(expression.clone());
+                }
                 let args: Vec<CompiledExpr> = args
                     .iter()
                     .map(|a| Self::compile(a.as_expr(), layout))

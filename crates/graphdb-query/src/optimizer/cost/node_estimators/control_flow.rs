@@ -86,6 +86,27 @@ impl<'a> NodeEstimator for ControlFlowEstimator<'a> {
                 let output_rows = body_estimate.output_rows.saturating_mul(iterations as u64);
                 Ok((cost, output_rows))
             }
+            PlanNodeEnum::RecursiveCte(n) => {
+                // anchor cost once + step cost per iteration. Child
+                // estimates are [anchor, step?].
+                let anchor_estimate = child_estimates
+                    .first()
+                    .copied()
+                    .unwrap_or(NodeCostEstimate::new(0.0, 0.0, 0));
+                let step_estimate = child_estimates
+                    .get(1)
+                    .copied()
+                    .unwrap_or(NodeCostEstimate::new(0.0, 0.0, 0));
+                let iterations = u64::from(n.max_iterations().min(u32::MAX as u64));
+                let step_cost = self
+                    .cost_calculator
+                    .calculate_loop_cost(step_estimate.total_cost, iterations as u32);
+                let cost = anchor_estimate.total_cost + step_cost;
+                let output_rows = anchor_estimate
+                    .output_rows
+                    .saturating_add(step_estimate.output_rows.saturating_mul(iterations));
+                Ok((cost, output_rows))
+            }
             PlanNodeEnum::Select(n) => {
                 let input_rows_val = get_input_rows(child_estimates, 0);
                 let branch_count = self.estimate_select_branch_count(n);

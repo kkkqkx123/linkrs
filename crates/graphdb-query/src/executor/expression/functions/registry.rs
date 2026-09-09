@@ -28,8 +28,6 @@ pub struct RegistryEntry {
 pub struct FunctionRegistry {
     /// Built-in function mapping (function name -> RegistryEntry)
     builtin_functions: HashMap<String, RegistryEntry>,
-    /// Alias mapping: alias upper -> canonical upper
-    aliases: HashMap<String, String>,
     /// Custom function mapping (function name -> CustomFunction)
     custom_functions: HashMap<String, CustomFunction>,
     /// Table function mapping (function name -> Box<dyn TableFunction>)
@@ -46,7 +44,6 @@ impl FunctionRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             builtin_functions: HashMap::new(),
-            aliases: HashMap::new(),
             custom_functions: HashMap::new(),
             table_functions: HashMap::new(),
         };
@@ -55,30 +52,15 @@ impl FunctionRegistry {
         registry
     }
 
-    fn canonical_name(&self, upper: &str) -> Option<String> {
-        if self.builtin_functions.contains_key(upper) {
-            Some(upper.to_string())
-        } else {
-            self.aliases.get(upper).cloned()
-        }
-    }
-
     fn resolve_entry(&self, name: &str) -> Option<&RegistryEntry> {
         let upper = name.to_uppercase();
-        if let Some(entry) = self.builtin_functions.get(&upper) {
-            return Some(entry);
-        }
-        if let Some(canon) = self.aliases.get(&upper) {
-            return self.builtin_functions.get(canon);
-        }
-        None
+        self.builtin_functions.get(&upper)
     }
 
     /// Check whether the function exists.
     pub fn contains(&self, name: &str) -> bool {
         let upper_name = name.to_uppercase();
         self.builtin_functions.contains_key(&upper_name)
-            || self.aliases.contains_key(&upper_name)
             || self.custom_functions.contains_key(&upper_name)
     }
 
@@ -102,10 +84,9 @@ impl FunctionRegistry {
         );
     }
 
-    /// Register an alias for a built-in function.
-    pub fn register_alias(&mut self, alias: &str, canonical: &str) {
-        self.aliases
-            .insert(alias.to_uppercase(), canonical.to_uppercase());
+    /// Get the static return type for a function name.
+    pub fn get_return_type(&self, name: &str) -> Option<&DataType> {
+        self.resolve_entry(name).map(|e| &e.return_type)
     }
 
     /// Obtaining built-in functions
@@ -116,11 +97,6 @@ impl FunctionRegistry {
     /// Get the full registry entry (function + return type).
     pub fn get_entry(&self, name: &str) -> Option<&RegistryEntry> {
         self.resolve_entry(name)
-    }
-
-    /// Get the static return type for a function name, resolving aliases.
-    pub fn get_return_type(&self, name: &str) -> Option<&DataType> {
-        self.resolve_entry(name).map(|e| &e.return_type)
     }
 
     /// Registering a custom function (full form)
@@ -139,10 +115,7 @@ impl FunctionRegistry {
     /// Execute a function (based on its name)
     pub fn execute(&self, name: &str, args: &[Value]) -> Result<Value, ExpressionError> {
         let upper_name = name.to_uppercase();
-        let canonical = self
-            .canonical_name(&upper_name)
-            .unwrap_or(upper_name.clone());
-        if let Some(entry) = self.builtin_functions.get(&canonical) {
+        if let Some(entry) = self.builtin_functions.get(&upper_name) {
             return entry.function.execute(args);
         }
         if let Some(func) = self.custom_functions.get(&upper_name) {
@@ -163,10 +136,7 @@ impl FunctionRegistry {
         storage: &GraphStorageRef,
     ) -> Result<Value, ExpressionError> {
         let upper_name = name.to_uppercase();
-        let canonical = self
-            .canonical_name(&upper_name)
-            .unwrap_or(upper_name.clone());
-        if let Some(entry) = self.builtin_functions.get(&canonical) {
+        if let Some(entry) = self.builtin_functions.get(&upper_name) {
             return entry.function.execute_with_storage(args, storage);
         }
         if let Some(func) = self.custom_functions.get(&upper_name) {
@@ -561,15 +531,6 @@ impl FunctionRegistry {
         use super::SequenceFunction;
         self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::CurrVal));
         self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::NextVal));
-
-        // Register conversion aliases for backward compatibility
-        self.register_alias("TOINTEGER", "TO_INT");
-        self.register_alias("TOFLOAT", "TO_FLOAT");
-        self.register_alias("TOBOOLEAN", "TO_BOOL");
-        self.register_alias("TOSTRING", "TO_STRING");
-        // Also support camelCase variants via uppercase mapping (already covered)
-        // but keep explicit for clarity.
-        self.register_alias("TO_INTEGER", "TO_INT");
     }
 }
 

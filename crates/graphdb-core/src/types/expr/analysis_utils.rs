@@ -138,6 +138,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         Expression::Exists { .. } => true,
         Expression::In { expr, .. } => requires_runtime_context(expr),
         Expression::CountSubquery { .. } => true,
+        Expression::ScalarSubquery { .. } => true,
         Expression::Lambda { body, .. } => requires_runtime_context(body),
     }
 }

@@ -36,6 +36,7 @@ define_logical_plan_node! {
         src_vids: Vec<Value>,
         include_empty_paths: bool,
         input_var: Option<String>,
+        path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     }
     enum: ExpandAll
     input: MultipleInputNode

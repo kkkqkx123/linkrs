@@ -546,6 +546,7 @@ fn expand_mirror(
         src_vids: vec![],
         include_empty_paths: true,
         input_var: None,
+        path_semantic: None,
         output_var: None,
         col_names,
         column_types: vec![],

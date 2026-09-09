@@ -5,7 +5,7 @@ use crate::parser::Parser;
 use crate::storage::QueryStorage;
 use crate::QueryContext;
 use graphdb_core::error::{DBError, DBResult, QueryError};
-use graphdb_core::MetricType;
+use graphdb_metrics::MetricType;
 use std::sync::Arc;
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
@@ -13,7 +13,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_text: &str,
     ) -> DBResult<crate::parser::ParserResult> {
-        let mut parser = Parser::new(query_text);
+        let mut parser = Parser::new(query_text)
+            // User-defined type aliases resolve in CAST targets and DDL
+            // column types against the shared engine-wide catalog.
+            .with_type_alias_manager(self.type_alias_manager.clone());
         let result = parser
             .parse()
             .map_err(|e| DBError::from(QueryError::pipeline_parse_error(e)))?;
@@ -63,6 +66,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref schema_manager) = self.schema_manager {
             binder = binder.with_schema_manager(schema_manager.clone());
         }
+        // User-defined macros expand at bind time against the shared
+        // engine-wide catalog.
+        binder = binder.with_macro_manager(self.macro_manager.clone());
 
         binder.bind(ast).map(Some)
     }

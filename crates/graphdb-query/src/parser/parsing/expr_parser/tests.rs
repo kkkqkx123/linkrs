@@ -252,3 +252,32 @@ fn test_subquery_pattern_round_trip_reparse() {
         }
     }
 }
+
+#[test]
+fn test_parse_scalar_subquery() {
+    let input = "SUBQUERY { MATCH (q:person) WHERE q.age > 30 RETURN q.name }";
+    let ctx = &mut ParseContext::new(input);
+    let result = parse_expression(ctx);
+    assert!(result.is_ok(), "parse failed: {:?}", result.err());
+    let parse_result = result.expect("SUBQUERY parsing should succeed");
+    match parse_result.expr {
+        Expression::ScalarSubquery { body } => {
+            assert_eq!(body.patterns.len(), 1);
+            assert!(body.where_clause.is_some());
+            assert!(body.return_expr.is_some());
+            assert_eq!(body.id, 0, "planner assigns the id later");
+        }
+        other => panic!("expected Expression::ScalarSubquery, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_scalar_subquery_requires_return() {
+    let input = "SUBQUERY { MATCH (q:person) WHERE q.age > 30 }";
+    let ctx = &mut ParseContext::new(input);
+    let result = parse_expression(ctx);
+    assert!(
+        result.is_err(),
+        "SUBQUERY without RETURN must be rejected at parse time"
+    );
+}

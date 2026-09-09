@@ -5,7 +5,7 @@ use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
 use crate::result::{IndexStats, SearchResult};
 use crate::ConsistencyState;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 
 /// Wrapper around any [`FulltextSearchEngine`] that records latency and
 /// success/failure metrics into a [`StatsManager`].

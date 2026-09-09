@@ -639,7 +639,7 @@ impl Config {
     pub fn slow_query_log(&self) -> &SlowQueryLogConfig {
         &self.common.monitoring.slow_query_log
     }
-    pub fn to_slow_query_config(&self) -> graphdb_core::stats::SlowQueryConfig {
+    pub fn to_slow_query_config(&self) -> graphdb_metrics::SlowQueryConfig {
         self.common.monitoring.slow_query_log.to_slow_query_config()
     }
     pub fn storage(&self) -> &StorageConfig {

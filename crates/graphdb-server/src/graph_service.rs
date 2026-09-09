@@ -19,9 +19,9 @@ use crate::storage::{
 #[cfg(feature = "vector")]
 use graphdb_api::api_core::VectorApi;
 use graphdb_core::metadata::SchemaManager;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::{MetricType, StatsManager};
 use graphdb_core::types::SpaceSummary;
-use graphdb_core::{MetricType, Permission};
+use graphdb_core::Permission;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_transaction::{TransactionId, TransactionManager};

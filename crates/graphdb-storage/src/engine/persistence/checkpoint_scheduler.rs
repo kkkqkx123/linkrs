@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use graphdb_core::stats::{CheckpointTriggerReason, StatsManager};
+use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
 use graphdb_core::StorageResult;
 
 use crate::engine::persistence_coordinator::{
@@ -257,7 +257,7 @@ mod tests {
         // Second request should be deduplicated
         scheduler.request_checkpoint(CheckpointTriggerReason::Explicit);
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointRequestsDeduplicated),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointRequestsDeduplicated),
             Some(1)
         );
         // Still pending with original reason
@@ -321,7 +321,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         scheduler.stop();
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointRequestsBlocked),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointRequestsBlocked),
             Some(1)
         );
     }
@@ -403,11 +403,11 @@ mod tests {
             "checkpoint should have been triggered by WAL size"
         );
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointSuccessCount),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointSuccessCount),
             Some(1)
         );
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointTriggeredByWalSize),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointTriggeredByWalSize),
             Some(1)
         );
     }
@@ -459,7 +459,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(80));
         // First execution should have failed
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointFailureCount),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointFailureCount),
             Some(1)
         );
         // Request again after failure
@@ -467,7 +467,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(80));
         scheduler.stop();
         assert_eq!(
-            stats.get_value(graphdb_core::stats::MetricType::CheckpointSuccessCount),
+            stats.get_value(graphdb_metrics::MetricType::CheckpointSuccessCount),
             Some(1)
         );
         // Verify dedup didn't block second attempt

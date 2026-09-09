@@ -12,7 +12,7 @@ use super::common;
 
 use common::test_scenario::TestScenario;
 use common::TestStorage;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::pipeline::QueryPipelineManager;
 use std::sync::Arc;

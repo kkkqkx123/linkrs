@@ -19,6 +19,7 @@ fulltext = ["graphdb-fulltext/fulltext"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
+graphdb-metrics = { path = "../graphdb-metrics" }
 graphdb-fulltext = { path = "../graphdb-fulltext" }
 graphdb-config = { path = "../graphdb-config" }
 graphdb-embedding = { path = "../graphdb-embedding", optional = true }

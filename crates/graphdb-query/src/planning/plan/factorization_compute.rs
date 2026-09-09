@@ -749,6 +749,7 @@ mod tests {
                 src_vids: vec![],
                 include_empty_paths: false,
                 input_var: Some("a".to_string()),
+                path_semantic: None,
                 deps: vec![],
                 output_var: None,
                 col_names: vec!["e".to_string()],

@@ -656,7 +656,7 @@ fn test_shared_version_manager_is_preserved() {
     let version_manager = Arc::new(VersionManager::new());
     let manager = TransactionManager::with_shared_version_manager(
         TransactionManagerConfig::default(),
-        Arc::new(graphdb_core::stats::StatsManager::new()),
+        Arc::new(graphdb_metrics::StatsManager::new()),
         Arc::clone(&version_manager),
     );
 

@@ -29,7 +29,7 @@ impl TestScenario {
         let test_storage = TestStorage::new()?;
         let storage = test_storage.storage();
 
-        use crate::core::stats::StatsManager;
+        use graphdb_metrics::StatsManager;
         use crate::query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 

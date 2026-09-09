@@ -42,17 +42,25 @@ pub(super) fn handle_traverse(
     let path_semantic = *path_semantic;
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
-    let skip_visited = !matches!(path_semantic, Some(PathSemantic::Walk));
+    // Operator-level global dedup applies to Shortest variants and to the
+    // default (no semantic) traversal. Walk/Trail/Acyclic enumerate paths
+    // with per-path repeat rules, so they must not be collapsed by a
+    // global visited set.
+    let skip_visited = !matches!(
+        path_semantic,
+        Some(PathSemantic::Walk | PathSemantic::Trail | PathSemantic::Acyclic)
+    );
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
-            let tc = TraversalConfig::traverse(
+            let mut tc = TraversalConfig::traverse(
                 space_name.to_string(),
                 direction,
                 min_depth,
                 max_depth,
                 edge_types.to_vec(),
             );
+            tc.path_semantic = path_semantic;
             if let Some(output) = common::traverse_on_chunk_with_semantic(
                 chunk,
                 Arc::clone(&op.output_layout),

@@ -89,6 +89,7 @@ fn logical_expand_all(
     any_edge_type: bool,
     input_var: Option<String>,
     col_names: Vec<String>,
+    path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
         id: next_node_id(),
@@ -107,6 +108,7 @@ fn logical_expand_all(
         src_vids: vec![],
         include_empty_paths: false,
         input_var,
+        path_semantic,
         output_var: None,
         col_names,
         column_types: vec![],
@@ -455,6 +457,7 @@ pub fn plan_pattern_edge(
     }
 
     expand_node.set_step_limit(1);
+    expand_node.set_path_semantic(edge.path_semantic);
 
     let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
     expand_node.set_col_names(vec![edge_var.clone()]);
@@ -467,6 +470,7 @@ pub fn plan_pattern_edge(
         edge.edge_types.is_empty(),
         None,
         vec![edge_var.clone()],
+        edge.path_semantic,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -549,6 +553,7 @@ pub fn plan_pattern_edge_with_input(
     }
 
     expand_node.set_step_limit(1);
+    expand_node.set_path_semantic(edge.path_semantic);
 
     expand_node.set_input_var(input_var.to_string());
 
@@ -571,6 +576,7 @@ pub fn plan_pattern_edge_with_input(
         edge.edge_types.is_empty(),
         Some(input_var.to_string()),
         vec![src_col_name, edge_col_name, dst_col_name],
+        edge.path_semantic,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),

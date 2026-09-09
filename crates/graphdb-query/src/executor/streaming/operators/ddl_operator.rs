@@ -589,83 +589,177 @@ impl DdlOperator {
     }
 
     fn execute_macro_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        if let DdlOperatorKind::MacroManage {
-            ref command,
-            ref mut emitted,
-            ..
-        } = self.kind
-        {
-            if *emitted {
-                return Ok(None);
-            }
-            *emitted = true;
+        use graphdb_core::metadata::MacroDef;
 
-            match command {
-                MacroManageCommand::Create {
-                    macro_name,
-                    params: _,
-                    body: _,
-                    if_not_exists,
-                } => Ok(Some(make_manage_result(
-                    "create",
-                    Some(macro_name),
-                    if *if_not_exists {
-                        "if_not_exists"
-                    } else {
-                        "ok"
-                    },
-                ))),
-                MacroManageCommand::Drop {
-                    macro_name,
-                    if_exists,
-                } => Ok(Some(make_manage_result(
-                    "drop",
-                    Some(macro_name),
-                    if *if_exists { "if_exists" } else { "ok" },
-                ))),
+        let command = match &self.kind {
+            DdlOperatorKind::MacroManage {
+                command, emitted, ..
+            } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                command.clone()
             }
-        } else {
-            unreachable!("execute_macro_manage called with non-MacroManage kind")
+            _ => {
+                return Err(QueryError::execution(
+                    "execute_macro_manage called with non-MacroManage kind".to_string(),
+                ));
+            }
+        };
+
+        let manager = self
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.macro_manager())
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "CREATE/DROP MACRO requires a macro catalog manager on the runtime".to_string(),
+                )
+            })?;
+
+        let result = match command {
+            MacroManageCommand::Create {
+                macro_name,
+                params,
+                body,
+                if_not_exists,
+            } => {
+                if manager.exists(&macro_name) {
+                    if if_not_exists {
+                        Ok(Some(make_manage_result(
+                            "create",
+                            Some(&macro_name),
+                            "if_not_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Macro '{macro_name}' already exists"
+                        )))
+                    }
+                } else {
+                    manager
+                        .create_macro(MacroDef::new(macro_name.clone(), params, body))
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("create", Some(&macro_name), "ok")))
+                }
+            }
+            MacroManageCommand::Drop {
+                macro_name,
+                if_exists,
+            } => {
+                if !manager.exists(&macro_name) {
+                    if if_exists {
+                        Ok(Some(make_manage_result(
+                            "drop",
+                            Some(&macro_name),
+                            "if_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Macro '{macro_name}' does not exist"
+                        )))
+                    }
+                } else {
+                    manager
+                        .drop_macro(&macro_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("drop", Some(&macro_name), "ok")))
+                }
+            }
+        };
+        if result.is_ok() {
+            if let DdlOperatorKind::MacroManage { emitted, .. } = &mut self.kind {
+                *emitted = true;
+            }
         }
+        result
     }
 
     fn execute_type_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        if let DdlOperatorKind::TypeManage {
-            ref command,
-            ref mut emitted,
-            ..
-        } = self.kind
-        {
-            if *emitted {
-                return Ok(None);
-            }
-            *emitted = true;
+        use graphdb_core::metadata::TypeAliasDef;
 
-            match command {
-                TypeManageCommand::Create {
-                    type_name,
-                    underlying_type: _,
-                    if_not_exists,
-                } => Ok(Some(make_manage_result(
-                    "create",
-                    Some(type_name),
-                    if *if_not_exists {
-                        "if_not_exists"
-                    } else {
-                        "ok"
-                    },
-                ))),
-                TypeManageCommand::Drop {
-                    type_name,
-                    if_exists,
-                } => Ok(Some(make_manage_result(
-                    "drop",
-                    Some(type_name),
-                    if *if_exists { "if_exists" } else { "ok" },
-                ))),
+        let command = match &self.kind {
+            DdlOperatorKind::TypeManage {
+                command, emitted, ..
+            } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                command.clone()
             }
-        } else {
-            unreachable!("execute_type_manage called with non-TypeManage kind")
+            _ => {
+                return Err(QueryError::execution(
+                    "execute_type_manage called with non-TypeManage kind".to_string(),
+                ));
+            }
+        };
+
+        let manager = self
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.type_alias_manager())
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "CREATE/DROP TYPE requires a type-alias catalog manager on the runtime"
+                        .to_string(),
+                )
+            })?;
+
+        let result = match command {
+            TypeManageCommand::Create {
+                type_name,
+                underlying_type,
+                if_not_exists,
+            } => {
+                if manager.exists(&type_name) {
+                    if if_not_exists {
+                        Ok(Some(make_manage_result(
+                            "create",
+                            Some(&type_name),
+                            "if_not_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Type '{type_name}' already exists"
+                        )))
+                    }
+                } else {
+                    // Cycle detection runs inside the catalog write.
+                    manager
+                        .create_alias(TypeAliasDef::new(type_name.clone(), underlying_type))
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("create", Some(&type_name), "ok")))
+                }
+            }
+            TypeManageCommand::Drop {
+                type_name,
+                if_exists,
+            } => {
+                if !manager.exists(&type_name) {
+                    if if_exists {
+                        Ok(Some(make_manage_result(
+                            "drop",
+                            Some(&type_name),
+                            "if_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Type '{type_name}' does not exist"
+                        )))
+                    }
+                } else {
+                    manager
+                        .drop_alias(&type_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("drop", Some(&type_name), "ok")))
+                }
+            }
+        };
+        if result.is_ok() {
+            if let DdlOperatorKind::TypeManage { emitted, .. } = &mut self.kind {
+                *emitted = true;
+            }
         }
+        result
     }
 }

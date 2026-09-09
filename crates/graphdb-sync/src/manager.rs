@@ -9,7 +9,7 @@ use crate::outbox::OutboxPayload;
 use crate::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::types::ChangeType;
 use dashmap::DashMap;
-use graphdb_core::stats::{OutboxState, StatsManager};
+use graphdb_metrics::{OutboxState, StatsManager};
 use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use graphdb_core::Value;
 #[cfg(feature = "fulltext")]
@@ -357,7 +357,7 @@ impl SyncManager {
                 if let Some(stats) = self
                     .stats_manager
                     .as_ref()
-                    .and_then(|s| s.get_value(graphdb_core::stats::MetricType::OutboxPending))
+                    .and_then(|s| s.get_value(graphdb_metrics::MetricType::OutboxPending))
                 {
                     let durable_pending = stats as usize;
                     if durable_pending + total_pending + needed_targets
@@ -395,7 +395,7 @@ impl SyncManager {
         // Update the staged backlog gauge for observability.
         if let Some(stats) = self.stats_manager.as_ref() {
             let total: usize = self.pending_intents.iter().map(|e| e.value().len()).sum();
-            stats.set_value(graphdb_core::stats::MetricType::OutboxPending, total as u64);
+            stats.set_value(graphdb_metrics::MetricType::OutboxPending, total as u64);
         }
         Ok(())
     }

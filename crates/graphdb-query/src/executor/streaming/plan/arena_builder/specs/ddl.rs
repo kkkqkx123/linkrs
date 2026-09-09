@@ -588,6 +588,47 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_user_manage_spe
     })
 }
 
+pub(in crate::executor::streaming::plan::arena_builder) fn build_macro_manage_spec(
+    node: &crate::planning::plan::core::nodes::management::manage_node_enums::MacroManageNode,
+    _exec_ctx: &ExecutionContext,
+) -> Result<DdlSpec, PlanBuildError> {
+    use crate::executor::streaming::operators::spec::MacroManageCommand;
+    use crate::planning::plan::core::nodes::management::manage_node_enums::MacroManageNode::*;
+    let command = match node {
+        Create(n) => MacroManageCommand::Create {
+            macro_name: n.macro_name().to_string(),
+            params: n.info().params.clone(),
+            body: n.info().body.clone(),
+            if_not_exists: n.info().if_not_exists,
+        },
+        Drop(n) => MacroManageCommand::Drop {
+            macro_name: n.macro_name().to_string(),
+            if_exists: n.if_exists(),
+        },
+    };
+    Ok(DdlSpec::MacroManage { command })
+}
+
+pub(in crate::executor::streaming::plan::arena_builder) fn build_type_manage_spec(
+    node: &crate::planning::plan::core::nodes::management::manage_node_enums::TypeManageNode,
+    _exec_ctx: &ExecutionContext,
+) -> Result<DdlSpec, PlanBuildError> {
+    use crate::executor::streaming::operators::spec::TypeManageCommand;
+    use crate::planning::plan::core::nodes::management::manage_node_enums::TypeManageNode::*;
+    let command = match node {
+        Create(n) => TypeManageCommand::Create {
+            type_name: n.alias_name().to_string(),
+            underlying_type: n.info().underlying_type.clone(),
+            if_not_exists: n.info().if_not_exists,
+        },
+        Drop(n) => TypeManageCommand::Drop {
+            type_name: n.alias_name().to_string(),
+            if_exists: n.if_exists(),
+        },
+    };
+    Ok(DdlSpec::TypeManage { command })
+}
+
 // ── Fulltext spec builders ────────────────────────────────────────────────────
 
 fn fulltext_manage_to_command(

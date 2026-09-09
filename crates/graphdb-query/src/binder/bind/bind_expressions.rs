@@ -56,7 +56,40 @@ impl Binder {
                     check(scope, right)
                 }
                 Expression::Unary { operand, .. } => check(scope, operand),
-                Expression::Function { args, .. } => {
+                Expression::Function { name, args } => {
+                    let lower = name.to_ascii_lowercase();
+                    let is_higher_order = matches!(
+                        lower.as_str(),
+                        "list_filter"
+                            | "list_transform"
+                            | "list_any"
+                            | "list_all"
+                            | "list_single"
+                            | "list_reduce"
+                    );
+                    if is_higher_order {
+                        if let Some(lambda_arg) = args
+                            .iter()
+                            .find(|a| matches!(a.as_expr(), Expression::Lambda { .. }))
+                        {
+                            // Source and initial value resolve in the outer
+                            // scope; only the lambda body sees the bound
+                            // iteration variables.
+                            for arg in args {
+                                if !matches!(arg.as_expr(), Expression::Lambda { .. }) {
+                                    check(scope, arg.as_expr())?;
+                                }
+                            }
+                            if let Expression::Lambda { params, body } = lambda_arg.as_expr() {
+                                let mut inner = BinderScope::with_parent(scope.clone());
+                                for param in params {
+                                    inner.define_variable(local_variable(param));
+                                }
+                                return check(&inner, body);
+                            }
+                            return Ok(());
+                        }
+                    }
                     args.iter().try_for_each(|a| check(scope, a.as_expr()))
                 }
                 Expression::Aggregate { args, filter, .. } => {
@@ -229,6 +262,10 @@ impl Binder {
                 })
             }
             Expression::Function { name, args } => {
+                // User-defined macros expand before function resolution.
+                if let Some(expanded) = self.try_expand_macro(name, args, type_hint)? {
+                    return Ok(expanded);
+                }
                 let args = args
                     .iter()
                     .map(|a| self.bind_inner_expr(a.as_expr(), None))
@@ -569,6 +606,14 @@ impl Binder {
                 let original = body.clone();
                 let query = self.bind_subquery_body(body)?;
                 Ok(BoundExpression::CountSubquery {
+                    query: Box::new(query),
+                    original_body: Some(original),
+                })
+            }
+            Expression::ScalarSubquery { body } => {
+                let original = body.clone();
+                let query = self.bind_subquery_body(body)?;
+                Ok(BoundExpression::Subquery {
                     query: Box::new(query),
                     original_body: Some(original),
                 })

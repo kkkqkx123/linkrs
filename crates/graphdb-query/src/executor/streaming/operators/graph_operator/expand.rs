@@ -54,6 +54,7 @@ pub(super) fn handle(
                     filter_expr,
                     col_names_template: Vec::new(),
                     cancel_token: cancel_token.clone(),
+                    path_semantic: None,
                 },
             )? {
                 return Ok(Some(output));
@@ -117,7 +118,7 @@ pub(super) fn handle_all(
         count_only,
         emit_raw_ids,
         lightweight_source,
-        path_semantic: _,
+        path_semantic,
     } = &mut op.kind
     else {
         unreachable!("expand::handle_all called for a non-expand-all graph source")
@@ -133,16 +134,22 @@ pub(super) fn handle_all(
     let count_only = *count_only;
     let emit_raw_ids = *emit_raw_ids;
     let lightweight_source = *lightweight_source;
+    let path_semantic = *path_semantic;
 
-    let use_fast_path =
-        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && !emit_raw_ids;
+    let use_fast_path = step_limit == 1
+        && filter_expr.is_none()
+        && src_vids.is_empty()
+        && !emit_raw_ids
+        && path_semantic.is_none();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
 
-            if count_only {
+            // The degree-batch count path ignores per-path repeat rules,
+            // so it only applies when no semantic constrains the walk.
+            if count_only && path_semantic.is_none() {
                 let count = common::expand_count_only(
                     chunk,
                     &*reader,
@@ -154,6 +161,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
+                        path_semantic,
                     },
                 )?;
                 if count > 0 {
@@ -181,6 +189,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
+                        path_semantic,
                     },
                 )?
             } else {
@@ -197,6 +206,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
+                        path_semantic,
                     },
                 )?
             };

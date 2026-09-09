@@ -480,11 +480,11 @@ fn lifecycle_explain_plan_description_round_trips_cbo_notes() {
 
 #[test]
 fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
-    use graphdb_core::stats::StatsManager;
     use graphdb_core::types::VertexId;
     use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb_core::vertex_edge_path::Tag;
     use graphdb_core::{DataType, Value, Vertex};
+    use graphdb_metrics::StatsManager;
     use graphdb_query::optimizer::OptimizerEngine;
     use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::StorageOperationContextOps;

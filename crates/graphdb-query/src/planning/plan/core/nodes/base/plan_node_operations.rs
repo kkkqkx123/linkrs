@@ -40,6 +40,7 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::Flatten(node) => node.$method(),
             PlanNodeEnum::Argument(node) => node.$method(),
             PlanNodeEnum::Loop(node) => node.$method(),
+            PlanNodeEnum::RecursiveCte(node) => node.$method(),
             PlanNodeEnum::PassThrough(node) => node.$method(),
             PlanNodeEnum::Select(node) => node.$method(),
             PlanNodeEnum::BeginTransaction(node) => node.$method(),
@@ -69,6 +70,8 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::UserManage(node) => node.$method(),
             PlanNodeEnum::FulltextManage(node) => node.$method(),
             PlanNodeEnum::VectorManage(node) => node.$method(),
+            PlanNodeEnum::MacroManage(node) => node.$method(),
+            PlanNodeEnum::TypeManage(node) => node.$method(),
             _ => $default,
         }
     };
@@ -112,6 +115,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::Window(_) => "Window",
             PlanNodeEnum::Argument(_) => "Argument",
             PlanNodeEnum::Loop(_) => "Loop",
+            PlanNodeEnum::RecursiveCte(_) => "RecursiveCte",
             PlanNodeEnum::PassThrough(_) => "PassThrough",
             PlanNodeEnum::Select(_) => "Select",
             PlanNodeEnum::BeginTransaction(_) => "BeginTransaction",
@@ -148,6 +152,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowFunctions(_) => "ShowFunctions",
             PlanNodeEnum::ShowGraphs(_) => "ShowGraphs",
             PlanNodeEnum::ShowMacros(_) => "ShowMacros",
+            PlanNodeEnum::MacroManage(_) => "MacroManage",
+            PlanNodeEnum::TypeManage(_) => "TypeManage",
             PlanNodeEnum::LoadFrom(_) => "LoadFrom",
             PlanNodeEnum::InQueryCall(_) => "InQueryCall",
             PlanNodeEnum::CopyFrom(_) => "CopyFrom",
@@ -204,6 +210,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::Aggregate(node) => node.output_var(),
             PlanNodeEnum::Argument(node) => node.output_var(),
             PlanNodeEnum::Loop(node) => node.output_var(),
+            PlanNodeEnum::RecursiveCte(node) => node.output_var(),
             PlanNodeEnum::PassThrough(node) => node.output_var(),
             PlanNodeEnum::Select(node) => node.output_var(),
             PlanNodeEnum::BeginTransaction(node) => node.output_var(),
@@ -271,6 +278,8 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::MacroManage(_)
+            | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::LoadFrom(_)
             | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::CopyFrom(_)
@@ -322,6 +331,15 @@ impl PlanNodeEnum {
             }
 
             PlanNodeEnum::Loop(_) => Cow::Borrowed(&[]),
+
+            PlanNodeEnum::RecursiveCte(node) => {
+                let mut deps = Vec::with_capacity(2);
+                deps.push(node.anchor());
+                if let Some(step) = node.step() {
+                    deps.push(step);
+                }
+                Cow::Owned(deps)
+            }
 
             PlanNodeEnum::PipeDeleteVertices(node) => Cow::Owned(vec![node.input()]),
             PlanNodeEnum::PipeDeleteEdges(node) => Cow::Owned(vec![node.input()]),
@@ -385,6 +403,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::Aggregate(node) => node.set_output_var(var),
             PlanNodeEnum::Argument(node) => node.set_output_var(var),
             PlanNodeEnum::Loop(node) => node.set_output_var(var),
+            PlanNodeEnum::RecursiveCte(node) => node.set_output_var(var),
             PlanNodeEnum::PassThrough(node) => node.set_output_var(var),
             PlanNodeEnum::Select(node) => node.set_output_var(var),
             PlanNodeEnum::BeginTransaction(node) => node.set_output_var(var),

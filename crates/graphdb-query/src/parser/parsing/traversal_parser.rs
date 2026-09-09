@@ -568,8 +568,8 @@ impl TraversalParser {
             Steps::Fixed(1)
         };
 
-        // Support optional FROM keyword for backward compatibility
-        ctx.match_token(TokenKind::From);
+        // Canonical form requires FROM: GET SUBGRAPH <n> STEPS FROM ...
+        ctx.expect_token(TokenKind::From)?;
         let from_span = ctx.current_span();
         let from_clause = ctx.recover_clause(
             |c| {

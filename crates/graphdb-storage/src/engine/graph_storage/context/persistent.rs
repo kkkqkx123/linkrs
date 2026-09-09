@@ -14,7 +14,7 @@ use crate::engine::spiller::Spiller;
 use crate::index::IndexDataManagerImpl;
 use crate::vertex::IdKey;
 use graphdb_core::metadata::{IndexManager, SchemaManager};
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig};
 use graphdb_core::UserStorage;
 use graphdb_transaction::VersionManager;

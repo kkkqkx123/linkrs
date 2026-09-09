@@ -1,6 +1,10 @@
 //! Immutable configuration for recursive fragment operators.
 
+use std::sync::Arc;
+
 use graphdb_core::{EdgeDirection, Value};
+
+use crate::executor::streaming::plan::types::PhysicalPlan;
 
 /// Immutable config for recursive fragment operators.
 ///
@@ -47,5 +51,24 @@ pub enum RecursiveFragmentSpec {
         offset: usize,
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
+    },
+    /// Recursive-CTE fixpoint (`WITH [RECURSIVE] name AS (anchor [UNION ALL step])`).
+    ///
+    /// The anchor sub-plan runs once; the step sub-plan re-runs with the
+    /// previous delta published as the CTE working table (read through
+    /// [`CteScan`](super::source::SourceSpec::CteScan) sources keyed by the
+    /// mangled `cte_name`) until no new rows appear or `max_iterations` is
+    /// reached. `step` is `None` for a non-recursive CTE (inline view).
+    Fixpoint {
+        /// Mangled CTE tag (`crate::cte::mangle_cte_name`).
+        cte_name: String,
+        /// Anchor sub-plan (runs once, seeds the working table).
+        anchor: Arc<PhysicalPlan>,
+        /// Step sub-plan (re-runs per iteration over the delta).
+        step: Option<Arc<PhysicalPlan>>,
+        /// Fixpoint iteration cap (errors when exceeded).
+        max_iterations: u64,
+        /// Output column names (single column in V1).
+        col_names: Vec<String>,
     },
 }

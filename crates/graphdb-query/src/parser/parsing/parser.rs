@@ -30,6 +30,17 @@ impl<'a> Parser<'a> {
         Self { ctx, expr_context }
     }
 
+    /// Attach the shared type-alias catalog so unknown type names resolve
+    /// through user-defined aliases (`CAST(x AS alias)`, DDL column types).
+    /// Defaults to off (previous behavior) when unset.
+    pub fn with_type_alias_manager(
+        mut self,
+        manager: Arc<graphdb_core::metadata::TypeAliasManager>,
+    ) -> Self {
+        self.ctx.set_type_alias_manager(manager);
+        self
+    }
+
     pub fn from_string(input: String) -> Self {
         let expr_context = Arc::new(ExpressionAnalysisContext::new());
         let mut ctx = ParseContext::from_string(input);

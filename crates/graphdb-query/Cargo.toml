@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
+graphdb-metrics = { path = "../graphdb-metrics" }
 graphdb-storage = { path = "../graphdb-storage" }
 graphdb-migration = { path = "../graphdb-migration" }
 graphdb-fulltext = { path = "../graphdb-fulltext" }

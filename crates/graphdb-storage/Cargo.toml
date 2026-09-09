@@ -10,6 +10,7 @@ fulltext = ["graphdb-sync/fulltext", "graphdb-fulltext"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
+graphdb-metrics = { path = "../graphdb-metrics" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
 graphdb-fulltext = { path = "../graphdb-fulltext", optional = true }

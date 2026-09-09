@@ -777,6 +777,9 @@ impl WildcardReplacer {
                 negated: *negated,
             },
             Expression::CountSubquery { body } => Expression::CountSubquery { body: body.clone() },
+            Expression::ScalarSubquery { body } => {
+                Expression::ScalarSubquery { body: body.clone() }
+            }
             Expression::Lambda { params, body } => Expression::Lambda {
                 params: params.clone(),
                 body: Box::new(self.replace_internal(body)),

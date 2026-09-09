@@ -717,31 +717,16 @@ fn execute_list_single(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_list_reduce(args: &[Value]) -> Result<Value, ExpressionError> {
-    match (&args[0], &args[1]) {
-        (Value::List(list), initial) => {
-            let mut acc = initial.clone();
-            for item in &list.values {
-                match (&acc, item) {
-                    (Value::Int(a), Value::Int(b)) => acc = Value::Int(a + b),
-                    (Value::BigInt(a), Value::BigInt(b)) => acc = Value::BigInt(a + b),
-                    (Value::Float(a), Value::Float(b)) => acc = Value::Float(a + b),
-                    (Value::Double(a), Value::Double(b)) => acc = Value::Double(a + b),
-                    (Value::Int(a), Value::BigInt(b)) => acc = Value::BigInt(*a as i64 + b),
-                    (Value::BigInt(a), Value::Int(b)) => acc = Value::BigInt(a + *b as i64),
-                    _ => {
-                        return Err(ExpressionError::type_error(
-                            "list_reduce: accumulator and list elements must be numeric and of compatible types",
-                        ))
-                    }
-                }
-            }
-            Ok(acc)
-        }
-        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "list_reduce requires a list as first argument",
-        )),
+    // Lambda evaluation lives in the expression evaluator, which binds
+    // (acc, item) per element and runs the lambda body. Eager values here
+    // can never represent a lambda, so any direct registry call is a
+    // non-lambda misuse rather than a second reduce implementation.
+    if matches!(&args[0], Value::Null(_)) {
+        return Ok(Value::Null(NullType::Null));
     }
+    Err(ExpressionError::type_error(
+        "list_reduce requires (source, lambda, initial) with a lambda as second argument",
+    ))
 }
 
 fn value_to_string(v: &Value) -> String {

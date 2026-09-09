@@ -500,6 +500,52 @@ impl ArenaPlanAssembler {
         Ok((fid, op_id))
     }
 
+    /// Push a recursive-CTE fixpoint operator onto a fresh `Start` source.
+    ///
+    /// The fixpoint is self-contained (anchor/step sub-plans run inside the
+    /// operator); the `Start` input exists only to satisfy the fragment
+    /// pipeline shape and is never advanced, mirroring `push_ddl_op`.
+    pub(super) fn push_fixpoint_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        node_id: i64,
+        spec: RecursiveFragmentSpec,
+        output_layout: SlotLayout,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        let (child_fid, _) = Self::push_source_op(
+            operators,
+            fragments,
+            op_alloc,
+            frag_alloc,
+            node_id,
+            SourceSpec::Start,
+        );
+        let op_id = op_alloc.allocate();
+        let explain_name = super::super::metadata::recursive_fragment_explain_name(&spec);
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: Some(LogicalNodeId(node_id)),
+            spec: OperatorKindSpec::RecursiveFragment(spec),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout,
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            choice_reason: None,
+            has_folded_expressions: false,
+            explain_name,
+        });
+        let fragment = fragments
+            .get_mut(child_fid.0)
+            .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "fragment not found"))?;
+        fragment.operators.push(op_id);
+        fragment.root_operator = op_id;
+        Ok((child_fid, op_id))
+    }
+
     pub(super) fn push_ddl_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,

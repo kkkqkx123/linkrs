@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use super::config::{CachePriority, CteCacheConfig};
 use super::stats::CteCacheStats;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 
 /// CTE cache entries
 #[derive(Debug, Clone)]

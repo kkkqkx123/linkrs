@@ -2,7 +2,7 @@ use crate::index::key_codec::KeyParser;
 use crate::index::manifest::ManifestCatalog;
 use crate::index::shard_runtime::{IndexBarrierRegistry, IndexMaps, IndexRuntime};
 use crate::index::types::IndexIdentity;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_core::types::{Index, IndexGeneration, IndexType, Timestamp};
 use graphdb_core::value::ordered_codec::OrderedCodec;
 use graphdb_core::Value;

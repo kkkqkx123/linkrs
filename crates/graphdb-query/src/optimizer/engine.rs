@@ -142,7 +142,7 @@ pub struct OptimizerEngine {
     /// When set, the factorization steps increment the corresponding
     /// `MetricType` counters; when `None` (the default) no metrics work is
     /// performed and existing constructors behave unchanged.
-    metrics_stats: Option<Arc<graphdb_core::stats::StatsManager>>,
+    metrics_stats: Option<Arc<graphdb_metrics::StatsManager>>,
 }
 
 impl OptimizerEngine {
@@ -187,7 +187,7 @@ impl OptimizerEngine {
         stats_manager: Arc<StatisticsManager>,
         cte_cache_manager: Arc<CteCacheManager>,
         cost_config: CostModelConfig,
-        metrics_stats: Option<Arc<graphdb_core::stats::StatsManager>>,
+        metrics_stats: Option<Arc<graphdb_metrics::StatsManager>>,
     ) -> Self {
         // Create a cost calculator and a selective estimator.
         let cost_calculator = Arc::new(CostCalculator::with_config(
@@ -322,12 +322,12 @@ impl OptimizerEngine {
     }
 
     /// Attach the observability sink for factorization fallback counters.
-    pub fn set_metrics_stats(&mut self, stats: Arc<graphdb_core::stats::StatsManager>) {
+    pub fn set_metrics_stats(&mut self, stats: Arc<graphdb_metrics::StatsManager>) {
         self.metrics_stats = Some(stats);
     }
 
     /// Access the observability sink for factorization fallback counters.
-    pub fn metrics_stats(&self) -> Option<Arc<graphdb_core::stats::StatsManager>> {
+    pub fn metrics_stats(&self) -> Option<Arc<graphdb_metrics::StatsManager>> {
         self.metrics_stats.clone()
     }
 
@@ -361,10 +361,7 @@ impl OptimizerEngine {
     }
 
     /// Set the stats manager on the CTE cache manager
-    pub fn set_cte_cache_stats_manager(
-        &self,
-        stats_manager: Arc<graphdb_core::stats::StatsManager>,
-    ) {
+    pub fn set_cte_cache_stats_manager(&self, stats_manager: Arc<graphdb_metrics::StatsManager>) {
         self.cte_cache_manager.set_stats_manager(stats_manager);
     }
 
@@ -523,7 +520,7 @@ impl OptimizerEngine {
                             node_type
                         ));
                         if let Some(ref ms) = self.metrics_stats {
-                            ms.add_value(graphdb_core::MetricType::FactorizationFallbackTotal);
+                            ms.add_value(graphdb_metrics::MetricType::FactorizationFallbackTotal);
                         }
                         if plan.parallel_fallback_reason.is_empty() {
                             plan.parallel_fallback_reason = msg;
@@ -574,7 +571,7 @@ impl OptimizerEngine {
                     ));
                     if let Some(ref ms) = self.metrics_stats {
                         ms.add_value_with_amount(
-                            graphdb_core::MetricType::FactorizationPhysicalMappingFallbackTotal,
+                            graphdb_metrics::MetricType::FactorizationPhysicalMappingFallbackTotal,
                             fallback_count as u64,
                         );
                     }
@@ -1187,7 +1184,7 @@ impl OptimizerEngine {
                     .push(format!("factorization: flatten_total={}", flattens.len()));
                 if let Some(ref ms) = self.metrics_stats {
                     ms.add_value_with_amount(
-                        graphdb_core::MetricType::FactorizationFlattenTotal,
+                        graphdb_metrics::MetricType::FactorizationFlattenTotal,
                         flattens.len() as u64,
                     );
                 }
@@ -1251,7 +1248,7 @@ impl OptimizerEngine {
                     ));
                     if let Some(ref ms) = self.metrics_stats {
                         ms.add_value_with_amount(
-                            graphdb_core::MetricType::FactorizationFallbackTotal,
+                            graphdb_metrics::MetricType::FactorizationFallbackTotal,
                             rewrite_count,
                         );
                     }

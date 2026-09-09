@@ -27,6 +27,8 @@ pub enum MutationResource {
     Schema,
     Index,
     Sequence,
+    Macro,
+    TypeAlias,
     SyncIntent,
     #[default]
     Unknown,
@@ -42,6 +44,8 @@ impl std::fmt::Display for MutationResource {
             MutationResource::Schema => "schema",
             MutationResource::Index => "index",
             MutationResource::Sequence => "sequence",
+            MutationResource::Macro => "macro",
+            MutationResource::TypeAlias => "type_alias",
             MutationResource::SyncIntent => "sync_intent",
             MutationResource::Unknown => "unknown",
         };
@@ -77,6 +81,8 @@ impl MutationResource {
             | WalOpType::CreateEdgeIndex
             | WalOpType::DropEdgeIndex => MutationResource::Index,
             WalOpType::UpdateSequence => MutationResource::Sequence,
+            WalOpType::CreateMacro | WalOpType::DropMacro => MutationResource::Macro,
+            WalOpType::CreateTypeAlias | WalOpType::DropTypeAlias => MutationResource::TypeAlias,
             WalOpType::OutboxIntent => MutationResource::SyncIntent,
             _ => MutationResource::Unknown,
         }
@@ -89,6 +95,8 @@ impl MutationResource {
             Some("schema") => MutationResource::Schema,
             Some("index") => MutationResource::Index,
             Some("sequence") => MutationResource::Sequence,
+            Some("macro") => MutationResource::Macro,
+            Some("type_alias") => MutationResource::TypeAlias,
             Some("sync") => MutationResource::SyncIntent,
             _ => MutationResource::Unknown,
         }

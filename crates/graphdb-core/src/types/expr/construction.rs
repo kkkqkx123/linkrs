@@ -271,6 +271,13 @@ impl Expression {
         }
     }
 
+    /// Create a scalar subquery expression
+    pub fn scalar_subquery(body: SubqueryBody) -> Self {
+        Expression::ScalarSubquery {
+            body: Box::new(body),
+        }
+    }
+
     /// Create a Lambda expression
     pub fn lambda(params: Vec<String>, body: Expression) -> Self {
         Expression::Lambda {

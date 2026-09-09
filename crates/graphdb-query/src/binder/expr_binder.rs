@@ -84,6 +84,27 @@ impl<'a> ExpressionBinder<'a> {
             },
 
             Expression::Function { name, args } => {
+                if name.eq_ignore_ascii_case("list_reduce") {
+                    // Prefer the lambda body type over the initial value so
+                    // `reduce` over strings, decimals or nested lists keeps
+                    // the body result instead of falling back to the list type.
+                    for arg in args {
+                        if let Expression::Lambda { body, .. } = arg.as_expr() {
+                            let body_type = self.resolve_type(body);
+                            if body_type != DataType::Unknown {
+                                return body_type;
+                            }
+                            break;
+                        }
+                    }
+                    if let Some(initial) = args.get(2) {
+                        let initial_type = self.resolve_type(initial.as_expr());
+                        if initial_type != DataType::Unknown {
+                            return initial_type;
+                        }
+                    }
+                    return DataType::Unknown;
+                }
                 let arg_types: Vec<DataType> = args
                     .iter()
                     .map(|a| self.resolve_type(a.as_expr()))
@@ -180,6 +201,7 @@ impl<'a> ExpressionBinder<'a> {
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
             Expression::CountSubquery { .. } => DataType::Int,
+            Expression::ScalarSubquery { .. } => DataType::Unknown,
             Expression::Lambda { .. } => DataType::Unknown,
         }
     }
@@ -267,6 +289,11 @@ impl<'a> ExpressionBinder<'a> {
     pub fn deduce_function_return_type(&self, name: &str, arg_types: &[DataType]) -> DataType {
         let lower = name.to_lowercase();
         match lower.as_str() {
+            // list_reduce without expression context cannot see the lambda
+            // body; the Function branch in resolve_type handles the precise
+            // case. Keep Unknown here so callers do not fall back to the
+            // list element type.
+            "list_reduce" => return DataType::Unknown,
             "head" | "last" | "coalesce" | "greatest" | "least" | "nullif" | "ifnull"
             | "first_value" | "last_value" | "nth_value" | "lead" | "lag" | "element_at"
             | "list_extract" | "struct_extract" | "map_extract" => {

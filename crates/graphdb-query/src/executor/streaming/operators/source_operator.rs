@@ -64,6 +64,15 @@ pub enum SourceOperatorKind {
         current_index: usize,
         col_names: Vec<String>,
     },
+    /// Recursive-CTE working-table scan — rows are snapshotted from the
+    /// enclosing fixpoint operator's published table at `open()`/`reset()`
+    /// (once per step iteration) and served from the in-kind buffer.
+    CteScan {
+        cte_name: String,
+        col_names: Vec<String>,
+        buffer: Vec<Vec<Value>>,
+        current_index: usize,
+    },
     /// Standalone DML values. Expressions are evaluated once in `open()`
     /// (i.e. once per execution) so volatile expressions such as `now()`
     /// are resolved at execution time.
@@ -204,6 +213,15 @@ impl SourceOperator {
                     col_names: col_names.clone(),
                 }
             }
+            super::spec::SourceSpec::CteScan {
+                cte_name,
+                col_names,
+            } => SourceOperatorKind::CteScan {
+                cte_name: cte_name.clone(),
+                col_names: col_names.clone(),
+                buffer: Vec::new(),
+                current_index: 0,
+            },
             super::spec::SourceSpec::StorageScanVertices {
                 space_name,
                 limit,
@@ -413,6 +431,7 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
             SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::CteScan { .. } => Self::open_cte_scan(self)?,
             SourceOperatorKind::Argument => {
                 state = Some(GlobalState::Source(SourceState::Argument));
             }
@@ -451,6 +470,7 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::next(self),
             SourceOperatorKind::IndexScan { .. } => index_scan::next(self),
+            SourceOperatorKind::CteScan { .. } => Self::next_cte_scan(self),
             SourceOperatorKind::GetProp { .. } => Err(QueryError::execution(
                 "GetProp is not available as a source operator; \
                   use the unary GetProp operator"
@@ -533,6 +553,11 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
             SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::CteScan { .. } => {
+                // Re-snapshot the working table: the fixpoint operator
+                // publishes a fresh delta before every step iteration.
+                Self::open_cte_scan(self)?;
+            }
             SourceOperatorKind::Argument => {
                 // The correlation frame lives on the operator and is
                 // re-injected per run by the parent; nothing to rewind.
@@ -558,6 +583,58 @@ impl SourceOperator {
     pub fn close(&mut self) -> Result<(), QueryError> {
         self.take_state();
         Ok(())
+    }
+
+    /// Snapshot the enclosing fixpoint's working table into the in-kind
+    /// buffer. Called at `open()` and at every `reset()` (once per step
+    /// iteration); a missing table reads as an empty stream.
+    fn open_cte_scan(op: &mut SourceOperator) -> Result<(), QueryError> {
+        let (cte_name, buffer, current_index) = match &mut op.kind {
+            SourceOperatorKind::CteScan {
+                cte_name,
+                buffer,
+                current_index,
+                ..
+            } => (cte_name.clone(), buffer, current_index),
+            _ => {
+                return Err(QueryError::execution(
+                    "open_cte_scan called for a non-CTE source".to_string(),
+                ));
+            }
+        };
+        let rows = op
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.cte_table(&cte_name))
+            .unwrap_or_default();
+        *buffer = rows;
+        *current_index = 0;
+        Ok(())
+    }
+
+    /// Serve the next chunk from the snapshotted working table.
+    fn next_cte_scan(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+        let layout = Arc::clone(&op.output_layout);
+        let chunk_size = op.config.chunk_size;
+        let (buffer, current_index) = match &mut op.kind {
+            SourceOperatorKind::CteScan {
+                buffer,
+                current_index,
+                ..
+            } => (buffer, current_index),
+            _ => {
+                return Err(QueryError::execution(
+                    "next_cte_scan called for a non-CTE source".to_string(),
+                ));
+            }
+        };
+        if *current_index >= buffer.len() {
+            return Ok(None);
+        }
+        let end = (*current_index + chunk_size).min(buffer.len());
+        let rows = buffer[*current_index..end].to_vec();
+        *current_index = end;
+        Ok(Some(DataChunk::new_with_layout(rows, layout)))
     }
 }
 

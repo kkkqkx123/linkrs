@@ -725,6 +725,7 @@ fn convert_expand_all(
         node.set_src_vids(n.src_vids);
     }
     node.set_include_empty_paths(n.include_empty_paths);
+    node.set_path_semantic(n.path_semantic);
     if let Some(var) = n.input_var {
         node.set_input_var(var);
     }

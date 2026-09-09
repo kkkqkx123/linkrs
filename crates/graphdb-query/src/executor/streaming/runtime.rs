@@ -806,6 +806,24 @@ pub struct ExecutionRuntime {
     /// execution instance records estimated-vs-actual operator feedback here
     /// after execution completes (stats feedback loop).
     pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
+    /// Macro catalog manager (user-defined macros), shared engine-wide.
+    ///
+    /// Injected by the materializer from the query bindings; read by DDL
+    /// operators executing `CREATE/DROP MACRO` and `SHOW MACROS`.
+    pub macro_manager: Option<Arc<graphdb_core::metadata::MacroManager>>,
+    /// Type-alias catalog manager (user-defined types), shared engine-wide.
+    ///
+    /// Injected by the materializer from the query bindings; read by DDL
+    /// operators executing `CREATE/DROP TYPE`.
+    pub type_alias_manager: Option<Arc<graphdb_core::metadata::TypeAliasManager>>,
+    /// Working tables of enclosing recursive-CTE fixpoints, keyed by the
+    /// mangled CTE tag (`crate::cte::mangle_cte_name`).
+    ///
+    /// Written by the fixpoint operator before each step iteration and
+    /// cleared afterwards; read by CTE scan sources. Serial execution only
+    /// (fixpoint fragments are never partitioned).
+    pub cte_tables:
+        Arc<parking_lot::Mutex<std::collections::HashMap<String, Vec<Vec<graphdb_core::Value>>>>>,
 }
 
 impl ExecutionRuntime {
@@ -842,6 +860,9 @@ impl ExecutionRuntime {
             columnar_stats: Arc::new(ColumnarStats::new()),
             columnar_policy: None,
             feedback_history: None,
+            macro_manager: None,
+            type_alias_manager: None,
+            cte_tables: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -944,6 +965,48 @@ impl ExecutionRuntime {
     /// Return the session variable snapshot, if bound.
     pub fn session_variable_values(&self) -> Option<Arc<HashMap<String, Value>>> {
         self.session_variable_values.clone()
+    }
+
+    /// Set the macro catalog manager for this execution instance.
+    pub fn set_macro_manager(
+        &mut self,
+        manager: Option<Arc<graphdb_core::metadata::MacroManager>>,
+    ) {
+        self.macro_manager = manager;
+    }
+
+    /// Return the macro catalog manager, if bound.
+    pub fn macro_manager(&self) -> Option<Arc<graphdb_core::metadata::MacroManager>> {
+        self.macro_manager.clone()
+    }
+
+    /// Set the type-alias catalog manager for this execution instance.
+    pub fn set_type_alias_manager(
+        &mut self,
+        manager: Option<Arc<graphdb_core::metadata::TypeAliasManager>>,
+    ) {
+        self.type_alias_manager = manager;
+    }
+
+    /// Return the type-alias catalog manager, if bound.
+    pub fn type_alias_manager(&self) -> Option<Arc<graphdb_core::metadata::TypeAliasManager>> {
+        self.type_alias_manager.clone()
+    }
+
+    /// Publish a recursive-CTE working table for the duration of one step
+    /// iteration. Overwrites any previous table under the same mangled tag.
+    pub fn set_cte_table(&self, mangled_tag: &str, rows: Vec<Vec<graphdb_core::Value>>) {
+        self.cte_tables.lock().insert(mangled_tag.to_string(), rows);
+    }
+
+    /// Read the current working table published under a mangled CTE tag.
+    pub fn cte_table(&self, mangled_tag: &str) -> Option<Vec<Vec<graphdb_core::Value>>> {
+        self.cte_tables.lock().get(mangled_tag).cloned()
+    }
+
+    /// Remove the working table published under a mangled CTE tag.
+    pub fn clear_cte_table(&self, mangled_tag: &str) {
+        self.cte_tables.lock().remove(mangled_tag);
     }
 
     /// Set the transaction scope for this execution.

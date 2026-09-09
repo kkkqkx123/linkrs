@@ -298,6 +298,16 @@ impl FingerprintCalculator {
                     body_fp.hash(hasher);
                 }
             }
+            PlanNodeEnum::RecursiveCte(n) => {
+                n.cte_name().hash(hasher);
+                n.max_iterations().hash(hasher);
+                let anchor_fp = self.calculate_fingerprint(n.anchor());
+                anchor_fp.hash(hasher);
+                if let Some(step) = n.step() {
+                    let step_fp = self.calculate_fingerprint(step);
+                    step_fp.hash(hasher);
+                }
+            }
 
             // Zero-input nodes (leaf nodes)
             PlanNodeEnum::Start(_) => {

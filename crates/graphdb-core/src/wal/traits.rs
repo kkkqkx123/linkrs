@@ -4,11 +4,11 @@ use crate::Value;
 
 use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo,
+    CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo,
+    DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
+    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 
@@ -165,6 +165,30 @@ pub trait RecoveryApplier {
         redo: &UpdateSequenceRedo,
         ts: Timestamp,
     ) -> StorageResult<()> {
+        let _ = (redo, ts);
+        Ok(())
+    }
+
+    fn replay_create_macro(&self, redo: &CreateMacroRedo, ts: Timestamp) -> StorageResult<()> {
+        let _ = (redo, ts);
+        Ok(())
+    }
+
+    fn replay_drop_macro(&self, redo: &DropMacroRedo, ts: Timestamp) -> StorageResult<()> {
+        let _ = (redo, ts);
+        Ok(())
+    }
+
+    fn replay_create_type_alias(
+        &self,
+        redo: &CreateTypeAliasRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = (redo, ts);
+        Ok(())
+    }
+
+    fn replay_drop_type_alias(&self, redo: &DropTypeAliasRedo, ts: Timestamp) -> StorageResult<()> {
         let _ = (redo, ts);
         Ok(())
     }

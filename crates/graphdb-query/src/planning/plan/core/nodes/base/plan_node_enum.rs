@@ -16,8 +16,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
-    UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
+    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
@@ -40,7 +40,7 @@ pub use crate::planning::plan::core::nodes::access::index_scan::{
     IndexLimit, IndexScanNode, OrderByItem, ScanType,
 };
 pub use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RecursiveCteNode,
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
@@ -173,6 +173,7 @@ pub enum PlanNodeEnum {
     // ========== Control Flow Nodes ==========
     Argument(ArgumentNode),
     Loop(LoopNode),
+    RecursiveCte(RecursiveCteNode),
     PassThrough(PassThroughNode),
     Select(SelectNode),
 
@@ -253,6 +254,8 @@ pub enum PlanNodeEnum {
     ShowMacros(ShowMacrosNode),
     LoadFrom(LoadFromNode),
     InQueryCall(InQueryCallNode),
+    MacroManage(MacroManageNode),
+    TypeManage(TypeManageNode),
 
     // Full-text Search Nodes
     FulltextSearch(FulltextSearchNode),
@@ -314,6 +317,7 @@ crate::define_enum_is_methods! {
     // Control flow nodes
     (Argument, is_argument),
     (Loop, is_loop),
+    (RecursiveCte, is_recursive_cte),
     (PassThrough, is_pass_through),
     (Select, is_select),
     // Data processing node
@@ -421,6 +425,7 @@ crate::define_enum_as_methods! {
     // Control flow nodes
     (Argument, as_argument, ArgumentNode),
     (Loop, as_loop, LoopNode),
+    (RecursiveCte, as_recursive_cte, RecursiveCteNode),
     (PassThrough, as_pass_through, PassThroughNode),
     (Select, as_select, SelectNode),
     // Transaction control nodes
@@ -533,6 +538,7 @@ crate::define_enum_as_mut_methods! {
     // Control flow nodes
     (Argument, as_argument_mut, ArgumentNode),
     (Loop, as_loop_mut, LoopNode),
+    (RecursiveCte, as_recursive_cte_mut, RecursiveCteNode),
     (PassThrough, as_pass_through_mut, PassThroughNode),
     (Select, as_select_mut, SelectNode),
     // Transaction control nodes
@@ -651,6 +657,7 @@ crate::define_all_plan_nodes! {
     // Control flow nodes
     (Argument, ArgumentNode, PlanNodeCategory::ControlFlow, "Argument"),
     (Loop, LoopNode, PlanNodeCategory::ControlFlow, "Loop"),
+    (RecursiveCte, RecursiveCteNode, PlanNodeCategory::ControlFlow, "RecursiveCte"),
     (PassThrough, PassThroughNode, PlanNodeCategory::ControlFlow, "PassThrough"),
     (Select, SelectNode, PlanNodeCategory::ControlFlow, "Select"),
     // Transaction control nodes
@@ -685,6 +692,8 @@ crate::define_all_plan_nodes! {
     (UserManage, UserManageNode, PlanNodeCategory::Management, "UserManage"),
     (FulltextManage, FulltextManageNode, PlanNodeCategory::Management, "FulltextManage"),
     (VectorManage, VectorManageNode, PlanNodeCategory::Management, "VectorManage"),
+    (MacroManage, MacroManageNode, PlanNodeCategory::Management, "MacroManage"),
+    (TypeManage, TypeManageNode, PlanNodeCategory::Management, "TypeManage"),
     // Management Node – Data
     (CopyFrom, CopyFromNode, PlanNodeCategory::Management, "CopyFrom"),
     (CopyTo, CopyToNode, PlanNodeCategory::Management, "CopyTo"),
@@ -811,9 +820,10 @@ mod tests {
         "AppendVertices",
         "BiExpand",
         "BiTraverse",
-        // ControlFlow (9)
+        // ControlFlow (10)
         "Argument",
         "Loop",
+        "RecursiveCte",
         "PassThrough",
         "Select",
         "BeginTransaction",
@@ -839,7 +849,7 @@ mod tests {
         "BFSShortest",
         "AllPaths",
         "ShortestPath",
-        // Management/DDL (25)
+        // Management/DDL (27)
         "SpaceManage",
         "TagManage",
         "EdgeManage",
@@ -847,6 +857,8 @@ mod tests {
         "UserManage",
         "FulltextManage",
         "VectorManage",
+        "MacroManage",
+        "TypeManage",
         "CopyFrom",
         "CopyTo",
         "InsertVertices",
@@ -910,6 +922,7 @@ mod tests {
         "BiTraverse",
         "Argument",
         "Loop",
+        "RecursiveCte",
         "PassThrough",
         "Select",
         "BeginTransaction",
@@ -940,6 +953,8 @@ mod tests {
         "UserManage",
         "FulltextManage",
         "VectorManage",
+        "MacroManage",
+        "TypeManage",
         "CopyFrom",
         "CopyTo",
         "InsertVertices",
@@ -970,11 +985,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 87 variants. With `qdrant`: 90 variants.
+    /// Default build: 90 variants. With `qdrant`: 93 variants.
     #[cfg(not(feature = "qdrant"))]
-    const EXPECTED_VARIANT_COUNT: usize = 87;
-    #[cfg(feature = "qdrant")]
     const EXPECTED_VARIANT_COUNT: usize = 90;
+    #[cfg(feature = "qdrant")]
+    const EXPECTED_VARIANT_COUNT: usize = 93;
 
     #[test]
     fn variant_count_matches_documented_number() {

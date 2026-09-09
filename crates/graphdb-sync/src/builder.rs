@@ -85,7 +85,7 @@ impl SyncManagerBuilder {
 pub struct SyncCoordinatorBuilder {
     fulltext_manager: Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>>,
     config: Option<crate::batch::BatchConfig>,
-    stats_manager: Option<Arc<graphdb_core::stats::StatsManager>>,
+    stats_manager: Option<Arc<graphdb_metrics::StatsManager>>,
 }
 
 #[cfg(feature = "fulltext")]
@@ -120,7 +120,7 @@ impl SyncCoordinatorBuilder {
 
     pub fn with_stats_manager(
         mut self,
-        stats_manager: Arc<graphdb_core::stats::StatsManager>,
+        stats_manager: Arc<graphdb_metrics::StatsManager>,
     ) -> Self {
         self.stats_manager = Some(stats_manager);
         self

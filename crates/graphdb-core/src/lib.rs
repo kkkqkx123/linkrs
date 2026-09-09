@@ -8,7 +8,6 @@ pub mod vertex_edge_path;
 
 // New sub-modules
 pub mod permission;
-pub mod stats;
 pub mod types;
 pub mod vector;
 pub mod wal;
@@ -59,12 +58,6 @@ pub use type_system::TypeUtils;
 
 // Permission type
 pub use permission::{Permission, RoleType};
-
-// Statistical type
-pub use stats::{
-    ErrorInfo, ErrorSummary, ErrorType, MetricType, MetricValue, QueryMetrics, QueryPhase,
-    QueryProfile, QueryStatus, StatsManager,
-};
 
 // Session statistics type
 pub use session_stats::SessionStatistics;

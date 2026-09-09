@@ -10,7 +10,7 @@ use crate::QueryRequestContext;
 use graphdb_core::error::{DBError, DBResult, QueryError};
 use graphdb_core::types::SpaceInfo;
 use graphdb_core::types::TransactionId;
-use graphdb_core::{
+use graphdb_metrics::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
 use parking_lot::RwLock;
@@ -307,6 +307,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ..ExecutionContext::default()
         };
         context.shared_scheduler = self.shared_scheduler.clone();
+        context.macro_manager = Some(self.macro_manager.clone());
+        context.type_alias_manager = Some(self.type_alias_manager.clone());
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn QueryStorage>> = if let Some(operation_storage) =
                 query_context.request_context().operation_storage.clone()

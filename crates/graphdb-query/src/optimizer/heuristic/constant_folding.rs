@@ -60,6 +60,8 @@ impl FoldConstantsRule {
             // Aggregates and window functions need a row-group context even
             // with constant arguments — never fold them.
             Expression::Aggregate { .. } | Expression::WindowFunction { .. } => false,
+            // Subqueries need a streaming runtime context — never fold them.
+            Expression::ScalarSubquery { .. } => false,
             Expression::Function { name, args, .. } => {
                 // Purity comes from the function registry; unregistered
                 // functions are conservatively treated as non-pure.

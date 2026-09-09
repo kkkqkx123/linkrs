@@ -349,7 +349,9 @@ fn plan_scalar_subquery(
 /// Whether `expr` contains an expression-level EXISTS / IN anywhere.
 fn contains_expression_subquery(expr: &Expression) -> bool {
     match expr {
-        Expression::Exists { .. } | Expression::In { .. } => true,
+        Expression::Exists { .. } | Expression::In { .. } | Expression::ScalarSubquery { .. } => {
+            true
+        }
         _ => expr
             .children()
             .iter()

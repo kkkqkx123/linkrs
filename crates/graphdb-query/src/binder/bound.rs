@@ -75,7 +75,10 @@ pub enum BoundExpression {
     SessionVariable(String, DataType),
 
     /// Subquery expression
-    Subquery(Box<BoundStatement>),
+    Subquery {
+        query: Box<BoundStatement>,
+        original_body: Option<Box<SubqueryBody>>,
+    },
 
     /// Cast expression
     Cast {
@@ -242,7 +245,7 @@ impl BoundExpression {
             Self::Aggregate(a) => a.return_type.to_data_type(),
             Self::ParameterRef(_, dt) => dt.clone(),
             Self::SessionVariable(_, _) => DataType::Unknown,
-            Self::Subquery(_) => DataType::Unknown,
+            Self::Subquery { .. } => DataType::Unknown,
             Self::Cast { target_type, .. } => target_type.clone(),
             Self::List(_, dt) => dt.clone(),
             Self::Map(_, dt) => dt.clone(),
@@ -477,6 +480,19 @@ pub struct BoundReturnStatement {
 pub struct BoundWithStatement {
     pub items: Vec<BoundProjectionItem>,
     pub condition: Option<BoundExpression>,
+    pub ctes: Vec<BoundCteDef>,
+}
+
+/// A bound common table expression.
+///
+/// Under `WITH RECURSIVE`, `step` is the `UNION ALL` right branch bound with
+/// the CTE name visible as a scannable working table; otherwise `step` is
+/// `None` and the CTE is a plain inline view.
+#[derive(Debug, Clone)]
+pub struct BoundCteDef {
+    pub name: String,
+    pub anchor: Box<BoundStatement>,
+    pub step: Option<Box<BoundStatement>>,
 }
 
 #[derive(Debug, Clone)]

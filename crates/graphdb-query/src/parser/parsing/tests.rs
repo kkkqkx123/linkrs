@@ -919,4 +919,78 @@ mod tests {
             panic!("expected Alter statement");
         }
     }
+
+    #[test]
+    fn test_with_recursive_cte() {
+        let stmt = parse_statement(
+            "WITH RECURSIVE r AS (MATCH (a:Person) WHERE a.id == 1 RETURN a AS n UNION ALL MATCH (m:r)-[:KNOWS]->(x) RETURN x AS n) 1 AS one",
+        )
+        .expect("WITH RECURSIVE should parse");
+        if let Stmt::With(with) = stmt {
+            assert!(with.recursive);
+            assert_eq!(with.ctes.len(), 1);
+            assert_eq!(with.ctes[0].name, "r");
+            assert!(
+                matches!(
+                    with.ctes[0].body.as_ref(),
+                    Stmt::SetOperation(setop) if setop.op_type == SetOperationType::UnionAll
+                ),
+                "recursive CTE body must be anchor UNION ALL step"
+            );
+            assert_eq!(with.items.len(), 1);
+        } else {
+            panic!("expected With statement");
+        }
+    }
+
+    #[test]
+    fn test_with_plain_cte() {
+        let stmt = parse_statement("WITH v AS (MATCH (a:Person) RETURN a AS n) 1 AS one")
+            .expect("WITH with CTE should parse");
+        if let Stmt::With(with) = stmt {
+            assert!(!with.recursive);
+            assert_eq!(with.ctes.len(), 1);
+            assert_eq!(with.ctes[0].name, "v");
+        } else {
+            panic!("expected With statement");
+        }
+    }
+
+    #[test]
+    fn test_with_without_cte_unchanged() {
+        let stmt = parse_statement("WITH 1 AS one").expect("plain WITH should parse");
+        if let Stmt::With(with) = stmt {
+            assert!(!with.recursive);
+            assert!(with.ctes.is_empty());
+            assert_eq!(with.items.len(), 1);
+        } else {
+            panic!("expected With statement");
+        }
+    }
+
+    #[test]
+    fn test_create_type_alias_text() {
+        let stmt = parse_statement("CREATE TYPE uid AS my_int")
+            .expect("CREATE TYPE with alias reference should parse");
+        if let Stmt::CreateType(create) = stmt {
+            assert_eq!(create.name, "uid");
+            assert_eq!(create.underlying_type, graphdb_core::DataType::Unknown);
+            assert_eq!(create.underlying_type_text, "my_int");
+        } else {
+            panic!("expected CreateType statement");
+        }
+    }
+
+    #[test]
+    fn test_create_type_builtin() {
+        let stmt = parse_statement("CREATE TYPE uid AS INT")
+            .expect("CREATE TYPE with builtin should parse");
+        if let Stmt::CreateType(create) = stmt {
+            assert_eq!(create.name, "uid");
+            assert_eq!(create.underlying_type, graphdb_core::DataType::Int);
+            assert_eq!(create.underlying_type_text, "INT");
+        } else {
+            panic!("expected CreateType statement");
+        }
+    }
 }

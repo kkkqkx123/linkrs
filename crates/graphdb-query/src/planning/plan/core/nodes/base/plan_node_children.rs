@@ -23,6 +23,8 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::MacroManage(_)
+            | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::LoadFrom(_)
             | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::CopyFrom(_)
@@ -175,6 +177,14 @@ impl PlanNodeEnum {
                 }
                 children
             }
+            PlanNodeEnum::RecursiveCte(node) => {
+                let mut children = Vec::new();
+                children.push(node.anchor());
+                if let Some(step) = node.step() {
+                    children.push(step);
+                }
+                children
+            }
             PlanNodeEnum::PassThrough(_) => vec![],
             PlanNodeEnum::Select(node) => {
                 let mut children = Vec::new();
@@ -300,6 +310,18 @@ impl PlanNodeEnum {
                 }
                 if let Some(child) = children.into_iter().next() {
                     node.set_body(child);
+                }
+                Ok(())
+            }
+            PlanNodeEnum::RecursiveCte(node) => {
+                // Children are [anchor, step?], mirroring `children()`.
+                if children.is_empty() || children.len() > 2 {
+                    return Err("set_children: RecursiveCte expects 1 or 2 children".to_string());
+                }
+                let mut children = children.into_iter();
+                node.set_anchor(children.next().expect("checked length"));
+                if let Some(step) = children.next() {
+                    node.set_step(step);
                 }
                 Ok(())
             }

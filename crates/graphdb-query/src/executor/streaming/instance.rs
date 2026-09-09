@@ -108,6 +108,10 @@ pub struct QueryBindings {
     /// the policy when the query finishes (columnar auto-detection).
     /// Injected by the pipeline from the optimizer engine.
     pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
+    /// Macro catalog manager (user-defined macros), shared engine-wide.
+    pub macro_manager: Option<Arc<graphdb_core::metadata::MacroManager>>,
+    /// Type-alias catalog manager (user-defined types), shared engine-wide.
+    pub type_alias_manager: Option<Arc<graphdb_core::metadata::TypeAliasManager>>,
     pub search: crate::executor::base::SearchContext,
 }
 
@@ -149,6 +153,8 @@ impl QueryBindings {
             arena: context.arena.clone(),
             feedback_history: context.feedback_history.clone(),
             columnar_policy: context.columnar_policy.clone(),
+            macro_manager: context.macro_manager.clone(),
+            type_alias_manager: context.type_alias_manager.clone(),
             search: context.search.clone(),
         }
     }

@@ -11,7 +11,8 @@ use common::TestStorage;
 
 use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{DataType, StatsManager, Value, Vertex};
+use graphdb_core::{DataType, Value, Vertex};
+use graphdb_metrics::StatsManager;
 use graphdb_query::executor::base::ExecutionResult;
 use graphdb_query::optimizer::{OptimizerEngine, PartitioningConfig};
 use graphdb_query::pipeline::QueryPipelineManager;

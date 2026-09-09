@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::planning::plan::execution_plan::PartitionSpec;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 
 use super::config::{CachePriority, PlanCacheConfig};
 use super::stats::PlanCacheStats;

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::parser::ast::stmt::Ast;
 use crate::parser::ast::Stmt;
-use graphdb_core::metadata::SchemaManager;
+use graphdb_core::metadata::{MacroManager, SchemaManager};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::DBResult;
 
@@ -26,9 +26,15 @@ use crate::executor::streaming::interner::StrInterner;
 pub struct Binder {
     scope: BinderScope,
     schema_manager: Option<Arc<SchemaManager>>,
+    pub(crate) macro_manager: Option<Arc<MacroManager>>,
     space_name: Option<String>,
     space_id: u64,
     interner: StrInterner,
+    /// Stack of macro names currently being expanded (recursion guard).
+    pub(crate) expanding: Vec<String>,
+    /// Stack of enclosing CTE names whose working tables are visible to
+    /// patterns (recursive-step binding). Innermost last.
+    pub(crate) cte_stack: Vec<String>,
 }
 
 impl Binder {
@@ -36,9 +42,12 @@ impl Binder {
         Self {
             scope: BinderScope::new(),
             schema_manager: None,
+            macro_manager: None,
             space_name: None,
             space_id: 0,
             interner: StrInterner::new(),
+            expanding: Vec::new(),
+            cte_stack: Vec::new(),
         }
     }
 
@@ -300,6 +309,120 @@ mod tests {
                 ));
             }
             other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    fn bind_query_with_macros(
+        query: &str,
+        manager: Arc<graphdb_core::metadata::MacroManager>,
+    ) -> DBResult<BoundStatement> {
+        let mut parser = crate::parser::Parser::new(query);
+        let result = parser
+            .parse()
+            .map_err(|e| DBError::from(graphdb_core::error::QueryError::pipeline_parse_error(e)))?;
+        Binder::new()
+            .with_space(None, 0)
+            .with_macro_manager(manager)
+            .bind(result.ast)
+    }
+
+    fn double_macro() -> graphdb_core::metadata::MacroDef {
+        use graphdb_core::types::expr::Expression;
+        use graphdb_core::types::operators::BinaryOperator;
+        graphdb_core::metadata::MacroDef::new(
+            "double".to_string(),
+            vec![graphdb_core::metadata::MacroParamDef {
+                name: "x".to_string(),
+                default: None,
+            }],
+            Expression::Binary {
+                left: Box::new(Expression::variable("x")),
+                op: BinaryOperator::Multiply,
+                right: Box::new(Expression::literal(graphdb_core::Value::Int(2))),
+            },
+        )
+    }
+
+    #[test]
+    fn test_bind_macro_expansion() {
+        let manager = Arc::new(graphdb_core::metadata::MacroManager::new());
+        manager.create_macro(double_macro()).unwrap();
+        let bound =
+            bind_query_with_macros("RETURN double(21)", manager).expect("macro call should expand");
+        match bound {
+            BoundStatement::Return(ret) => {
+                assert_eq!(ret.items.len(), 1);
+                assert!(
+                    matches!(ret.items[0].expression, BoundExpression::BinaryOp { .. }),
+                    "macro body must expand to a binary expression"
+                );
+            }
+            other => panic!("expected Return, got {:?}", other.kind()),
+        }
+    }
+
+    #[test]
+    fn test_bind_macro_missing_arg() {
+        let manager = Arc::new(graphdb_core::metadata::MacroManager::new());
+        manager.create_macro(double_macro()).unwrap();
+        let err = bind_query_with_macros("RETURN double()", manager).unwrap_err();
+        assert!(
+            err.to_string().contains("missing required argument"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_macro_recursion_rejected() {
+        use graphdb_core::types::expr::Expression;
+        let manager = Arc::new(graphdb_core::metadata::MacroManager::new());
+        manager
+            .create_macro(graphdb_core::metadata::MacroDef::new(
+                "loopm".to_string(),
+                vec![graphdb_core::metadata::MacroParamDef {
+                    name: "x".to_string(),
+                    default: None,
+                }],
+                Expression::Function {
+                    name: "loopm".to_string(),
+                    args: vec![graphdb_core::types::expr::FunctionArg::positional(
+                        Expression::variable("x"),
+                    )],
+                },
+            ))
+            .unwrap();
+        let err = bind_query_with_macros("RETURN loopm(1)", manager).unwrap_err();
+        assert!(
+            err.to_string().contains("Recursive macro"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_scalar_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE t.age > SUBQUERY { MATCH (p:person) RETURN p.age } RETURN t.name",
+        )
+        .expect("scalar subquery should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::BinaryOp { right, .. } => {
+                assert!(
+                    matches!(
+                        right.as_ref(),
+                        BoundExpression::Subquery {
+                            original_body: Some(_),
+                            ..
+                        }
+                    ),
+                    "scalar subquery must keep its original body"
+                );
+            }
+            other => panic!("expected BinaryOp, got {:?}", other),
         }
     }
 }

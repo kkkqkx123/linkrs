@@ -10,6 +10,7 @@
 pub mod binder;
 pub mod cache;
 pub mod context;
+pub mod cte;
 pub mod executor;
 pub mod metadata;
 pub mod optimizer;

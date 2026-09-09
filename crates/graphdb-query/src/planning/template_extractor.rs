@@ -315,6 +315,9 @@ impl ParameterizingTransformer {
             Expression::CountSubquery { body } => {
                 Expression::count_subquery(self.transform_subquery_body(body, result))
             }
+            Expression::ScalarSubquery { body } => {
+                Expression::scalar_subquery(self.transform_subquery_body(body, result))
+            }
             Expression::Lambda { params, body } => {
                 let transformed_body = self.transform_with_params(body, result);
                 Expression::Lambda {

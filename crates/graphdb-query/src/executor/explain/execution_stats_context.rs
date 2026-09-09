@@ -9,7 +9,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 
 use crate::executor::base::ExecutorStats;
-use graphdb_core::stats::utils::micros_to_millis;
+use graphdb_metrics::utils::micros_to_millis;
 
 /// Node-level execution statistics
 #[derive(Debug, Clone)]

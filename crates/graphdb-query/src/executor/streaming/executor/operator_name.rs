@@ -32,6 +32,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             SourceOperatorKind::Argument => "Argument",
             SourceOperatorKind::GetProp { .. } => "GetProp",
             SourceOperatorKind::Start => "Start",
+            SourceOperatorKind::CteScan { .. } => "CteScan",
         },
         Unary(_, _, op) => match &op.kind {
             UnaryOperatorKind::Filter { .. } => "Filter",
@@ -105,6 +106,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             RecursiveFragmentOperatorKind::MultiShortestPath { .. } => "RecursiveMultiShortestPath",
             RecursiveFragmentOperatorKind::BFSShortest { .. } => "RecursiveBFSShortest",
             RecursiveFragmentOperatorKind::AllPaths { .. } => "RecursiveAllPaths",
+            RecursiveFragmentOperatorKind::Fixpoint { .. } => "RecursiveFixpoint",
         },
         Sink(_, _, op) => match &op.kind {
             SinkOperatorKind::CopyFrom { .. } => "CopyFrom",

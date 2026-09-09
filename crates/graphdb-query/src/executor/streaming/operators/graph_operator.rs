@@ -29,6 +29,7 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) filter_expr: &'a Option<Expression>,
     pub(super) col_names_template: Vec<String>,
     pub(super) cancel_token: Option<CancelToken>,
+    pub(super) path_semantic: Option<PathSemantic>,
 }
 
 #[derive(Debug)]

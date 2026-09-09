@@ -80,6 +80,22 @@ impl ArenaPlanAssembler {
                 Ok((fid, op_id))
             }
 
+            // ── Recursive CTE fixpoint ──────────────────────────────────────
+            PlanNodeEnum::RecursiveCte(cte_node) => {
+                let spec = build_fixpoint_spec(cte_node, exec_ctx)?;
+                let output_layout =
+                    crate::executor::streaming::slot::SlotLayout::from_names(cte_node.col_names());
+                Self::push_fixpoint_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    node.id(),
+                    spec,
+                    output_layout,
+                )
+            }
+
             // ── Unary nodes ─────────────────────────────────────────────────────
             PlanNodeEnum::Filter(filter_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -632,6 +648,8 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::MacroManage(_)
+            | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::LoadFrom(_)
             | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::FulltextManage(_)
@@ -697,4 +715,35 @@ pub(crate) fn build_subquery_runner_specs(
         });
     }
     Ok(specs)
+}
+
+/// Build a self-contained fixpoint spec from a [`RecursiveCteNode`].
+///
+/// Anchor and step roots compile exactly like expression-subquery runners
+/// (unpartitioned `sub_ctx`); the fixpoint operator materializes them at
+/// execution time and iterates the step to convergence.
+pub(crate) fn build_fixpoint_spec(
+    node: &crate::planning::plan::core::nodes::control_flow::control_flow_node::RecursiveCteNode,
+    exec_ctx: &ExecutionContext,
+) -> Result<crate::executor::streaming::operators::spec::RecursiveFragmentSpec, PlanBuildError> {
+    let mut sub_ctx = PhysicalPlanBuildContext::from_execution_context(exec_ctx);
+    sub_ctx.partition_spec = None;
+    let anchor_plan = Arc::new(PhysicalPlanBuilder::build(
+        node.anchor(),
+        &mut sub_ctx,
+        exec_ctx,
+    )?);
+    let step_plan = node
+        .step()
+        .map(|step| PhysicalPlanBuilder::build(step, &mut sub_ctx, exec_ctx).map(Arc::new))
+        .transpose()?;
+    Ok(
+        crate::executor::streaming::operators::spec::RecursiveFragmentSpec::Fixpoint {
+            cte_name: crate::cte::mangle_cte_name(node.cte_name()),
+            anchor: anchor_plan,
+            step: step_plan,
+            max_iterations: node.max_iterations(),
+            col_names: node.col_names().to_vec(),
+        },
+    )
 }

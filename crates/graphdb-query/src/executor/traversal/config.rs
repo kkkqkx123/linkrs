@@ -1,3 +1,4 @@
+use crate::parser::ast::pattern::PathSemantic;
 use graphdb_core::EdgeDirection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +50,8 @@ pub struct TraversalConfig {
     pub path_policy: PathPolicy,
     pub emit_policy: EmitPolicy,
     pub space_name: String,
+    /// Optional path constraint from a variable-length pattern.
+    pub path_semantic: Option<PathSemantic>,
 }
 
 impl TraversalConfig {
@@ -65,6 +68,7 @@ impl TraversalConfig {
             path_policy: PathPolicy::EdgeAndVertex,
             emit_policy: EmitPolicy::EveryDepth,
             space_name,
+            path_semantic: None,
         }
     }
 
@@ -87,6 +91,7 @@ impl TraversalConfig {
             path_policy: PathPolicy::VertexOnly,
             emit_policy: EmitPolicy::EveryDepth,
             space_name,
+            path_semantic: None,
         }
     }
 }

@@ -240,6 +240,11 @@ impl ChildAccessor for PlanNodeEnum {
                     None
                 }
             }
+            PlanNodeEnum::RecursiveCte(n) => match index {
+                0 => Some(n.anchor_mut()),
+                1 => n.step_mut(),
+                _ => None,
+            },
             PlanNodeEnum::Select(n) => match index {
                 0 => n.if_branch_mut().as_mut().map(|b| b.as_mut()),
                 1 => n.else_branch_mut().as_mut().map(|b| b.as_mut()),

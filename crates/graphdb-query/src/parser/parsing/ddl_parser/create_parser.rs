@@ -539,13 +539,35 @@ impl DdlParser {
             }
             let name = ctx.expect_identifier()?;
             ctx.consume_keyword("AS")?;
-            let underlying_type = self.parse_data_type(ctx)?;
+            // The underlying type is either a builtin type or a reference to
+            // another alias. Builtins parse directly; an unknown leading
+            // identifier is kept as raw alias text (DataType::Unknown) and
+            // resolved at plan time through the type-alias catalog, where
+            // cycle detection also runs.
+            let ckpt = ctx.checkpoint();
+            let leading_is_identifier =
+                matches!(ctx.current_token().kind, TokenKind::Identifier(_));
+            let (underlying_type, underlying_type_text) = match self.parse_data_type(ctx) {
+                Ok(parsed) => {
+                    let text = parsed.to_string();
+                    (parsed, text)
+                }
+                Err(parse_err) => {
+                    if !leading_is_identifier {
+                        return Err(parse_err);
+                    }
+                    ctx.restore(ckpt);
+                    let alias_name = ctx.expect_identifier()?;
+                    (DataType::Unknown, alias_name.clone())
+                }
+            };
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
             Ok(Stmt::CreateType(CreateTypeStmt {
                 span,
                 name,
                 underlying_type,
+                underlying_type_text,
                 if_not_exists,
             }))
         } else {

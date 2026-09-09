@@ -107,6 +107,12 @@ impl SourceState {
             },
             SourceSpec::IndexScan { .. } => SourceState::IndexScan { cursor: None },
             SourceSpec::Argument { .. } => SourceState::Argument,
+            // CTE scans buffer rows in the operator kind itself; the arena
+            // state only records scan identity for diagnostics.
+            SourceSpec::CteScan { col_names, .. } => SourceState::ScanVertices {
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
             SourceSpec::GetProp {
                 entity_slot,
                 prop_names,
@@ -520,6 +526,7 @@ pub enum RecursiveFragmentState {
     MultiShortestPath,
     BFSShortest,
     AllPaths,
+    Fixpoint,
 }
 
 impl RecursiveFragmentState {
@@ -535,6 +542,7 @@ impl RecursiveFragmentState {
                 RecursiveFragmentState::BFSShortest
             }
             super::spec::RecursiveFragmentSpec::AllPaths { .. } => RecursiveFragmentState::AllPaths,
+            super::spec::RecursiveFragmentSpec::Fixpoint { .. } => RecursiveFragmentState::Fixpoint,
         }
     }
 }

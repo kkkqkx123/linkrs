@@ -235,3 +235,47 @@ pub struct UpdateSequenceRedo {
     pub table_name: String,
     pub next_value: u64,
 }
+
+// ============================================================================
+// Macro / Type-alias catalog operations
+// ============================================================================
+
+/// Redo record for `CREATE MACRO`.
+///
+/// Replayed by inserting (or overwriting) the macro definition in the macro
+/// catalog; recovery is last-writer-wins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMacroRedo {
+    pub space_name: String,
+    pub name: String,
+    pub params: Vec<crate::metadata::MacroParamDef>,
+    pub body: crate::types::expr::Expression,
+}
+
+/// Redo record for `DROP MACRO`.
+///
+/// Replayed by removing the macro definition if present (idempotent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropMacroRedo {
+    pub space_name: String,
+    pub name: String,
+}
+
+/// Redo record for `CREATE TYPE` (type alias).
+///
+/// Replayed by inserting (or overwriting) the alias in the type catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTypeAliasRedo {
+    pub space_name: String,
+    pub name: String,
+    pub underlying: String,
+}
+
+/// Redo record for `DROP TYPE` (type alias).
+///
+/// Replayed by removing the alias if present (idempotent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropTypeAliasRedo {
+    pub space_name: String,
+    pub name: String,
+}

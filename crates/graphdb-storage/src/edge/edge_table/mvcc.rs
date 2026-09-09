@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_metrics_tombstone_count() {
-        use graphdb_core::stats::{MetricType, StatsManager};
+        use graphdb_metrics::{MetricType, StatsManager};
         use std::sync::Arc;
 
         let mut table = create_edge_table_with_props();

@@ -13,9 +13,9 @@ use crate::optimizer::OptimizerEngine;
 use crate::storage::QueryStorage;
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::metadata::SchemaManager;
-use graphdb_core::StatsManager;
 #[cfg(feature = "fulltext")]
 use graphdb_fulltext::manager::FulltextIndexManager;
+use graphdb_metrics::StatsManager;
 #[cfg(feature = "vector")]
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
 use graphdb_sync::SyncManager;
@@ -48,6 +48,17 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// Engine-level shared scheduler, created once and reused across queries.
     pub(crate) shared_scheduler: Option<Arc<SharedScheduler>>,
     pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
+    /// Shared macro catalog (user-defined macros), engine-wide.
+    ///
+    /// Created once with the pipeline manager and shared with every query
+    /// through the binder (expansion), parser-adjacent planning and the
+    /// execution runtime (DDL). Persistence/WAL backends can be attached by
+    /// replacing this instance before serving queries.
+    pub macro_manager: Arc<graphdb_core::metadata::MacroManager>,
+    /// Shared type-alias catalog (user-defined types), engine-wide.
+    ///
+    /// Threaded the same way as [`Self::macro_manager`].
+    pub type_alias_manager: Arc<graphdb_core::metadata::TypeAliasManager>,
     /// Serializes statistics collection to prevent concurrent re-collection.
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
@@ -124,6 +135,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_generation: Arc::new(AtomicU64::new(1)),
             query_registry: None,
             shared_scheduler: None,
+            macro_manager: Arc::new(graphdb_core::metadata::MacroManager::new()),
+            type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,
@@ -262,6 +275,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_generation: Arc::new(AtomicU64::new(1)),
             query_registry: None,
             shared_scheduler: None,
+            macro_manager: Arc::new(graphdb_core::metadata::MacroManager::new()),
+            type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,

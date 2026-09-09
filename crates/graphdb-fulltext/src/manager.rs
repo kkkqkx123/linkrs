@@ -12,7 +12,7 @@ use crate::tantivy_index::TantivySearchEngine;
 use crate::ConsistencyState;
 use graphdb_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use graphdb_core::metadata::SchemaManager;
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 
 const METADATA_FILE_NAME: &str = "fulltext_metadata.json";
 

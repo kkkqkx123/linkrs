@@ -99,6 +99,9 @@ pub mod memory_estimation;
 // Serialization support
 pub mod serializable;
 
+// Variable substitution (macro expansion)
+pub mod substitute;
+
 // Expression traversal
 mod traverse;
 
@@ -122,6 +125,7 @@ pub use def::FunctionArg;
 pub use def::SubqueryBody;
 pub use expression::{ExpressionId, ExpressionMeta};
 pub use serializable::SerializableExpression;
+pub use substitute::substitute_variables;
 
 // Unified Export - Visitor pattern
 pub use expression_context::{ExpressionAnalysisContext, OptimizationFlags};

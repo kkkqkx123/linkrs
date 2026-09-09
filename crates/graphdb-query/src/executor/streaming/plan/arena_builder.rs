@@ -256,6 +256,8 @@ mod tests {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            macro_manager: None,
+            type_alias_manager: None,
             search: crate::executor::base::SearchContext::default(),
         };
 

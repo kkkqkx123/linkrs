@@ -287,6 +287,14 @@ impl ArenaPlanAssembler {
                 let spec = build_user_manage_spec(um_node, exec_ctx)?;
                 Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
             }
+            PlanNodeEnum::MacroManage(mm_node) => {
+                let spec = build_macro_manage_spec(mm_node, exec_ctx)?;
+                Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
+            }
+            PlanNodeEnum::TypeManage(tm_node) => {
+                let spec = build_type_manage_spec(tm_node, exec_ctx)?;
+                Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
+            }
             PlanNodeEnum::ShowStats(_) => Self::push_ddl_op(
                 operators,
                 fragments,

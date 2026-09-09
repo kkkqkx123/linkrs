@@ -341,6 +341,7 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             SourceSpec::GetProp { .. } => "property_lookup".to_string(),
             SourceSpec::StandaloneValues { .. } => "values".to_string(),
             SourceSpec::Argument { .. } | SourceSpec::Start => "seed".to_string(),
+            SourceSpec::CteScan { .. } => "cte_scan".to_string(),
         }),
         OperatorKindSpec::Join(_) => Some("hash_join".to_string()),
         OperatorKindSpec::Blocking(spec) => Some(match spec {
@@ -440,6 +441,8 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
             vertex_ids.as_ref().map(|ids| ids.len() as f64)
         }
         SourceSpec::Argument { .. } | SourceSpec::Start => Some(1.0),
+        // CTE working tables are populated at execution time.
+        SourceSpec::CteScan { .. } => None,
         SourceSpec::GetEdges { .. }
         | SourceSpec::GetNeighbors { .. }
         | SourceSpec::IndexScan { .. }
@@ -619,6 +622,9 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::AllPaths { .. }) => {
             layout_with_added_names(&input, ["path".to_string()])
         }
+        OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::Fixpoint {
+            col_names, ..
+        }) => SlotLayout::from_names(col_names),
         OperatorKindSpec::Graph(GraphSpec::BiExpand { .. } | GraphSpec::BiTraverse { .. }) => input,
         OperatorKindSpec::Fulltext(FulltextSpec::FulltextManage { .. })
         | OperatorKindSpec::Vector(VectorSpec::VectorManage { .. }) => SlotLayout::from_names(&[
@@ -646,6 +652,7 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::Start => SlotLayout::new(vec![]),
         SourceSpec::Argument { col_names } => SlotLayout::from_names(col_names),
         SourceSpec::ScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
+        SourceSpec::CteScan { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StandaloneValues { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StorageScanVertices {
             col_names,
@@ -702,6 +709,7 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::Start => "Start",
         SourceSpec::Argument { .. } => "Argument",
         SourceSpec::ScanVertices { .. } => "ScanVertices",
+        SourceSpec::CteScan { .. } => "CteScan",
         SourceSpec::StandaloneValues { .. } => "StandaloneValues",
         SourceSpec::StorageScanVertices { .. } => "StorageScanVertices",
         SourceSpec::ScanEdges { .. } => "ScanEdges",
@@ -781,6 +789,7 @@ pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &
         RecursiveFragmentSpec::MultiShortestPath { .. } => "RecursiveMultiShortestPath",
         RecursiveFragmentSpec::BFSShortest { .. } => "RecursiveBFSShortest",
         RecursiveFragmentSpec::AllPaths { .. } => "RecursiveAllPaths",
+        RecursiveFragmentSpec::Fixpoint { .. } => "RecursiveFixpoint",
     }
 }
 

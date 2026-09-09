@@ -1,5 +1,7 @@
 //! Immutable configuration for DDL operators and schema/user manage payloads.
 
+use graphdb_core::metadata::MacroParamDef;
+use graphdb_core::types::expr::Expression;
 use graphdb_core::types::user::PasswordInfo;
 use graphdb_core::types::PropertyDef;
 
@@ -137,12 +139,15 @@ pub enum SequenceManageCommand {
 }
 
 /// Macro DDL command payload.
+///
+/// The body is the parsed macro template; the binder expands macro calls
+/// before planning, so the executor only stores and lists definitions.
 #[derive(Debug, Clone)]
 pub enum MacroManageCommand {
     Create {
         macro_name: String,
-        params: Vec<String>,
-        body: String,
+        params: Vec<MacroParamDef>,
+        body: Expression,
         if_not_exists: bool,
     },
     Drop {

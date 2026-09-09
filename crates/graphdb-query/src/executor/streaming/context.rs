@@ -145,6 +145,20 @@ impl ExpressionContext for ValueRowContext {
             .execute_exists(body, self.layout.clone(), self.row.clone())
     }
 
+    fn execute_scalar_subquery(
+        &mut self,
+        body: &graphdb_core::types::expr::SubqueryBody,
+    ) -> Result<Value, ExpressionError> {
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error(
+                    "Scalar subquery execution not supported in this context",
+                )
+            })?
+            .execute_scalar(body, self.layout.clone(), self.row.clone())
+    }
+
     fn contains_subquery(
         &mut self,
         body: &graphdb_core::types::expr::SubqueryBody,
@@ -276,6 +290,20 @@ impl ExpressionContext for BorrowedRowContext<'_> {
             .execute_exists(body, self.layout.clone(), self.row.to_vec())
     }
 
+    fn execute_scalar_subquery(
+        &mut self,
+        body: &graphdb_core::types::expr::SubqueryBody,
+    ) -> Result<Value, ExpressionError> {
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error(
+                    "Scalar subquery execution not supported in this context",
+                )
+            })?
+            .execute_scalar(body, self.layout.clone(), self.row.to_vec())
+    }
+
     fn contains_subquery(
         &mut self,
         body: &graphdb_core::types::expr::SubqueryBody,
@@ -398,6 +426,22 @@ impl ExpressionContext for SplitRowContext<'_> {
                 ExpressionError::type_error("Subquery execution not supported in this context")
             })?
             .execute_exists(body, self.layout.clone(), row)
+    }
+
+    fn execute_scalar_subquery(
+        &mut self,
+        body: &graphdb_core::types::expr::SubqueryBody,
+    ) -> Result<Value, ExpressionError> {
+        let mut row = self.left.to_vec();
+        row.extend_from_slice(self.right);
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error(
+                    "Scalar subquery execution not supported in this context",
+                )
+            })?
+            .execute_scalar(body, self.layout.clone(), row)
     }
 
     fn contains_subquery(

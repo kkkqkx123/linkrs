@@ -3,7 +3,7 @@
 //! This file extends the basic result count comparison with actual content verification.
 //! It ensures that queries return identical results regardless of optimization settings.
 //!
-use graphdb_core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_query::executor::base::ExecutionResult;
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::pipeline::QueryPipelineManager;

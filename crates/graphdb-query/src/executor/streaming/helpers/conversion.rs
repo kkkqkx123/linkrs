@@ -2,7 +2,6 @@
 //!
 //! Converts between Vertex/Edge and row representations.
 
-use graphdb_core::value::NullType;
 use graphdb_core::Value;
 use graphdb_core::{Edge, Vertex};
 
@@ -23,11 +22,6 @@ pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
         row.push(value.clone());
     }
 
-    // Ensure we have at least 5 columns for compatibility
-    while row.len() < 5 {
-        row.push(Value::Null(NullType::Null));
-    }
-
     row
 }
 
@@ -43,11 +37,6 @@ pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
     // Add first 2 properties (simplified)
     for value in edge.props.values().take(2) {
         row.push(value.clone());
-    }
-
-    // Ensure we have at least 5 columns for compatibility
-    while row.len() < 5 {
-        row.push(Value::Null(NullType::Null));
     }
 
     row
@@ -99,8 +88,8 @@ mod tests {
 
         let row = vertex_to_row(&vertex);
 
-        // Verify row structure: id, vid, + at least 3 null properties
-        assert!(row.len() >= 5);
+        // Verify row structure: id and vid form the base layout.
+        assert_eq!(row.len(), 2);
         assert_eq!(row[0], Value::BigInt(123));
     }
 
@@ -116,8 +105,8 @@ mod tests {
 
         let row = edge_to_row(&edge);
 
-        // Verify row structure: src, dst, edge_type, ranking, + at least 1 property
-        assert!(row.len() >= 5);
+        // Verify row structure: src, dst, edge_type, ranking.
+        assert_eq!(row.len(), 4);
         assert_eq!(row[2], Value::string("follows"));
         assert_eq!(row[3], Value::BigInt(42));
     }

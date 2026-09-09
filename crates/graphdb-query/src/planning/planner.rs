@@ -260,6 +260,11 @@ impl PlannerEnum {
             Stmt::LoadFrom(_) | Stmt::InQueryCall(_) => {
                 Some(PlannerEnum::Maintain(MaintainPlanner::new()))
             }
+            // Catalog DDL statements are planned by the MaintainPlanner into
+            // MacroManage / TypeManage plan nodes.
+            Stmt::CreateMacro(_) | Stmt::DropMacro(_) | Stmt::CreateType(_) | Stmt::DropType(_) => {
+                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
+            }
             // The type of the following sentence does not currently support direct planning.
             _ => None,
         }

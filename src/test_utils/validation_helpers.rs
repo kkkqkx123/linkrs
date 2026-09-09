@@ -18,7 +18,7 @@ pub struct ValidationHelper<S: crate::storage::StorageClient + 'static> {
 impl<S: crate::storage::StorageClient + 'static> ValidationHelper<S> {
     /// Create a new validation helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
-        use crate::core::stats::StatsManager;
+        use graphdb_metrics::StatsManager;
         use crate::query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 

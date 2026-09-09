@@ -452,6 +452,14 @@ impl ReferenceCountAnalyzer {
                 }
                 total
             }
+            PlanNodeEnum::RecursiveCte(n) => {
+                let mut total = 1; // Current node
+                total += self.analyze_recursive(n.anchor(), context, Some(node_id));
+                if let Some(step) = n.step() {
+                    total += self.analyze_recursive(step, context, Some(node_id));
+                }
+                total
+            }
 
             // Zero-input nodes (leaf nodes)
             _ => 1, // Only the current node.

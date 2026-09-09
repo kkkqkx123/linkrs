@@ -100,6 +100,9 @@ pub struct ParseContext<'a> {
     max_recursion_depth: usize,
     expr_context: Arc<ExpressionAnalysisContext>,
     recovery_count: usize,
+    /// Shared user-defined type-alias catalog. When set, unknown type names
+    /// resolve through aliases (`CAST(x AS alias)`, DDL column types).
+    type_alias_manager: Option<Arc<graphdb_core::metadata::TypeAliasManager>>,
 }
 
 pub struct ParseContextCheckpoint {
@@ -126,6 +129,7 @@ impl<'a> ParseContext<'a> {
             max_recursion_depth: 100,
             expr_context,
             recovery_count: 0,
+            type_alias_manager: None,
         }
     }
 
@@ -146,6 +150,7 @@ impl<'a> ParseContext<'a> {
             max_recursion_depth: 100,
             expr_context,
             recovery_count: 0,
+            type_alias_manager: None,
         }
     }
 
@@ -169,6 +174,26 @@ impl<'a> ParseContext<'a> {
 
     pub fn expression_context(&self) -> &Arc<ExpressionAnalysisContext> {
         &self.expr_context
+    }
+
+    /// Attach the shared user-defined type-alias catalog.
+    pub fn set_type_alias_manager(
+        &mut self,
+        manager: Arc<graphdb_core::metadata::TypeAliasManager>,
+    ) {
+        self.type_alias_manager = Some(manager);
+    }
+
+    /// Resolve a raw type name through builtin types, then user-defined
+    /// aliases. Returns `None` when the name denotes neither.
+    pub fn resolve_named_type(&self, name: &str) -> Option<graphdb_core::DataType> {
+        if let Ok(builtin) = name.parse::<graphdb_core::DataType>() {
+            return Some(builtin);
+        }
+        let manager = self.type_alias_manager.as_ref()?;
+        manager
+            .resolve(name, &|text| text.parse::<graphdb_core::DataType>().ok())
+            .ok()
     }
 
     pub fn expression_context_clone(&self) -> Arc<ExpressionAnalysisContext> {

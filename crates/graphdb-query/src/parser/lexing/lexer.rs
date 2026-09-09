@@ -418,6 +418,7 @@ impl<'a> Lexer<'a> {
             "ALTER" => Tk::Alter,
             "IF" => Tk::If,
             "EXISTS" => Tk::Exists,
+            "SUBQUERY" => Tk::Subquery,
             "CHANGE" => Tk::Change,
             "CREATEUSER" => Tk::CreateUser,
             "ALTERUSER" => Tk::AlterUser,

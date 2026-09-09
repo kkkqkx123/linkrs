@@ -62,6 +62,31 @@ pub enum RecursiveFragmentOperatorKind {
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
     },
+    Fixpoint {
+        /// Mangled CTE tag identifying the working table on the runtime.
+        cte_name: String,
+        /// Anchor sub-plan (runs once, seeds the working table).
+        anchor: Arc<crate::executor::streaming::plan::types::PhysicalPlan>,
+        /// Step sub-plan (re-runs per iteration over the delta).
+        step: Option<Arc<crate::executor::streaming::plan::types::PhysicalPlan>>,
+        /// Fixpoint iteration cap (errors when exceeded).
+        max_iterations: u64,
+        /// Output column names (single column in V1).
+        col_names: Vec<String>,
+        /// Lazily materialized child executors, reused across iterations.
+        state: FixpointState,
+    },
+}
+
+/// Mutable fixpoint execution state, owned by the operator.
+///
+/// Sub-plan executors are built and dropped inside a single `run_fixpoint`
+/// call; only the converged result is retained here.
+#[derive(Debug, Default)]
+pub struct FixpointState {
+    /// Final converged rows once computed; served chunk by chunk.
+    output: Option<Vec<Vec<Value>>>,
+    output_pos: usize,
 }
 
 /// Recursive fragment operator.
@@ -152,6 +177,20 @@ impl RecursiveFragmentOperator {
                 offset: *offset,
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
+            },
+            RecursiveFragmentSpec::Fixpoint {
+                cte_name,
+                anchor,
+                step,
+                max_iterations,
+                col_names,
+            } => RecursiveFragmentOperatorKind::Fixpoint {
+                cte_name: cte_name.clone(),
+                anchor: anchor.clone(),
+                step: step.clone(),
+                max_iterations: *max_iterations,
+                col_names: col_names.clone(),
+                state: FixpointState::default(),
             },
         };
         Self::new(kind, output_layout)
@@ -555,6 +594,7 @@ impl RecursiveFragmentOperator {
                     return Ok(Some(chunk));
                 }
             },
+            RecursiveFragmentOperatorKind::Fixpoint { .. } => self.next_fixpoint(),
         }
     }
 
@@ -590,11 +630,191 @@ impl RecursiveFragmentOperator {
                 *target_storage = storage;
                 *target_space = space_name;
             }
+            RecursiveFragmentOperatorKind::Fixpoint { .. } => {
+                // Child sub-plans inherit storage from the shared runtime at
+                // materialization time; nothing to rebind here.
+            }
         }
     }
 
     pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
+    }
+
+    /// Serve the converged fixpoint rows chunk by chunk, computing them on
+    /// first call. The (ignored) fragment input is never advanced: fixpoint
+    /// fragments are always built over a `Start` source.
+    fn next_fixpoint(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        let (cte_name, anchor, step, max_iterations, state, output_layout, chunk_size) =
+            match &mut self.kind {
+                RecursiveFragmentOperatorKind::Fixpoint {
+                    cte_name,
+                    anchor,
+                    step,
+                    max_iterations,
+                    state,
+                    ..
+                } => (
+                    cte_name.clone(),
+                    anchor.clone(),
+                    step.clone(),
+                    *max_iterations,
+                    state,
+                    Arc::clone(&self.output_layout),
+                    self.config.chunk_size,
+                ),
+                _ => {
+                    return Err(QueryError::execution(
+                        "next_fixpoint called for a non-fixpoint fragment".to_string(),
+                    ));
+                }
+            };
+        let runtime = self.runtime.clone().ok_or_else(|| {
+            QueryError::execution("Fixpoint execution requires a runtime".to_string())
+        })?;
+
+        if state.output.is_none() {
+            let rows =
+                Self::run_fixpoint(&runtime, &cte_name, &anchor, step.as_ref(), max_iterations)?;
+            state.output = Some(rows);
+        }
+        let output = state.output.as_ref().expect("computed above");
+        if state.output_pos >= output.len() {
+            return Ok(None);
+        }
+        let end = (state.output_pos + chunk_size).min(output.len());
+        let rows = output[state.output_pos..end].to_vec();
+        state.output_pos = end;
+        Ok(Some(DataChunk::new_with_layout(rows, output_layout)))
+    }
+
+    /// Run anchor once, then iterate the step over successive deltas until
+    /// no new rows appear or `max_iterations` is exceeded.
+    fn run_fixpoint(
+        runtime: &Arc<ExecutionRuntime>,
+        cte_name: &str,
+        anchor: &Arc<crate::executor::streaming::plan::types::PhysicalPlan>,
+        step: Option<&Arc<crate::executor::streaming::plan::types::PhysicalPlan>>,
+        max_iterations: u64,
+    ) -> Result<Vec<Vec<Value>>, QueryError> {
+        let bindings = Arc::new(Self::child_bindings(runtime));
+
+        let mut anchor_exec = Self::materialize_child(runtime, &bindings, anchor)?;
+        let anchor_rows = Self::collect_all(&mut anchor_exec)?;
+
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut seen_rows: Vec<Vec<Value>> = Vec::new();
+        for row in anchor_rows {
+            let key = postcard::to_allocvec(&row).map_err(|e| {
+                QueryError::execution(format!("Fixpoint row serialization failed: {e}"))
+            })?;
+            if seen_keys.insert(key) {
+                seen_rows.push(row);
+            }
+        }
+
+        let Some(step_plan) = step else {
+            // Non-recursive CTE: the anchor output is the whole result.
+            return Ok(seen_rows);
+        };
+
+        let mut step_exec = Self::materialize_child(runtime, &bindings, step_plan)?;
+        let mut delta: Vec<Vec<Value>> = seen_rows.clone();
+        for _ in 0..max_iterations {
+            runtime.ensure_not_cancelled()?;
+            if delta.is_empty() {
+                runtime.clear_cte_table(cte_name);
+                return Ok(seen_rows);
+            }
+            runtime.set_cte_table(cte_name, delta);
+            step_exec.reset()?;
+            let step_rows = Self::collect_all(&mut step_exec)?;
+            let mut next_delta = Vec::new();
+            for row in step_rows {
+                let key = postcard::to_allocvec(&row).map_err(|e| {
+                    QueryError::execution(format!("Fixpoint row serialization failed: {e}"))
+                })?;
+                if seen_keys.insert(key) {
+                    next_delta.push(row.clone());
+                    seen_rows.push(row);
+                }
+            }
+            delta = next_delta;
+        }
+        runtime.clear_cte_table(cte_name);
+        if delta.is_empty() {
+            Ok(seen_rows)
+        } else {
+            Err(QueryError::execution(format!(
+                "Recursive CTE did not converge within {max_iterations} iterations"
+            )))
+        }
+    }
+
+    /// Materialize a child sub-plan, inheriting the parent runtime (storage,
+    /// cancellation, parameters, CTE tables) like expression subqueries do.
+    fn materialize_child(
+        runtime: &Arc<ExecutionRuntime>,
+        bindings: &Arc<crate::executor::streaming::instance::QueryBindings>,
+        plan: &Arc<crate::executor::streaming::plan::types::PhysicalPlan>,
+    ) -> Result<StreamingExecutor, QueryError> {
+        use crate::executor::streaming::plan::materializer::PhysicalPlanMaterializer;
+
+        let (mut exec, _) = PhysicalPlanMaterializer::materialize(plan, bindings)?;
+        exec.set_chunk_size(bindings.chunk_size);
+        exec.set_runtime(Some(runtime.clone()));
+        exec.open()?;
+        Ok(exec)
+    }
+
+    /// Run an executor to completion, collecting every output row.
+    fn collect_all(exec: &mut StreamingExecutor) -> Result<Vec<Vec<Value>>, QueryError> {
+        let mut rows = Vec::new();
+        exec.reset()?;
+        while let Some(mut chunk) = exec.advance()? {
+            chunk.normalize_for_opaque("RecursiveFixpoint");
+            rows.extend(chunk.rows.drain(..));
+        }
+        Ok(rows)
+    }
+
+    /// Child bindings for fixpoint sub-plans, derived from the parent
+    /// runtime. Serial execution (`max_workers = 1`): fixpoint fragments are
+    /// never partitioned.
+    fn child_bindings(
+        runtime: &Arc<ExecutionRuntime>,
+    ) -> crate::executor::streaming::instance::QueryBindings {
+        use crate::executor::streaming::instance::QueryBindings;
+        use crate::executor::streaming::transaction_scope::TransactionScope;
+
+        let identity = runtime.query_id();
+        QueryBindings {
+            parameters: runtime.parameter_values.clone().unwrap_or_default(),
+            session_variables: runtime.session_variable_values.clone().unwrap_or_default(),
+            parameter_frame: None,
+            space_name: identity.space_name.clone(),
+            storage: runtime.storage.clone(),
+            bound_snapshot: None,
+            memory_budget: runtime.memory_budget.clone(),
+            max_workers: 1,
+            chunk_size: crate::executor::base::ExecutionContext::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks:
+                crate::executor::base::ExecutionContext::DEFAULT_MAX_BUFFERED_CHUNKS,
+            query_id: identity.query_id,
+            cancel_token: Some(runtime.cancel_token()),
+            query_text: None,
+            session_id: identity.session_id.clone(),
+            user_name: None,
+            transaction: TransactionScope::None,
+            shared_scheduler: None,
+            partition_count: 0,
+            arena: runtime.arena.clone(),
+            feedback_history: None,
+            columnar_policy: None,
+            macro_manager: runtime.macro_manager.clone(),
+            type_alias_manager: runtime.type_alias_manager.clone(),
+            search: runtime.search.clone(),
+        }
     }
 
     /// Reset per-run graph-algorithm state and rewind the input. All state

@@ -8,7 +8,7 @@ use crate::storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
 };
 use graphdb_core::metadata::SchemaManager;
-use graphdb_core::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb_query::executor::streaming::pool::SharedScheduler;
 use graphdb_query::executor::streaming::query_registry::QueryRegistry;
 use graphdb_query::executor::streaming::StreamingQueryResult;

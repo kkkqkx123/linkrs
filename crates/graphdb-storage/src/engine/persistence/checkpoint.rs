@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use graphdb_core::stats::CheckpointTriggerReason;
+use graphdb_metrics::CheckpointTriggerReason;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_sync::checkpoint_manifest::{

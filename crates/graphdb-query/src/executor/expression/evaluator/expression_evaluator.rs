@@ -66,6 +66,9 @@ impl ExpressionEvaluator {
 
             // Function calls – Parameter evaluation in batch
             Expression::Function { name, args } => {
+                if let Some(value) = Self::evaluate_higher_order(name, args, context)? {
+                    return Ok(value);
+                }
                 let arg_values: Result<Vec<Value>, ExpressionError> = args
                     .iter()
                     .map(|arg| Self::evaluate_recursive(arg.as_expr(), context))
@@ -333,10 +336,158 @@ impl ExpressionEvaluator {
                 let results = context.execute_subquery(body)?;
                 Ok(Value::Int(results.len() as i32))
             }
+            Expression::ScalarSubquery { body } => {
+                // First result value, or NULL when the subquery is empty.
+                context.execute_scalar_subquery(body)
+            }
             Expression::Lambda { .. } => Err(ExpressionError::type_error(
                 "Lambda expression cannot be evaluated directly; \
                  use it as an argument to a higher-order function like list_transform or list_filter",
             )),
+        }
+    }
+
+    fn evaluate_higher_order<C: ExpressionContext>(
+        name: &str,
+        args: &[graphdb_core::types::expr::FunctionArg],
+        context: &mut C,
+    ) -> Result<Option<Value>, ExpressionError> {
+        let lower = name.to_ascii_lowercase();
+        if !matches!(
+            lower.as_str(),
+            "list_filter"
+                | "list_transform"
+                | "list_any"
+                | "list_all"
+                | "list_single"
+                | "list_reduce"
+        ) {
+            return Ok(None);
+        }
+        // Only intercept the lambda form. Legacy mask calls such as
+        // `list_filter(list, mask)` carry no Lambda and must fall through
+        // to the normal eager path so context-local functions, storage
+        // and named-argument handling stay intact.
+        let lambda_pos = args
+            .iter()
+            .position(|a| matches!(a.as_expr(), Expression::Lambda { .. }));
+        let Some(lambda_index) = lambda_pos else {
+            return Ok(None);
+        };
+        // Unified signature places the lambda at index 1:
+        // `list_filter(source, lambda)`, `list_reduce(source, lambda, initial)`.
+        // Named arguments still preserve positions, so enforce the position
+        // instead of silently accepting permuted orders.
+        if lambda_index != 1 {
+            return Err(ExpressionError::type_error(format!(
+                "{name} expects the lambda as the second argument"
+            )));
+        }
+        let Some(source_expr) = args.first().map(|a| a.as_expr()) else {
+            return Err(ExpressionError::type_error(format!(
+                "{name} requires a list as first argument"
+            )));
+        };
+        let source = Self::evaluate_recursive(source_expr, context)?;
+        // NULL source propagates NULL, matching REDUCE and comprehension semantics.
+        if matches!(source, Value::Null(_)) {
+            return Ok(Some(Value::Null(NullType::Null)));
+        }
+        let Value::List(list) = source else {
+            return Err(ExpressionError::type_error(format!(
+                "{name} requires a list as first argument"
+            )));
+        };
+        let Expression::Lambda { params, body } = args[lambda_index].as_expr() else {
+            return Ok(None);
+        };
+
+        if lower == "list_reduce" {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(ExpressionError::type_error(
+                    "list_reduce requires (source, lambda, initial)".to_string(),
+                ));
+            }
+            if params.len() != 2 {
+                return Err(ExpressionError::type_error(
+                    "list_reduce lambda requires two parameters (acc, item)".to_string(),
+                ));
+            }
+            let initial = args
+                .get(2)
+                .map(|a| Self::evaluate_recursive(a.as_expr(), context))
+                .transpose()?
+                .unwrap_or(Value::Null(NullType::Null));
+            let mut acc = initial;
+            for item in list.values {
+                context.set_variable(params[0].clone(), acc.clone());
+                context.set_variable(params[1].clone(), item);
+                acc = Self::evaluate_recursive(body, context)?;
+            }
+            return Ok(Some(acc));
+        }
+
+        if args.len() != 2 {
+            return Err(ExpressionError::type_error(format!(
+                "{name} requires (source, lambda)"
+            )));
+        }
+        if params.is_empty() {
+            return Err(ExpressionError::type_error(format!(
+                "{name} lambda requires a parameter"
+            )));
+        }
+        let param = params[0].clone();
+        match lower.as_str() {
+            "list_filter" => {
+                let mut kept = Vec::new();
+                for item in list.values {
+                    context.set_variable(param.clone(), item.clone());
+                    match Self::evaluate_recursive(body, context)? {
+                        Value::Bool(true) => kept.push(item),
+                        Value::Bool(false) | Value::Null(_) => {}
+                        other => {
+                            return Err(ExpressionError::type_error(format!(
+                                "list_filter lambda must return boolean, got {:?}",
+                                other.get_type()
+                            )))
+                        }
+                    }
+                }
+                Ok(Some(Value::list(List::from(kept))))
+            }
+            "list_transform" => {
+                let mut out = Vec::with_capacity(list.values.len());
+                for item in list.values {
+                    context.set_variable(param.clone(), item);
+                    out.push(Self::evaluate_recursive(body, context)?);
+                }
+                Ok(Some(Value::list(List::from(out))))
+            }
+            "list_any" | "list_all" | "list_single" => {
+                let mut matched = 0usize;
+                let total = list.values.len();
+                for item in list.values {
+                    context.set_variable(param.clone(), item);
+                    match Self::evaluate_recursive(body, context)? {
+                        Value::Bool(true) => matched += 1,
+                        Value::Bool(false) | Value::Null(_) => {}
+                        other => {
+                            return Err(ExpressionError::type_error(format!(
+                                "{name} lambda must return boolean, got {:?}",
+                                other.get_type()
+                            )))
+                        }
+                    }
+                }
+                let result = match lower.as_str() {
+                    "list_any" => matched > 0,
+                    "list_all" => matched == total,
+                    _ => matched == 1,
+                };
+                Ok(Some(Value::Bool(result)))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -436,5 +587,290 @@ impl ExpressionEvaluator {
         } else {
             Ok(result)
         }
+    }
+}
+
+#[cfg(test)]
+mod higher_order_tests {
+    use super::*;
+    use crate::executor::expression::evaluation_context::DefaultExpressionContext;
+    use graphdb_core::types::expr::FunctionArg;
+    use graphdb_core::types::operators::BinaryOperator;
+
+    fn int_list(values: Vec<i32>) -> Expression {
+        Expression::List(values.into_iter().map(Expression::int).collect())
+    }
+
+    fn lambda_two_body() -> Expression {
+        Expression::lambda(
+            vec!["acc".to_string(), "x".to_string()],
+            Expression::binary(
+                Expression::variable("acc"),
+                BinaryOperator::Add,
+                Expression::variable("x"),
+            ),
+        )
+    }
+
+    fn eval_function(name: &str, args: Vec<FunctionArg>) -> Result<Value, ExpressionError> {
+        let expr = Expression::Function {
+            name: name.to_string(),
+            args,
+        };
+        let mut ctx = DefaultExpressionContext::new();
+        ExpressionEvaluator::evaluate(&expr, &mut ctx)
+    }
+
+    #[test]
+    fn list_reduce_sums_ints() {
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(int_list(vec![1, 2, 3])),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::int(0)),
+            ],
+        )
+        .expect("reduce ints");
+        assert_eq!(result, Value::Int(6));
+    }
+
+    #[test]
+    fn list_reduce_concatenates_strings() {
+        let source = Expression::List(vec![Expression::string("a"), Expression::string("b")]);
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(source),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::string("")),
+            ],
+        )
+        .expect("reduce strings");
+        assert_eq!(result, Value::string("ab"));
+    }
+
+    #[test]
+    fn list_reduce_adds_floats() {
+        let source = Expression::List(vec![Expression::int(1), Expression::int(2)]);
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(source),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::float(0.0)),
+            ],
+        )
+        .expect("reduce floats");
+        assert_eq!(result, Value::Float(3.0));
+    }
+
+    #[test]
+    fn list_reduce_empty_returns_initial() {
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(Expression::List(vec![])),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::int(42)),
+            ],
+        )
+        .expect("empty reduce");
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn list_reduce_null_source_returns_null() {
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(Expression::null()),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::int(0)),
+            ],
+        )
+        .expect("null reduce");
+        assert!(matches!(result, Value::Null(_)));
+    }
+
+    #[test]
+    fn list_reduce_requires_two_lambda_params() {
+        let bad = Expression::lambda(vec!["x".to_string()], Expression::variable("x"));
+        let err = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(int_list(vec![1])),
+                FunctionArg::positional(bad),
+                FunctionArg::positional(Expression::int(0)),
+            ],
+        )
+        .expect_err("single-param reduce must fail");
+        assert!(err.message.contains("two parameters"), "{}", err.message);
+    }
+
+    #[test]
+    fn list_filter_applies_lambda_per_element() {
+        let lambda = Expression::lambda(
+            vec!["x".to_string()],
+            Expression::binary(
+                Expression::variable("x"),
+                BinaryOperator::GreaterThan,
+                Expression::int(1),
+            ),
+        );
+        let result = eval_function(
+            "list_filter",
+            vec![
+                FunctionArg::positional(int_list(vec![1, 2, 3])),
+                FunctionArg::positional(lambda),
+            ],
+        )
+        .expect("filter");
+        assert_eq!(
+            result,
+            Value::list(List::from(vec![Value::Int(2), Value::Int(3)]))
+        );
+    }
+
+    #[test]
+    fn list_transform_applies_lambda_per_element() {
+        let lambda = Expression::lambda(
+            vec!["x".to_string()],
+            Expression::binary(
+                Expression::variable("x"),
+                BinaryOperator::Multiply,
+                Expression::int(2),
+            ),
+        );
+        let result = eval_function(
+            "list_transform",
+            vec![
+                FunctionArg::positional(int_list(vec![1, 2])),
+                FunctionArg::positional(lambda),
+            ],
+        )
+        .expect("transform");
+        assert_eq!(
+            result,
+            Value::list(List::from(vec![Value::Int(2), Value::Int(4)]))
+        );
+    }
+
+    #[test]
+    fn list_any_all_single_use_lambda_truth() {
+        let gt_one = || {
+            Expression::lambda(
+                vec!["x".to_string()],
+                Expression::binary(
+                    Expression::variable("x"),
+                    BinaryOperator::GreaterThan,
+                    Expression::int(1),
+                ),
+            )
+        };
+        let source = || int_list(vec![1, 2, 3]);
+        let any = eval_function(
+            "list_any",
+            vec![
+                FunctionArg::positional(source()),
+                FunctionArg::positional(gt_one()),
+            ],
+        )
+        .expect("any");
+        assert_eq!(any, Value::Bool(true));
+        let all = eval_function(
+            "list_all",
+            vec![
+                FunctionArg::positional(source()),
+                FunctionArg::positional(gt_one()),
+            ],
+        )
+        .expect("all");
+        assert_eq!(all, Value::Bool(false));
+        let gt_two = Expression::lambda(
+            vec!["x".to_string()],
+            Expression::binary(
+                Expression::variable("x"),
+                BinaryOperator::GreaterThan,
+                Expression::int(2),
+            ),
+        );
+        let single = eval_function(
+            "list_single",
+            vec![
+                FunctionArg::positional(source()),
+                FunctionArg::positional(gt_two),
+            ],
+        )
+        .expect("single");
+        assert_eq!(single, Value::Bool(true));
+    }
+
+    #[test]
+    fn list_reduce_supports_smallint_with_wrapping_overflow() {
+        let source = Expression::List(vec![
+            Expression::Literal(Value::SmallInt(1)),
+            Expression::Literal(Value::SmallInt(2)),
+        ]);
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(source),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::Literal(Value::SmallInt(0))),
+            ],
+        )
+        .expect("reduce smallint");
+        assert_eq!(result, Value::SmallInt(3));
+        // Overflow wraps rather than erroring, matching integer arithmetic.
+        let overflowing = Expression::List(vec![Expression::Literal(Value::Int(i32::MAX))]);
+        let wrapped = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(overflowing),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::int(1)),
+            ],
+        )
+        .expect("wrapping overflow");
+        assert_eq!(wrapped, Value::Int(i32::MIN));
+    }
+
+    #[test]
+    fn list_reduce_supports_decimal() {
+        use graphdb_core::value::Decimal128Value;
+        let dec = |n: i64| Expression::Literal(Value::Decimal128(Decimal128Value::from_i64(n)));
+        let source = Expression::List(vec![dec(1), dec(2)]);
+        let result = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(source),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(dec(0)),
+            ],
+        )
+        .expect("reduce decimal");
+        assert_eq!(result, Value::Decimal128(Decimal128Value::from_i64(3)));
+    }
+
+    #[test]
+    fn list_reduce_null_element_surfaces_type_error() {
+        // NULL has no addition rule, so the lambda body error propagates
+        // instead of being silently skipped.
+        let source = Expression::List(vec![Expression::int(1), Expression::null()]);
+        let err = eval_function(
+            "list_reduce",
+            vec![
+                FunctionArg::positional(source),
+                FunctionArg::positional(lambda_two_body()),
+                FunctionArg::positional(Expression::int(0)),
+            ],
+        )
+        .expect_err("null element must error");
+        assert!(
+            err.message.contains("Cannot perform addition"),
+            "{}",
+            err.message
+        );
     }
 }

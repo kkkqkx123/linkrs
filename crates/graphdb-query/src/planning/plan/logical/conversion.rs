@@ -496,6 +496,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     src_vids: n.src_vids().to_vec(),
                     include_empty_paths: n.include_empty_paths(),
                     input_var: n.get_input_var().map(|s| s.to_string()),
+                    path_semantic: n.path_semantic(),
                     deps,
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),

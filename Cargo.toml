@@ -165,6 +165,7 @@ required-features = ["server"]
 
 [dependencies]
 graphdb-core = { path = "crates/graphdb-core" }
+graphdb-metrics = { path = "crates/graphdb-metrics" }
 graphdb-config = { path = "crates/graphdb-config" }
 graphdb-fulltext = { path = "crates/graphdb-fulltext" }
 graphdb-sync = { path = "crates/graphdb-sync" }
