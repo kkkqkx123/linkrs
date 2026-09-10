@@ -348,3 +348,125 @@ pub unsafe extern "C" fn graphdb_context_arg_count(context: *mut graphdb_context
     }
     (*context).inner.argc as c_int
 }
+
+/// Load a UDF dynamic library and register the exported function.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `path`: Null-terminated UTF-8 path to the `.so` / `.dylib` / `.dll` file
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `graphdb_session_create`
+/// - `path` must be a valid pointer to a null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_load_extension(
+    session: *mut graphdb_session_t,
+    path: *const c_char,
+) -> c_int {
+    if session.is_null() || path.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+    let path_str = unsafe {
+        match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
+        }
+    };
+    unsafe {
+        let handle = &*(session as *mut GraphDbSessionHandle);
+        if let Err(e) = handle.inner.load_extension(std::path::Path::new(path_str)) {
+            error!("Load extension failed: {:?}", e);
+            return graphdb_error_code_t::GRAPHDB_ERROR as c_int;
+        }
+    }
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
+/// Unload a previously loaded dynamic UDF by function name.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `name`: Null-terminated UTF-8 function name
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `graphdb_session_create`
+/// - `name` must be a valid pointer to a null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_unload_extension(
+    session: *mut graphdb_session_t,
+    name: *const c_char,
+) -> c_int {
+    if session.is_null() || name.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+    let name_str = unsafe {
+        match CStr::from_ptr(name).to_str() {
+            Ok(s) => s,
+            Err(_) => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
+        }
+    };
+    unsafe {
+        let handle = &*(session as *mut GraphDbSessionHandle);
+        if let Err(e) = handle.inner.unload_extension(name_str) {
+            error!("Unload extension failed: {:?}", e);
+            return graphdb_error_code_t::GRAPHDB_ERROR as c_int;
+        }
+    }
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
+/// Reload a dynamic UDF from its original library path.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `name`: Null-terminated UTF-8 function name
+/// - `reloaded`: Out-parameter set to 1 when the library was reloaded,
+///   0 when the file is unchanged and reloading was skipped
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `graphdb_session_create`
+/// - `name` must be a valid pointer to a null-terminated UTF-8 string
+/// - `reloaded` must be a valid writable pointer (may be NULL to ignore)
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_reload_extension(
+    session: *mut graphdb_session_t,
+    name: *const c_char,
+    reloaded: *mut c_int,
+) -> c_int {
+    if session.is_null() || name.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+    let name_str = unsafe {
+        match CStr::from_ptr(name).to_str() {
+            Ok(s) => s,
+            Err(_) => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
+        }
+    };
+    unsafe {
+        let handle = &*(session as *mut GraphDbSessionHandle);
+        match handle.inner.reload_extension(name_str) {
+            Ok(did_reload) => {
+                if !reloaded.is_null() {
+                    *reloaded = i32::from(did_reload);
+                }
+            }
+            Err(e) => {
+                error!("Reload extension failed: {:?}", e);
+                return graphdb_error_code_t::GRAPHDB_ERROR as c_int;
+            }
+        }
+    }
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}

@@ -37,7 +37,13 @@ impl StmtParser {
             return Self::parse_checkpoint_statement(ctx);
         }
         if ctx.check_keyword("LOAD") {
+            if ctx.check_keyword_sequence(&["LOAD", "EXTENSION"]) {
+                return Self::parse_extension_statement(ctx);
+            }
             return Self::parse_load_from_statement(ctx);
+        }
+        if ctx.check_keyword("INSTALL") || ctx.check_keyword("UNINSTALL") {
+            return Self::parse_extension_statement(ctx);
         }
         if ctx.check_keyword("CALL") {
             return Self::parse_in_query_call_statement(ctx);
@@ -64,9 +70,7 @@ impl StmtParser {
             // Data modification statements
             TokenKind::Insert => DmlParser::new().parse_insert_statement(ctx),
             TokenKind::Copy => DmlParser::new().parse_copy_statement(ctx),
-            TokenKind::Delete | TokenKind::Detach => {
-                DmlParser::new().parse_delete_statement(ctx)
-            }
+            TokenKind::Delete | TokenKind::Detach => DmlParser::new().parse_delete_statement(ctx),
             TokenKind::Update => Self::parse_update_statement_extended(ctx),
             TokenKind::Upsert => DmlParser::new().parse_upsert_statement(ctx),
             TokenKind::Merge => DmlParser::new().parse_merge_statement(ctx),
@@ -682,6 +686,53 @@ impl StmtParser {
             source,
             options,
             return_clause,
+        }))
+    }
+
+    /// Parse extension management statements:
+    /// `LOAD EXTENSION '<path>'`,
+    /// `INSTALL EXTENSION <name> FROM '<source>'`,
+    /// `UNINSTALL EXTENSION <name>`.
+    fn parse_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::parser::ast::stmt::{ExtensionAction, ExtensionStmt};
+
+        let start_span = ctx.current_span();
+        let action = if ctx.check_keyword("LOAD") {
+            ctx.consume_keyword("LOAD")?;
+            ExtensionAction::Load
+        } else if ctx.check_keyword("INSTALL") {
+            ctx.consume_keyword("INSTALL")?;
+            ExtensionAction::Install
+        } else {
+            ctx.consume_keyword("UNINSTALL")?;
+            ExtensionAction::Uninstall
+        };
+        ctx.consume_keyword("EXTENSION")?;
+
+        let (name, source) = match action {
+            ExtensionAction::Load => {
+                let path = ctx.expect_string_literal()?;
+                (path, None)
+            }
+            ExtensionAction::Install => {
+                let name = ctx.expect_identifier()?;
+                ctx.consume_keyword("FROM")?;
+                let source = ctx.expect_string_literal()?;
+                (name, Some(source))
+            }
+            ExtensionAction::Uninstall => {
+                let name = ctx.expect_identifier()?;
+                (name, None)
+            }
+        };
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::Extension(ExtensionStmt {
+            span,
+            action,
+            name,
+            source,
         }))
     }
 
@@ -1653,6 +1704,60 @@ mod tests {
             result.err()
         );
         assert!(matches!(result.unwrap(), Stmt::Checkpoint(_)));
+    }
+
+    #[test]
+    fn test_parse_load_extension() {
+        let mut ctx = create_parser_context("LOAD EXTENSION '/tmp/udf_plugin.so'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LOAD EXTENSION parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::Extension(stmt)) = result {
+            assert_eq!(stmt.action, ExtensionAction::Load);
+            assert_eq!(stmt.name, "/tmp/udf_plugin.so");
+            assert!(stmt.source.is_none());
+        } else {
+            panic!("Expected Extension statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_install_extension() {
+        let mut ctx = create_parser_context("INSTALL EXTENSION my_udf FROM '/tmp/udf_plugin.so'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "INSTALL EXTENSION parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::Extension(stmt)) = result {
+            assert_eq!(stmt.action, ExtensionAction::Install);
+            assert_eq!(stmt.name, "my_udf");
+            assert_eq!(stmt.source.as_deref(), Some("/tmp/udf_plugin.so"));
+        } else {
+            panic!("Expected Extension statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_uninstall_extension() {
+        let mut ctx = create_parser_context("UNINSTALL EXTENSION my_udf");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "UNINSTALL EXTENSION parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::Extension(stmt)) = result {
+            assert_eq!(stmt.action, ExtensionAction::Uninstall);
+            assert_eq!(stmt.name, "my_udf");
+            assert!(stmt.source.is_none());
+        } else {
+            panic!("Expected Extension statement");
+        }
     }
 
     #[test]

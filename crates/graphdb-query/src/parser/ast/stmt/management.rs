@@ -264,6 +264,31 @@ pub struct ImportDatabaseStmt {
     pub path: String,
 }
 
+/// Extension management action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionAction {
+    /// `LOAD EXTENSION '<path>'`: load a UDF dynamic library.
+    Load,
+    /// `INSTALL EXTENSION <name> FROM '<source>'`: install from a local file source.
+    Install,
+    /// `UNINSTALL EXTENSION <name>`: unload a previously loaded UDF.
+    Uninstall,
+}
+
+/// `LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION` statement.
+///
+/// Extension statements are executed directly by the session layer against
+/// the function registry; they never reach the planner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensionStmt {
+    pub span: Span,
+    pub action: ExtensionAction,
+    /// Function name (install/uninstall) or library path (load).
+    pub name: String,
+    /// Install source path (`INSTALL ... FROM`). `None` for load/uninstall.
+    pub source: Option<String>,
+}
+
 pub struct StmtUtils;
 
 impl StmtUtils {

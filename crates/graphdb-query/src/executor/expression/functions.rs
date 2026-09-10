@@ -22,6 +22,7 @@
 pub mod builtin;
 pub mod registry;
 pub mod signature;
+pub mod udf;
 
 // Full-text search functions
 pub mod fulltext;
@@ -35,6 +36,7 @@ pub use builtin::sequence::SequenceFunction;
 
 pub use registry::{global_registry, global_registry_ref, FunctionRegistry};
 pub use signature::ValueType;
+pub use udf::{SharedPlugin, UdfError, UdfPlugin};
 
 /// Table function trait for functions that return rows of data.
 ///
@@ -698,7 +700,7 @@ pub type AggregateStepCallback =
 pub type AggregateFinalCallback = extern "C" fn(*mut CFunctionContext);
 
 /// Implementation of custom functions and their types
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum CustomFunctionImpl {
     /// Custom functions implemented in Rust
     Rust(fn(&[Value]) -> Result<Value, ExpressionError>),
@@ -718,6 +720,11 @@ pub enum CustomFunctionImpl {
         /// User data (storage pointer address)
         user_data: usize,
     },
+    /// A function backed by a dynamically loaded UDF plugin.
+    Dynamic {
+        /// Shared plugin handle; keeps the dynamic library alive.
+        plugin: SharedPlugin,
+    },
 }
 
 impl std::fmt::Debug for CustomFunctionImpl {
@@ -726,6 +733,9 @@ impl std::fmt::Debug for CustomFunctionImpl {
             CustomFunctionImpl::Rust(_) => write!(f, "Rust closure"),
             CustomFunctionImpl::C { .. } => write!(f, "C scalar callback"),
             CustomFunctionImpl::Aggregate { .. } => write!(f, "C aggregate callback"),
+            CustomFunctionImpl::Dynamic { plugin } => {
+                write!(f, "Dynamic UDF '{}'", plugin.name())
+            }
         }
     }
 }
@@ -807,6 +817,26 @@ impl CustomFunction {
         }
     }
 
+    /// Create a custom function backed by a dynamically loaded UDF plugin.
+    ///
+    /// Arity metadata is read from the plugin so registration stays in sync
+    /// with the library implementation.
+    pub fn new_dynamic(plugin: SharedPlugin) -> Self {
+        let (min_arity, max_arity) = (plugin.min_arity(), plugin.max_arity());
+        Self {
+            name: plugin.name().to_string(),
+            arity: min_arity,
+            is_variadic: min_arity != max_arity,
+            description: plugin.description().to_string(),
+            implementation: CustomFunctionImpl::Dynamic { plugin },
+        }
+    }
+
+    /// Check whether the function is backed by a dynamic UDF plugin.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self.implementation, CustomFunctionImpl::Dynamic { .. })
+    }
+
     /// Check whether it is an aggregate function.
     pub fn is_aggregate(&self) -> bool {
         matches!(self.implementation, CustomFunctionImpl::Aggregate { .. })
@@ -859,6 +889,9 @@ impl CustomFunction {
                 "Aggregation functions need to be executed within the aggregation context"
                     .to_string(),
             )),
+            CustomFunctionImpl::Dynamic { plugin } => {
+                crate::executor::expression::functions::udf::execute_isolated(plugin.as_ref(), args)
+            }
         }
     }
 }

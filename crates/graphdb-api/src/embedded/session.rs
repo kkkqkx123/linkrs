@@ -114,6 +114,97 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         Ok(())
     }
 
+    /// Load a UDF dynamic library and register the exported function.
+    ///
+    /// Returns the registered function name.
+    pub fn load_extension(&self, path: &std::path::Path) -> CoreResult<String> {
+        let mut registry = self.function_registry.write();
+        registry
+            .load_dynamic_udf(path)
+            .map_err(|e| CoreError::InvalidParameter(e.to_string()))
+    }
+
+    /// Unload a previously loaded dynamic UDF by function name.
+    pub fn unload_extension(&self, name: &str) -> CoreResult<()> {
+        let mut registry = self.function_registry.write();
+        registry
+            .unload_dynamic_udf(name)
+            .map_err(|e| CoreError::InvalidParameter(e.to_string()))
+    }
+
+    /// Reload a dynamic UDF from its original library path.
+    ///
+    /// Returns `true` when the library was reloaded, `false` when the file
+    /// is unchanged and reloading was skipped.
+    pub fn reload_extension(&self, name: &str) -> CoreResult<bool> {
+        let mut registry = self.function_registry.write();
+        registry
+            .reload_dynamic_udf(name)
+            .map_err(|e| CoreError::InvalidParameter(e.to_string()))
+    }
+
+    /// Install a UDF from an `INSTALL EXTENSION ... FROM` source.
+    ///
+    /// Local file paths load directly; `http(s)://` sources return a
+    /// repository-unsupported error until a repository module is added.
+    pub fn install_extension(&self, source: &str) -> CoreResult<String> {
+        let mut registry = self.function_registry.write();
+        registry
+            .install_dynamic_udf(source)
+            .map_err(|e| CoreError::InvalidParameter(e.to_string()))
+    }
+
+    /// List all loaded dynamic UDFs ordered by name.
+    pub fn list_extensions(
+        &self,
+    ) -> Vec<graphdb_query::executor::expression::functions::registry::DynamicUdfInfo> {
+        self.function_registry.read().list_dynamic_udfs()
+    }
+
+    /// Execute an extension management statement
+    /// (`LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION`).
+    ///
+    /// Extension statements run directly against the session function
+    /// registry and never reach the query planner.
+    fn execute_extension(
+        &self,
+        extension: &graphdb_query::parser::ast::stmt::ExtensionStmt,
+    ) -> CoreResult<QueryResult> {
+        use graphdb_query::parser::ast::stmt::ExtensionAction;
+        let message = match extension.action {
+            ExtensionAction::Load => {
+                let name = self.load_extension(std::path::Path::new(&extension.name))?;
+                format!("Loaded extension '{name}' from '{}'", extension.name)
+            }
+            ExtensionAction::Uninstall => {
+                self.unload_extension(&extension.name)?;
+                format!("Uninstalled extension '{}'", extension.name)
+            }
+            ExtensionAction::Install => {
+                let source = extension.source.clone().unwrap_or_default();
+                let name = self.install_extension(&source)?;
+                format!("Installed extension '{name}' from '{source}'")
+            }
+        };
+        Ok(Self::single_message_result(message))
+    }
+
+    /// Build a single-row, single-column result carrying an admin message.
+    fn single_message_result(message: String) -> QueryResult {
+        let columns = vec!["result".to_string()];
+        let rows = vec![vec![Value::String(message)]];
+        let execution = graphdb_query::executor::base::ExecutionResult::from_data_set(
+            graphdb_core::types::DataSet::from_rows(rows, columns),
+        );
+        QueryResult::from_core(crate::api_core::types::QueryResult::new(
+            execution,
+            crate::api_core::types::ExecutionMetadata {
+                rows_returned: 1,
+                ..Default::default()
+            },
+        ))
+    }
+
     /// Obtain a reference to the function registry.
     pub fn function_registry(&self) -> Arc<RwLock<FunctionRegistry>> {
         Arc::clone(&self.function_registry)
@@ -327,6 +418,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                             None,
                         );
                     }
+                    Stmt::Extension(extension) => {
+                        return self.execute_extension(extension);
+                    }
                     stmt => {
                         return self.execute_transaction_command(query, stmt, parsed_ast.clone());
                     }
@@ -406,7 +500,10 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             || upper.starts_with("SAVEPOINT")
             || upper.starts_with("RELEASE SAVEPOINT")
             || upper == "LET"
-            || upper.starts_with("LET ");
+            || upper.starts_with("LET ")
+            || upper.starts_with("LOAD EXTENSION")
+            || upper.starts_with("INSTALL EXTENSION")
+            || upper.starts_with("UNINSTALL EXTENSION");
         if !command_like {
             return Ok(None);
         }
@@ -420,7 +517,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                     | Stmt::RollbackTransaction(_)
                     | Stmt::Savepoint(_)
                     | Stmt::ReleaseSavepoint(_)
-                    | Stmt::AssignVariable(_) => Ok(Some(result)),
+                    | Stmt::AssignVariable(_)
+                    | Stmt::Extension(_) => Ok(Some(result)),
                     _ => Ok(None),
                 }
             }
@@ -761,6 +859,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                             None,
                         );
                     }
+                    Stmt::Extension(extension) => {
+                        return self.execute_extension(extension);
+                    }
                     stmt => {
                         return self.execute_transaction_command(query, stmt, parsed_ast.clone());
                     }
@@ -837,6 +938,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                             Some(params),
                             None,
                         );
+                    }
+                    Stmt::Extension(extension) => {
+                        return self.execute_extension(extension);
                     }
                     stmt => {
                         return self.execute_transaction_command(query, stmt, parsed_ast.clone());

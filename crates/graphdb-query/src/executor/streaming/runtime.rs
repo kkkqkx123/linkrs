@@ -1201,7 +1201,8 @@ impl ExecutionRuntime {
     /// id space. A negative query id suppresses emission until the assembly
     /// provides the real mapping between the two query identity schemes.
     pub fn set_progress_identity(&self, session_id: i64, query_id: i64) {
-        self.progress_session_id.store(session_id, Ordering::Relaxed);
+        self.progress_session_id
+            .store(session_id, Ordering::Relaxed);
         self.progress_query_id.store(query_id, Ordering::Relaxed);
         self.progress_last_emitted.store(0, Ordering::Relaxed);
     }

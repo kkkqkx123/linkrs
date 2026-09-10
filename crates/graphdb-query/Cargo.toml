@@ -24,6 +24,7 @@ rand.workspace = true
 rayon.workspace = true
 csv.workspace = true
 glob.workspace = true
+libloading = "0.8"
 dashmap.workspace = true
 bitvec.workspace = true
 futures.workspace = true

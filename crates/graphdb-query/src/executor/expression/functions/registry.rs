@@ -3,6 +3,7 @@
 //! Provide functions for registration, lookup, and execution.
 //! The specific implementation of the function is located in the builtin submodule.
 
+use super::udf::{SharedPlugin, UdfError, UdfLoader};
 use super::BuiltinFunction;
 use super::CustomFunction;
 use super::TableFunction;
@@ -11,13 +12,51 @@ use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use graphdb_core::DataType;
 use graphdb_core::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 /// Registry entry carrying the function and its static return type.
 #[derive(Debug, Clone)]
 pub struct RegistryEntry {
     pub function: BuiltinFunction,
     pub return_type: DataType,
+}
+
+/// Metadata kept for each dynamically loaded UDF library.
+///
+/// The shared plugin handle keeps the underlying `Library` alive, so entries
+/// must be removed through `unload_dynamic_udf` (dropping the entry unloads
+/// the library).
+pub struct LoadedExtension {
+    /// Upper-cased function name.
+    pub name: String,
+    /// Canonical library path.
+    pub path: PathBuf,
+    /// Modification time observed at load, used by reload decisions.
+    pub loaded_mtime: Option<SystemTime>,
+    /// Shared plugin handle.
+    pub plugin: SharedPlugin,
+}
+
+impl std::fmt::Debug for LoadedExtension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadedExtension")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+/// Snapshot describing a loaded dynamic UDF for listing purposes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicUdfInfo {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub min_arity: usize,
+    pub max_arity: usize,
+    pub is_pure: bool,
 }
 
 /// Function Registry
@@ -32,6 +71,8 @@ pub struct FunctionRegistry {
     custom_functions: HashMap<String, CustomFunction>,
     /// Table function mapping (function name -> Box<dyn TableFunction>)
     table_functions: HashMap<String, Box<dyn TableFunction>>,
+    /// Dynamically loaded UDF libraries (upper-cased name -> extension metadata)
+    dynamic_libraries: HashMap<String, LoadedExtension>,
 }
 
 impl Default for FunctionRegistry {
@@ -46,6 +87,7 @@ impl FunctionRegistry {
             builtin_functions: HashMap::new(),
             custom_functions: HashMap::new(),
             table_functions: HashMap::new(),
+            dynamic_libraries: HashMap::new(),
         };
         registry.register_all_builtin_functions();
         registry.register_builtin_table_functions();
@@ -110,6 +152,179 @@ impl FunctionRegistry {
         // Convert to uppercase for case-insensitive lookup
         let upper_name = name.to_uppercase();
         self.custom_functions.get(&upper_name)
+    }
+
+    /// Load a UDF dynamic library and register the exported function.
+    ///
+    /// Returns the registered (original-case) function name. The library
+    /// handle is retained until `unload_dynamic_udf` is called.
+    pub fn load_dynamic_udf(&mut self, path: &Path) -> Result<String, UdfError> {
+        let loaded = UdfLoader::load(path)?;
+        self.register_loaded_plugin(loaded)
+    }
+
+    /// Install a UDF from an `INSTALL EXTENSION ... FROM` source.
+    ///
+    /// Local file paths load directly; `http(s)://` sources return
+    /// `RepoDownloadUnsupported` until a repository module is added.
+    pub fn install_dynamic_udf(&mut self, source: &str) -> Result<String, UdfError> {
+        let loaded = UdfLoader::install_from_source(source)?;
+        self.register_loaded_plugin(loaded)
+    }
+
+    fn register_loaded_plugin(
+        &mut self,
+        loaded: super::udf::LoadedPlugin,
+    ) -> Result<String, UdfError> {
+        let name = loaded.plugin.name().to_string();
+        let upper = name.to_uppercase();
+        if self.builtin_functions.contains_key(&upper) {
+            return Err(UdfError::BuiltinConflict(name));
+        }
+        if let Some(existing) = self.dynamic_libraries.get(&upper) {
+            return Err(UdfError::AlreadyLoaded(
+                name,
+                existing.path.to_string_lossy().to_string(),
+            ));
+        }
+        if let Some(existing) = self.custom_functions.get(&upper) {
+            if !existing.is_dynamic() {
+                return Err(UdfError::AlreadyLoaded(
+                    name,
+                    "custom function registry".to_string(),
+                ));
+            }
+        }
+        let func = CustomFunction::new_dynamic(Arc::clone(&loaded.plugin));
+        self.register_custom_full(func);
+        self.dynamic_libraries.insert(
+            upper,
+            LoadedExtension {
+                name: name.clone(),
+                path: loaded.path,
+                loaded_mtime: loaded.loaded_mtime,
+                plugin: loaded.plugin,
+            },
+        );
+        Ok(name)
+    }
+
+    /// Register an in-process plugin without a dynamic library.
+    ///
+    /// Primarily intended for tests and embeddings that build the plugin
+    /// in the host binary; production libraries go through `load_dynamic_udf`.
+    pub fn register_dynamic_plugin(&mut self, plugin: SharedPlugin) -> Result<String, UdfError> {
+        let name = plugin.name().to_string();
+        if name.trim().is_empty() {
+            return Err(UdfError::InvalidName("<in-process>".to_string()));
+        }
+        let upper = name.to_uppercase();
+        if self.builtin_functions.contains_key(&upper) {
+            return Err(UdfError::BuiltinConflict(name));
+        }
+        if self.dynamic_libraries.contains_key(&upper) {
+            let existing = &self.dynamic_libraries[&upper];
+            return Err(UdfError::AlreadyLoaded(
+                name,
+                existing.path.to_string_lossy().to_string(),
+            ));
+        }
+        let func = CustomFunction::new_dynamic(Arc::clone(&plugin));
+        self.register_custom_full(func);
+        self.dynamic_libraries.insert(
+            upper,
+            LoadedExtension {
+                name: name.clone(),
+                path: PathBuf::from("<in-process>"),
+                loaded_mtime: None,
+                plugin,
+            },
+        );
+        Ok(name)
+    }
+
+    /// Unload a previously loaded dynamic UDF by function name.
+    pub fn unload_dynamic_udf(&mut self, name: &str) -> Result<(), UdfError> {
+        let upper = name.to_uppercase();
+        let extension = self
+            .dynamic_libraries
+            .remove(&upper)
+            .ok_or_else(|| UdfError::NotLoaded(name.to_string()))?;
+        let _ = extension;
+        // Only remove the registry entry if it still points at a dynamic
+        // function; a newer non-dynamic registration must be preserved.
+        let remove = self
+            .custom_functions
+            .get(&upper)
+            .map(|f| f.is_dynamic())
+            .unwrap_or(false);
+        if remove {
+            self.custom_functions.remove(&upper);
+        }
+        Ok(())
+    }
+
+    /// Reload a dynamic UDF from its original library path.
+    ///
+    /// Returns `true` when the library was reloaded, `false` when the file
+    /// is unchanged since the initial load and reloading was skipped.
+    /// In-process plugins (no library path) always report `false`.
+    pub fn reload_dynamic_udf(&mut self, name: &str) -> Result<bool, UdfError> {
+        let upper = name.to_uppercase();
+        let current_mtime = self
+            .dynamic_libraries
+            .get(&upper)
+            .ok_or_else(|| UdfError::NotLoaded(name.to_string()))?
+            .loaded_mtime;
+        let path = self.dynamic_libraries[&upper].path.clone();
+        if path.to_string_lossy() == "<in-process>" {
+            return Ok(false);
+        }
+        let current_file_mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        if current_mtime.is_some() && current_mtime == current_file_mtime {
+            return Ok(false);
+        }
+        // Load the replacement before dropping the old one so a failed
+        // reload keeps the previous version active.
+        let loaded = UdfLoader::load(&path)?;
+        let func = CustomFunction::new_dynamic(Arc::clone(&loaded.plugin));
+        let registered_name = loaded.plugin.name().to_string();
+        self.register_custom_full(func);
+        self.dynamic_libraries.insert(
+            upper,
+            LoadedExtension {
+                name: registered_name,
+                path: loaded.path,
+                loaded_mtime: loaded.loaded_mtime,
+                plugin: loaded.plugin,
+            },
+        );
+        Ok(true)
+    }
+
+    /// Check whether a function name resolves to a dynamic UDF.
+    pub fn is_dynamic(&self, name: &str) -> bool {
+        self.dynamic_libraries.contains_key(&name.to_uppercase())
+    }
+
+    /// List all loaded dynamic UDFs ordered by name.
+    pub fn list_dynamic_udfs(&self) -> Vec<DynamicUdfInfo> {
+        let mut infos: Vec<DynamicUdfInfo> = self
+            .dynamic_libraries
+            .values()
+            .map(|ext| DynamicUdfInfo {
+                name: ext.name.clone(),
+                path: ext.path.to_string_lossy().to_string(),
+                description: ext.plugin.description().to_string(),
+                min_arity: ext.plugin.min_arity(),
+                max_arity: ext.plugin.max_arity(),
+                is_pure: ext.plugin.is_pure(),
+            })
+            .collect();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        infos
     }
 
     /// Execute a function (based on its name)
@@ -885,4 +1100,154 @@ pub fn global_registry_ref() -> &'static FunctionRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<FunctionRegistry> = OnceLock::new();
     REGISTRY.get_or_init(FunctionRegistry::new)
+}
+
+#[cfg(test)]
+mod dynamic_tests {
+    use super::super::udf::UdfPlugin;
+    use super::*;
+    use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+
+    struct AddOne;
+
+    impl UdfPlugin for AddOne {
+        fn name(&self) -> &str {
+            "test_add_one"
+        }
+
+        fn description(&self) -> &str {
+            "adds one"
+        }
+
+        fn min_arity(&self) -> usize {
+            1
+        }
+
+        fn max_arity(&self) -> usize {
+            1
+        }
+
+        fn is_pure(&self) -> bool {
+            true
+        }
+
+        fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+            match &args[0] {
+                Value::Int(v) => Ok(Value::Int(v + 1)),
+                other => Err(ExpressionError::new(
+                    ExpressionErrorType::TypeError,
+                    format!("expected int, got {other:?}"),
+                )),
+            }
+        }
+    }
+
+    fn plugin() -> SharedPlugin {
+        Arc::new(AddOne)
+    }
+
+    #[test]
+    fn test_register_and_execute_dynamic_plugin() {
+        let mut registry = FunctionRegistry::new();
+        let name = registry
+            .register_dynamic_plugin(plugin())
+            .expect("registration failed");
+        assert_eq!(name, "test_add_one");
+        assert!(registry.is_dynamic("TEST_ADD_ONE"));
+        let result = registry
+            .execute("test_add_one", &[Value::Int(41)])
+            .expect("execution failed");
+        assert_eq!(result, Value::Int(42));
+        let infos = registry.list_dynamic_udfs();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].name, "test_add_one");
+    }
+
+    #[test]
+    fn test_dynamic_plugin_duplicate_rejected() {
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register_dynamic_plugin(plugin())
+            .expect("first registration failed");
+        let err = registry.register_dynamic_plugin(plugin()).unwrap_err();
+        assert!(matches!(err, UdfError::AlreadyLoaded(_, _)));
+    }
+
+    #[test]
+    fn test_dynamic_plugin_builtin_conflict_rejected() {
+        let mut registry = FunctionRegistry::new();
+        struct ShadowAbs;
+        impl UdfPlugin for ShadowAbs {
+            fn name(&self) -> &str {
+                "abs"
+            }
+            fn description(&self) -> &str {
+                "shadow"
+            }
+            fn min_arity(&self) -> usize {
+                1
+            }
+            fn max_arity(&self) -> usize {
+                1
+            }
+            fn is_pure(&self) -> bool {
+                true
+            }
+            fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+                Ok(args[0].clone())
+            }
+        }
+        let err = registry
+            .register_dynamic_plugin(Arc::new(ShadowAbs))
+            .unwrap_err();
+        assert!(matches!(err, UdfError::BuiltinConflict(_)));
+    }
+
+    #[test]
+    fn test_unload_dynamic_plugin() {
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register_dynamic_plugin(plugin())
+            .expect("registration failed");
+        registry
+            .unload_dynamic_udf("test_add_one")
+            .expect("unload failed");
+        assert!(!registry.is_dynamic("test_add_one"));
+        let err = registry
+            .execute("test_add_one", &[Value::Int(1)])
+            .unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::UndefinedFunction);
+        let err = registry.unload_dynamic_udf("test_add_one").unwrap_err();
+        assert!(matches!(err, UdfError::NotLoaded(_)));
+    }
+
+    #[test]
+    fn test_reload_in_process_plugin_skipped() {
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register_dynamic_plugin(plugin())
+            .expect("registration failed");
+        let reloaded = registry
+            .reload_dynamic_udf("test_add_one")
+            .expect("reload failed");
+        assert!(!reloaded);
+    }
+
+    #[test]
+    fn test_load_dynamic_udf_missing_file() {
+        let mut registry = FunctionRegistry::new();
+        let err = registry
+            .load_dynamic_udf(Path::new("/nonexistent/udf_plugin.so"))
+            .unwrap_err();
+        assert!(matches!(err, UdfError::InvalidPath(_, _)));
+    }
+
+    #[test]
+    fn test_install_dynamic_udf_rejects_remote_source() {
+        let mut registry = FunctionRegistry::new();
+        let err = registry
+            .install_dynamic_udf("https://example.com/udf.so")
+            .unwrap_err();
+        assert!(matches!(err, UdfError::RepoDownloadUnsupported(_)));
+    }
 }

@@ -163,6 +163,7 @@ pub enum Stmt {
     DropMacro(DropMacroStmt),
     CreateType(CreateTypeStmt),
     DropType(DropTypeStmt),
+    Extension(ExtensionStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -244,6 +245,7 @@ crate::define_stmt_helpers! {
     DropMacro => Ddl,
     CreateType => Ddl,
     DropType => Ddl,
+    Extension => Admin,
 }
 
 impl Stmt {
@@ -348,6 +350,11 @@ impl Stmt {
             Stmt::DropMacro(_) => "DROP MACRO",
             Stmt::CreateType(_) => "CREATE TYPE",
             Stmt::DropType(_) => "DROP TYPE",
+            Stmt::Extension(s) => match s.action {
+                ExtensionAction::Load => "LOAD EXTENSION",
+                ExtensionAction::Install => "INSTALL EXTENSION",
+                ExtensionAction::Uninstall => "UNINSTALL EXTENSION",
+            },
         }
     }
 
@@ -1095,8 +1102,17 @@ mod tests {
                 }),
                 Ddl,
             ),
+            (
+                Stmt::Extension(ExtensionStmt {
+                    span,
+                    action: ExtensionAction::Load,
+                    name: "libudf.so".to_string(),
+                    source: None,
+                }),
+                Admin,
+            ),
         ];
-        assert_eq!(cases.len(), 79, "Stmt has 79 variants; update this test");
+        assert_eq!(cases.len(), 80, "Stmt has 80 variants; update this test");
         for (stmt, expected) in cases {
             assert_eq!(
                 stmt.category(),
