@@ -140,19 +140,35 @@ impl ExtensionRegistry {
     }
 
     fn snapshot_parsers(&self) -> Vec<Arc<dyn ParserExtension>> {
-        self.parsers.read().clone()
+        let guard = self.parsers.read();
+        if guard.is_empty() {
+            return Vec::new();
+        }
+        guard.clone()
     }
 
     fn snapshot_binders(&self) -> Vec<Arc<dyn BinderExtension>> {
-        self.binders.read().clone()
+        let guard = self.binders.read();
+        if guard.is_empty() {
+            return Vec::new();
+        }
+        guard.clone()
     }
 
     fn snapshot_planners(&self) -> Vec<Arc<dyn PlannerExtension>> {
-        self.planners.read().clone()
+        let guard = self.planners.read();
+        if guard.is_empty() {
+            return Vec::new();
+        }
+        guard.clone()
     }
 
     fn snapshot_mappers(&self) -> Vec<Arc<dyn MapperExtension>> {
-        self.mappers.read().clone()
+        let guard = self.mappers.read();
+        if guard.is_empty() {
+            return Vec::new();
+        }
+        guard.clone()
     }
 
     /// First `Some` wins; panics are isolated to `None`.

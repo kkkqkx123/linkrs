@@ -28,7 +28,7 @@ pub struct FulltextIndexManager {
     config: FulltextConfig,
     schema_manager: Option<Arc<SchemaManager>>,
     stats_manager: Mutex<Option<Arc<StatsManager>>>,
-    index_callbacks: EventSubscriptions<IndexEvent>,
+    index_callbacks: Arc<EventSubscriptions<IndexEvent>>,
 }
 
 impl std::fmt::Debug for FulltextIndexManager {
@@ -58,12 +58,17 @@ impl FulltextIndexManager {
             config,
             schema_manager: None,
             stats_manager: Mutex::new(None),
-            index_callbacks: EventSubscriptions::new(),
+            index_callbacks: Arc::new(EventSubscriptions::new()),
         };
 
         manager.discover_existing_indexes()?;
 
         Ok(manager)
+    }
+
+    /// Shared index-event registry for the central `HookBus`.
+    pub fn shared_index_callbacks(&self) -> Arc<EventSubscriptions<IndexEvent>> {
+        Arc::clone(&self.index_callbacks)
     }
 
     /// Register a runtime observer for index lifecycle events.
@@ -91,6 +96,9 @@ impl FulltextIndexManager {
     }
 
     fn emit_index_event(&self, event: IndexEvent) {
+        if self.index_callbacks.is_empty() {
+            return;
+        }
         self.index_callbacks.dispatch("index", &event);
     }
 

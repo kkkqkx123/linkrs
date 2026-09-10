@@ -12,6 +12,13 @@ use std::sync::Arc;
 /// This is a notification hook: observers cannot veto or mutate the
 /// event. Decision hooks (commit veto, query interrupt) and pipeline
 /// hooks (parser/binder/planner extensions) are separate mechanisms.
+///
+/// Retention rule: callbacks must not retain `&E` or any borrow derived
+/// from it beyond the dispatch call. The event (and heavy payloads it may
+/// carry, e.g. a transaction write set) is only valid for the duration of
+/// the callback; observers needing data afterwards must clone explicitly
+/// and pay that cost themselves. Prefer filtered subscriptions over
+/// cloning the full event stream.
 pub fn dispatch_event_callbacks<E>(
     owner: &str,
     callbacks: &[Arc<dyn Fn(&E) + Send + Sync>],
@@ -45,6 +52,18 @@ pub struct DispatchOutcome {
     pub panics: usize,
 }
 
+/// Outcome of a timed dispatch (`dispatch_timed`).
+///
+/// `outcome` is the standard breakdown; `slow` counts callbacks whose
+/// wall time reached `slow_threshold`, and `slowest_ms` is the maximum
+/// observed callback latency in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TimedDispatchOutcome {
+    pub outcome: DispatchOutcome,
+    pub slow: usize,
+    pub slowest_ms: u64,
+}
+
 /// Handle returned when registering an event-hook observer.
 ///
 /// The id can be passed back to `EventSubscriptions::remove` to unsubscribe.
@@ -61,6 +80,50 @@ struct SubscriptionEntry<E> {
     id: SubscriptionId,
     callback: Arc<dyn Fn(&E) + Send + Sync>,
     filter: Option<EventFilter<E>>,
+}
+
+struct SnapshotEntry<E> {
+    callback: Arc<dyn Fn(&E) + Send + Sync>,
+    filter: Option<EventFilter<E>>,
+}
+
+enum FilterEval {
+    Matched,
+    Skip,
+    Panicked,
+}
+
+fn eval_filter<E>(
+    owner: &str,
+    index: usize,
+    filter: Option<&EventFilter<E>>,
+    event: &E,
+) -> FilterEval {
+    match filter {
+        None => FilterEval::Matched,
+        Some(filter) => {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filter(event))) {
+                Ok(true) => FilterEval::Matched,
+                Ok(false) => FilterEval::Skip,
+                Err(payload) => {
+                    log::error!(
+                        "{} filter #{} panicked: {}; skipping observer",
+                        owner,
+                        index,
+                        panic_payload_message(&payload)
+                    );
+                    FilterEval::Panicked
+                }
+            }
+        }
+    }
+}
+
+fn invoke_callback<E>(
+    callback: &dyn Fn(&E),
+    event: &E,
+) -> Result<(), Box<dyn std::any::Any + Send>> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(event)))
 }
 
 /// Cancellable, optionally filtered registry for event-hook observers.
@@ -154,65 +217,121 @@ impl<E> EventSubscriptions<E> {
         self.dispatch_detailed(owner, event).panics
     }
 
+    fn snapshot_locked(&self) -> Vec<SnapshotEntry<E>> {
+        let entries = self.entries.read();
+        if entries.is_empty() {
+            return Vec::new();
+        }
+        entries
+            .iter()
+            .map(|entry| SnapshotEntry {
+                callback: Arc::clone(&entry.callback),
+                filter: entry.filter.clone(),
+            })
+            .collect()
+    }
+
     /// Dispatch with a full outcome breakdown.
     pub fn dispatch_detailed(&self, owner: &str, event: &E) -> DispatchOutcome {
-        struct Snapshot<E> {
-            callback: Arc<dyn Fn(&E) + Send + Sync>,
-            filter: Option<EventFilter<E>>,
+        let snapshot = self.snapshot_locked();
+        if snapshot.is_empty() {
+            return DispatchOutcome::default();
         }
-        let snapshot: Vec<Snapshot<E>> = {
-            let entries = self.entries.read();
-            if entries.is_empty() {
-                return DispatchOutcome::default();
-            }
-            entries
-                .iter()
-                .map(|entry| Snapshot {
-                    callback: Arc::clone(&entry.callback),
-                    filter: entry.filter.clone(),
-                })
-                .collect()
-        };
         let mut outcome = DispatchOutcome::default();
         for (index, item) in snapshot.iter().enumerate() {
-            let matched = match &item.filter {
-                None => true,
-                Some(filter) => {
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filter(event))) {
-                        Ok(matched) => matched,
-                        Err(payload) => {
-                            outcome.panics += 1;
-                            outcome.skipped_by_filter += 1;
-                            log::error!(
-                                "{} filter #{} panicked: {}; skipping observer",
-                                owner,
-                                index,
-                                panic_payload_message(&payload)
-                            );
-                            continue;
-                        }
-                    }
+            match eval_filter(owner, index, item.filter.as_ref(), event) {
+                FilterEval::Skip => {
+                    outcome.skipped_by_filter += 1;
+                    continue;
                 }
-            };
-            if !matched {
-                outcome.skipped_by_filter += 1;
-                continue;
+                FilterEval::Panicked => {
+                    outcome.panics += 1;
+                    outcome.skipped_by_filter += 1;
+                    continue;
+                }
+                FilterEval::Matched => {}
             }
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                (item.callback)(event);
-            })) {
-                outcome.panics += 1;
-                log::error!(
-                    "{} callback #{} panicked: {}; continuing dispatch",
-                    owner,
-                    index,
-                    panic_payload_message(&payload)
-                );
-                continue;
+            match invoke_callback(item.callback.as_ref(), event) {
+                Ok(()) => {
+                    outcome.delivered += 1;
+                }
+                Err(payload) => {
+                    outcome.panics += 1;
+                    log::error!(
+                        "{} callback #{} panicked: {}; continuing dispatch",
+                        owner,
+                        index,
+                        panic_payload_message(&payload)
+                    );
+                    continue;
+                }
             }
-            outcome.delivered += 1;
         }
         outcome
+    }
+
+    /// Timed dispatch: like `dispatch_detailed`, additionally measuring each
+    /// callback's wall time. Callbacks reaching `slow_threshold` are counted
+    /// in `slow`, contribute to `slowest_ms`, and emit a `log::warn` so slow
+    /// observers are visible without affecting delivery.
+    ///
+    /// Timing costs one `Instant::now()` pair per delivered callback, so
+    /// hot paths should keep using `dispatch`/`dispatch_detailed` and opt
+    /// into this only for diagnostics or slow-path emission points.
+    pub fn dispatch_timed(
+        &self,
+        owner: &str,
+        event: &E,
+        slow_threshold: std::time::Duration,
+    ) -> TimedDispatchOutcome {
+        let snapshot = self.snapshot_locked();
+        if snapshot.is_empty() {
+            return TimedDispatchOutcome::default();
+        }
+        let mut result = TimedDispatchOutcome::default();
+        for (index, item) in snapshot.iter().enumerate() {
+            match eval_filter(owner, index, item.filter.as_ref(), event) {
+                FilterEval::Skip => {
+                    result.outcome.skipped_by_filter += 1;
+                    continue;
+                }
+                FilterEval::Panicked => {
+                    result.outcome.panics += 1;
+                    result.outcome.skipped_by_filter += 1;
+                    continue;
+                }
+                FilterEval::Matched => {}
+            }
+            let start = std::time::Instant::now();
+            match invoke_callback(item.callback.as_ref(), event) {
+                Ok(()) => {
+                    result.outcome.delivered += 1;
+                }
+                Err(payload) => {
+                    result.outcome.panics += 1;
+                    log::error!(
+                        "{} callback #{} panicked: {}; continuing dispatch",
+                        owner,
+                        index,
+                        panic_payload_message(&payload)
+                    );
+                }
+            }
+            let elapsed = start.elapsed();
+            if elapsed >= slow_threshold {
+                result.slow += 1;
+                let elapsed_ms = elapsed.as_millis() as u64;
+                result.slowest_ms = result.slowest_ms.max(elapsed_ms);
+                log::warn!(
+                    "{} callback #{} slow: {}ms >= {}ms threshold",
+                    owner,
+                    index,
+                    elapsed_ms,
+                    slow_threshold.as_millis() as u64,
+                );
+            }
+        }
+        result
     }
 }
 
@@ -262,6 +381,73 @@ pub fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String 
         message.clone()
     } else {
         "unknown panic payload".to_string()
+    }
+}
+
+/// Opt-in observer-side escape hatch for slow consumers.
+///
+/// The leaf registries always dispatch synchronously inline, so a slow
+/// observer would block the emitter path. Wrap such an observer in an
+/// `AsyncForwarder`: the dispatch-path callback only does a bounded
+/// `try_send` (never blocks), while a dedicated worker thread runs the
+/// real callback. When the queue is full the event is dropped and
+/// `dropped_count` is incremented, so backpressure is explicit instead of
+/// silently stalling commits, DDL, or checkpoints.
+///
+/// Dropping the forwarder closes the channel and ends the worker thread.
+/// Use `adapter` to get an `Arc` callback suitable for `add`/`subscribe`.
+pub struct AsyncForwarder<E> {
+    sender: std::sync::mpsc::SyncSender<E>,
+    dropped: std::sync::atomic::AtomicUsize,
+}
+
+impl<E> AsyncForwarder<E>
+where
+    E: Clone + Send + 'static,
+{
+    /// Spawn a worker running `callback` for each forwarded event.
+    ///
+    /// Returns the forwarder plus the worker's join handle. Drop the
+    /// forwarder (closing the channel) before joining. A panicking
+    /// `callback` is isolated per event: the error is logged and the
+    /// worker keeps consuming.
+    pub fn spawn(
+        capacity: usize,
+        callback: impl Fn(&E) + Send + 'static,
+    ) -> (Arc<Self>, std::thread::JoinHandle<()>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(capacity);
+        let forwarder = Arc::new(Self {
+            sender,
+            dropped: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let handle = std::thread::spawn(move || {
+            for event in receiver {
+                if invoke_callback(&callback, &event).is_err() {
+                    log::error!("async forwarder callback panicked; continuing");
+                }
+            }
+        });
+        (forwarder, handle)
+    }
+
+    /// Hand an event to the worker without blocking. Drops (and counts)
+    /// the event when the queue is full or the worker is gone.
+    pub fn forward(&self, event: &E) {
+        if self.sender.try_send(event.clone()).is_err() {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Number of events dropped due to a full queue or a gone worker.
+    pub fn dropped_count(&self) -> usize {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Dispatch-path adapter: `registry.add(forwarder.adapter())`.
+    pub fn adapter(self: &Arc<Self>) -> Arc<dyn Fn(&E) + Send + Sync> {
+        let forwarder = Arc::clone(self);
+        Arc::new(move |event: &E| forwarder.forward(event))
     }
 }
 
@@ -374,5 +560,67 @@ mod tests {
         assert_eq!(registry.len(), 2);
         registry.clear();
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn timed_dispatch_flags_slow_observer() {
+        use std::time::Duration;
+        let registry: EventSubscriptions<u32> = EventSubscriptions::new();
+        registry.add(Arc::new(|_| {}));
+        registry.add(Arc::new(|_: &u32| {
+            std::thread::sleep(Duration::from_millis(15));
+        }));
+        let outcome = registry.dispatch_timed("test", &1, Duration::from_millis(5));
+        assert_eq!(outcome.outcome.delivered, 2);
+        assert_eq!(outcome.outcome.panics, 0);
+        assert_eq!(outcome.slow, 1);
+        assert!(outcome.slowest_ms >= 5);
+
+        // Empty registry: zero outcome, no timing cost.
+        let empty: EventSubscriptions<u32> = EventSubscriptions::new();
+        assert_eq!(
+            empty.dispatch_timed("test", &1, Duration::from_millis(1)),
+            TimedDispatchOutcome::default()
+        );
+    }
+
+    #[test]
+    fn async_forwarder_delivers_without_blocking_emitter() {
+        use std::time::Duration;
+        let registry: EventSubscriptions<u32> = EventSubscriptions::new();
+        let received = Arc::new(AtomicUsize::new(0));
+        let probe = Arc::clone(&received);
+        let (forwarder, handle) = AsyncForwarder::spawn(16, move |_: &u32| {
+            probe.fetch_add(1, Ordering::SeqCst);
+        });
+        registry.add(forwarder.adapter());
+        for event in 0..5u32 {
+            registry.dispatch("test", &event);
+        }
+        assert_eq!(forwarder.dropped_count(), 0);
+        drop(registry);
+        drop(forwarder);
+        handle.join().expect("worker joins");
+        assert_eq!(received.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn async_forwarder_counts_drops_on_full_queue() {
+        // Rendezvous channel with a slow worker: some forwards land while
+        // the worker waits, the rest are dropped and counted. Dropped plus
+        // received must account for every sent event.
+        let received = Arc::new(AtomicUsize::new(0));
+        let probe = Arc::clone(&received);
+        let (forwarder, handle) = AsyncForwarder::spawn(0, move |_: &u32| {
+            probe.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        });
+        for event in 0..10u32 {
+            forwarder.forward(&event);
+        }
+        let dropped = forwarder.dropped_count();
+        drop(forwarder);
+        handle.join().expect("worker joins");
+        assert_eq!(received.load(Ordering::SeqCst) + dropped, 10);
     }
 }

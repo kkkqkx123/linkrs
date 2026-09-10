@@ -118,7 +118,7 @@ pub struct PersistenceCoordinator {
     pub(crate) state: Arc<RwLock<PersistenceState>>,
     pub(crate) fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
     pub(crate) outbox_frontier_provider: RwLock<Option<OutboxFrontierProvider>>,
-    storage_callbacks: EventSubscriptions<StorageEvent>,
+    storage_callbacks: Arc<EventSubscriptions<StorageEvent>>,
 }
 
 impl PersistenceCoordinator {
@@ -205,8 +205,13 @@ impl PersistenceCoordinator {
             state: Arc::new(RwLock::new(PersistenceState::Idle)),
             fault_points: Arc::new(RwLock::new(HashSet::new())),
             outbox_frontier_provider: RwLock::new(None),
-            storage_callbacks: EventSubscriptions::new(),
+            storage_callbacks: Arc::new(EventSubscriptions::new()),
         })
+    }
+
+    /// Shared storage-event registry for the central `HookBus`.
+    pub fn shared_storage_callbacks(&self) -> Arc<EventSubscriptions<StorageEvent>> {
+        Arc::clone(&self.storage_callbacks)
     }
 
     /// Register a runtime observer for storage lifecycle events.
@@ -239,6 +244,9 @@ impl PersistenceCoordinator {
     }
 
     fn emit_storage_event(&self, event: StorageEvent) {
+        if self.storage_callbacks.is_empty() {
+            return;
+        }
         self.storage_callbacks.dispatch("storage", &event);
     }
 
@@ -382,6 +390,46 @@ mod tests {
 
         coordinator.notify_gc_run(7);
         assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn storage_filtered_subscription_and_unsubscribe() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig::for_work_dir(temp_dir.path());
+        let coordinator = PersistenceCoordinator::new(config).expect("coordinator");
+        assert_eq!(coordinator.storage_callback_count(), 0);
+
+        let gc_hits = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let wal_hits = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let gc_probe = gc_hits.clone();
+        let wal_probe = wal_hits.clone();
+        // Filtered: only GcRun passes.
+        let filtered_id = coordinator.register_storage_callback_filtered(
+            Arc::new(move |_| {
+                gc_probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }),
+            Arc::new(|event| matches!(event, StorageEvent::GcRun { .. })),
+        );
+        let wal_id = coordinator.register_storage_callback(Arc::new(move |_| {
+            wal_probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        assert_eq!(coordinator.storage_callback_count(), 2);
+
+        coordinator.notify_gc_run(3);
+        coordinator.notify_wal_truncated(9);
+        assert_eq!(gc_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Unfiltered observer receives both events.
+        assert_eq!(wal_hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        assert!(coordinator.unregister_storage_callback(filtered_id));
+        assert!(!coordinator.unregister_storage_callback(filtered_id));
+        assert_eq!(coordinator.storage_callback_count(), 1);
+        coordinator.notify_gc_run(5);
+        assert_eq!(gc_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(wal_hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        assert!(coordinator.unregister_storage_callback(wal_id));
+        assert_eq!(coordinator.storage_callback_count(), 0);
     }
 
     #[test]

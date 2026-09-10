@@ -56,12 +56,24 @@ pub unsafe extern "C" fn graphdb_execute(
             Ok(query_result) => {
                 handle.clear_error();
 
-                // Check whether it is a data modification operation, and then call the update hook.
-                if let Some((operation, rowid)) = detect_data_modification(query_str, &query_result)
-                {
-                    let space_name_owned = handle.inner.current_space();
-                    let space_name = space_name_owned.as_deref().unwrap_or("default");
-                    handle.invoke_update_hook(operation, space_name, rowid);
+                // Statement-level DML notification (bus) + legacy update hook.
+                // Classification does a full-string uppercase scan for
+                // MATCH-family queries, so it is skipped entirely when
+                // neither side listens.
+                if handle.has_update_hook() || handle.inner.has_dml_observers() {
+                    let rows = query_result.metadata().rows_returned as u64;
+                    if let Some(op) = handle.inner.notify_dml(query_str, rows) {
+                        if handle.has_update_hook() {
+                            let operation = match op {
+                                graphdb_query::DmlOp::Insert => 1,
+                                graphdb_query::DmlOp::Update => 2,
+                                graphdb_query::DmlOp::Delete => 3,
+                            };
+                            let space_name_owned = handle.inner.current_space();
+                            let space_name = space_name_owned.as_deref().unwrap_or("default");
+                            handle.invoke_update_hook(operation, space_name, rows as i64);
+                        }
+                    }
                 }
 
                 let result_handle = Box::new(GraphDbResultHandle {
@@ -144,12 +156,24 @@ pub unsafe extern "C" fn graphdb_execute_params(
             Ok(query_result) => {
                 handle.clear_error();
 
-                // Check whether it is a data modification operation, and then call the update hook.
-                if let Some((operation, rowid)) = detect_data_modification(query_str, &query_result)
-                {
-                    let space_name_owned = handle.inner.current_space();
-                    let space_name = space_name_owned.as_deref().unwrap_or("default");
-                    handle.invoke_update_hook(operation, space_name, rowid);
+                // Statement-level DML notification (bus) + legacy update hook.
+                // Classification does a full-string uppercase scan for
+                // MATCH-family queries, so it is skipped entirely when
+                // neither side listens.
+                if handle.has_update_hook() || handle.inner.has_dml_observers() {
+                    let rows = query_result.metadata().rows_returned as u64;
+                    if let Some(op) = handle.inner.notify_dml(query_str, rows) {
+                        if handle.has_update_hook() {
+                            let operation = match op {
+                                graphdb_query::DmlOp::Insert => 1,
+                                graphdb_query::DmlOp::Update => 2,
+                                graphdb_query::DmlOp::Delete => 3,
+                            };
+                            let space_name_owned = handle.inner.current_space();
+                            let space_name = space_name_owned.as_deref().unwrap_or("default");
+                            handle.invoke_update_hook(operation, space_name, rows as i64);
+                        }
+                    }
                 }
 
                 let result_handle = Box::new(GraphDbResultHandle {
@@ -201,104 +225,6 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
     }
 }
 
-/// Check whether the query represents a data modification operation.
-///
-/// Return a tuple of (operation type, affected rows). If it is not a data
-/// modification operation, return None.
-/// Operation type: 1=INSERT, 2=UPDATE, 3=DELETE
-///
-/// This is a best-effort heuristic over the leading keyword (after skipping
-/// whitespace and `--` / `//` / `#` line comments and `/* */` block comments).
-/// The affected-rows count comes from the result metadata, so embedded
-/// observers should treat it as a row count rather than a stable row id.
-fn detect_data_modification(
-    query: &str,
-    result: &crate::embedded::result::QueryResult,
-) -> Option<(i32, i64)> {
-    let keyword = leading_keyword(query);
-    let operation = match keyword {
-        // Row creation.
-        "INSERT" | "CREATE" | "MERGE" => 1,
-        // Property / structure modification.
-        "UPDATE" | "SET" | "REMOVE" | "ALTER" => 2,
-        // Removal.
-        "DELETE" | "DETACH" | "DROP" => 3,
-        _ => return None,
-    };
-    // `MATCH ... DELETE/SET/REMOVE/MERGE/CREATE` carries the write in its
-    // trailing clause rather than the leading keyword.
-    if keyword == "MATCH" || keyword == "WITH" || keyword == "UNWIND" || keyword == "OPTIONAL" {
-        let upper = query.to_uppercase();
-        if upper.contains("DELETE") || upper.contains("DETACH DELETE") {
-            return Some((3, result.metadata().rows_returned as i64));
-        }
-        if upper.contains("SET")
-            || upper.contains("REMOVE")
-            || upper.contains("MERGE")
-            || upper.contains("CREATE")
-        {
-            let op = if upper.contains("MERGE") || upper.contains("CREATE") {
-                1
-            } else {
-                2
-            };
-            return Some((op, result.metadata().rows_returned as i64));
-        }
-        return None;
-    }
-    Some((operation, result.metadata().rows_returned as i64))
-}
-
-/// Extract the first keyword token, skipping whitespace and SQL/Cypher comments.
-fn leading_keyword(query: &str) -> &str {
-    let bytes = query.as_bytes();
-    let mut pos = 0;
-    while pos < bytes.len() {
-        // Skip whitespace.
-        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
-        if pos >= bytes.len() {
-            break;
-        }
-        // Line comments: `--`, `//`, `#`.
-        if query[pos..].starts_with("--")
-            || query[pos..].starts_with("//")
-            || query[pos..].starts_with('#')
-        {
-            while pos < bytes.len() && bytes[pos] != b'\n' {
-                pos += 1;
-            }
-            continue;
-        }
-        // Block comments: `/* ... */`.
-        if query[pos..].starts_with("/*") {
-            if let Some(end) = query[pos..].find("*/") {
-                pos += end + 2;
-                continue;
-            }
-            return "";
-        }
-        break;
-    }
-    let rest = &query[pos..];
-    let end = rest
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
-        .unwrap_or(rest.len());
-    let mut token = &rest[..end];
-    // Handle `OPTIONAL MATCH` / `DETACH DELETE` two-word openers.
-    if token.eq_ignore_ascii_case("OPTIONAL") || token.eq_ignore_ascii_case("DETACH") {
-        let after: &str = rest[end..].trim_start();
-        let after_end = after
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
-            .unwrap_or(after.len());
-        if !after[..after_end].is_empty() {
-            token = &after[..after_end];
-        }
-    }
-    token
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,13 +255,20 @@ mod tests {
     }
 
     #[test]
-    fn test_leading_keyword_skips_comments() {
-        assert_eq!(leading_keyword("  -- comment\nCREATE (n)"), "CREATE");
-        assert_eq!(leading_keyword("/* block */ MERGE (n)"), "MERGE");
-        assert_eq!(leading_keyword("# hash\n// slash\nSET n.x = 1"), "SET");
-        assert_eq!(leading_keyword("  match (n) return n"), "match");
-        assert_eq!(leading_keyword("OPTIONAL MATCH (n) RETURN n"), "MATCH");
-        assert_eq!(leading_keyword("DETACH DELETE n"), "DELETE");
+    fn test_dml_classification_skips_comments() {
+        use graphdb_query::{classify_dml, DmlOp};
+        assert_eq!(
+            classify_dml("  -- comment\nCREATE (n)"),
+            Some(DmlOp::Insert)
+        );
+        assert_eq!(classify_dml("/* block */ MERGE (n)"), Some(DmlOp::Insert));
+        assert_eq!(
+            classify_dml("# hash\n// slash\nSET n.x = 1"),
+            Some(DmlOp::Update)
+        );
+        assert_eq!(classify_dml("  match (n) return n"), None);
+        assert_eq!(classify_dml("OPTIONAL MATCH (n) RETURN n"), None);
+        assert_eq!(classify_dml("DETACH DELETE n"), Some(DmlOp::Delete));
     }
 
     #[test]

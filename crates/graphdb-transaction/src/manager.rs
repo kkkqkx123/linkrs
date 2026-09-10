@@ -59,6 +59,12 @@ pub struct TransactionManager {
     // `BudgetWarning` has its own entry point and no longer rides the
     // commit channel.
     pub(super) txn_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
+    /// Pre-commit decision hooks (`register_commit_veto`). Evaluated after
+    /// conflict certification and before any WAL I/O; first veto wins.
+    /// Separate from the notification registry above: vetoes decide, they
+    /// do not observe.
+    pub(super) commit_vetoes: parking_lot::RwLock<Vec<(SubscriptionId, CommitVetoCallback)>>,
+    pub(super) next_veto_id: AtomicU64,
     /// Whether shutdown
     pub(super) shutdown_flag: AtomicU64,
     /// Transaction monitor for metrics collection
@@ -98,6 +104,8 @@ impl TransactionManager {
             commits_since_checkpoint: AtomicU64::new(0),
             stats,
             txn_callbacks: Arc::new(EventSubscriptions::new()),
+            commit_vetoes: parking_lot::RwLock::new(Vec::new()),
+            next_veto_id: AtomicU64::new(1),
             shutdown_flag: AtomicU64::new(0),
             monitor,
             sync_manager: None,
@@ -170,6 +178,74 @@ impl TransactionManager {
     /// Shared transaction-event registry behind this manager.
     pub fn shared_txn_callbacks(&self) -> Arc<EventSubscriptions<TransactionEvent>> {
         Arc::clone(&self.txn_callbacks)
+    }
+
+    /// Register a pre-commit decision hook.
+    ///
+    /// Evaluated synchronously in registration order after conflict
+    /// certification and before any WAL I/O. The first veto blocks the
+    /// commit; a panicking hook is logged and treated as allow. A vetoed
+    /// commit fails with a `CommitVetoed` error and leaves the transaction
+    /// active: the caller must roll it back.
+    pub fn register_commit_veto(&self, callback: CommitVetoCallback) -> SubscriptionId {
+        let id = self.next_veto_id.fetch_add(1, Ordering::SeqCst);
+        self.commit_vetoes.write().push((id, callback));
+        id
+    }
+
+    /// Remove a previously registered commit veto. Returns true if present.
+    pub fn unregister_commit_veto(&self, id: SubscriptionId) -> bool {
+        let mut vetoes = self.commit_vetoes.write();
+        let before = vetoes.len();
+        vetoes.retain(|(entry_id, _)| *entry_id != id);
+        vetoes.len() != before
+    }
+
+    /// Number of registered commit vetoes.
+    pub fn commit_veto_count(&self) -> usize {
+        self.commit_vetoes.read().len()
+    }
+
+    /// Evaluate vetoes against `context`, returning the first veto reason.
+    ///
+    /// Snapshots the hook list under the lock, then invokes callbacks
+    /// without holding it. Never vetoes when no hook is registered
+    /// (zero overhead beyond one lock acquisition).
+    pub(super) fn eval_commit_vetoes(&self, context: &TransactionContext) -> Option<String> {
+        let vetoes: Vec<CommitVetoCallback> = {
+            let guard = self.commit_vetoes.read();
+            if guard.is_empty() {
+                return None;
+            }
+            guard.iter().map(|(_, cb)| Arc::clone(cb)).collect()
+        };
+        let view = CommitVetoContext {
+            txn_id: context.id,
+            write_timestamp: context.timestamp(),
+        };
+        for (index, callback) in vetoes.iter().enumerate() {
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&view)));
+            match outcome {
+                Ok(decision) if decision.veto => {
+                    let reason = decision
+                        .reason
+                        .unwrap_or_else(|| "commit vetoed".to_string());
+                    log::warn!(
+                        "commit veto #{} blocked transaction {}: {}",
+                        index,
+                        view.txn_id,
+                        reason,
+                    );
+                    return Some(reason);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    log::error!("commit veto #{} panicked; treating as allow", index,);
+                }
+            }
+        }
+        None
     }
 
     /// Register a commit observer (compatibility vest: only
@@ -254,22 +330,37 @@ impl TransactionManager {
     }
 
     pub(super) fn emit_commit_event(&self, event: TransactionEvent) {
-        let panics = self.txn_callbacks.dispatch("commit", &event);
-        for _ in 0..panics {
+        if self.txn_callbacks.is_empty() {
+            return;
+        }
+        let outcome = self.txn_callbacks.dispatch_detailed("commit", &event);
+        self.stats
+            .record_hook_dispatch(outcome.delivered, outcome.panics);
+        for _ in 0..outcome.panics {
             self.stats.increment_cleanup_failure();
         }
     }
 
     pub(super) fn emit_rollback_event(&self, event: TransactionEvent) {
-        let panics = self.txn_callbacks.dispatch("rollback", &event);
-        for _ in 0..panics {
+        if self.txn_callbacks.is_empty() {
+            return;
+        }
+        let outcome = self.txn_callbacks.dispatch_detailed("rollback", &event);
+        self.stats
+            .record_hook_dispatch(outcome.delivered, outcome.panics);
+        for _ in 0..outcome.panics {
             self.stats.increment_cleanup_failure();
         }
     }
 
     pub(super) fn emit_budget_warning_event(&self, event: TransactionEvent) {
-        let panics = self.txn_callbacks.dispatch("txn-budget", &event);
-        for _ in 0..panics {
+        if self.txn_callbacks.is_empty() {
+            return;
+        }
+        let outcome = self.txn_callbacks.dispatch_detailed("txn-budget", &event);
+        self.stats
+            .record_hook_dispatch(outcome.delivered, outcome.panics);
+        for _ in 0..outcome.panics {
             self.stats.increment_cleanup_failure();
         }
     }
@@ -925,16 +1016,6 @@ pub(super) fn rollback_context_timestamp(
     }
 }
 
-fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        message.to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,6 +1109,61 @@ mod tests {
         assert_eq!(commits.load(Ordering::SeqCst), 1);
         assert_eq!(aborts.load(Ordering::SeqCst), 1);
         assert!(manager.list_transactions().is_empty());
+    }
+
+    #[test]
+    fn commit_veto_blocks_commit_without_aborting() {
+        use crate::error::TransactionErrorKind;
+
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let commits = Arc::new(AtomicUsize::new(0));
+        let commit_count = Arc::clone(&commits);
+        manager.register_commit_callback(Arc::new(move |event| {
+            if let TransactionEvent::Committed { .. } = event {
+                commit_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let veto_id = manager.register_commit_veto(Arc::new(|_| VetoDecision::veto("test veto")));
+        assert_eq!(manager.commit_veto_count(), 1);
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        let err = manager
+            .commit_transaction(txn_id)
+            .expect_err("vetoed commit must fail");
+        assert_eq!(err.kind(), TransactionErrorKind::CommitVetoed);
+        // No commit event observed, and the transaction is still active.
+        assert_eq!(commits.load(Ordering::SeqCst), 0);
+        assert!(manager.get_context(txn_id).is_ok());
+        manager
+            .abort_transaction(txn_id)
+            .expect("vetoed transaction rolls back");
+
+        // After removal the same flow commits normally.
+        assert!(manager.unregister_commit_veto(veto_id));
+        assert!(!manager.unregister_commit_veto(veto_id));
+        assert_eq!(manager.commit_veto_count(), 0);
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .commit_transaction(txn_id)
+            .expect("transaction should commit");
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn panicking_veto_is_treated_as_allow() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        manager.register_commit_veto(Arc::new(|_| panic!("veto boom")));
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .commit_transaction(txn_id)
+            .expect("panicking veto must not block commit");
     }
 
     #[test]

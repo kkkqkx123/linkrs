@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use graphdb_core::error::storage::StorageErrorKind;
+use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_core::types::{EdgeTypeInfo, TagInfo};
 use graphdb_core::{Edge, Tag, Value, Vertex};
 use graphdb_storage::{
@@ -13,7 +15,7 @@ use graphdb_storage::{
 use crate::config::MigrationConfig;
 use crate::converter::convert_value;
 use crate::error::MigrationError;
-use crate::event::{notify_migration_listener, MigrationEvent, MigrationEventListener};
+use crate::event::{MigrationDispatcher, MigrationEvent, MigrationEventListener};
 use crate::lock::MigrationFileLock;
 use crate::metrics::global_migration_metrics;
 use crate::plan::{MigrationPlan, MigrationReport, MigrationStep, SafetyLevel};
@@ -205,6 +207,7 @@ where
         &effective_plan,
         progress,
         event_listener,
+        None,
         config.lock_path.as_deref(),
         config.checkpoint_dir.as_deref(),
     )
@@ -253,8 +256,43 @@ where
         plan,
         progress,
         event_listener,
+        None,
         lock_path,
         None,
+    )
+}
+
+/// Execute a migration plan, fanning lifecycle events out to both a legacy
+/// trait listener and a shared `EventSubscriptions` registry.
+///
+/// This is the only entry point that accepts a registry; all other
+/// `execute_migration_plan_*` wrappers pass `None` and preserve their
+/// existing signatures.
+pub fn execute_migration_plan_with_event_registry<S>(
+    storage: &mut S,
+    plan: &MigrationPlan,
+    progress: &dyn MigrationProgress,
+    event_listener: Option<&dyn MigrationEventListener>,
+    event_registry: Option<&Arc<EventSubscriptions<MigrationEvent>>>,
+    lock_path: Option<&Path>,
+    checkpoint_dir: Option<&Path>,
+) -> Result<MigrationReport, MigrationError>
+where
+    S: StorageReader
+        + StorageWriter
+        + StorageSchemaOps
+        + AutoCommitGroupOps
+        + AutoCommitBatchOps
+        + ?Sized,
+{
+    execute_migration_plan_with_progress_and_file_lock_and_checkpoint(
+        storage,
+        plan,
+        progress,
+        event_listener,
+        event_registry,
+        lock_path,
+        checkpoint_dir,
     )
 }
 
@@ -263,6 +301,7 @@ pub fn execute_migration_plan_with_progress_and_file_lock_and_checkpoint<S>(
     plan: &MigrationPlan,
     progress: &dyn MigrationProgress,
     event_listener: Option<&dyn MigrationEventListener>,
+    event_registry: Option<&Arc<EventSubscriptions<MigrationEvent>>>,
     lock_path: Option<&Path>,
     checkpoint_dir: Option<&Path>,
 ) -> Result<MigrationReport, MigrationError>
@@ -280,6 +319,7 @@ where
     } else {
         None
     };
+    let dispatcher = MigrationDispatcher::with_registry(event_listener, event_registry);
     let start = std::time::Instant::now();
     // --- checkpoint resume handling ---
     let mut checkpoint_completed: Vec<usize> = Vec::new();
@@ -305,9 +345,7 @@ where
         }
     }
 
-    if let Some(listener) = event_listener {
-        notify_migration_listener(listener, MigrationEvent::Started { plan: plan.clone() });
-    }
+    dispatcher.notify(MigrationEvent::Started { plan: plan.clone() });
     progress.on_plan_start(plan);
 
     for step in &plan.steps {
@@ -336,22 +374,14 @@ where
 
     if plan.dry_run {
         let report = execute_dry_run(storage, plan)?;
-        if let Some(listener) = event_listener {
-            if report.success {
-                notify_migration_listener(
-                    listener,
-                    MigrationEvent::Completed {
-                        report: report.clone(),
-                    },
-                );
-            } else {
-                notify_migration_listener(
-                    listener,
-                    MigrationEvent::Failed {
-                        error: report.errors.join("; "),
-                    },
-                );
-            }
+        if report.success {
+            dispatcher.notify(MigrationEvent::Completed {
+                report: report.clone(),
+            });
+        } else {
+            dispatcher.notify(MigrationEvent::Failed {
+                error: report.errors.join("; "),
+            });
         }
         progress.on_plan_complete(plan, report.rows_migrated);
         return Ok(report);
@@ -369,12 +399,7 @@ where
                         "Checksum mismatch for version {}: stored hash {} != plan hash {}",
                         rec.to_version, rec.plan_hash, plan.plan_hash
                     );
-                    if let Some(listener) = event_listener {
-                        notify_migration_listener(
-                            listener,
-                            MigrationEvent::Failed { error: err.clone() },
-                        );
-                    }
+                    dispatcher.notify(MigrationEvent::Failed { error: err.clone() });
                     global_migration_metrics().record_failure(start.elapsed().as_millis() as u64);
                     return Err(MigrationError::Plan(err));
                 }
@@ -401,14 +426,9 @@ where
             errors: vec![],
             completed_step_indices: all_done.clone(),
         };
-        if let Some(listener) = event_listener {
-            notify_migration_listener(
-                listener,
-                MigrationEvent::Completed {
-                    report: report.clone(),
-                },
-            );
-        }
+        dispatcher.notify(MigrationEvent::Completed {
+            report: report.clone(),
+        });
         progress.on_plan_complete(plan, 0);
         if let Some(dir) = checkpoint_dir {
             let _ = crate::plan::MigrationCheckpoint::cleanup(plan, dir);
@@ -468,14 +488,9 @@ where
             completed_step_indices: all_completed.clone(),
         };
         record_migration_history(storage, plan, 0, MigrationStatus::Applied, None);
-        if let Some(listener) = event_listener {
-            notify_migration_listener(
-                listener,
-                MigrationEvent::Completed {
-                    report: report.clone(),
-                },
-            );
-        }
+        dispatcher.notify(MigrationEvent::Completed {
+            report: report.clone(),
+        });
         progress.on_plan_complete(plan, 0);
         global_migration_metrics()
             .record_success(report.rows_migrated, start.elapsed().as_millis() as u64);
@@ -521,9 +536,7 @@ where
     for &idx in &data_remaining {
         let step = &plan.steps[idx];
         progress.on_step_start(idx, step);
-        if let Some(listener) = event_listener {
-            notify_migration_listener(listener, MigrationEvent::StepStarted { step_idx: idx });
-        }
+        dispatcher.notify(MigrationEvent::StepStarted { step_idx: idx });
 
         let single_slice = vec![idx];
         let step_report = if plan.target.is_edge {
@@ -563,14 +576,9 @@ where
                 MigrationStatus::Failed,
                 Some(step_report.errors.join("; ")),
             );
-            if let Some(listener) = event_listener {
-                notify_migration_listener(
-                    listener,
-                    MigrationEvent::Failed {
-                        error: step_report.errors.join("; "),
-                    },
-                );
-            }
+            dispatcher.notify(MigrationEvent::Failed {
+                error: step_report.errors.join("; "),
+            });
             for err in &step_report.errors {
                 progress.on_error(err);
             }
@@ -595,15 +603,10 @@ where
         all_completed.sort_unstable();
 
         progress.on_step_complete(idx, step);
-        if let Some(listener) = event_listener {
-            notify_migration_listener(
-                listener,
-                MigrationEvent::StepCompleted {
-                    step_idx: idx,
-                    rows: step_report.rows_migrated,
-                },
-            );
-        }
+        dispatcher.notify(MigrationEvent::StepCompleted {
+            step_idx: idx,
+            rows: step_report.rows_migrated,
+        });
 
         let cp = crate::plan::MigrationCheckpoint {
             completed_step_index: idx,
@@ -643,14 +646,9 @@ where
         completed_step_indices: all_completed.clone(),
     };
     record_migration_history(storage, plan, final_rows, MigrationStatus::Applied, None);
-    if let Some(listener) = event_listener {
-        notify_migration_listener(
-            listener,
-            MigrationEvent::Completed {
-                report: report.clone(),
-            },
-        );
-    }
+    dispatcher.notify(MigrationEvent::Completed {
+        report: report.clone(),
+    });
     progress.on_plan_complete(plan, final_rows);
     global_migration_metrics().record_success(final_rows, start.elapsed().as_millis() as u64);
     Ok(report)
@@ -2653,6 +2651,7 @@ mod tests {
             &crate::progress::NoopProgress,
             None,
             None,
+            None,
             Some(tmp.path()),
         )
         .unwrap();
@@ -2709,6 +2708,7 @@ mod tests {
             &mut storage,
             &plan,
             &crate::progress::NoopProgress,
+            None,
             None,
             None,
             Some(tmp.path()),

@@ -273,7 +273,22 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
 
         txn_manager
             .commit_transaction(self.txn_handle.0)
-            .map_err(|e| crate::api_core::error::CoreError::TransactionFailed(e.to_string()))?;
+            .map_err(|e| {
+                use graphdb_transaction::TransactionErrorKind;
+                // A veto leaves the transaction active by contract; roll it
+                // back here so callers observe sqlite-style veto-means-abort
+                // without a second decision point.
+                if e.kind() == TransactionErrorKind::CommitVetoed {
+                    if let Err(abort_error) = txn_manager.abort_transaction(self.txn_handle.0) {
+                        log::error!(
+                            "Abort-after-veto failed for transaction {}: {}",
+                            self.txn_handle.0,
+                            abort_error
+                        );
+                    }
+                }
+                crate::api_core::error::CoreError::TransactionFailed(e.to_string())
+            })?;
         self.committed = true;
         Ok(())
     }

@@ -22,6 +22,8 @@ use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, Subscription
 /// variant, so high-frequency progress never touches the low-frequency
 /// session-lifecycle matches. Zero overhead when no observer is registered.
 /// The executor calls `emit_progress` only at its configured row interval.
+/// The notification is valid only for the dispatch call; observers must
+/// not retain it beyond the callback.
 #[derive(Debug, Clone)]
 pub struct QueryProgress {
     pub session_id: i64,

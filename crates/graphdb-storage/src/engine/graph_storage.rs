@@ -889,6 +889,11 @@ impl GraphStorage {
         self.ctx.unregister_schema_callback(id)
     }
 
+    /// Number of registered schema-change observers (diagnostics).
+    pub fn schema_callback_count(&self) -> usize {
+        self.ctx.schema_callback_count()
+    }
+
     /// Shared schema-event registry for the central `HookBus`.
     pub fn shared_schema_callbacks(
         &self,
@@ -899,12 +904,78 @@ impl GraphStorage {
     }
 
     /// Register a storage-lifecycle observer on the persistence coordinator.
+    ///
+    /// Returns `None` when no persistence coordinator is attached (e.g.
+    /// pure in-memory mode); otherwise returns the subscription id, which
+    /// can be passed to `unregister_storage_callback`.
     pub fn register_storage_callback(
         &self,
         callback: crate::engine::persistence_coordinator::StorageEventCallback,
-    ) {
+    ) -> Option<graphdb_core::event_dispatch::SubscriptionId> {
         if let Some(persistence) = self.ctx.persistence() {
-            persistence.read().register_storage_callback(callback);
+            Some(persistence.read().register_storage_callback(callback))
+        } else {
+            None
+        }
+    }
+
+    /// Register a filtered storage-lifecycle observer (only invoked when
+    /// `filter` returns true). Returns `None` without a coordinator.
+    pub fn register_storage_callback_filtered(
+        &self,
+        callback: crate::engine::persistence_coordinator::StorageEventCallback,
+        filter: graphdb_core::event_dispatch::EventFilter<
+            crate::engine::persistence_coordinator::StorageEvent,
+        >,
+    ) -> Option<graphdb_core::event_dispatch::SubscriptionId> {
+        if let Some(persistence) = self.ctx.persistence() {
+            Some(
+                persistence
+                    .read()
+                    .register_storage_callback_filtered(callback, filter),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Remove a previously registered storage-lifecycle observer.
+    /// Returns false when unknown or without a coordinator.
+    pub fn unregister_storage_callback(
+        &self,
+        id: graphdb_core::event_dispatch::SubscriptionId,
+    ) -> bool {
+        if let Some(persistence) = self.ctx.persistence() {
+            persistence.read().unregister_storage_callback(id)
+        } else {
+            false
+        }
+    }
+
+    /// Number of registered storage-lifecycle observers (diagnostics).
+    pub fn storage_callback_count(&self) -> usize {
+        if let Some(persistence) = self.ctx.persistence() {
+            persistence.read().storage_callback_count()
+        } else {
+            0
+        }
+    }
+
+    /// Shared storage-event registry for the central `HookBus`.
+    /// Returns `None` without an attached persistence coordinator.
+    pub fn shared_storage_callbacks(
+        &self,
+    ) -> Option<
+        Arc<
+            graphdb_core::event_dispatch::EventSubscriptions<
+                crate::engine::persistence_coordinator::StorageEvent,
+            >,
+        >,
+    > {
+        if let Some(persistence) = self.ctx.persistence() {
+            Some(persistence.read().shared_storage_callbacks())
+        } else {
+            None
         }
     }
 

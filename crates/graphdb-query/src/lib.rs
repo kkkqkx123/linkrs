@@ -11,6 +11,7 @@ pub mod binder;
 pub mod cache;
 pub mod context;
 pub mod cte;
+pub mod dml_events;
 pub mod executor;
 pub mod extensions;
 pub mod metadata;
@@ -53,6 +54,7 @@ pub use extensions::{
 pub mod experimental_pipeline_extensions {
     pub use super::extensions::*;
 }
+pub use dml_events::{classify_dml, DmlOp, DmlStatementCallback, DmlStatementEvent};
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;

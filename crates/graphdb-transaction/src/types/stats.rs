@@ -55,6 +55,12 @@ pub struct TransactionMetrics {
     pub timeout_transactions: u64,
     pub disconnect_transactions: u64,
     pub cleanup_failure_transactions: u64,
+    /// Observer deliveries fanned out by hook emission.
+    pub hook_dispatch_total: u64,
+    /// Panicking hook observers (isolated, delivery continued).
+    pub hook_panic_total: u64,
+    /// Hook callbacks reaching the slow threshold (timed dispatch only).
+    pub hook_slow_total: u64,
     pub active_statements: u64,
     pub conflict_breakdown: ConflictBreakdown,
 }
@@ -103,6 +109,16 @@ pub struct TransactionStats {
     pub recovery_abort_transactions: AtomicU64,
     /// Transactions whose cleanup protocol reported an error.
     pub cleanup_failure_transactions: AtomicU64,
+    /// Event-hook dispatches fanned out to transaction observers
+    /// (`emit_commit/rollback/budget_warning_event`).
+    pub hook_dispatch_total: AtomicU64,
+    /// Hook dispatches where at least one observer panicked (isolated,
+    /// delivery to the rest continued).
+    pub hook_panic_total: AtomicU64,
+    /// Hook callbacks reaching the slow threshold under timed dispatch.
+    /// Plain `dispatch` never times, so this only moves when a timed
+    /// emission path is used.
+    pub hook_slow_total: AtomicU64,
     /// Number of statements currently being executed.
     pub active_statements: AtomicU64,
     /// Sliding window of conflict counts per second (circular buffer).
@@ -131,6 +147,9 @@ impl Default for TransactionStats {
             disconnect_transactions: AtomicU64::new(0),
             recovery_abort_transactions: AtomicU64::new(0),
             cleanup_failure_transactions: AtomicU64::new(0),
+            hook_dispatch_total: AtomicU64::new(0),
+            hook_panic_total: AtomicU64::new(0),
+            hook_slow_total: AtomicU64::new(0),
             active_statements: AtomicU64::new(0),
             window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
                 .map(|_| AtomicU64::new(0))
@@ -181,6 +200,25 @@ impl TransactionStats {
     pub fn increment_cleanup_failure(&self) {
         self.cleanup_failure_transactions
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record one hook fan-out delivering to `delivered` observers with
+    /// `panics` panicking observers.
+    pub fn record_hook_dispatch(&self, delivered: usize, panics: usize) {
+        self.hook_dispatch_total
+            .fetch_add(delivered as u64, Ordering::Relaxed);
+        if panics > 0 {
+            self.hook_panic_total
+                .fetch_add(panics as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Record `slow` callbacks flagged by a timed dispatch.
+    pub fn record_hook_slow(&self, slow: usize) {
+        if slow > 0 {
+            self.hook_slow_total
+                .fetch_add(slow as u64, Ordering::Relaxed);
+        }
     }
 
     pub fn begin_statement(&self) {

@@ -2,18 +2,26 @@
 //!
 //! Notification hooks only: observers run synchronously inline on the emitter
 //! path with best-effort `catch_unwind` isolation (see
-//! `graphdb_core::event_dispatch`). Decision hooks (C-API `commit_hook` veto
-//! semantics) are a separate mechanism and are explicitly excluded here.
+//! `graphdb_core::event_dispatch`). The one decision hook (commit veto) lives
+//! on the transaction manager (`register_commit_veto`); the C-API
+//! `graphdb_commit_hook` is bridged into that same registry, so C and Rust
+//! vetoes share one evaluation point with first-veto-wins semantics.
 //!
 //! The bus forwards subscriptions to the leaf registries and hands out its own
 //! bus-level ids, keeping a `bus id -> (leaf registry, leaf id)` map so one
 //! `unsubscribe` stops delivery everywhere. Leaf `dispatch` paths are
 //! untouched: no event data moves, no async channel.
 //!
-//! Scope: registries visible from the embedded layer (schema, transaction).
-//! The server-side `GraphSessionManager` registry is aggregated by the server
-//! layer, not here; a session/query registry can be attached later via
-//! `attach_session_registry` once the executor assembly owns both halves.
+//! Scope: registries visible from the embedded layer (schema, transaction,
+//! storage, index). The server-side `GraphSessionManager` registry is
+//! aggregated by the server layer, not here; a session/query registry can be
+//! attached later via `attach_session_registry` once the executor assembly
+//! owns both halves.
+//!
+//! A `None` return from `subscribe_*` means that domain's registry is not
+//! attached in this backend (e.g. mocks, disabled fulltext): it signals
+//! "unavailable here", not "no events are happening". Use the
+//! `has_*_registry` guards to branch explicitly instead of ignoring it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +29,9 @@ use std::sync::Arc;
 
 use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use graphdb_core::metadata::{SchemaChangeCallback, SchemaChangeEvent};
-use graphdb_query::{SessionEvent, SessionEventCallback};
+use graphdb_query::{
+    DmlOp, DmlStatementCallback, DmlStatementEvent, SessionEvent, SessionEventCallback,
+};
 use graphdb_transaction::{RollbackCallback, TransactionEvent, TxnCallback};
 use parking_lot::RwLock;
 
@@ -30,6 +40,15 @@ enum BusTarget {
     Schema(Arc<EventSubscriptions<SchemaChangeEvent>>, SubscriptionId),
     Txn(Arc<EventSubscriptions<TransactionEvent>>, SubscriptionId),
     Session(Arc<EventSubscriptions<SessionEvent>>, SubscriptionId),
+    Storage(
+        Arc<EventSubscriptions<graphdb_storage::StorageEvent>>,
+        SubscriptionId,
+    ),
+    Index(
+        Arc<EventSubscriptions<graphdb_fulltext::IndexEvent>>,
+        SubscriptionId,
+    ),
+    Dml(Arc<EventSubscriptions<DmlStatementEvent>>, SubscriptionId),
 }
 
 /// Unified subscription entry point for embedded event hooks.
@@ -39,11 +58,18 @@ pub struct HookBus {
     txn_events: Arc<EventSubscriptions<TransactionEvent>>,
     schema_events: Option<Arc<EventSubscriptions<SchemaChangeEvent>>>,
     session_events: RwLock<Option<Arc<EventSubscriptions<SessionEvent>>>>,
+    storage_events: RwLock<Option<Arc<EventSubscriptions<graphdb_storage::StorageEvent>>>>,
+    index_events: RwLock<Option<Arc<EventSubscriptions<graphdb_fulltext::IndexEvent>>>>,
+    /// Statement-level DML registry, owned by the bus itself: no other
+    /// manager emits these, so no attach step is needed. Always present,
+    /// zero overhead when empty.
+    dml_events: Arc<EventSubscriptions<DmlStatementEvent>>,
 }
 
 impl HookBus {
     /// Build a bus over the unified transaction registry and an optional
     /// shared schema registry (`None` for storages without one, e.g. mocks).
+    /// Storage/index/session registries attach later via `attach_*`.
     pub fn new(
         txn_events: Arc<EventSubscriptions<TransactionEvent>>,
         schema_events: Option<Arc<EventSubscriptions<SchemaChangeEvent>>>,
@@ -54,6 +80,9 @@ impl HookBus {
             txn_events,
             schema_events,
             session_events: RwLock::new(None),
+            storage_events: RwLock::new(None),
+            index_events: RwLock::new(None),
+            dml_events: Arc::new(EventSubscriptions::new()),
         }
     }
 
@@ -69,6 +98,42 @@ impl HookBus {
     /// owns both emission halves.
     pub fn attach_session_registry(&self, shared: Arc<EventSubscriptions<SessionEvent>>) {
         *self.session_events.write() = Some(shared);
+    }
+
+    /// Attach the shared storage-lifecycle registry (persistence coordinator).
+    pub fn attach_storage_registry(
+        &self,
+        shared: Arc<EventSubscriptions<graphdb_storage::StorageEvent>>,
+    ) {
+        *self.storage_events.write() = Some(shared);
+    }
+
+    /// Attach the shared fulltext/vector index-lifecycle registry.
+    pub fn attach_index_registry(
+        &self,
+        shared: Arc<EventSubscriptions<graphdb_fulltext::IndexEvent>>,
+    ) {
+        *self.index_events.write() = Some(shared);
+    }
+
+    /// Whether a schema registry is attached in this backend.
+    pub fn has_schema_registry(&self) -> bool {
+        self.schema_events.is_some()
+    }
+
+    /// Whether a session/query registry has been attached.
+    pub fn has_session_registry(&self) -> bool {
+        self.session_events.read().is_some()
+    }
+
+    /// Whether a storage-lifecycle registry has been attached.
+    pub fn has_storage_registry(&self) -> bool {
+        self.storage_events.read().is_some()
+    }
+
+    /// Whether an index-lifecycle registry has been attached.
+    pub fn has_index_registry(&self) -> bool {
+        self.index_events.read().is_some()
     }
 
     fn insert(&self, target: BusTarget) -> SubscriptionId {
@@ -88,6 +153,9 @@ impl HookBus {
             BusTarget::Schema(registry, leaf) => registry.remove(leaf),
             BusTarget::Txn(registry, leaf) => registry.remove(leaf),
             BusTarget::Session(registry, leaf) => registry.remove(leaf),
+            BusTarget::Storage(registry, leaf) => registry.remove(leaf),
+            BusTarget::Index(registry, leaf) => registry.remove(leaf),
+            BusTarget::Dml(registry, leaf) => registry.remove(leaf),
         }
     }
 
@@ -170,8 +238,9 @@ impl HookBus {
         callback: TxnCallback,
         filter: EventFilter<TransactionEvent>,
     ) -> SubscriptionId {
-        let combined: EventFilter<TransactionEvent> =
-            Arc::new(move |event| matches!(event, TransactionEvent::BudgetWarning { .. }) && filter(event));
+        let combined: EventFilter<TransactionEvent> = Arc::new(move |event| {
+            matches!(event, TransactionEvent::BudgetWarning { .. }) && filter(event)
+        });
         self.subscribe_txn_filtered(callback, combined)
     }
 
@@ -192,6 +261,90 @@ impl HookBus {
         let registry = Arc::clone(self.session_events.read().as_ref()?);
         let leaf = registry.add_filtered(callback, Some(filter));
         Some(self.insert(BusTarget::Session(registry, leaf)))
+    }
+
+    /// Subscribe to storage lifecycle events (checkpoint/WAL/GC/compaction).
+    /// Returns `None` until a coordinator registry is attached via
+    /// `attach_storage_registry`.
+    pub fn subscribe_storage(
+        &self,
+        callback: graphdb_storage::StorageEventCallback,
+    ) -> Option<SubscriptionId> {
+        let registry = Arc::clone(self.storage_events.read().as_ref()?);
+        let leaf = registry.add(callback);
+        Some(self.insert(BusTarget::Storage(registry, leaf)))
+    }
+
+    /// Filtered storage subscription. Returns `None` without an attached registry.
+    pub fn subscribe_storage_filtered(
+        &self,
+        callback: graphdb_storage::StorageEventCallback,
+        filter: EventFilter<graphdb_storage::StorageEvent>,
+    ) -> Option<SubscriptionId> {
+        let registry = Arc::clone(self.storage_events.read().as_ref()?);
+        let leaf = registry.add_filtered(callback, Some(filter));
+        Some(self.insert(BusTarget::Storage(registry, leaf)))
+    }
+
+    /// Subscribe to index lifecycle events (fulltext/vector build/drop/merge).
+    /// Returns `None` until an index registry is attached via
+    /// `attach_index_registry`.
+    pub fn subscribe_index(
+        &self,
+        callback: graphdb_fulltext::IndexEventCallback,
+    ) -> Option<SubscriptionId> {
+        let registry = Arc::clone(self.index_events.read().as_ref()?);
+        let leaf = registry.add(callback);
+        Some(self.insert(BusTarget::Index(registry, leaf)))
+    }
+
+    /// Filtered index subscription. Returns `None` without an attached registry.
+    pub fn subscribe_index_filtered(
+        &self,
+        callback: graphdb_fulltext::IndexEventCallback,
+        filter: EventFilter<graphdb_fulltext::IndexEvent>,
+    ) -> Option<SubscriptionId> {
+        let registry = Arc::clone(self.index_events.read().as_ref()?);
+        let leaf = registry.add_filtered(callback, Some(filter));
+        Some(self.insert(BusTarget::Index(registry, leaf)))
+    }
+
+    /// Subscribe to statement-level DML notifications (always available;
+    /// the bus owns this registry, so no attach step exists).
+    pub fn subscribe_dml(&self, callback: DmlStatementCallback) -> SubscriptionId {
+        let registry = Arc::clone(&self.dml_events);
+        let leaf = registry.add(callback);
+        self.insert(BusTarget::Dml(registry, leaf))
+    }
+
+    /// Filtered DML subscription (e.g. only `DmlOp::Delete`).
+    pub fn subscribe_dml_filtered(
+        &self,
+        callback: DmlStatementCallback,
+        filter: EventFilter<DmlStatementEvent>,
+    ) -> SubscriptionId {
+        let registry = Arc::clone(&self.dml_events);
+        let leaf = registry.add_filtered(callback, Some(filter));
+        self.insert(BusTarget::Dml(registry, leaf))
+    }
+    /// Emit one statement-level DML notification. No-op when nobody listens.
+    pub(crate) fn emit_dml(&self, op: DmlOp, space_name: &str, rows: u64) {
+        if self.dml_events.is_empty() {
+            return;
+        }
+        self.dml_events.dispatch(
+            "dml",
+            &DmlStatementEvent {
+                op,
+                space_name: space_name.to_string(),
+                rows,
+            },
+        );
+    }
+
+    /// Whether any statement-level DML observer is registered.
+    pub(crate) fn has_dml_observers(&self) -> bool {
+        !self.dml_events.is_empty()
     }
 }
 
@@ -278,5 +431,121 @@ mod tests {
             .subscribe_session(Arc::new(|_| {}))
             .expect("attached registry serves subscriptions");
         assert!(bus.unsubscribe(id));
+    }
+
+    #[test]
+    fn storage_and_index_subscription_require_attached_registries() {
+        use graphdb_fulltext::IndexEvent;
+        use graphdb_storage::StorageEvent;
+
+        let bus = HookBus::new(
+            Arc::new(EventSubscriptions::<TransactionEvent>::new()),
+            None,
+        );
+        assert!(!bus.has_schema_registry());
+        assert!(!bus.has_session_registry());
+        assert!(!bus.has_storage_registry());
+        assert!(!bus.has_index_registry());
+        assert!(bus.subscribe_storage(Arc::new(|_| {})).is_none());
+        assert!(bus.subscribe_index(Arc::new(|_| {})).is_none());
+
+        let storage_shared = Arc::new(EventSubscriptions::<StorageEvent>::new());
+        let index_shared = Arc::new(EventSubscriptions::<IndexEvent>::new());
+        bus.attach_storage_registry(Arc::clone(&storage_shared));
+        bus.attach_index_registry(Arc::clone(&index_shared));
+        assert!(bus.has_storage_registry());
+        assert!(bus.has_index_registry());
+
+        let storage_hits = Arc::new(AtomicUsize::new(0));
+        let index_hits = Arc::new(AtomicUsize::new(0));
+        let storage_probe = Arc::clone(&storage_hits);
+        let index_probe = Arc::clone(&index_hits);
+        let storage_id = bus
+            .subscribe_storage(Arc::new(move |_| {
+                storage_probe.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("attached storage registry serves subscriptions");
+        let index_id = bus
+            .subscribe_index_filtered(
+                Arc::new(move |_| {
+                    index_probe.fetch_add(1, Ordering::SeqCst);
+                }),
+                Arc::new(|event| matches!(event, IndexEvent::FulltextRefresh { .. })),
+            )
+            .expect("attached index registry serves subscriptions");
+        assert_eq!(bus.subscription_count(), 2);
+
+        storage_shared.dispatch(
+            "test",
+            &StorageEvent::GcRun {
+                reclaimed_entries: 7,
+            },
+        );
+        index_shared.dispatch(
+            "test",
+            &IndexEvent::FulltextBuildStarted {
+                index_name: "idx".to_string(),
+            },
+        );
+        index_shared.dispatch(
+            "test",
+            &IndexEvent::FulltextRefresh {
+                index_name: "idx".to_string(),
+            },
+        );
+        assert_eq!(storage_hits.load(Ordering::SeqCst), 1);
+        // Filtered index subscription only sees the refresh.
+        assert_eq!(index_hits.load(Ordering::SeqCst), 1);
+
+        assert!(bus.unsubscribe(storage_id));
+        assert!(bus.unsubscribe(index_id));
+        assert_eq!(bus.subscription_count(), 0);
+        storage_shared.dispatch(
+            "test",
+            &StorageEvent::GcRun {
+                reclaimed_entries: 1,
+            },
+        );
+        assert_eq!(storage_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn dml_notifications_carry_op_space_and_rows() {
+        use graphdb_query::DmlOp;
+
+        let bus = HookBus::new(
+            Arc::new(EventSubscriptions::<TransactionEvent>::new()),
+            None,
+        );
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let probe = Arc::clone(&seen);
+        let all_id = bus.subscribe_dml(Arc::new(move |event| {
+            probe
+                .lock()
+                .push((event.op, event.space_name.clone(), event.rows));
+        }));
+        let delete_hits = Arc::new(AtomicUsize::new(0));
+        let delete_probe = Arc::clone(&delete_hits);
+        let delete_id = bus.subscribe_dml_filtered(
+            Arc::new(move |_| {
+                delete_probe.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(|event| event.op == DmlOp::Delete),
+        );
+
+        bus.emit_dml(DmlOp::Insert, "users", 3);
+        bus.emit_dml(DmlOp::Delete, "users", 1);
+        assert_eq!(
+            *seen.lock(),
+            vec![
+                (DmlOp::Insert, "users".to_string(), 3),
+                (DmlOp::Delete, "users".to_string(), 1),
+            ]
+        );
+        assert_eq!(delete_hits.load(Ordering::SeqCst), 1);
+
+        assert!(bus.unsubscribe(all_id));
+        assert!(bus.unsubscribe(delete_id));
+        assert_eq!(bus.subscription_count(), 0);
     }
 }

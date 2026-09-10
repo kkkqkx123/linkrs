@@ -141,6 +141,9 @@ impl SchemaManager {
     }
 
     fn emit_schema_event(&self, event: SchemaChangeEvent) {
+        if self.schema_callbacks.is_empty() {
+            return;
+        }
         self.schema_callbacks.dispatch("schema", &event);
     }
 

@@ -385,6 +385,16 @@ impl GraphDatabase<GraphStorage> {
             &txn_manager,
             Some(storage.read().shared_schema_callbacks()),
         );
+        // Aggregate leaf registries so one bus subscription covers the whole
+        // backend. Each attach is best-effort: backends without a coordinator
+        // (in-memory) simply leave the domain unattached (`has_*_registry`).
+        if let Some(shared) = storage.read().shared_storage_callbacks() {
+            hooks.attach_storage_registry(shared);
+        }
+        #[cfg(feature = "fulltext")]
+        if let Some(ref manager) = fulltext_manager {
+            hooks.attach_index_registry(manager.shared_index_callbacks());
+        }
 
         let inner = Arc::new(GraphDatabaseInner {
             query_api,

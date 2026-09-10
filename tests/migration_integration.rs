@@ -55,6 +55,51 @@ fn test_execute_migration_plan_empty() {
 }
 
 #[test]
+fn test_migration_event_registry_receives_lifecycle() {
+    use graphdb::migration::{
+        execute_migration_plan_with_event_registry, MigrationEvent, NoopProgress,
+    };
+    use graphdb_core::event_dispatch::EventSubscriptions;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    let mut storage = MockStorage::new().expect("mock storage");
+    let plan = MigrationPlan::new(
+        MigrationTarget {
+            space: "test_space".into(),
+            label: "test_tag".into(),
+            is_edge: false,
+        },
+        VersionRange { from: 1, to: 2 },
+        vec![],
+        0,
+        SafetyLevel::Safe,
+        None,
+    );
+    let registry = Arc::new(EventSubscriptions::<MigrationEvent>::new());
+    let hits = Arc::new(AtomicUsize::new(0));
+    let probe = Arc::clone(&hits);
+    registry.add(Arc::new(move |_| {
+        probe.fetch_add(1, Ordering::SeqCst);
+    }));
+    let report = execute_migration_plan_with_event_registry(
+        &mut storage,
+        &plan,
+        &NoopProgress,
+        None,
+        Some(&registry),
+        None,
+        None,
+    );
+    assert!(report.is_ok());
+    assert!(report.unwrap().success);
+    // Empty plan emits Started + Completed through the registry.
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn test_rollback_migration_no_plan() {
     let mut storage = MockStorage::new().expect("mock storage");
     let plan = MigrationPlan::new(

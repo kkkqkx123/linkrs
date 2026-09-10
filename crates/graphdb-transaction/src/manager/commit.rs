@@ -15,6 +15,8 @@ impl TransactionManager {
     /// 1. Check state and timeout (transaction still active)
     /// 2. Transition to Committing (marks in-progress, prevents concurrent operations)
     /// 3. Certify the write set (pre-check; conflicts abort before any I/O)
+    /// 3b. Evaluate commit-veto hooks (first veto fails the commit without
+    ///    aborting; the caller must roll back)
     /// 4. Persist through the configured storage commit sink with exponential backoff retries
     /// 5. Publish the write set into the certifier
     /// 6. Finalize through the commit sink (storage visibility point)
@@ -83,6 +85,16 @@ impl TransactionManager {
             || context.get_type() == TransactionType::Dummy
         {
             return Err(TransactionError::invalid_state_for_commit(context.state()));
+        }
+
+        // Pre-commit decision hooks: evaluated after certification and
+        // before any WAL I/O. A veto fails the commit WITHOUT aborting;
+        // the transaction stays active and the caller must roll it back.
+        if let Some(reason) = self.eval_commit_vetoes(&context) {
+            return Err(TransactionError::commit_vetoed(format!(
+                "Commit vetoed for transaction {}: {}",
+                txn_id, reason
+            )));
         }
 
         context.transition_to(TransactionState::Committing)?;
@@ -289,14 +301,18 @@ impl TransactionManager {
         context.transition_to(TransactionState::Committed)?;
         self.active_transactions.remove(&txn_id);
         self.drain_context_budget_warnings(&context);
-        self.emit_commit_event(TransactionEvent::Committed {
-            txn_id,
-            write_timestamp: context.timestamp(),
-            commit_timestamp: commit_ts,
-            write_set: Box::new(descriptor.write_set),
-            schema_catalog_version: context.schema_catalog_version(),
-            replayed: false,
-        });
+        // Skip boxing the write set when nobody listens: the event is only
+        // consumed by observers.
+        if self.commit_callback_count() != 0 {
+            self.emit_commit_event(TransactionEvent::Committed {
+                txn_id,
+                write_timestamp: context.timestamp(),
+                commit_timestamp: commit_ts,
+                write_set: Box::new(descriptor.write_set),
+                schema_catalog_version: context.schema_catalog_version(),
+                replayed: false,
+            });
+        }
 
         log::info!(
             "transaction committed: txn={:?} commit_lsn={:?} write_ts={} commit_ts={}",
@@ -441,14 +457,17 @@ impl TransactionManager {
         self.active_transactions.remove(&txn_id);
         self.certifier.unregister_reads(txn_id);
         self.drain_context_budget_warnings(&context);
-        self.emit_commit_event(TransactionEvent::Committed {
-            txn_id,
-            write_timestamp: context.timestamp(),
-            commit_timestamp: commit_ts,
-            write_set: Box::new(descriptor.write_set),
-            schema_catalog_version: context.schema_catalog_version(),
-            replayed: true,
-        });
+        // Skip boxing the write set when nobody listens (see commit path).
+        if self.commit_callback_count() != 0 {
+            self.emit_commit_event(TransactionEvent::Committed {
+                txn_id,
+                write_timestamp: context.timestamp(),
+                commit_timestamp: commit_ts,
+                write_set: Box::new(descriptor.write_set),
+                schema_catalog_version: context.schema_catalog_version(),
+                replayed: true,
+            });
+        }
         Ok(())
     }
 

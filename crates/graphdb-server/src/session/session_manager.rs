@@ -185,6 +185,9 @@ impl GraphSessionManager {
     }
 
     fn emit_session_event(&self, event: SessionEvent) {
+        if self.session_callbacks.is_empty() {
+            return;
+        }
         self.session_callbacks.dispatch("session", &event);
     }
 

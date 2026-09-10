@@ -271,47 +271,34 @@ pub unsafe extern "C" fn graphdb_txn_commit(txn: *mut graphdb_txn_t) -> c_int {
     // Get session pointer for later use
     let session_ptr = handle.session;
 
-    // Execute commit hook if present.
-    // Decision-hook semantics: a non-zero return vetoes the commit and the
-    // transaction is rolled back instead. A panicking callback is isolated,
-    // logged, and treated as no-veto so a broken observer cannot block
-    // commits forever.
-    {
-        let session = &*session_ptr;
-        if let Some(callback) = session.commit_hook {
-            let user_data = session.commit_hook_user_data;
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(user_data)));
-            match outcome {
-                Ok(result) => {
-                    if result != 0 {
-                        return graphdb_txn_rollback(txn);
-                    }
-                }
-                Err(_) => {
-                    log::error!("commit hook panicked; continuing commit");
-                }
-            }
-        }
-    }
-
-    let txn_handle = match handle.txn_handle.take() {
-        Some(h) => h,
-        None => return graphdb_error_code_t::GRAPHDB_INTERNAL as c_int,
-    };
+    // NOTE: the C commit hook is bridged into the transaction manager's
+    // veto registry at `graphdb_commit_hook` time, so evaluation happens
+    // inside `commit_transaction` below (shared point with Rust
+    // `register_commit_veto` hooks). No direct invocation here.
 
     // Use embedded session API instead of direct TransactionManager access
     let session = &*session_ptr;
 
-    // Commit transaction (synchronous, no longer async)
-    let result = session.inner.commit_transaction(txn_handle);
-
+    // Commit transaction (synchronous, no longer async). A veto fails with
+    // `CommitVetoed` and leaves the transaction active; roll it back
+    // through the standard path so the rollback hook fires, exactly like
+    // the historical pre-commit veto behavior.
+    let txn_id = match handle.txn_handle.as_ref() {
+        Some(h) => h.0,
+        None => return graphdb_error_code_t::GRAPHDB_INTERNAL as c_int,
+    };
+    let result = session.inner.txn_manager().commit_transaction(txn_id);
     match result {
         Ok(_) => {
+            handle.txn_handle.take();
             handle.committed = true;
             graphdb_error_code_t::GRAPHDB_OK as c_int
         }
+        Err(e) if e.kind() == graphdb_transaction::TransactionErrorKind::CommitVetoed => {
+            graphdb_txn_rollback(txn)
+        }
         Err(e) => {
+            handle.txn_handle.take();
             let error_code = graphdb_error_code_t::GRAPHDB_ABORT as c_int;
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);

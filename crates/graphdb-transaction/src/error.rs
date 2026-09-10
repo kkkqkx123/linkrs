@@ -45,6 +45,7 @@ pub enum TransactionErrorKind {
     CheckpointInProgress,
     CheckpointTimeout,
     TransactionBudgetExceeded,
+    CommitVetoed,
     Internal,
 }
 
@@ -77,6 +78,7 @@ impl TransactionErrorKind {
             TransactionErrorKind::CheckpointInProgress => "checkpoint_in_progress",
             TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
             TransactionErrorKind::TransactionBudgetExceeded => "transaction_budget_exceeded",
+            TransactionErrorKind::CommitVetoed => "commit_vetoed",
             TransactionErrorKind::Internal => "internal",
         }
     }
@@ -132,6 +134,10 @@ impl TransactionError {
 
     pub fn commit_failed(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::CommitFailed, message)
+    }
+
+    pub fn commit_vetoed(reason: impl Into<String>) -> Self {
+        Self::new(TransactionErrorKind::CommitVetoed, reason)
     }
 
     pub fn abort_failed(message: impl Into<String>) -> Self {

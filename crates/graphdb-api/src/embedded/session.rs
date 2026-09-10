@@ -169,6 +169,25 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         *self.space_id.read()
     }
 
+    /// Classify `query` and emit a statement-level DML notification when it
+    /// is a write. No-op for read-only text and when nobody subscribes
+    /// (`HookBus::subscribe_dml`). Returns the classified operation so
+    /// callers sharing the classification (e.g. the C-API update hook) do
+    /// not scan the text twice.
+    pub(crate) fn notify_dml(&self, query: &str, rows: u64) -> Option<graphdb_query::DmlOp> {
+        let op = graphdb_query::classify_dml(query)?;
+        let space = self
+            .current_space()
+            .unwrap_or_else(|| "default".to_string());
+        self.db.hooks.emit_dml(op, &space, rows);
+        Some(op)
+    }
+
+    /// Whether any statement-level DML observer is registered.
+    pub(crate) fn has_dml_observers(&self) -> bool {
+        self.db.hooks.has_dml_observers()
+    }
+
     /// After executing a query, check if the result represents a space switch
     /// (from USE <space>), and persist the new space context on this session.
     ///
@@ -361,6 +380,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
+
+        self.notify_dml(query, result.metadata.rows_returned as u64);
 
         Ok(QueryResult::from_core(result))
     }
@@ -602,6 +623,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         txn_manager
             .finish_statement(&ctx, statement_start)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+        self.notify_dml(query, result.metadata.rows_returned as u64);
         Ok(QueryResult::from_core(result))
     }
 
@@ -782,6 +804,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
 
+        self.notify_dml(query, result.metadata.rows_returned as u64);
+
         Ok(QueryResult::from_core(result))
     }
 
@@ -856,6 +880,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
 
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
+
+        self.notify_dml(query, result.metadata.rows_returned as u64);
 
         Ok(QueryResult::from_core(result))
     }

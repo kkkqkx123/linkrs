@@ -30,10 +30,12 @@ pub struct GraphDbSessionHandle {
     pub(crate) trace_callback: graphdb_trace_callback,
     /// SQL tracking callback for user data
     pub(crate) trace_user_data: *mut c_void,
-    /// Submit the hook callback
-    pub(crate) commit_hook: graphdb_commit_hook_callback,
-    /// Submit the user data for the hook
+    /// User data for the commit hook, returned to the caller on replacement.
     pub(crate) commit_hook_user_data: *mut c_void,
+    /// Bridge registration id of the commit hook on the transaction
+    /// manager's veto registry (`None` when no hook is installed). The C
+    /// callback and the Rust veto share one evaluation point.
+    pub(crate) commit_veto_id: Option<graphdb_core::event_dispatch::SubscriptionId>,
     /// Rollback hook callback
     pub(crate) rollback_hook: graphdb_rollback_hook_callback,
     /// Roll back the user data associated with the hook.
@@ -45,7 +47,11 @@ pub struct GraphDbSessionHandle {
 }
 
 // The Send and Sync functions need to be implemented manually, because the type *mut c_void is not thread-safe.
-// But here we only use it at the C API level; it is the responsibility of the caller to ensure thread safety.
+// Thread-safety contract: a session handle must not be shared across threads
+// concurrently. Hook callbacks (commit veto, update, trace) always run on the
+// thread performing the operation that triggers them; `user_data` must stay
+// valid from registration until replacement, session close, or explicit NULL
+// deregistration, whichever comes first.
 unsafe impl Send for GraphDbSessionHandle {}
 unsafe impl Sync for GraphDbSessionHandle {}
 
@@ -60,8 +66,8 @@ impl GraphDbSessionHandle {
             last_extended_error: None,
             trace_callback: None,
             trace_user_data: ptr::null_mut(),
-            commit_hook: None,
             commit_hook_user_data: ptr::null_mut(),
+            commit_veto_id: None,
             rollback_hook: None,
             rollback_hook_user_data: ptr::null_mut(),
             update_hook: None,
@@ -69,11 +75,21 @@ impl GraphDbSessionHandle {
         }
     }
 
+    /// Whether an update hook is installed.
+    ///
+    /// Fast path so query execution can skip statement classification
+    /// (`detect_data_modification`, including a full-string uppercase scan
+    /// for `MATCH`-family queries) when nobody listens.
+    pub(crate) fn has_update_hook(&self) -> bool {
+        self.update_hook.is_some()
+    }
+
     /// Call the update hook.
     ///
-    /// Graph semantics: `database` carries the space name and `table` is an
-    /// empty string (there is no table concept). `rowid` carries the affected
-    /// row count from the result metadata, not a stable row id.
+    /// Statement-level DML notification (not per-row): `database` carries
+    /// the space name and `table` is an empty string (there is no table
+    /// concept). `rowid` carries the affected row count from the result
+    /// metadata, not a stable row id.
     ///
     /// The callback runs with panic isolation: a panicking C callback is
     /// caught, logged, and skipped so the query result is still returned.
@@ -197,7 +213,13 @@ pub unsafe extern "C" fn graphdb_session_close(session: *mut graphdb_session_t) 
         return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
     }
 
-    let _ = Box::from_raw(session as *mut GraphDbSessionHandle);
+    let handle = Box::from_raw(session as *mut GraphDbSessionHandle);
+    // Retire the commit-hook bridge so a closed session's user_data can
+    // never be invoked by a later commit on the shared manager.
+    if let Some(id) = handle.commit_veto_id {
+        handle.inner.txn_manager().unregister_commit_veto(id);
+    }
+    drop(handle);
 
     graphdb_error_code_t::GRAPHDB_OK as c_int
 }
@@ -527,6 +549,11 @@ pub unsafe extern "C" fn graphdb_trace(
 /// The commit hook is called before a transaction is committed. If the callback returns a non-zero value,
 /// the transaction will be rolled back.
 ///
+/// The C callback is bridged into the transaction manager's commit-veto
+/// registry, so it shares one evaluation point with Rust
+/// `register_commit_veto` hooks (first veto wins). A panicking callback is
+/// isolated and treated as allow.
+///
 /// # Safety
 /// - `session` must be a valid session handle created by `graphdb_session_create`
 /// - `callback` must be a valid function pointer, or NULL to disable the hook
@@ -543,8 +570,36 @@ pub unsafe extern "C" fn graphdb_commit_hook(
 
     let handle = &mut *(session as *mut GraphDbSessionHandle);
     let old_user_data = handle.commit_hook_user_data;
-    handle.commit_hook = callback;
+    // Retire the previous bridge registration, if any.
+    if let Some(id) = handle.commit_veto_id.take() {
+        handle.inner.txn_manager().unregister_commit_veto(id);
+    }
     handle.commit_hook_user_data = user_data;
+    if let Some(func) = callback {
+        // `usize` round-trips the raw pointer into the `'static` closure
+        // without claiming `Send` for it; the callback always runs on the
+        // thread performing the commit, and lifetime is bounded by the
+        // unregister above / session close.
+        let user_data_addr = user_data as usize;
+        let bridge: std::sync::Arc<
+            dyn Fn(&graphdb_transaction::CommitVetoContext) -> graphdb_transaction::VetoDecision
+                + Send
+                + Sync,
+        > = std::sync::Arc::new(move |_| {
+            let restored = user_data_addr as *mut c_void;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| func(restored)));
+            match outcome {
+                Ok(0) => graphdb_transaction::VetoDecision::allow(),
+                Ok(_) => graphdb_transaction::VetoDecision::veto("c commit hook vetoed"),
+                Err(_) => {
+                    log::error!("commit hook panicked; treating as allow");
+                    graphdb_transaction::VetoDecision::allow()
+                }
+            }
+        });
+        let id = handle.inner.txn_manager().register_commit_veto(bridge);
+        handle.commit_veto_id = Some(id);
+    }
     old_user_data
 }
 

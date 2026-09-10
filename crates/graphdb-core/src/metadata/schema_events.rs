@@ -4,6 +4,8 @@ use std::sync::Arc;
 ///
 /// Emission is best-effort: callbacks run synchronously on the DDL path,
 /// isolated with `catch_unwind`, and must not affect the main flow.
+/// The event reference is valid only for the dispatch call; observers must
+/// not retain it beyond the callback.
 #[derive(Debug, Clone)]
 pub enum SchemaChangeEvent {
     SpaceCreated {

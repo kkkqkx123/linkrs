@@ -1178,6 +1178,7 @@ fn transaction_status(error: TransactionError) -> Status {
             Status::deadline_exceeded(message)
         }
         TransactionErrorKind::WriteTransactionConflict => Status::aborted(message),
+        TransactionErrorKind::CommitVetoed => Status::aborted(message),
         TransactionErrorKind::InvalidStateForCommit
         | TransactionErrorKind::InvalidStateForAbort
         | TransactionErrorKind::InvalidStateForExecution

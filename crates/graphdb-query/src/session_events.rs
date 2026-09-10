@@ -6,6 +6,8 @@ use std::sync::Arc;
 /// session manager, while `QueryStarted` / `QueryCompleted` /
 /// `SlowQueryDetected` are emitted by `QueryManager`. A single enum is used
 /// so observers can subscribe once and receive both halves.
+/// The event reference is valid only for the dispatch call; observers must
+/// not retain it beyond the callback.
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     SessionCreated {

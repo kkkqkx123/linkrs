@@ -15,10 +15,11 @@ pub use checkpoint::{MigrationCheckpoint, StepResult};
 pub use config::MigrationConfig;
 pub use converter::{convert_value, is_compatible_type};
 pub use error::MigrationError;
-pub use event::{MigrationEvent, MigrationEventListener};
+pub use event::{bridge_listener, MigrationDispatcher, MigrationEvent, MigrationEventListener};
 pub use executor::{
     execute_migration_plan, execute_migration_plan_with_config,
-    execute_migration_plan_with_progress, execute_migration_plan_with_progress_and_config,
+    execute_migration_plan_with_event_registry, execute_migration_plan_with_progress,
+    execute_migration_plan_with_progress_and_config,
     execute_migration_plan_with_progress_and_file_lock,
     execute_migration_plan_with_progress_and_file_lock_and_checkpoint, rollback_migration,
 };

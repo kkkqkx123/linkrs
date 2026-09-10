@@ -58,6 +58,9 @@ impl TransactionMonitor {
             .stats
             .cleanup_failure_transactions
             .load(Ordering::Relaxed);
+        metrics.hook_dispatch_total = self.stats.hook_dispatch_total.load(Ordering::Relaxed);
+        metrics.hook_panic_total = self.stats.hook_panic_total.load(Ordering::Relaxed);
+        metrics.hook_slow_total = self.stats.hook_slow_total.load(Ordering::Relaxed);
         metrics.active_statements = self.stats.active_statements.load(Ordering::Relaxed);
 
         if !durations.is_empty() {
