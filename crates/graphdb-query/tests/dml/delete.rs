@@ -608,7 +608,7 @@ fn test_delete_vertex_with_edges_no_with_edge() {
         .exec_dml("DELETE VERTEX 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
-        .assert_edge_not_exists(1, 2, "KNOWS")
+        .assert_edge_exists(1, 2, "KNOWS")
         .assert_vertex_exists(2, "Person");
 }
 

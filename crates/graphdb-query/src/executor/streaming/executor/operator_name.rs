@@ -135,6 +135,8 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             DdlOperatorKind::ShowFunctions { .. } => "ShowFunctions",
             DdlOperatorKind::ShowGraphs { .. } => "ShowGraphs",
             DdlOperatorKind::ShowMacros { .. } => "ShowMacros",
+            DdlOperatorKind::ShowAttachedDatabases { .. } => "ShowAttachedDatabases",
+            DdlOperatorKind::ShowExtensions { .. } => "ShowExtensions",
             DdlOperatorKind::LoadFrom { .. } => "LoadFrom",
             DdlOperatorKind::InQueryCall { .. } => "InQueryCall",
             DdlOperatorKind::Analyze { .. } => "Analyze",

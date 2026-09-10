@@ -96,6 +96,11 @@ pub struct ParseContext<'a> {
     compat_mode: bool,
     upsert_mode: bool,
     edge_syntax_mode: bool,
+    /// When true, a top-level `|` is NOT consumed as the bitwise-OR operator.
+    /// Set while parsing a list-comprehension source/filter operand so the
+    /// comprehension body separator `|` is not swallowed; cleared again inside
+    /// any bracketed group where `|` is unambiguously bitwise-OR.
+    suppress_pipe_or: bool,
     recursion_depth: usize,
     max_recursion_depth: usize,
     expr_context: Arc<ExpressionAnalysisContext>,
@@ -103,6 +108,8 @@ pub struct ParseContext<'a> {
     /// Shared user-defined type-alias catalog. When set, unknown type names
     /// resolve through aliases (`CAST(x AS alias)`, DDL column types).
     type_alias_manager: Option<Arc<graphdb_core::metadata::TypeAliasManager>>,
+    /// Recursive comprehension parsed during edge pattern parsing
+    recursive_comprehension: Option<crate::parser::ast::pattern::RecursiveComprehension>,
 }
 
 pub struct ParseContextCheckpoint {
@@ -125,11 +132,13 @@ impl<'a> ParseContext<'a> {
             compat_mode: false,
             upsert_mode: false,
             edge_syntax_mode: false,
+            suppress_pipe_or: false,
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
             recovery_count: 0,
             type_alias_manager: None,
+            recursive_comprehension: None,
         }
     }
 
@@ -146,11 +155,13 @@ impl<'a> ParseContext<'a> {
             compat_mode: false,
             upsert_mode: false,
             edge_syntax_mode: false,
+            suppress_pipe_or: false,
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
             recovery_count: 0,
             type_alias_manager: None,
+            recursive_comprehension: None,
         }
     }
 
@@ -200,6 +211,14 @@ impl<'a> ParseContext<'a> {
         self.expr_context.clone()
     }
 
+    pub fn take_recursive_comprehension(&mut self) -> Option<crate::parser::ast::pattern::RecursiveComprehension> {
+        self.recursive_comprehension.take()
+    }
+
+    pub fn set_recursive_comprehension(&mut self, rc: crate::parser::ast::pattern::RecursiveComprehension) {
+        self.recursive_comprehension = Some(rc);
+    }
+
     pub fn lexer(&self) -> &Lexer<'a> {
         &self.lexer
     }
@@ -236,6 +255,26 @@ impl<'a> ParseContext<'a> {
         self.edge_syntax_mode = true;
         let result = f(self);
         self.edge_syntax_mode = saved;
+        result
+    }
+
+    /// Whether `|` should be treated as a list-comprehension separator instead
+    /// of the bitwise-OR operator in the current parsing position.
+    pub fn is_pipe_or_suppressed(&self) -> bool {
+        self.suppress_pipe_or
+    }
+
+    /// Run `f` with `suppress_pipe_or` forced to `value`, restoring the
+    /// previous setting afterwards (even on error).
+    pub fn with_pipe_or_suppression<T>(
+        &mut self,
+        value: bool,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.suppress_pipe_or;
+        self.suppress_pipe_or = value;
+        let result = f(self);
+        self.suppress_pipe_or = saved;
         result
     }
 
@@ -688,6 +727,7 @@ impl<'a> ParseContext<'a> {
             TokenKind::Space => keyword.eq_ignore_ascii_case("SPACE"),
             TokenKind::Insert => keyword.eq_ignore_ascii_case("INSERT"),
             TokenKind::Delete => keyword.eq_ignore_ascii_case("DELETE"),
+            TokenKind::Detach => keyword.eq_ignore_ascii_case("DETACH"),
             TokenKind::Update => keyword.eq_ignore_ascii_case("UPDATE"),
             TokenKind::Return => keyword.eq_ignore_ascii_case("RETURN"),
             TokenKind::Where => keyword.eq_ignore_ascii_case("WHERE"),

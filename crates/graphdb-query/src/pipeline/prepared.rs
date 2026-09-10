@@ -269,6 +269,8 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
                 | Stmt::Checkpoint(_)
                 | Stmt::ExportDatabase(_)
                 | Stmt::ImportDatabase(_)
+                | Stmt::AttachDatabase(_)
+                | Stmt::DetachDatabase(_)
         ),
     }
 }

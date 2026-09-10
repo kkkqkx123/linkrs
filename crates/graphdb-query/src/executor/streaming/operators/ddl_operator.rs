@@ -188,6 +188,16 @@ pub enum DdlOperatorKind {
         space_name: String,
         emitted: bool,
     },
+    ShowAttachedDatabases {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
+    ShowExtensions {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
     LoadFrom {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -359,6 +369,20 @@ impl DdlOperator {
                 space_name: space_name.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::ShowAttachedDatabases { space_name } => {
+                DdlOperatorKind::ShowAttachedDatabases {
+                    storage: storage.clone(),
+                    space_name: space_name.clone(),
+                    emitted: false,
+                }
+            }
+            super::spec::DdlSpec::ShowExtensions { space_name } => {
+                DdlOperatorKind::ShowExtensions {
+                    storage: storage.clone(),
+                    space_name: space_name.clone(),
+                    emitted: false,
+                }
+            }
             super::spec::DdlSpec::LoadFrom {
                 space_name,
                 source_kind,
@@ -506,6 +530,12 @@ impl DdlOperator {
             }
             DdlOperatorKind::ShowGraphs { .. } => maintenance_executor::execute_show_graphs(self),
             DdlOperatorKind::ShowMacros { .. } => maintenance_executor::execute_show_macros(self),
+            DdlOperatorKind::ShowAttachedDatabases { .. } => {
+                maintenance_executor::execute_show_attached_databases(self)
+            }
+            DdlOperatorKind::ShowExtensions { .. } => {
+                maintenance_executor::execute_show_extensions(self)
+            }
             DdlOperatorKind::LoadFrom { .. } => maintenance_executor::execute_load_from(self),
             DdlOperatorKind::InQueryCall { .. } => {
                 maintenance_executor::execute_in_query_call(self)

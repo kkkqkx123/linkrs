@@ -37,9 +37,10 @@ pub(super) fn execute_space_manage(
         | SpaceManageCommand::Clear { space_name }
         | SpaceManageCommand::CommentOn { space_name, .. } => Some(space_name.clone()),
         SpaceManageCommand::Show | SpaceManageCommand::Checkpoint => None,
-        SpaceManageCommand::ExportDatabase { .. } | SpaceManageCommand::ImportDatabase { .. } => {
-            None
-        }
+        SpaceManageCommand::ExportDatabase { .. }
+        | SpaceManageCommand::ImportDatabase { .. }
+        | SpaceManageCommand::AttachDatabase { .. }
+        | SpaceManageCommand::DetachDatabase { .. } => None,
     };
     let result = match command {
         SpaceManageCommand::Create {
@@ -277,6 +278,35 @@ pub(super) fn execute_space_manage(
                 }
                 Ok(())
             })
+        }
+        SpaceManageCommand::AttachDatabase {
+            alias,
+            path,
+            db_type,
+        } => {
+            let info = crate::attached::AttachedDatabase::new(
+                alias.clone(),
+                path.clone(),
+                db_type.clone(),
+            );
+            match crate::attached::attach_database(info) {
+                Ok(()) => Ok(Some(super::make_manage_result(
+                    "attach",
+                    Some(alias.as_str()),
+                    "attached",
+                ))),
+                Err(e) => Err(QueryError::execution(e)),
+            }
+        }
+        SpaceManageCommand::DetachDatabase { alias } => {
+            match crate::attached::detach_database(alias) {
+                Ok(_) => Ok(Some(super::make_manage_result(
+                    "detach",
+                    Some(alias.as_str()),
+                    "detached",
+                ))),
+                Err(e) => Err(QueryError::execution(e)),
+            }
         }
     };
     result

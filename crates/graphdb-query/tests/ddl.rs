@@ -10,6 +10,8 @@
 //! - DESC - Describe schema objects
 //! - Constraints - DEFAULT, NOT NULL
 
+#[path = "ddl/attach_detach.rs"]
+mod attach_detach;
 mod common;
 #[path = "ddl/constraints.rs"]
 mod constraints;
@@ -21,6 +23,8 @@ mod edge_basic;
 mod macro_;
 #[path = "ddl/schema_evolution.rs"]
 mod schema_evolution;
+#[path = "ddl/show_catalog.rs"]
+mod show_catalog;
 #[path = "ddl/tag_alter.rs"]
 mod tag_alter;
 #[path = "ddl/tag_basic.rs"]

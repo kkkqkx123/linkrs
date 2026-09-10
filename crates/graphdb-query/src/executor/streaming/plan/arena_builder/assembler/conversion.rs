@@ -648,6 +648,8 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::ShowAttachedDatabases(_)
+            | PlanNodeEnum::ShowExtensions(_)
             | PlanNodeEnum::MacroManage(_)
             | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::LoadFrom(_)

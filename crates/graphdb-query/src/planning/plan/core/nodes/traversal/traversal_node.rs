@@ -407,7 +407,7 @@ impl ExpandAllNode {
     }
 
     pub fn path_semantic(&self) -> Option<crate::parser::ast::pattern::PathSemantic> {
-        self.path_semantic
+        self.path_semantic.clone()
     }
 
     pub fn set_path_semantic(
@@ -567,7 +567,7 @@ impl TraverseNode {
     }
 
     pub fn path_semantic(&self) -> Option<crate::parser::ast::pattern::PathSemantic> {
-        self.path_semantic
+        self.path_semantic.clone()
     }
 
     pub fn start_vids(&self) -> &str {

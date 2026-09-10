@@ -357,16 +357,7 @@ pub(super) fn expand_on_chunk(
             TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec())
         };
         let mut config = config;
-        config.path_semantic = ctx.path_semantic;
-        // Weighted shortest path is encoded by the parser as a
-        // `WSHORTEST(prop)` edge-type marker; the streaming executor has
-        // no Dijkstra implementation, so fail explicitly instead of
-        // silently matching zero edges.
-        if ctx.edge_types.iter().any(|t| t.starts_with("WSHORTEST(")) {
-            return Err(QueryError::execution(
-                "Weighted shortest path is not supported by the streaming executor".to_string(),
-            ));
-        }
+        config.path_semantic = ctx.path_semantic.clone();
         match config.path_semantic {
             // Walk/Trail/Acyclic allow or constrain repeats per path, so
             // the runtime must not apply global vertex dedup. Trail and
@@ -379,10 +370,14 @@ pub(super) fn expand_on_chunk(
                     config.visited_policy = crate::executor::traversal::config::VisitedPolicy::None;
                 }
             }
-            // Shortest variants rely on BFS first-visit order: the first
-            // time a vertex is reached is via a shortest path, so global
-            // dedup is the algorithm rather than an optimization.
-            Some(PathSemantic::Shortest) | Some(PathSemantic::AllShortest) => {
+            // Shortest variants rely on a global first-visit order: the
+            // first time a vertex is reached is via a shortest path, so
+            // global dedup is the algorithm rather than an optimization.
+            // The weighted variant runs Dijkstra inside the runtime, which
+            // also needs global dedup.
+            Some(PathSemantic::Shortest)
+            | Some(PathSemantic::AllShortest)
+            | Some(PathSemantic::WeightedShortest(_)) => {
                 config.visited_policy = crate::executor::traversal::config::VisitedPolicy::Global;
                 config.order = crate::executor::traversal::config::TraversalOrder::Bfs;
             }
@@ -467,19 +462,11 @@ pub(super) fn traverse_on_chunk_with_semantic(
             .or_else(|| row.first().cloned())
             .unwrap_or(Value::Null(graphdb_core::NullType::Null));
         if let Ok(vid) = VertexId::try_from(&vid_val) {
-            if config
-                .edge_types
-                .iter()
-                .any(|t| t.starts_with("WSHORTEST("))
-            {
-                return Err(QueryError::execution(
-                    "Weighted shortest path is not supported by the streaming executor".to_string(),
-                ));
-            }
             let runtime_reader = TraversalGraphReader::new(reader);
             let mut runtime_config = config.clone();
             // Keep the declared semantic for the runtime: Trail/Acyclic
-            // are enforced per path, Shortest uses BFS first-visit.
+            // are enforced per path, Shortest uses BFS first-visit and
+            // WeightedShortest uses Dijkstra (both need global dedup).
             // The operator-level `skip_visited` (global VisitedSet) is
             // applied separately below so per-path semantics are never
             // silently replaced by global dedup.
@@ -493,7 +480,9 @@ pub(super) fn traverse_on_chunk_with_semantic(
                             crate::executor::traversal::config::VisitedPolicy::None;
                     }
                 }
-                Some(PathSemantic::Shortest) | Some(PathSemantic::AllShortest) => {
+                Some(PathSemantic::Shortest)
+                | Some(PathSemantic::AllShortest)
+                | Some(PathSemantic::WeightedShortest(_)) => {
                     runtime_config.visited_policy =
                         crate::executor::traversal::config::VisitedPolicy::Global;
                     runtime_config.order = crate::executor::traversal::config::TraversalOrder::Bfs;

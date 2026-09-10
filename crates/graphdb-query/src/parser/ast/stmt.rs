@@ -164,6 +164,8 @@ pub enum Stmt {
     CreateType(CreateTypeStmt),
     DropType(DropTypeStmt),
     Extension(ExtensionStmt),
+    AttachDatabase(AttachDatabaseStmt),
+    DetachDatabase(DetachDatabaseStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -246,6 +248,8 @@ crate::define_stmt_helpers! {
     CreateType => Ddl,
     DropType => Ddl,
     Extension => Admin,
+    AttachDatabase => Admin,
+    DetachDatabase => Admin,
 }
 
 impl Stmt {
@@ -354,7 +358,10 @@ impl Stmt {
                 ExtensionAction::Load => "LOAD EXTENSION",
                 ExtensionAction::Install => "INSTALL EXTENSION",
                 ExtensionAction::Uninstall => "UNINSTALL EXTENSION",
+                ExtensionAction::Update => "UPDATE EXTENSION",
             },
+            Stmt::AttachDatabase(_) => "ATTACH DATABASE",
+            Stmt::DetachDatabase(_) => "DETACH DATABASE",
         }
     }
 

@@ -125,6 +125,23 @@ impl ShowParser {
                 span,
                 target: ShowTarget::Macros,
             }))
+        } else if ctx.check_keyword("ATTACHED") {
+            ctx.consume_keyword("ATTACHED")?;
+            ctx.consume_keyword("DATABASES")?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::AttachedDatabases,
+            }))
+        } else if ctx.check_keyword("EXTENSIONS") {
+            ctx.consume_keyword("EXTENSIONS")?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Extensions,
+            }))
         } else {
             Err(ParseError::new(
                 ParseErrorKind::SyntaxError,

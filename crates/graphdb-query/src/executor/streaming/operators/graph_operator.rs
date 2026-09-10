@@ -203,7 +203,7 @@ impl GraphOperator {
                 count_only: *count_only,
                 emit_raw_ids: *emit_raw_ids,
                 lightweight_source: *lightweight_source,
-                path_semantic: *path_semantic,
+                path_semantic: path_semantic.clone(),
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -221,7 +221,7 @@ impl GraphOperator {
                 max_depth: *max_depth,
                 filter_expr: filter_expr.clone(),
                 visited: VisitedSet::new(),
-                path_semantic: *path_semantic,
+                path_semantic: path_semantic.clone(),
             },
             GraphSpec::BiExpand {
                 edge_types,

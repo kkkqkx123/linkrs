@@ -35,6 +35,8 @@ pub enum ShowTarget {
     Functions,
     Graphs,
     Macros,
+    AttachedDatabases,
+    Extensions,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -273,9 +275,41 @@ pub enum ExtensionAction {
     Install,
     /// `UNINSTALL EXTENSION <name>`: unload a previously loaded UDF.
     Uninstall,
+    /// `UPDATE EXTENSION <name>`: reload a previously loaded UDF from its
+    /// original library path.
+    Update,
 }
 
-/// `LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION` statement.
+/// `ATTACH '<path>' AS <alias> [(DBTYPE <type>)]` statement.
+///
+/// Registers an external data source in the attached-database catalog so it
+/// can be observed via `SHOW ATTACHED DATABASES`. Cross-source federation is
+/// not implemented; only the catalog entry is produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachDatabaseStmt {
+    pub span: Span,
+    /// Source path/URL as written in the statement.
+    pub path: String,
+    /// Alias used to reference the source after attachment.
+    pub alias: String,
+    /// Optional declared source type (`DBTYPE <name>` or `DATABASE_TYPE = ...`).
+    pub db_type: Option<String>,
+    /// Additional key/value options from the parenthesized list.
+    pub options: Vec<(String, String)>,
+}
+
+/// `DETACH <alias>` statement.
+///
+/// Removes a previously registered attachment from the catalog. Distinct from
+/// `DETACH DELETE`, which is parsed as part of the DELETE statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetachDatabaseStmt {
+    pub span: Span,
+    pub alias: String,
+}
+
+/// `LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION` /
+/// `UPDATE EXTENSION` statement.
 ///
 /// Extension statements are executed directly by the session layer against
 /// the function registry; they never reach the planner.

@@ -355,6 +355,14 @@ fn space_manage_to_command(
         ImportDatabase(n) => SpaceManageCommand::ImportDatabase {
             path: n.path().to_string(),
         },
+        AttachDatabase(n) => SpaceManageCommand::AttachDatabase {
+            alias: n.alias().to_string(),
+            path: n.path().to_string(),
+            db_type: n.db_type().map(|s| s.to_string()),
+        },
+        DetachDatabase(n) => SpaceManageCommand::DetachDatabase {
+            alias: n.alias().to_string(),
+        },
     }
 }
 

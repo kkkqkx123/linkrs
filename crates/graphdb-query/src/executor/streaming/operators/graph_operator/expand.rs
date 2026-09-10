@@ -134,7 +134,7 @@ pub(super) fn handle_all(
     let count_only = *count_only;
     let emit_raw_ids = *emit_raw_ids;
     let lightweight_source = *lightweight_source;
-    let path_semantic = *path_semantic;
+    let path_semantic = path_semantic.clone();
 
     let use_fast_path = step_limit == 1
         && filter_expr.is_none()
@@ -161,7 +161,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
-                        path_semantic,
+                        path_semantic: path_semantic.clone(),
                     },
                 )?;
                 if count > 0 {
@@ -189,7 +189,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
-                        path_semantic,
+                        path_semantic: path_semantic.clone(),
                     },
                 )?
             } else {
@@ -206,7 +206,7 @@ pub(super) fn handle_all(
                         filter_expr,
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
-                        path_semantic,
+                        path_semantic: path_semantic.clone(),
                     },
                 )?
             };

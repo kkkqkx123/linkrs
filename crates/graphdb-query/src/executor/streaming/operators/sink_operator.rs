@@ -893,20 +893,6 @@ impl SinkOperator {
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;
                                     } else {
-                                        let edges = writer
-                                            .get_node_edges(
-                                                space_name,
-                                                &vid,
-                                                graphdb_core::EdgeDirection::Both,
-                                            )
-                                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                                        if !edges.is_empty() {
-                                            return Err(QueryError::execution(format!(
-                                                "Vertex {} has {} edges, use DETACH DELETE",
-                                                vid,
-                                                edges.len()
-                                            )));
-                                        }
                                         StorageWriter::delete_vertex(
                                             &mut *writer,
                                             space_name,
@@ -1079,20 +1065,6 @@ impl SinkOperator {
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;
                                     } else {
-                                        let edges = writer
-                                            .get_node_edges(
-                                                space_name,
-                                                &vid,
-                                                graphdb_core::EdgeDirection::Both,
-                                            )
-                                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                                        if !edges.is_empty() {
-                                            return Err(QueryError::execution(format!(
-                                                "Vertex {} has {} edges, use DETACH DELETE",
-                                                vid,
-                                                edges.len()
-                                            )));
-                                        }
                                         StorageWriter::delete_vertex(
                                             &mut *writer,
                                             space_name,

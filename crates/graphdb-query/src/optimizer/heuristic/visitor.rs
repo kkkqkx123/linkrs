@@ -67,7 +67,8 @@ use crate::planning::plan::core::nodes::RemoveNode;
 use crate::planning::plan::core::nodes::access::IndexScanNode;
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowConfigsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
+    ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode, ShowMacrosNode,
+    ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -291,6 +292,14 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 
     fn visit_show_macros(&mut self, node: &ShowMacrosNode) -> Self::Result {
         Ok(PlanNodeEnum::ShowMacros(node.clone()))
+    }
+
+    fn visit_show_attached_databases(&mut self, node: &ShowAttachedDatabasesNode) -> Self::Result {
+        Ok(PlanNodeEnum::ShowAttachedDatabases(node.clone()))
+    }
+
+    fn visit_show_extensions(&mut self, node: &ShowExtensionsNode) -> Self::Result {
+        Ok(PlanNodeEnum::ShowExtensions(node.clone()))
     }
 
     // Management nodes (parameterized sub-enums)

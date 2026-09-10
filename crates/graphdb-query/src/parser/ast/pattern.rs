@@ -66,16 +66,19 @@ pub struct EdgePattern {
     pub direction: EdgeDirection,
     pub range: Option<EdgeRange>,
     pub path_semantic: Option<PathSemantic>,
+    /// Optional recursive comprehension for variable-length patterns with binding
+    pub recursive_comprehension: Option<RecursiveComprehension>,
 }
 
 /// Path semantic types for variable-length patterns
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PathSemantic {
-    Walk,        // * (default, allows repeated nodes/edges)
-    Trail,       // *TRAIL (no repeated nodes)
-    Acyclic,     // *ACYCLIC (no repeated edges)
-    Shortest,    // *SHORTEST
-    AllShortest, // *ALL SHORTEST
+    Walk,                    // * (default, allows repeated nodes/edges)
+    Trail,                   // *TRAIL (no repeated nodes)
+    Acyclic,                 // *ACYCLIC (no repeated edges)
+    Shortest,                // *SHORTEST
+    AllShortest,             // *ALL SHORTEST
+    WeightedShortest(String), // *WEIGHTED(weight_prop)
 }
 
 impl EdgePattern {
@@ -97,6 +100,7 @@ impl EdgePattern {
             direction,
             range,
             path_semantic: None,
+            recursive_comprehension: None,
         }
     }
 }
@@ -177,12 +181,16 @@ pub enum PathElement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecursiveComprehension {
     pub span: Span,
+    /// Node variable name (e.g., `v` in `-[e* (v, r | WHERE v.age > 20 | {v.name}, {r.weight})]->`)
     pub variable: String,
-    pub path_pattern: Box<Pattern>,
-    pub base_predicate: Option<ContextualExpression>,
-    pub height_limit: Option<ContextualExpression>,
+    /// Edge variable name (e.g., `r` in the same syntax)
+    pub edge_variable: Option<String>,
+    /// Optional filter predicate on each step (e.g., `WHERE v.age > 20`)
     pub filter_predicate: Option<ContextualExpression>,
-    pub output_expressions: Vec<ContextualExpression>,
+    /// Optional node projection (e.g., `{v.name}`)
+    pub node_projection: Option<ContextualExpression>,
+    /// Optional edge projection (e.g., `{r.weight}`)
+    pub edge_projection: Option<ContextualExpression>,
 }
 
 /// Duplicate type
@@ -291,18 +299,17 @@ impl PatternUtils {
             }
             PathElement::Recursive(rc) => {
                 variables.push(rc.variable.clone());
-                Self::find_variables_recursive(&rc.path_pattern, variables);
-                if let Some(ref pred) = rc.base_predicate {
-                    variables.extend(collect_variables_from_contextual(pred));
-                }
-                if let Some(ref limit) = rc.height_limit {
-                    variables.extend(collect_variables_from_contextual(limit));
+                if let Some(ref edge_var) = rc.edge_variable {
+                    variables.push(edge_var.clone());
                 }
                 if let Some(ref filter) = rc.filter_predicate {
                     variables.extend(collect_variables_from_contextual(filter));
                 }
-                for expr in &rc.output_expressions {
-                    variables.extend(collect_variables_from_contextual(expr));
+                if let Some(ref node_proj) = rc.node_projection {
+                    variables.extend(collect_variables_from_contextual(node_proj));
+                }
+                if let Some(ref edge_proj) = rc.edge_projection {
+                    variables.extend(collect_variables_from_contextual(edge_proj));
                 }
             }
         }
@@ -350,8 +357,9 @@ impl PatternUtils {
             PathElement::Repeated(elem, _) => {
                 Self::get_labels_in_element(elem, labels);
             }
-            PathElement::Recursive(rc) => {
-                Self::get_labels_recursive(&rc.path_pattern, labels);
+            PathElement::Recursive(_rc) => {
+                // Recursive comprehension doesn't have a path_pattern anymore;
+                // labels are inferred from the filter/projection expressions.
             }
             _ => {}
         }

@@ -24,6 +24,11 @@ impl UtilStmtParser {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Use)?;
 
+        // `USE GRAPH <name>` is a namespace alias for `USE <name>`.
+        if ctx.check_keyword("GRAPH") {
+            ctx.consume_keyword("GRAPH")?;
+        }
+
         let space = ctx.expect_identifier()?;
 
         Ok(Stmt::Use(UseStmt {

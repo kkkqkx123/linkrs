@@ -295,9 +295,16 @@ pub fn plan_path_pattern(
                         };
                         i += 1;
                     }
-                    PathElement::Recursive(_) => {
+                    PathElement::Recursive(rc) => {
                         return Err(PlannerError::UnsupportedOperation(
-                            "Recursive comprehension is not yet supported".to_string(),
+                            format!(
+                                "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
+                                rc.variable,
+                                rc.edge_variable,
+                                rc.filter_predicate.is_some(),
+                                rc.node_projection.is_some(),
+                                rc.edge_projection.is_some()
+                            )
                         ));
                     }
                 }
@@ -457,7 +464,7 @@ pub fn plan_pattern_edge(
     }
 
     expand_node.set_step_limit(1);
-    expand_node.set_path_semantic(edge.path_semantic);
+    expand_node.set_path_semantic(edge.path_semantic.clone());
 
     let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
     expand_node.set_col_names(vec![edge_var.clone()]);
@@ -470,7 +477,7 @@ pub fn plan_pattern_edge(
         edge.edge_types.is_empty(),
         None,
         vec![edge_var.clone()],
-        edge.path_semantic,
+        edge.path_semantic.clone(),
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -553,7 +560,7 @@ pub fn plan_pattern_edge_with_input(
     }
 
     expand_node.set_step_limit(1);
-    expand_node.set_path_semantic(edge.path_semantic);
+    expand_node.set_path_semantic(edge.path_semantic.clone());
 
     expand_node.set_input_var(input_var.to_string());
 
@@ -576,7 +583,7 @@ pub fn plan_pattern_edge_with_input(
         edge.edge_types.is_empty(),
         Some(input_var.to_string()),
         vec![src_col_name, edge_col_name, dst_col_name],
-        edge.path_semantic,
+        edge.path_semantic.clone(),
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -662,7 +669,7 @@ pub fn plan_match_delete(
                 space_name: space_name.to_string(),
                 vertex_ids: vertex_exprs.clone(),
                 with_edge: delete_clause.with_edge,
-                cascade: false,
+                cascade: delete_clause.with_edge,
                 condition: None,
             };
             PipeDeleteVerticesNode::new(next_node_id(), info, input_node.clone()).into_enum()

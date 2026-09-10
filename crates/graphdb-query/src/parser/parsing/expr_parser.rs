@@ -186,6 +186,9 @@ fn parse_bitwise_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
 fn parse_bitwise_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOperator> {
     match ctx.current_token().kind {
         TokenKind::Pipe => {
+            if ctx.is_pipe_or_suppressed() {
+                return None;
+            }
             ctx.next_token();
             Some(BinaryOperator::BitwiseOr)
         }
@@ -593,7 +596,9 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
 
             // Not a lambda, restore and parse as normal parenthesized expression
             ctx.restore(ckpt);
-            let expression = parse_expression(ctx)?;
+            // A `(` group is delimited by `)`, so `|` inside it is bitwise-OR
+            // even when we are in a comprehension operand position.
+            let expression = ctx.with_pipe_or_suppression(false, |ctx| parse_expression(ctx))?;
             ctx.expect_token(TokenKind::RParen)?;
             Ok(expression)
         }
@@ -602,11 +607,14 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             let span = ctx.merge_span(start_pos, ctx.current_position());
             if ctx.match_token(TokenKind::LParen) {
                 parse_function_call(name, span, ctx)
-            } else if ctx.check_token(TokenKind::Arrow)
+            } else if !ctx.is_edge_syntax_mode()
+                && ctx.check_token(TokenKind::Arrow)
                 && !matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
             {
                 // Lambda expression: x -> expr
                 // (JSON access `m->'key'` is handled in the postfix loop.)
+                // Disabled inside DML edge statements where `->` separates
+                // the edge endpoints.
                 ctx.next_token(); // consume ->
                 let body = parse_expression(ctx)?;
                 let span = ctx.merge_span(start_pos, ctx.current_position());
@@ -776,7 +784,10 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                     span,
                 })
             } else {
-                let elements = parse_expression_list(ctx)?;
+                // List literal: elements are comma-delimited, so `|` inside
+                // them is bitwise-OR even within a comprehension operand.
+                let elements =
+                    ctx.with_pipe_or_suppression(false, |ctx| parse_expression_list(ctx))?;
                 ctx.expect_token(TokenKind::RBracket)?;
                 let span = ctx.merge_span(start_pos, ctx.current_position());
                 Ok(ParseResult {
@@ -1085,15 +1096,23 @@ fn parse_list_comprehension(
 ) -> Result<ParseResult, ParseError> {
     let variable = ctx.expect_identifier()?;
     ctx.expect_token(TokenKind::In)?;
-    let source = parse_expression(ctx)?.expr;
+    // Parse the source expression with `|` treated as the comprehension
+    // separator, not bitwise-OR. Any nested bracketed group resets the flag
+    // so `(a | b)` inside the source remains a bitwise-OR.
+    let source = ctx
+        .with_pipe_or_suppression(true, |ctx| parse_expression(ctx))?
+        .expr;
 
     let (filter, map) = if ctx.match_token(TokenKind::Pipe) {
-        let map_expr = parse_expression(ctx)?;
+        let map_expr = ctx.with_pipe_or_suppression(false, |ctx| parse_expression(ctx))?;
         (None, Some(map_expr.expr))
     } else if ctx.match_token(TokenKind::Where) {
-        let filter_expr = parse_expression(ctx)?;
+        let filter_expr = ctx.with_pipe_or_suppression(true, |ctx| parse_expression(ctx))?;
         let map_expr = if ctx.match_token(TokenKind::Pipe) {
-            Some(parse_expression(ctx)?.expr)
+            Some(
+                ctx.with_pipe_or_suppression(false, |ctx| parse_expression(ctx))?
+                    .expr,
+            )
         } else {
             None
         };

@@ -253,7 +253,9 @@ impl PlannerEnum {
             | Stmt::CommentOn(_)
             | Stmt::Checkpoint(_)
             | Stmt::ExportDatabase(_)
-            | Stmt::ImportDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            | Stmt::ImportDatabase(_)
+            | Stmt::AttachDatabase(_)
+            | Stmt::DetachDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             // New reading clause statements — no dedicated planner yet; route
             // through the MaintainPlanner fallback (returns UnsupportedOperation
             // until a proper planner is implemented).

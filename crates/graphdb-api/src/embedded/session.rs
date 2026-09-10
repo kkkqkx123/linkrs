@@ -162,7 +162,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     }
 
     /// Execute an extension management statement
-    /// (`LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION`).
+    /// (`LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION` /
+    /// `UPDATE EXTENSION`).
     ///
     /// Extension statements run directly against the session function
     /// registry and never reach the query planner.
@@ -184,6 +185,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                 let source = extension.source.clone().unwrap_or_default();
                 let name = self.install_extension(&source)?;
                 format!("Installed extension '{name}' from '{source}'")
+            }
+            ExtensionAction::Update => {
+                let reloaded = self.reload_extension(&extension.name)?;
+                if reloaded {
+                    format!("Updated extension '{}'", extension.name)
+                } else {
+                    format!("Extension '{}' is already up to date", extension.name)
+                }
             }
         };
         Ok(Self::single_message_result(message))
@@ -503,6 +512,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             || upper.starts_with("LET ")
             || upper.starts_with("LOAD EXTENSION")
             || upper.starts_with("INSTALL EXTENSION")
+            || upper.starts_with("UPDATE EXTENSION")
             || upper.starts_with("UNINSTALL EXTENSION");
         if !command_like {
             return Ok(None);

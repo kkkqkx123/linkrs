@@ -48,6 +48,14 @@ pub enum SpaceManageCommand {
     ImportDatabase {
         path: String,
     },
+    AttachDatabase {
+        alias: String,
+        path: String,
+        db_type: Option<String>,
+    },
+    DetachDatabase {
+        alias: String,
+    },
 }
 
 /// Tag DDL command payload.
@@ -299,6 +307,12 @@ pub enum DdlSpec {
     ShowMacros {
         space_name: String,
     },
+    ShowAttachedDatabases {
+        space_name: String,
+    },
+    ShowExtensions {
+        space_name: String,
+    },
     LoadFrom {
         space_name: String,
         source_kind: String,
@@ -362,6 +376,10 @@ impl SpaceManageCommand {
             | Self::Checkpoint
             | Self::ExportDatabase { .. }
             | Self::ImportDatabase { .. } => true,
+            // Attach/Detach only mutate the in-memory attached-database
+            // catalog, not storage, so they must not demand a write
+            // transaction scope.
+            Self::AttachDatabase { .. } | Self::DetachDatabase { .. } => false,
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } | Self::Switch { .. } => false,
         }
     }
@@ -477,6 +495,8 @@ impl DdlSpec {
             | Self::ShowFunctions { .. }
             | Self::ShowGraphs { .. }
             | Self::ShowMacros { .. }
+            | Self::ShowAttachedDatabases { .. }
+            | Self::ShowExtensions { .. }
             | Self::LoadFrom { .. }
             | Self::InQueryCall { .. }
             | Self::Analyze { .. } => false,

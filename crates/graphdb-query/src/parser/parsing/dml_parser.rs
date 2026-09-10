@@ -1030,6 +1030,7 @@ impl DmlParser {
             direction,
             range: None,
             path_semantic: None,
+            recursive_comprehension: None,
         })
     }
 

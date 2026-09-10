@@ -39,7 +39,7 @@ pub(super) fn handle_traverse(
     let min_depth = *min_depth;
     let max_depth = *max_depth;
     let visited = &mut *visited;
-    let path_semantic = *path_semantic;
+    let path_semantic = path_semantic.clone();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     // Operator-level global dedup applies to Shortest variants and to the
@@ -60,7 +60,7 @@ pub(super) fn handle_traverse(
                 max_depth,
                 edge_types.to_vec(),
             );
-            tc.path_semantic = path_semantic;
+            tc.path_semantic = path_semantic.clone();
             if let Some(output) = common::traverse_on_chunk_with_semantic(
                 chunk,
                 Arc::clone(&op.output_layout),

@@ -21,8 +21,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    InQueryCallNode, LoadFromNode, ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode,
-    ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
+    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode,
+    ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -97,9 +97,11 @@ pub use crate::planning::plan::core::nodes::management::stats_nodes::{
 };
 pub use crate::planning::plan::core::nodes::management::system_nodes::{
     InQueryCallNode as InQueryCallNodeType, LoadFromNode as LoadFromNodeType,
-    ShowConfigsNode as ShowConfigsNodeType, ShowFunctionsNode as ShowFunctionsNodeType,
-    ShowGraphsNode as ShowGraphsNodeType, ShowMacrosNode as ShowMacrosNodeType,
-    ShowQueriesNode as ShowQueriesNodeType, ShowSessionsNode as ShowSessionsNodeType,
+    ShowAttachedDatabasesNode as ShowAttachedDatabasesNodeType,
+    ShowConfigsNode as ShowConfigsNodeType, ShowExtensionsNode as ShowExtensionsNodeType,
+    ShowFunctionsNode as ShowFunctionsNodeType, ShowGraphsNode as ShowGraphsNodeType,
+    ShowMacrosNode as ShowMacrosNodeType, ShowQueriesNode as ShowQueriesNodeType,
+    ShowSessionsNode as ShowSessionsNodeType,
 };
 pub use crate::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
@@ -252,6 +254,8 @@ pub enum PlanNodeEnum {
     ShowFunctions(ShowFunctionsNode),
     ShowGraphs(ShowGraphsNode),
     ShowMacros(ShowMacrosNode),
+    ShowAttachedDatabases(ShowAttachedDatabasesNode),
+    ShowExtensions(ShowExtensionsNode),
     LoadFrom(LoadFromNode),
     InQueryCall(InQueryCallNode),
     MacroManage(MacroManageNode),
@@ -368,6 +372,8 @@ crate::define_enum_is_methods! {
     (ShowFunctions, is_show_functions),
     (ShowGraphs, is_show_graphs),
     (ShowMacros, is_show_macros),
+    (ShowAttachedDatabases, is_show_attached_databases),
+    (ShowExtensions, is_show_extensions),
     (LoadFrom, is_load_from),
     (InQueryCall, is_in_query_call),
     // Full-text Search Nodes
@@ -482,6 +488,8 @@ crate::define_enum_as_methods! {
     (ShowFunctions, as_show_functions, ShowFunctionsNode),
     (ShowGraphs, as_show_graphs, ShowGraphsNode),
     (ShowMacros, as_show_macros, ShowMacrosNode),
+    (ShowAttachedDatabases, as_show_attached_databases, ShowAttachedDatabasesNode),
+    (ShowExtensions, as_show_extensions, ShowExtensionsNode),
     (LoadFrom, as_load_from, LoadFromNode),
     (InQueryCall, as_in_query_call, InQueryCallNode),
     // Full-text Search Nodes
@@ -595,6 +603,8 @@ crate::define_enum_as_mut_methods! {
     (ShowFunctions, as_show_functions_mut, ShowFunctionsNode),
     (ShowGraphs, as_show_graphs_mut, ShowGraphsNode),
     (ShowMacros, as_show_macros_mut, ShowMacrosNode),
+    (ShowAttachedDatabases, as_show_attached_databases_mut, ShowAttachedDatabasesNode),
+    (ShowExtensions, as_show_extensions_mut, ShowExtensionsNode),
     (LoadFrom, as_load_from_mut, LoadFromNode),
     (InQueryCall, as_in_query_call_mut, InQueryCallNode),
     // Full-text Search Nodes
@@ -716,6 +726,8 @@ crate::define_all_plan_nodes! {
     (ShowFunctions, ShowFunctionsNode, PlanNodeCategory::Management, "ShowFunctions"),
     (ShowGraphs, ShowGraphsNode, PlanNodeCategory::Management, "ShowGraphs"),
     (ShowMacros, ShowMacrosNode, PlanNodeCategory::Management, "ShowMacros"),
+    (ShowAttachedDatabases, ShowAttachedDatabasesNode, PlanNodeCategory::Management, "ShowAttachedDatabases"),
+    (ShowExtensions, ShowExtensionsNode, PlanNodeCategory::Management, "ShowExtensions"),
     (LoadFrom, LoadFromNode, PlanNodeCategory::Management, "LoadFrom"),
     (InQueryCall, InQueryCallNode, PlanNodeCategory::Management, "InQueryCall"),
     // Full-text Search Nodes
@@ -763,6 +775,8 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::ShowFunctions(_)
                 | PlanNodeEnum::ShowGraphs(_)
                 | PlanNodeEnum::ShowMacros(_)
+                | PlanNodeEnum::ShowAttachedDatabases(_)
+                | PlanNodeEnum::ShowExtensions(_)
                 | PlanNodeEnum::LoadFrom(_)
                 | PlanNodeEnum::InQueryCall(_)
         )
@@ -849,7 +863,7 @@ mod tests {
         "BFSShortest",
         "AllPaths",
         "ShortestPath",
-        // Management/DDL (27)
+        // Management/DDL (29)
         "SpaceManage",
         "TagManage",
         "EdgeManage",
@@ -879,6 +893,8 @@ mod tests {
         "ShowFunctions",
         "ShowGraphs",
         "ShowMacros",
+        "ShowAttachedDatabases",
+        "ShowExtensions",
         "LoadFrom",
         "InQueryCall",
         // DataAccess (3)
@@ -975,6 +991,8 @@ mod tests {
         "ShowFunctions",
         "ShowGraphs",
         "ShowMacros",
+        "ShowAttachedDatabases",
+        "ShowExtensions",
         "LoadFrom",
         "InQueryCall",
         "FulltextSearch",
@@ -985,11 +1003,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 90 variants. With `vector-qdrant`: 93 variants.
+    /// Default build: 92 variants. With `vector-qdrant`: 95 variants.
     #[cfg(not(feature = "vector-qdrant"))]
-    const EXPECTED_VARIANT_COUNT: usize = 90;
+    const EXPECTED_VARIANT_COUNT: usize = 92;
     #[cfg(feature = "vector-qdrant")]
-    const EXPECTED_VARIANT_COUNT: usize = 93;
+    const EXPECTED_VARIANT_COUNT: usize = 95;
 
     #[test]
     fn variant_count_matches_documented_number() {

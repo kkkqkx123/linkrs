@@ -261,6 +261,86 @@ pub(super) fn execute_show_macros(
     Ok(Some(DataChunk::new(rows, schema)))
 }
 
+pub(super) fn execute_show_attached_databases(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let emitted = match &mut op.kind {
+        super::DdlOperatorKind::ShowAttachedDatabases { emitted, .. } => emitted,
+        _ => return Ok(None),
+    };
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+
+    let schema = Arc::new(Schema::new(vec![
+        ColumnInfo {
+            name: "name".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "path".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "db_type".to_string(),
+            data_type: "string".to_string(),
+        },
+    ]));
+    let rows = crate::attached::list_attached_databases()
+        .into_iter()
+        .map(|entry| {
+            vec![
+                Value::string(entry.alias),
+                Value::string(entry.path),
+                Value::string(entry.db_type.unwrap_or_default()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(DataChunk::new(rows, schema)))
+}
+
+pub(super) fn execute_show_extensions(
+    op: &mut super::DdlOperator,
+) -> Result<Option<DataChunk>, QueryError> {
+    let emitted = match &mut op.kind {
+        super::DdlOperatorKind::ShowExtensions { emitted, .. } => emitted,
+        _ => return Ok(None),
+    };
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+
+    let schema = Arc::new(Schema::new(vec![
+        ColumnInfo {
+            name: "name".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "path".to_string(),
+            data_type: "string".to_string(),
+        },
+        ColumnInfo {
+            name: "description".to_string(),
+            data_type: "string".to_string(),
+        },
+    ]));
+    let registry = crate::executor::expression::functions::registry::global_registry();
+    let rows = registry
+        .list_dynamic_udfs()
+        .into_iter()
+        .map(|info| {
+            vec![
+                Value::string(info.name),
+                Value::string(info.path),
+                Value::string(info.description),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(DataChunk::new(rows, schema)))
+}
+
 pub(super) fn execute_load_from(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {

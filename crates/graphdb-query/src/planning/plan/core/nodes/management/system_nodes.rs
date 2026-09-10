@@ -119,6 +119,42 @@ impl ShowMacrosNode {
 }
 
 define_plan_node! {
+    pub struct ShowAttachedDatabasesNode {
+    }
+    enum: ShowAttachedDatabases
+    input: ZeroInputNode
+}
+
+impl ShowAttachedDatabasesNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}
+
+define_plan_node! {
+    pub struct ShowExtensionsNode {
+    }
+    enum: ShowExtensions
+    input: ZeroInputNode
+}
+
+impl ShowExtensionsNode {
+    pub fn new(id: i64) -> Self {
+        Self {
+            id,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+}
+
+define_plan_node! {
     pub struct LoadFromNode {
         source_kind: String,
         source_value: String,

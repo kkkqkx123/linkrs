@@ -161,6 +161,20 @@ pub enum AlterTarget {
         old_name: String,
         new_name: String,
     },
+    /// `ALTER EDGE <name> ADD FROM <src_tag> TO <dst_tag>` — add a src->dst
+    /// endpoint pair constraint to an existing edge type.
+    AddFrom {
+        edge_name: String,
+        src_tag: String,
+        dst_tag: String,
+    },
+    /// `ALTER EDGE <name> DROP FROM <src_tag> TO <dst_tag>` — remove a
+    /// previously declared src->dst endpoint pair constraint.
+    DropFrom {
+        edge_name: String,
+        src_tag: String,
+        dst_tag: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

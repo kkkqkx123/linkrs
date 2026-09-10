@@ -32,8 +32,8 @@ pub use space_nodes::{
 };
 pub use stats_nodes::{ShowStatsNode, ShowStatsType};
 pub use system_nodes::{
-    InQueryCallNode, LoadFromNode, ShowConfigsNode, ShowFunctionsNode, ShowGraphsNode,
-    ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
+    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode,
+    ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 pub use tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,

@@ -269,67 +269,71 @@ impl TraversalParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<MatchDeleteClause, ParseError> {
-        let start_span = ctx.current_span();
+        // `->` inside this clause is an edge arrow, not a lambda arrow, so
+        // expressions such as `a -> b` must not parse as lambdas here.
+        ctx.with_edge_syntax_mode(|ctx| {
+            let start_span = ctx.current_span();
 
-        let target = if ctx.match_token(TokenKind::Vertex) {
-            let vertex_ids = self.parse_expression_list(ctx)?;
-            MatchDeleteTarget::Vertices(vertex_ids)
-        } else if ctx.match_token(TokenKind::Edge) {
-            // Two sub-syntaxes:
-            // 1) Edge variable: DELETE EDGE e [, e2, ...]
-            // 2) Edge refs:     DELETE EDGE a -> b [@rank] [, a2 -> b2 @rank2, ...]
-            // Disambiguate: parse first expression, then check for Arrow token
-            let first_expr = self.parse_expression(ctx)?;
-            if ctx.check_token(TokenKind::Arrow) {
-                // Syntax 2: a -> b [@rank] [, ...]
-                let mut edge_refs = Vec::new();
-                let mut current_src = first_expr;
-                loop {
-                    ctx.expect_token(TokenKind::Arrow)?;
-                    let dst = self.parse_expression(ctx)?;
-                    let rank = if ctx.match_token(TokenKind::At) {
-                        Some(self.parse_expression(ctx)?)
-                    } else {
-                        None
-                    };
-                    edge_refs.push((current_src, dst, rank));
-                    if ctx.match_token(TokenKind::Comma) {
-                        current_src = self.parse_expression(ctx)?;
-                    } else {
-                        break;
+            let target = if ctx.match_token(TokenKind::Vertex) {
+                let vertex_ids = self.parse_expression_list(ctx)?;
+                MatchDeleteTarget::Vertices(vertex_ids)
+            } else if ctx.match_token(TokenKind::Edge) {
+                // Two sub-syntaxes:
+                // 1) Edge variable: DELETE EDGE e [, e2, ...]
+                // 2) Edge refs:     DELETE EDGE a -> b [@rank] [, a2 -> b2 @rank2, ...]
+                // Disambiguate: parse first expression, then check for Arrow token
+                let first_expr = self.parse_expression(ctx)?;
+                if ctx.check_token(TokenKind::Arrow) {
+                    // Syntax 2: a -> b [@rank] [, ...]
+                    let mut edge_refs = Vec::new();
+                    let mut current_src = first_expr;
+                    loop {
+                        ctx.expect_token(TokenKind::Arrow)?;
+                        let dst = self.parse_expression(ctx)?;
+                        let rank = if ctx.match_token(TokenKind::At) {
+                            Some(self.parse_expression(ctx)?)
+                        } else {
+                            None
+                        };
+                        edge_refs.push((current_src, dst, rank));
+                        if ctx.match_token(TokenKind::Comma) {
+                            current_src = self.parse_expression(ctx)?;
+                        } else {
+                            break;
+                        }
                     }
+                    MatchDeleteTarget::EdgeRefs(edge_refs)
+                } else {
+                    // Syntax 1: edge variable e [, e2, ...]
+                    let mut edge_refs = vec![first_expr];
+                    while ctx.match_token(TokenKind::Comma) {
+                        edge_refs.push(self.parse_expression(ctx)?);
+                    }
+                    MatchDeleteTarget::Edges(edge_refs)
                 }
-                MatchDeleteTarget::EdgeRefs(edge_refs)
             } else {
-                // Syntax 1: edge variable e [, e2, ...]
-                let mut edge_refs = vec![first_expr];
-                while ctx.match_token(TokenKind::Comma) {
-                    edge_refs.push(self.parse_expression(ctx)?);
-                }
-                MatchDeleteTarget::Edges(edge_refs)
-            }
-        } else {
-            return Err(ParseError::new(
-                ParseErrorKind::UnexpectedToken,
-                "Expected VERTEX or EDGE after DELETE".to_string(),
-                ctx.current_position(),
-            ));
-        };
+                return Err(ParseError::new(
+                    ParseErrorKind::UnexpectedToken,
+                    "Expected VERTEX or EDGE after DELETE".to_string(),
+                    ctx.current_position(),
+                ));
+            };
 
-        let with_edge = if ctx.match_token(TokenKind::With) {
-            ctx.expect_token(TokenKind::Edge)?;
-            true
-        } else {
-            false
-        };
+            let with_edge = if ctx.match_token(TokenKind::With) {
+                ctx.expect_token(TokenKind::Edge)?;
+                true
+            } else {
+                false
+            };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
 
-        Ok(MatchDeleteClause {
-            span,
-            target,
-            with_edge,
+            Ok(MatchDeleteClause {
+                span,
+                target,
+                with_edge,
+            })
         })
     }
 
@@ -807,15 +811,86 @@ impl TraversalParser {
                 } else if ctx.match_token(TokenKind::Shortest) {
                     path_semantic = Some(PathSemantic::Shortest);
                     range = Some(EdgeRange::any());
+                } else if ctx.match_token(TokenKind::AllShortestPaths)
+                    || (ctx.match_token(TokenKind::All) && ctx.match_token(TokenKind::Shortest))
+                {
+                    // `*ALL SHORTEST` (also accepted as the single
+                    // `*ALLSHORTESTPATHS` token).
+                    path_semantic = Some(PathSemantic::AllShortest);
+                    range = Some(EdgeRange::any());
                 } else if ctx.match_token(TokenKind::Weighted) {
-                    // *WSHORTEST(weight_prop) - parse the weight property in parens
+                    // `*WEIGHTED(weight_prop)` - parse the weight property in
+                    // parens and record it on the semantic itself so the
+                    // executor can run a weighted (Dijkstra) traversal.
                     ctx.expect_token(TokenKind::LParen)?;
                     let weight_prop = ctx.expect_identifier()?;
                     ctx.expect_token(TokenKind::RParen)?;
-                    path_semantic = Some(PathSemantic::Shortest);
+                    path_semantic = Some(PathSemantic::WeightedShortest(weight_prop));
                     range = Some(EdgeRange::any());
-                    // Store weight property in edge_types for now (will be used by executor)
-                    edge_types.push(format!("WSHORTEST({})", weight_prop));
+                } else if ctx.match_token(TokenKind::LParen) {
+                    // `*(v, r | WHERE ... | {proj}, {proj})` - recursive comprehension
+                    let start_span = ctx.current_span();
+                    // Parse node variable
+                    let variable = ctx.expect_identifier()?;
+                    
+                    // Parse optional edge variable
+                    let mut edge_variable = None;
+                    if ctx.match_token(TokenKind::Comma) {
+                        edge_variable = Some(ctx.expect_identifier()?);
+                    }
+                    
+                    // Parse optional filter predicate
+                    let mut filter_predicate = None;
+                    if ctx.match_token(TokenKind::Pipe) {
+                        if ctx.check_keyword("WHERE") {
+                            ctx.consume_keyword("WHERE")?;
+                            filter_predicate = Some(self.parse_expression(ctx)?);
+                        }
+                    }
+                    
+                    // Parse optional projections
+                    let mut node_projection = None;
+                    let mut edge_projection = None;
+                    if ctx.match_token(TokenKind::Pipe) {
+                        // First projection is node
+                        if ctx.match_token(TokenKind::LBrace) {
+                            node_projection = Some(self.parse_expression(ctx)?);
+                            ctx.expect_token(TokenKind::RBrace)?;
+                        }
+                        // Optional edge projection
+                        if ctx.match_token(TokenKind::Comma) {
+                            if ctx.match_token(TokenKind::LBrace) {
+                                edge_projection = Some(self.parse_expression(ctx)?);
+                                ctx.expect_token(TokenKind::RBrace)?;
+                            }
+                        }
+                    }
+                    
+                    ctx.expect_token(TokenKind::RParen)?;
+                    
+                    let end_span = ctx.current_span();
+                    let span = ctx.merge_span(start_span.start, end_span.end);
+                    
+                    // Create RecursiveComprehension and store it in EdgePattern
+                    // We signal this via a special path_semantic + the recursive_comprehension field
+                    let rc = RecursiveComprehension {
+                        span,
+                        variable,
+                        edge_variable,
+                        filter_predicate,
+                        node_projection,
+                        edge_projection,
+                    };
+                    // Store the recursive comprehension directly
+                    // We'll need to modify the EdgePattern construction below
+                    path_semantic = Some(PathSemantic::Walk); // Marker for planner
+                    range = Some(EdgeRange::any());
+                    
+                    // Store in a temporary location - we'll attach it after EdgePattern construction
+                    // For now, use a thread-local or just return a different structure
+                    // Actually, we can modify the return to include the RC
+                    // Let's add it as a field on the returned EdgePattern
+                    ctx.set_recursive_comprehension(rc);
                 } else if ctx.match_token(TokenKind::LBracket) {
                     let min = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
                         let n = ctx.expect_integer_literal()? as usize;
@@ -898,6 +973,7 @@ impl TraversalParser {
             direction,
             range,
             path_semantic,
+            recursive_comprehension: ctx.take_recursive_comprehension(),
         })
     }
 

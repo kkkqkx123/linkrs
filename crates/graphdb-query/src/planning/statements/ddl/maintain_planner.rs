@@ -10,11 +10,12 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
     TypeManageNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    CheckpointNode, CommentOnNode, CreateSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
-    SpaceManageInfo,
+    AttachDatabaseNode, CheckpointNode, CommentOnNode, CreateSpaceNode, DetachDatabaseNode,
+    ExportDatabaseNode, ImportDatabaseNode, SpaceManageInfo,
 };
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    InQueryCallNode, LoadFromNode, ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
+    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowExtensionsNode,
+    ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
 use crate::planning::plan::core::nodes::{
@@ -111,6 +112,14 @@ impl MaintainPlanner {
             ShowTarget::Macros => {
                 let show_macros_node = ShowMacrosNode::new(next_node_id());
                 PlanNodeEnum::ShowMacros(show_macros_node)
+            }
+            ShowTarget::AttachedDatabases => {
+                let node = ShowAttachedDatabasesNode::new(next_node_id());
+                PlanNodeEnum::ShowAttachedDatabases(node)
+            }
+            ShowTarget::Extensions => {
+                let node = ShowExtensionsNode::new(next_node_id());
+                PlanNodeEnum::ShowExtensions(node)
             }
         }
     }
@@ -416,6 +425,11 @@ impl MaintainPlanner {
                     ),
                 );
                 PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node))
+            }
+            AlterTarget::AddFrom { .. } | AlterTarget::DropFrom { .. } => {
+                // Endpoint-pair constraints (ADD/DROP FROM) are enforced by the
+                // executor directly; planning support not yet implemented.
+                unreachable!("ALTER EDGE ADD/DROP FROM planning not yet implemented")
             }
         }
     }
@@ -793,6 +807,22 @@ impl Planner for MaintainPlanner {
                 PlanNodeEnum::SpaceManage(SpaceManageNode::ImportDatabase(node))
             }
 
+            Stmt::AttachDatabase(attach_stmt) => {
+                let node = AttachDatabaseNode::new(
+                    next_node_id(),
+                    attach_stmt.path.clone(),
+                    attach_stmt.alias.clone(),
+                    attach_stmt.db_type.clone(),
+                    attach_stmt.options.clone(),
+                );
+                PlanNodeEnum::SpaceManage(SpaceManageNode::AttachDatabase(node))
+            }
+
+            Stmt::DetachDatabase(detach_stmt) => {
+                let node = DetachDatabaseNode::new(next_node_id(), detach_stmt.alias.clone());
+                PlanNodeEnum::SpaceManage(SpaceManageNode::DetachDatabase(node))
+            }
+
             Stmt::LoadFrom(load_stmt) => {
                 use crate::parser::ast::stmt::ScanSource;
                 let (source_kind, source_value, func_name, func_args_json) = match &load_stmt.source
@@ -921,6 +951,8 @@ impl Planner for MaintainPlanner {
                 | Stmt::Checkpoint(_)
                 | Stmt::ExportDatabase(_)
                 | Stmt::ImportDatabase(_)
+                | Stmt::AttachDatabase(_)
+                | Stmt::DetachDatabase(_)
                 | Stmt::LoadFrom(_)
                 | Stmt::InQueryCall(_)
         )

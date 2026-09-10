@@ -152,6 +152,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowFunctions(_) => "ShowFunctions",
             PlanNodeEnum::ShowGraphs(_) => "ShowGraphs",
             PlanNodeEnum::ShowMacros(_) => "ShowMacros",
+            PlanNodeEnum::ShowAttachedDatabases(_) => "ShowAttachedDatabases",
+            PlanNodeEnum::ShowExtensions(_) => "ShowExtensions",
             PlanNodeEnum::MacroManage(_) => "MacroManage",
             PlanNodeEnum::TypeManage(_) => "TypeManage",
             PlanNodeEnum::LoadFrom(_) => "LoadFrom",
@@ -278,6 +280,8 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowFunctions(_)
             | PlanNodeEnum::ShowGraphs(_)
             | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::ShowAttachedDatabases(_)
+            | PlanNodeEnum::ShowExtensions(_)
             | PlanNodeEnum::MacroManage(_)
             | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::LoadFrom(_)

@@ -7,6 +7,7 @@
 // - Managing query contexts and validation
 
 // Sub-modules
+pub mod attached;
 pub mod binder;
 pub mod cache;
 pub mod context;

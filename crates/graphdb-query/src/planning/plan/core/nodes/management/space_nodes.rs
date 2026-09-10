@@ -326,3 +326,72 @@ impl ImportDatabaseNode {
         &self.path
     }
 }
+
+define_plan_node! {
+    pub struct AttachDatabaseNode {
+        path: String,
+        alias: String,
+        db_type: Option<String>,
+        options: Vec<(String, String)>,
+    }
+    manage_enum: SpaceManageNode::AttachDatabase as SpaceManage
+    input: ZeroInputNode
+}
+
+impl AttachDatabaseNode {
+    pub fn new(
+        id: i64,
+        path: String,
+        alias: String,
+        db_type: Option<String>,
+        options: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            id,
+            path,
+            alias,
+            db_type,
+            options,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+    pub fn db_type(&self) -> Option<&str> {
+        self.db_type.as_deref()
+    }
+    pub fn options(&self) -> &[(String, String)] {
+        &self.options
+    }
+}
+
+define_plan_node! {
+    pub struct DetachDatabaseNode {
+        alias: String,
+    }
+    manage_enum: SpaceManageNode::DetachDatabase as SpaceManage
+    input: ZeroInputNode
+}
+
+impl DetachDatabaseNode {
+    pub fn new(id: i64, alias: String) -> Self {
+        Self {
+            id,
+            alias,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+}

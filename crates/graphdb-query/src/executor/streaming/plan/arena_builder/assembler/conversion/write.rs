@@ -365,6 +365,26 @@ impl ArenaPlanAssembler {
                     space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 },
             ),
+            PlanNodeEnum::ShowAttachedDatabases(_) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::ShowAttachedDatabases {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                },
+            ),
+            PlanNodeEnum::ShowExtensions(_) => Self::push_ddl_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                DdlSpec::ShowExtensions {
+                    space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+                },
+            ),
             PlanNodeEnum::LoadFrom(lf) => Self::push_ddl_op(
                 operators,
                 fragments,

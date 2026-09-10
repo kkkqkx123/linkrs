@@ -104,11 +104,40 @@ impl DdlParser {
             }));
         }
 
+        // Edge endpoint-constraint changes:
+        // `ALTER EDGE <name> ADD FROM <src> TO <dst>` /
+        // `ALTER EDGE <name> DROP FROM <src> TO <dst>`.
+        if !is_tag && matches!(ctx.current_token().kind, TokenKind::Add | TokenKind::Drop)
+            && matches!(ctx.peek_token().kind, TokenKind::From)
+        {
+            let is_add = matches!(ctx.current_token().kind, TokenKind::Add);
+            ctx.next_token(); // ADD | DROP
+            ctx.next_token(); // FROM
+            let src_tag = ctx.expect_identifier()?;
+            ctx.expect_token(TokenKind::To)?;
+            let dst_tag = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            let target = if is_add {
+                AlterTarget::AddFrom {
+                    edge_name: name,
+                    src_tag,
+                    dst_tag,
+                }
+            } else {
+                AlterTarget::DropFrom {
+                    edge_name: name,
+                    src_tag,
+                    dst_tag,
+                }
+            };
+            return Ok(Stmt::Alter(AlterStmt { span, target }));
+        }
+
         let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
-
         if is_tag {
             Ok(Stmt::Alter(AlterStmt {
                 span,

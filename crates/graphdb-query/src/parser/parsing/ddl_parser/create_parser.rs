@@ -27,6 +27,19 @@ type TagEdgeDefsResult = (
     Option<String>,
 );
 
+/// Consume either the `SPACE` token or the `GRAPH` identifier (namespace
+/// alias). Returns `Ok(true)` when either was matched and consumed.
+fn consume_space_or_graph(ctx: &mut ParseContext) -> Result<bool, ParseError> {
+    if ctx.match_token(TokenKind::Space) {
+        return Ok(true);
+    }
+    if ctx.check_keyword("GRAPH") {
+        ctx.consume_keyword("GRAPH")?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 impl DdlParser {
     pub fn parse_create_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
@@ -117,7 +130,7 @@ impl DdlParser {
                 },
                 if_not_exists,
             }))
-        } else if ctx.match_token(TokenKind::Space) {
+        } else if consume_space_or_graph(ctx)? {
             let mut if_not_exists = false;
             if ctx.match_token(TokenKind::If) {
                 ctx.expect_token(TokenKind::Not)?;
@@ -311,7 +324,7 @@ impl DdlParser {
                 },
                 if_not_exists,
             }))
-        } else if ctx.match_token(TokenKind::Space) {
+        } else if consume_space_or_graph(ctx)? {
             let mut if_not_exists = false;
             if ctx.match_token(TokenKind::If) {
                 ctx.expect_token(TokenKind::Not)?;
