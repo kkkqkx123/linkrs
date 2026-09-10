@@ -733,8 +733,11 @@ pub struct ExecutionRuntime {
     profile: Arc<ProfileBoard>,
     /// Resource owner for cleanup of cursors, temp files, etc.
     resource_owner: Arc<Mutex<ResourceOwner>>,
-    /// Optional reference to the global QueryManager for KILL QUERY.
-    query_manager: Option<Arc<QueryManager>>,
+    /// Optional reference to the global QueryManager for KILL QUERY, finish
+    /// tracking, and progress forwarding. Behind a `Mutex` for interior
+    /// mutability so the assembly can attach it after the runtime is shared
+    /// with the executor tree (same pattern as `query_registry`).
+    query_manager: parking_lot::Mutex<Option<Arc<QueryManager>>>,
     /// Row cadence for query-progress notifications. Zero disables emission.
     /// Checked with a single relaxed atomic load on the row-recording path,
     /// so the default zero keeps the hot path allocation- and lock-free.
@@ -856,7 +859,7 @@ impl ExecutionRuntime {
             memory_budget,
             profile: Arc::new(ProfileBoard::new()),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
-            query_manager: None,
+            query_manager: parking_lot::Mutex::new(None),
             progress_rows_interval: AtomicU64::new(0),
             progress_last_emitted: AtomicU64::new(0),
             progress_session_id: AtomicI64::new(0),
@@ -924,9 +927,14 @@ impl ExecutionRuntime {
         self.search.vector_coordinator = coordinator;
     }
 
-    /// Attach a QueryManager so that KILL QUERY and finish tracking work.
-    pub fn set_query_manager(&mut self, qm: Arc<QueryManager>) {
-        self.query_manager = Some(qm);
+    /// Attach a QueryManager so that KILL QUERY, finish tracking, and progress
+    /// forwarding work.
+    ///
+    /// Uses interior mutability (`&self`) because the runtime is shared with
+    /// the executor tree before the assembly attaches the manager, so `&mut`
+    /// access is unavailable at that point.
+    pub fn set_query_manager(&self, qm: Arc<QueryManager>) {
+        *self.query_manager.lock() = Some(qm);
     }
 
     /// Register this query with the attached QueryManager and return a
@@ -934,7 +942,7 @@ impl ExecutionRuntime {
     ///
     /// Returns `None` when no QueryManager is attached (non-fatal).
     pub fn finish_guard(&self) -> Option<QueryFinishGuard> {
-        let qm = self.query_manager.as_ref()?.clone();
+        let qm = self.query_manager.lock().as_ref()?.clone();
         let id = self.query_id();
         Some(QueryFinishGuard::new(qm, id.query_id as i64))
     }
@@ -1102,7 +1110,7 @@ impl ExecutionRuntime {
     /// attached QueryManager, and cancels the registry entry (if configured).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
         self.cancel_token_v2.lock().cancel(reason.clone());
-        if let Some(ref qm) = self.query_manager {
+        if let Some(ref qm) = self.query_manager.lock().as_ref() {
             let id = self.query_id();
             let _ = qm.kill_query(id.query_id as i64);
         }
@@ -1210,8 +1218,10 @@ impl ExecutionRuntime {
         if query_id < 0 {
             return;
         }
-        let query_manager = match self.query_manager.as_ref() {
-            Some(query_manager) => query_manager,
+        // Clone out of the guard so the lock is released before any callback
+        // runs (progress observers must never be invoked under the lock).
+        let query_manager = match self.query_manager.lock().as_ref() {
+            Some(query_manager) => Arc::clone(query_manager),
             None => return,
         };
         if query_manager.progress_callback_count() == 0 {

@@ -181,3 +181,21 @@ T4 独立但建议最后做（涉及面最广）。
   发射。
 - T4 扩展 trait 一旦公开即成 API 承诺：首版方法签名尽量小（单方法 + 默认返回
   `None` 的提供方法）+ 实验模块门控，避免日后频繁 breaking。
+
+## 装配落地记录
+
+组件就绪但产线未接线的三处集成缺口，已在服务端装配点补齐：
+
+| 缺口 | 装配点 | 落地内容 |
+|---|---|---|
+| SessionEvent 双发射源 | `graph_service.rs` `create_service` | 建一个共享 `Arc<EventSubscriptions<SessionEvent>>`，同时注入 `QueryManager::new_with_shared` 与 `GraphSessionManager::new_with_shared`；订阅一次即可收 session（生命周期）与 query（查询半）两类 |
+| KILL 反向桥 | `create_service` + `instantiate_plan` | `QueryManager::set_query_registry(query_registry)` 登记执行器所用的同一 `QueryRegistry`；runtime 侧经 `QueryApi::install_query_manager` → `QueryPipelineManager` → `instantiate_plan` 注入 |
+| 进度钩子 | `execute_stream` | 装配点调用 `set_progress_identity` + `set_progress_rows_interval`；间隔取自新增配置 `monitoring.progress_report_rows_interval`，默认 0 |
+
+配合改动：`ExecutionRuntime::set_query_manager` 原为 `&mut self`，而 runtime 在被调用前已由执行器树共享为 `Arc`，产线无法取到 `&mut`；改为 `Mutex` 内部可变性，与既有 `set_query_registry` / `set_session_controller` 保持一致。`instantiate_plan` 因此新增第 5 个参数 `query_manager`（同步更新全部调用点，含 `pipeline/diagnostics.rs` 与 `tests/lifecycle.rs`）。
+
+## 遗留渐进项
+
+- `QueryManager::register_query` 仍无执行器侧调用，故其 `queries` 表在产线为空：对一个未登记的 id 调 `kill_query` 会返回 `NotFound`，而 `cancel_with_reason` 忽略该返回值，因此不影响实际取消。真正的取消仍由共享 `CancelToken` 与 `QueryRegistry` 完成（`runtime.cancel()` 路径，服务端 KILL 经 `QueryContext::runtime_registry` 抵达）。若日后要让 `QueryManager` 的查询表可观测（如 SHOW QUERIES），需先统一两套 id 空间：`QueryManager(i64)` vs `QueryRegistry(QueryId u64)`。
+- `HookBus::subscribe_session` 仍待 `attach_session_registry`（原文已注明延期）。
+- 进度钩子默认关闭：仅有装配点、无人注册回调时 `emit_progress` 为空表快速返回，热路径开销仍为一次 relaxed 读。

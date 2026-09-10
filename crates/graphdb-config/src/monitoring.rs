@@ -14,6 +14,11 @@ pub struct MonitoringConfig {
     /// Slow query log configuration
     #[serde(default)]
     pub slow_query_log: SlowQueryLogConfig,
+    /// Row interval for query-progress notifications. `0` disables progress
+    /// emission (zero hot-path overhead). When greater than zero, the execution
+    /// runtime reports processed-row watermarks to attached progress observers.
+    #[serde(default)]
+    pub progress_report_rows_interval: u64,
 }
 
 impl Default for MonitoringConfig {
@@ -23,6 +28,7 @@ impl Default for MonitoringConfig {
             memory_cache_size: 1000,
             slow_query_threshold_ms: 1000,
             slow_query_log: SlowQueryLogConfig::default(),
+            progress_report_rows_interval: 0,
         }
     }
 }

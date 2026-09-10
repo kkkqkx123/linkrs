@@ -216,6 +216,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             bindings,
             sink,
             self.query_registry.clone(),
+            self.query_manager.clone(),
         )
         .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
@@ -275,6 +276,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             bindings,
             ResultSink::Stream,
             self.query_registry.clone(),
+            self.query_manager.clone(),
         )
         .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 

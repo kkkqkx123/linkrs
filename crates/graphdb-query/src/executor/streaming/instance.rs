@@ -33,6 +33,7 @@ use graphdb_core::Value;
 use super::parameters::{ParameterFrame, ParameterSchema};
 use super::query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
 use super::transaction_scope::TransactionScope;
+use crate::query_manager::QueryManager;
 
 // ── QueryBindings ───────────────────────────────────────────────────────────
 
@@ -229,6 +230,7 @@ impl QueryExecutionInstance {
         bindings: QueryBindings,
         sink: ResultSink,
         registry: Option<Arc<QueryRegistry>>,
+        query_manager: Option<Arc<QueryManager>>,
     ) -> Result<Self, QueryError> {
         // Validate the plan (structural + binding).
         PhysicalPlanValidator::validate(&plan)?;
@@ -276,6 +278,12 @@ impl QueryExecutionInstance {
             };
             runtime.assign_query_id(qid.as_u64());
             runtime.set_query_registry(reg.clone(), qid);
+            // Attach the global QueryManager so KILL QUERY, finish tracking, and
+            // progress forwarding reach a single registry (the runtime is already
+            // shared as Arc, so this uses interior mutability).
+            if let Some(qm) = query_manager {
+                runtime.set_query_manager(qm);
+            }
             // Re-adopt the registry-canonical token (when no external
             // token was supplied the registry allocated its own), keeping
             // the registry entry and the runtime on one cancellation

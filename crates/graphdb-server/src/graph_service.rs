@@ -18,10 +18,13 @@ use crate::storage::{
 };
 #[cfg(feature = "vector")]
 use graphdb_api::api_core::VectorApi;
+use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_core::types::SpaceSummary;
 use graphdb_core::Permission;
 use graphdb_metrics::{MetricType, StatsManager};
+use graphdb_query::query_manager::QueryManager;
+use graphdb_query::SessionEvent;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_transaction::{TransactionId, TransactionManager};
@@ -76,6 +79,13 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
     shared_scheduler: Arc<SharedScheduler>,
     /// Process-level query registry, created once at startup.
     query_registry: Arc<QueryRegistry>,
+    /// Process-level query manager. Shares its session-event registry with
+    /// `session_manager` so subscribers receive both session and query halves
+    /// from one source. Attached to each runtime for KILL/progress forwarding.
+    query_manager: Arc<QueryManager>,
+
+    /// Row interval for query-progress notifications (0 disables emission).
+    progress_rows_interval: u64,
 
     /// Monotonically increasing query ID counter (server-assigned, not hash-based).
     next_query_id: AtomicU64,
@@ -193,10 +203,15 @@ impl<
         );
 
         let session_idle_timeout = Duration::from_secs(config.transaction.default_timeout * 10);
-        let session_manager = GraphSessionManager::new(
+        // One shared session-event registry so the QueryManager (query half) and
+        // GraphSessionManager (session half) feed a single observer source.
+        let session_events = Arc::new(EventSubscriptions::<SessionEvent>::new());
+        let query_manager = Arc::new(QueryManager::new_with_shared(session_events.clone()));
+        let session_manager = GraphSessionManager::new_with_shared(
             format!("{}:{}", config.database.host, config.database.port),
             config.database.max_connections,
             session_idle_timeout,
+            session_events.clone(),
         );
 
         if start_cleanup_task {
@@ -232,6 +247,9 @@ impl<
         ));
         let optimizer_engine = Arc::new(optimizer_engine);
         let query_registry = Arc::new(QueryRegistry::new());
+        // Wire the reverse KILL bridge: the QueryManager cancels the same registry
+        // the executor registers into, so kill_query stops the running query.
+        query_manager.set_query_registry(Arc::clone(&query_registry));
         info!(
             "Shared query scheduler created with {} worker(s)",
             shared_scheduler.max_workers()
@@ -274,6 +292,7 @@ impl<
             {
                 Ok(mut api) => {
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
+                    api.install_query_manager(Arc::clone(&query_manager));
                     let vector_api = Arc::new(VectorApi::new(backend));
                     (Arc::new(RwLock::new(api)), Some(vector_api))
                 }
@@ -289,6 +308,7 @@ impl<
                         optimizer_engine.clone(),
                     );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
+                    api.install_query_manager(Arc::clone(&query_manager));
                     (Arc::new(RwLock::new(api)), None)
                 }
             }
@@ -300,6 +320,7 @@ impl<
                 optimizer_engine.clone(),
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
+            api.install_query_manager(Arc::clone(&query_manager));
             (Arc::new(RwLock::new(api)), None)
         };
 
@@ -312,6 +333,7 @@ impl<
                 optimizer_engine.clone(),
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
+            api.install_query_manager(Arc::clone(&query_manager));
             Arc::new(RwLock::new(api))
         };
 
@@ -343,9 +365,17 @@ impl<
             transaction_manager,
             shared_scheduler,
             query_registry,
+            query_manager,
+            progress_rows_interval: config.monitoring.progress_report_rows_interval,
             next_query_id: AtomicU64::new(1),
         };
         Arc::new(service)
+    }
+
+    /// Shared process-level query manager. Exposed so callers can subscribe to
+    /// session/query events and drive KILL QUERY through one registry.
+    pub fn query_manager(&self) -> Arc<QueryManager> {
+        Arc::clone(&self.query_manager)
     }
 
     /// Shared helper: build a QueryApi with optional SchemaManager, reusing the
@@ -709,6 +739,15 @@ impl<
 
         // Assign a server-side monotonic query ID (not from SQL text hash).
         result.runtime().assign_query_id(query_id as u64);
+        // Configure progress forwarding on the execution runtime: the assembly
+        // supplies the QueryManager id space and the configured row cadence
+        // (0 disables emission, keeping the hot path overhead-free).
+        result
+            .runtime()
+            .set_progress_identity(session_id, query_id as i64);
+        result
+            .runtime()
+            .set_progress_rows_interval(self.progress_rows_interval);
         session.register_streaming_query(query_id, stmt.to_string(), result.runtime_downgrade());
 
         // Auto-deregister on Drop (covers completion, error, and disconnect).

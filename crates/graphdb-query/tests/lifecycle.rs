@@ -78,6 +78,7 @@ fn lifecycle_query_id_request_supplied_reaches_runtime() {
         bindings(1234, Some(token), TransactionScope::None),
         ResultSink::Discard,
         None,
+        None,
     )
     .expect("instantiate");
     assert_eq!(
@@ -95,6 +96,7 @@ fn lifecycle_query_id_registry_allocates_when_absent() {
         bindings(0, None, TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate");
     let qid = instance.runtime().query_id().query_id;
@@ -114,6 +116,7 @@ fn lifecycle_query_id_registry_honors_requested_when_free() {
         bindings(777, None, TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate");
     assert_eq!(
@@ -131,6 +134,7 @@ fn lifecycle_query_id_requested_id_already_active_allocates_fresh() {
         bindings(555, None, TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate first");
     let second = QueryExecutionInstance::instantiate_plan(
@@ -138,6 +142,7 @@ fn lifecycle_query_id_requested_id_already_active_allocates_fresh() {
         bindings(555, None, TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate second");
     let qid = second.runtime().query_id().query_id;
@@ -161,6 +166,7 @@ fn lifecycle_cancel_token_marks_runtime_without_registry() {
         bindings(0, Some(token.clone()), TransactionScope::None),
         ResultSink::Discard,
         None,
+        None,
     )
     .expect("instantiate without registry");
     assert!(!instance.runtime().is_cancelled());
@@ -181,6 +187,7 @@ fn lifecycle_registry_cancel_reaches_runtime() {
         bindings(0, Some(token.clone()), TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate with registry");
     let qid = instance.runtime().query_id();
@@ -205,6 +212,7 @@ fn lifecycle_mark_killed_shared_token_path() {
         bindings(0, Some(token.clone()), TransactionScope::None),
         ResultSink::Discard,
         None,
+        None,
     )
     .expect("instantiate");
     token.cancel(CancelReason::UserKill);
@@ -224,6 +232,7 @@ fn lifecycle_runtime_cancel_is_visible_on_shared_token() {
         bindings(0, Some(token.clone()), TransactionScope::None),
         ResultSink::Discard,
         Some(registry.clone()),
+        None,
     )
     .expect("instantiate");
     let qid = instance.runtime().query_id();
@@ -246,6 +255,7 @@ fn lifecycle_registry_none_cancel_aborts_execution() {
         start_plan(),
         bindings(0, Some(token.clone()), TransactionScope::None),
         ResultSink::Materialize,
+        None,
         None,
     )
     .expect("instantiate");
@@ -276,6 +286,7 @@ fn lifecycle_diagnostic_scopes_instantiate_all_variants() {
             plan.clone(),
             bindings(0, None, scope.clone()),
             ResultSink::Discard,
+            None,
             None,
         )
         .unwrap_or_else(|e| panic!("scope {:?} must instantiate: {}", scope, e));

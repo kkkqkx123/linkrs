@@ -261,8 +261,13 @@ mod tests {
             search: crate::executor::base::SearchContext::default(),
         };
 
-        let result =
-            QueryExecutionInstance::instantiate_plan(plan_arc, bindings, ResultSink::Discard, None);
+        let result = QueryExecutionInstance::instantiate_plan(
+            plan_arc,
+            bindings,
+            ResultSink::Discard,
+            None,
+            None,
+        );
         assert!(result.is_ok());
     }
 

@@ -11,6 +11,7 @@ use crate::executor::streaming::query_registry::QueryRegistry;
 use crate::executor::streaming::SessionTransactionController;
 use crate::extensions::ExtensionRegistry;
 use crate::optimizer::OptimizerEngine;
+use crate::query_manager::QueryManager;
 use crate::storage::QueryStorage;
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::metadata::SchemaManager;
@@ -46,6 +47,10 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) schema_generation: Arc<AtomicU64>,
     pub(crate) index_generation: Arc<AtomicU64>,
     pub(crate) query_registry: Option<Arc<QueryRegistry>>,
+    /// Optional global QueryManager shared with the server so per-query runtimes
+    /// can forward KILL/finish/progress events into one registry. None until the
+    /// assembly installs it after the pipeline is built.
+    pub(crate) query_manager: Option<Arc<QueryManager>>,
     /// Engine-level shared scheduler, created once and reused across queries.
     pub(crate) shared_scheduler: Option<Arc<SharedScheduler>>,
     pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
@@ -139,6 +144,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_generation: Arc::new(AtomicU64::new(1)),
             query_registry: None,
             shared_scheduler: None,
+            query_manager: None,
             macro_manager: Arc::new(graphdb_core::metadata::MacroManager::new()),
             type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),
@@ -246,6 +252,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.query_registry.clone()
     }
 
+    /// Set the global QueryManager (used when the pipeline is built before the
+    /// manager is created, e.g. the server startup path).
+    pub fn set_query_manager(&mut self, manager: Option<Arc<QueryManager>>) {
+        self.query_manager = manager;
+    }
+
+    /// Access the global QueryManager instance, if installed.
+    pub fn query_manager(&self) -> Option<Arc<QueryManager>> {
+        self.query_manager.clone()
+    }
+
     pub fn with_optimizer_and_cache(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
@@ -280,6 +297,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_generation: Arc::new(AtomicU64::new(1)),
             query_registry: None,
             shared_scheduler: None,
+            query_manager: None,
             macro_manager: Arc::new(graphdb_core::metadata::MacroManager::new()),
             type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),

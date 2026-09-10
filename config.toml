@@ -81,6 +81,8 @@ max_buffered_chunks = 10
 enabled = true
 memory_cache_size = 1000
 slow_query_threshold_ms = 1000
+# Row interval for query-progress notifications (0 disables emission).
+progress_report_rows_interval = 0
 
 [grpc]
 # 是否启用 gRPC 服务

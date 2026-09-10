@@ -12,8 +12,9 @@ use graphdb_metrics::StatsManager;
 use graphdb_query::executor::streaming::pool::SharedScheduler;
 use graphdb_query::executor::streaming::query_registry::QueryRegistry;
 use graphdb_query::executor::streaming::StreamingQueryResult;
-use graphdb_query::{OptimizerEngine, QueryPipelineManager};
 use graphdb_query::experimental_pipeline_extensions::ExtensionRegistry;
+use graphdb_query::query_manager::QueryManager;
+use graphdb_query::{OptimizerEngine, QueryPipelineManager};
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::SyncManager;
@@ -136,6 +137,13 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// Access the query registry instance held by the pipeline, if any.
     pub fn query_registry(&self) -> Option<Arc<QueryRegistry>> {
         self.pipeline_manager.query_registry()
+    }
+
+    /// Install the global QueryManager so per-query runtimes forward KILL QUERY,
+    /// finish tracking, and progress events into one registry. Mirror of
+    /// [`install_shared_scheduler`]: called once at server startup.
+    pub fn install_query_manager(&mut self, query_manager: Arc<QueryManager>) {
+        self.pipeline_manager.set_query_manager(Some(query_manager));
     }
 
     /// Install a shared pipeline-extension registry (unstable experimental
