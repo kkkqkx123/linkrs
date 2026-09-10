@@ -12,7 +12,11 @@ pub(crate) fn render_delete(delete: &DeleteStmt, values: &mut Vec<Value>) -> Opt
     if delete.where_clause.is_some() {
         return None;
     }
-    let mut out = String::from("DELETE ");
+    let mut out = if delete.detach {
+        String::from("DETACH DELETE ")
+    } else {
+        String::from("DELETE ")
+    };
     match &delete.target {
         DeleteTarget::Vertices(vids) => {
             out.push_str("VERTEX ");

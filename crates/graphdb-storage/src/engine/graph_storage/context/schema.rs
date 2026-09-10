@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use crate::edge::EdgeStrategy;
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
+use graphdb_core::event_dispatch::SubscriptionId;
 use graphdb_core::types::LabelId;
 use graphdb_core::StorageResult;
 
@@ -112,18 +115,36 @@ impl GraphStorageContext {
         super::super::schema_engine::rename_edge_property(self, edge_label, old_name, new_name)
     }
 
-    /// Register a schema-change observer on both the schema manager and
-    /// the index metadata manager.
+    /// Register a schema-change observer.
     ///
-    /// Index DDL (`TagIndexCreated/Dropped`, `EdgeIndexCreated/Dropped`)
-    /// is emitted by `IndexManager`, everything else by `SchemaManager`;
-    /// subscribing through this bridge avoids missing half of the events.
-    /// External subsystems (fulltext rebuild, vector sync, cache
+    /// `SchemaManager` and `IndexManager` share one registry, so a single
+    /// registration receives both table/space DDL and index DDL. External
+    /// subsystems (fulltext rebuild, vector sync, cache
     /// invalidation, monitoring) should subscribe here.
-    pub fn register_schema_callback(&self, callback: graphdb_core::metadata::SchemaChangeCallback) {
-        self.schema_manager()
-            .register_schema_callback(callback.clone());
-        self.index_metadata_manager()
-            .register_schema_callback(callback);
+    pub fn register_schema_callback(
+        &self,
+        callback: graphdb_core::metadata::SchemaChangeCallback,
+    ) -> SubscriptionId {
+        self.schema_manager().register_schema_callback(callback)
+    }
+
+    /// Shared schema-event registry (single subscription receives both
+    /// table/space DDL and index DDL). Used by the central `HookBus`.
+    pub fn shared_schema_callbacks(
+        &self,
+    ) -> Arc<
+        graphdb_core::event_dispatch::EventSubscriptions<graphdb_core::metadata::SchemaChangeEvent>,
+    > {
+        self.schema_manager().shared_schema_callbacks()
+    }
+
+    /// Remove a previously registered schema-change observer.
+    pub fn unregister_schema_callback(&self, id: SubscriptionId) -> bool {
+        self.schema_manager().unregister_schema_callback(id)
+    }
+
+    /// Number of registered schema-change observers.
+    pub fn schema_callback_count(&self) -> usize {
+        self.schema_manager().schema_callback_count()
     }
 }

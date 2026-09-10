@@ -102,7 +102,7 @@ fn test_filter_then_limit_pipeline() {
     // Limit returns a compact chunk (selection vector). Materialize to
     // count the visible rows an API consumer would observe (the engine
     // materializes at the root).
-    chunk.materialize_selection();
+    chunk.materialize_selection_by("Root");
     assert_eq!(chunk.len(), 10);
     pipeline.close().unwrap();
 }
@@ -164,7 +164,7 @@ fn test_join_with_small_inputs() {
         OperatorBase::new(0),
         Box::new(left),
         Box::new(right),
-        JoinOperator::new(
+        Box::new(JoinOperator::new(
             JoinOperatorKind::HashJoin {
                 join_condition: None,
                 hash_keys: vec![],
@@ -177,7 +177,7 @@ fn test_join_with_small_inputs() {
                 grace: GraceJoinState::default(),
             },
             empty_layout(),
-        ),
+        )),
     );
 
     join.open().unwrap();

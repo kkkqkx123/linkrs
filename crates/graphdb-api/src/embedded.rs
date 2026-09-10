@@ -35,6 +35,7 @@ pub mod batch;
 pub mod busy_handler;
 pub mod config;
 pub mod database;
+pub mod hooks;
 pub mod migration;
 pub mod result;
 pub mod session;
@@ -49,6 +50,7 @@ pub use batch::{BatchConfig, BatchError, BatchInserter, BatchItemType, BatchResu
 pub use busy_handler::{BusyConfig, BusyHandler, BusyResult};
 pub use config::{DatabaseConfig, SyncMode};
 pub use database::GraphDatabase;
+pub use hooks::HookBus;
 pub use result::{QueryResult, ResultMetadata, Row};
 pub use session::Session;
 pub use statistics::QueryStatistics;

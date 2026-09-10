@@ -190,6 +190,20 @@ impl RecoveryApplier for RecordingApplier {
     ) -> Result<(), StorageError> {
         Ok(())
     }
+    fn replay_rename_tag(
+        &self,
+        _redo: &graphdb::transaction::wal::RenameTagRedo,
+        _ts: Timestamp,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn replay_rename_edge_type(
+        &self,
+        _redo: &graphdb::transaction::wal::RenameEdgeTypeRedo,
+        _ts: Timestamp,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
     fn replay_create_tag_index(
         &self,
         _redo: &graphdb::transaction::wal::CreateTagIndexRedo,

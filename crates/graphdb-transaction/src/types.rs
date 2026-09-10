@@ -20,7 +20,7 @@ pub use config::{
     ConcurrencyMode, DurabilityLevel, IsolationLevel, RetryConfig, TransactionConfig,
     TransactionManagerConfig, TransactionOptions,
 };
-pub use events::{CommitCallback, RollbackCallback, TransactionEvent};
+pub use events::{CommitCallback, RollbackCallback, TransactionEvent, TxnCallback};
 pub(crate) use execution::SavepointParams;
 pub use execution::{SavepointId, SavepointInfo, TransactionExecution, TransactionInfo};
 pub use stats::{TransactionMetrics, TransactionResourceMetrics, TransactionStats};

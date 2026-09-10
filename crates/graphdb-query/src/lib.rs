@@ -12,6 +12,7 @@ pub mod cache;
 pub mod context;
 pub mod cte;
 pub mod executor;
+pub mod extensions;
 pub mod metadata;
 pub mod optimizer;
 pub mod parser;
@@ -32,7 +33,26 @@ pub use pipeline::QueryPipelineManager;
 // Re-export context types from context module
 pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
 // Re-export QueryManager
-pub use query_manager::{QueryInfo, QueryManager, QueryStatus};
+pub use query_manager::{
+    QueryInfo, QueryManager, QueryProgress, QueryProgressCallback, QueryStatus,
+};
+// Re-export pipeline extensions.
+//
+// Unstable experimental API: the extension surface may evolve while the
+// pipeline integration matures.
+pub use extensions::{
+    BinderExtension, BinderExtensionContext, ExtensionRegistry, MapperExtension, ParserExtension,
+    PlannerExtension,
+};
+/// Unstable alias for the experimental pipeline-extension surface.
+///
+/// New code should import from here instead of `extensions` so future
+/// stabilization (or removal) has one obvious place to change. The alias
+/// re-exports everything in [`extensions`]; both paths refer to the same
+/// types.
+pub mod experimental_pipeline_extensions {
+    pub use super::extensions::*;
+}
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;

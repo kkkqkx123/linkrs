@@ -735,6 +735,20 @@ pub struct ExecutionRuntime {
     resource_owner: Arc<Mutex<ResourceOwner>>,
     /// Optional reference to the global QueryManager for KILL QUERY.
     query_manager: Option<Arc<QueryManager>>,
+    /// Row cadence for query-progress notifications. Zero disables emission.
+    /// Checked with a single relaxed atomic load on the row-recording path,
+    /// so the default zero keeps the hot path allocation- and lock-free.
+    progress_rows_interval: AtomicU64,
+    /// Highest processed-row watermark already reported to progress
+    /// observers. Prevents duplicate notifications when several chunks land
+    /// inside the same interval bucket.
+    progress_last_emitted: AtomicU64,
+    /// Session id reported in progress notifications. Set by the assembly
+    /// that attaches the `QueryManager`; defaults to zero.
+    progress_session_id: AtomicI64,
+    /// Query id (in the `QueryManager` id space) reported in progress
+    /// notifications. Negative means unset and suppresses emission.
+    progress_query_id: AtomicI64,
     /// Session-level transaction controller for transaction commands.
     /// Behind a RwLock for interior mutability (set after runtime is shared).
     session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
@@ -843,6 +857,10 @@ impl ExecutionRuntime {
             profile: Arc::new(ProfileBoard::new()),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
+            progress_rows_interval: AtomicU64::new(0),
+            progress_last_emitted: AtomicU64::new(0),
+            progress_session_id: AtomicI64::new(0),
+            progress_query_id: AtomicI64::new(-1),
             session_controller: parking_lot::RwLock::new(None),
             transaction_scope: None,
             query_registry: parking_lot::Mutex::new(None),
@@ -1157,7 +1175,63 @@ impl ExecutionRuntime {
 
     /// Add rows to the profile counter.
     pub fn profile_add_rows(&self, count: u64) {
-        self.profile.total_rows.fetch_add(count, Ordering::Relaxed);
+        let previous = self.profile.total_rows.fetch_add(count, Ordering::Relaxed);
+        self.maybe_emit_progress(previous, previous.saturating_add(count));
+    }
+
+    /// Row cadence for query-progress notifications (`0` disables).
+    ///
+    /// Set alongside `set_query_manager` by the assembly that owns both the
+    /// executor and the `QueryManager`. Zero by default: unconfigured
+    /// runtimes never emit and pay a single relaxed atomic load per batch.
+    pub fn set_progress_rows_interval(&self, rows_interval: u64) {
+        self.progress_rows_interval
+            .store(rows_interval, Ordering::Relaxed);
+    }
+
+    /// Identity reported in progress notifications, in the `QueryManager`
+    /// id space. A negative query id suppresses emission until the assembly
+    /// provides the real mapping between the two query identity schemes.
+    pub fn set_progress_identity(&self, session_id: i64, query_id: i64) {
+        self.progress_session_id.store(session_id, Ordering::Relaxed);
+        self.progress_query_id.store(query_id, Ordering::Relaxed);
+        self.progress_last_emitted.store(0, Ordering::Relaxed);
+    }
+
+    /// Forward a row watermark to the attached `QueryManager` when it
+    /// crosses an unreported interval bucket. Cheap no-op unless a manager
+    /// is attached, an interval is configured, and the identity is set.
+    fn maybe_emit_progress(&self, previous_total: u64, new_total: u64) {
+        let interval = self.progress_rows_interval.load(Ordering::Relaxed);
+        if interval == 0 {
+            return;
+        }
+        let query_id = self.progress_query_id.load(Ordering::Relaxed);
+        if query_id < 0 {
+            return;
+        }
+        let query_manager = match self.query_manager.as_ref() {
+            Some(query_manager) => query_manager,
+            None => return,
+        };
+        if query_manager.progress_callback_count() == 0 {
+            return;
+        }
+        if new_total / interval == previous_total / interval {
+            return;
+        }
+        let session_id = self.progress_session_id.load(Ordering::Relaxed);
+        // Monotonic guard: concurrent workers may cross buckets out of
+        // order; only the highest watermark is reported.
+        let last = self.progress_last_emitted.load(Ordering::Relaxed);
+        if new_total > last
+            && self
+                .progress_last_emitted
+                .compare_exchange(last, new_total, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            query_manager.emit_progress(session_id, query_id, new_total);
+        }
     }
 
     // ── Resource ownership ──

@@ -381,6 +381,11 @@ impl GraphDatabase<GraphStorage> {
         };
         let schema_api = SchemaApi::new(storage.clone());
 
+        let hooks = crate::embedded::hooks::HookBus::with_txn_manager(
+            &txn_manager,
+            Some(storage.read().shared_schema_callbacks()),
+        );
+
         let inner = Arc::new(GraphDatabaseInner {
             query_api,
             schema_api,
@@ -390,6 +395,7 @@ impl GraphDatabase<GraphStorage> {
             fulltext_manager,
             sync_manager,
             stats_manager,
+            hooks,
             #[cfg(feature = "vector")]
             vector_runtime,
         });
@@ -505,6 +511,13 @@ impl<S: StorageClient + Clone + 'static> GraphDatabase<S> {
     pub fn stats_manager(&self) -> Arc<StatsManager> {
         self.inner.stats_manager.clone()
     }
+
+    /// Central event-hook facade: one subscription point for schema and
+    /// transaction notifications (notification hooks only; the C-API
+    /// `commit_hook` veto is separate).
+    pub fn hooks(&self) -> &crate::embedded::hooks::HookBus {
+        &self.inner.hooks
+    }
 }
 
 // To support Send + Sync
@@ -553,6 +566,8 @@ impl GraphDatabase<MockStorage> {
         let vector_runtime =
             Arc::new(tokio::runtime::Runtime::new().expect("Failed to create tokio runtime"));
 
+        let hooks = crate::embedded::hooks::HookBus::with_txn_manager(&txn_manager, None);
+
         let inner = Arc::new(GraphDatabaseInner {
             query_api,
             schema_api,
@@ -562,6 +577,7 @@ impl GraphDatabase<MockStorage> {
             fulltext_manager: None,
             sync_manager: None,
             stats_manager,
+            hooks,
             #[cfg(feature = "vector")]
             vector_runtime,
         });

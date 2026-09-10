@@ -199,7 +199,7 @@ fn test_storage_cascading_delete() {
         .assert_edge_exists(1, 2, "KNOWS")
         .assert_edge_exists(2, 3, "KNOWS")
         .assert_edge_exists(3, 1, "KNOWS")
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DETACH DELETE VERTEX 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_vertex_exists(2, "Person")

@@ -402,14 +402,12 @@ impl UtilStmtParser {
                 return Ok(None);
             }
         };
-        // V1 has no CTE column-alias list: `name(col, ...)` is rejected with
-        // a precise error instead of misparsing as a function call.
+        // A CTE definition is always `name AS (`; `name (` starts a function
+        // call item instead (e.g. `WITH count(*) AS total`), so back off and
+        // let the expression parser handle it.
         if ctx.check_token(TokenKind::LParen) {
-            return Err(ParseError::new(
-                ParseErrorKind::SyntaxError,
-                "CTE column alias lists are not supported; the CTE columns are the anchor query's output columns".to_string(),
-                ctx.current_position(),
-            ));
+            ctx.restore(ckpt);
+            return Ok(None);
         }
         if !ctx.check_keyword("AS") {
             ctx.restore(ckpt);

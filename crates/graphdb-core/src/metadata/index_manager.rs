@@ -82,7 +82,31 @@ impl IndexManager {
         }
     }
 
+    /// Build a manager sharing one schema-event registry with `SchemaManager`.
+    ///
+    /// Single enum dual emission source: index DDL is emitted here, everything
+    /// else by `SchemaManager`; sharing one registry lets observers subscribe
+    /// once and receive both halves.
+    pub fn with_shared_schema_callbacks(
+        shared: Arc<EventSubscriptions<SchemaChangeEvent>>,
+    ) -> Self {
+        Self {
+            tag_indexes: Arc::new(RwLock::new(HashMap::new())),
+            edge_indexes: Arc::new(RwLock::new(HashMap::new())),
+            next_index_id: AtomicU64::new(1),
+            schema_callbacks: shared,
+        }
+    }
+
+    /// Shared schema-event registry behind this manager.
+    pub fn shared_schema_callbacks(&self) -> Arc<EventSubscriptions<SchemaChangeEvent>> {
+        Arc::clone(&self.schema_callbacks)
+    }
+
     /// Register a runtime observer for index DDL events.
+    ///
+    /// Writes to the registry shared with `SchemaManager`, so one
+    /// subscription receives both index DDL and table/space DDL.
     pub fn register_schema_callback(&self, callback: SchemaChangeCallback) -> SubscriptionId {
         self.schema_callbacks.add(callback)
     }
@@ -454,5 +478,48 @@ mod tests {
             .create_tag_index(1, &tag_index("idx_c", "Person"))
             .unwrap();
         assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn shared_registry_receives_schema_and_index_halves_once() {
+        use super::super::schema_events::SchemaChangeEvent as SharedSchemaEvent;
+        use crate::event_dispatch::EventSubscriptions;
+        use crate::metadata::SchemaManager;
+        use crate::types::SpaceInfo;
+
+        let shared = Arc::new(EventSubscriptions::<SharedSchemaEvent>::new());
+        let schema = SchemaManager::with_shared_schema_callbacks(Arc::clone(&shared));
+        let indexes = IndexManager::with_shared_schema_callbacks(shared);
+        assert!(Arc::ptr_eq(
+            &schema.shared_schema_callbacks(),
+            &indexes.shared_schema_callbacks()
+        ));
+
+        let spaces = Arc::new(AtomicUsize::new(0));
+        let idx_events = Arc::new(AtomicUsize::new(0));
+        let space_probe = Arc::clone(&spaces);
+        let idx_probe = Arc::clone(&idx_events);
+        // Single subscription receives both halves.
+        schema.register_schema_callback(Arc::new(move |event| match event {
+            SharedSchemaEvent::SpaceCreated { .. } => {
+                space_probe.fetch_add(1, Ordering::SeqCst);
+            }
+            SharedSchemaEvent::TagIndexCreated { .. } => {
+                idx_probe.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
+        }));
+
+        let mut space = SpaceInfo::new("shared_space".to_string());
+        assert!(schema.create_space(&mut space).unwrap());
+        indexes
+            .create_tag_index(space.space_id, &tag_index("idx_shared", "Person"))
+            .unwrap();
+
+        assert_eq!(spaces.load(Ordering::SeqCst), 1);
+        assert_eq!(idx_events.load(Ordering::SeqCst), 1);
+        // Registered once: the shared registry holds exactly one observer.
+        assert_eq!(schema.schema_callback_count(), 1);
+        assert_eq!(indexes.schema_callback_count(), 1);
     }
 }

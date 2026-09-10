@@ -872,10 +872,30 @@ impl GraphStorage {
         self.ctx.stop_vertex_gc();
     }
 
-    /// Register a schema-change observer on both the schema manager and
-    /// the index metadata manager (see `GraphStorageContext` bridge).
-    pub fn register_schema_callback(&self, callback: graphdb_core::metadata::SchemaChangeCallback) {
-        self.ctx.register_schema_callback(callback);
+    /// Register a schema-change observer (single shared registry:
+    /// one subscription receives both table/space DDL and index DDL).
+    pub fn register_schema_callback(
+        &self,
+        callback: graphdb_core::metadata::SchemaChangeCallback,
+    ) -> graphdb_core::event_dispatch::SubscriptionId {
+        self.ctx.register_schema_callback(callback)
+    }
+
+    /// Remove a previously registered schema-change observer.
+    pub fn unregister_schema_callback(
+        &self,
+        id: graphdb_core::event_dispatch::SubscriptionId,
+    ) -> bool {
+        self.ctx.unregister_schema_callback(id)
+    }
+
+    /// Shared schema-event registry for the central `HookBus`.
+    pub fn shared_schema_callbacks(
+        &self,
+    ) -> Arc<
+        graphdb_core::event_dispatch::EventSubscriptions<graphdb_core::metadata::SchemaChangeEvent>,
+    > {
+        self.ctx.shared_schema_callbacks()
     }
 
     /// Register a storage-lifecycle observer on the persistence coordinator.

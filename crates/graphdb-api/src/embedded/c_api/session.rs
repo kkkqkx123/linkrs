@@ -618,6 +618,44 @@ pub unsafe extern "C" fn graphdb_update_hook(
     old_user_data
 }
 
+/// Interrupt a session's next query.
+///
+/// Cooperative cancellation at the entry gate: sets the session interrupt
+/// flag so the next `execute` entry point fails fast with an interrupted
+/// error. A query already running is not touched; stop those through the
+/// executor kill path. Use `graphdb_connection_clear_interrupt` to resume
+/// normal execution.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `graphdb_session_create`
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_connection_interrupt(session: *mut graphdb_session_t) -> c_int {
+    if session.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+
+    let handle = &*(session as *const GraphDbSessionHandle);
+    handle.inner.interrupt();
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
+/// Clear a previously requested session interrupt.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `graphdb_session_create`
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_connection_clear_interrupt(
+    session: *mut graphdb_session_t,
+) -> c_int {
+    if session.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+
+    let handle = &*(session as *const GraphDbSessionHandle);
+    handle.inner.clear_interrupt();
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

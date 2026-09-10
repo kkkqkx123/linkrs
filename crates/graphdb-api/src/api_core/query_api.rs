@@ -13,6 +13,7 @@ use graphdb_query::executor::streaming::pool::SharedScheduler;
 use graphdb_query::executor::streaming::query_registry::QueryRegistry;
 use graphdb_query::executor::streaming::StreamingQueryResult;
 use graphdb_query::{OptimizerEngine, QueryPipelineManager};
+use graphdb_query::experimental_pipeline_extensions::ExtensionRegistry;
 #[cfg(feature = "vector")]
 use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::SyncManager;
@@ -135,6 +136,17 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// Access the query registry instance held by the pipeline, if any.
     pub fn query_registry(&self) -> Option<Arc<QueryRegistry>> {
         self.pipeline_manager.query_registry()
+    }
+
+    /// Install a shared pipeline-extension registry (unstable experimental
+    /// API) into an existing pipeline.
+    pub fn set_extensions(&mut self, extensions: Arc<ExtensionRegistry>) {
+        self.pipeline_manager.set_extensions(extensions);
+    }
+
+    /// Pipeline-extension registry backing this API.
+    pub fn extensions(&self) -> Arc<ExtensionRegistry> {
+        self.pipeline_manager.extensions()
     }
 
     /// Collect (or serve cached) optimizer statistics for a space.

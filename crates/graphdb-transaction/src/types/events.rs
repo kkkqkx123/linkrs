@@ -38,3 +38,7 @@ pub enum TransactionEvent {
 
 pub type CommitCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;
 pub type RollbackCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;
+/// Observer over the unified transaction registry (receives every lifecycle
+/// event unless a filter narrows it). Same underlying type as the
+/// commit/rollback compatibility vests.
+pub type TxnCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;

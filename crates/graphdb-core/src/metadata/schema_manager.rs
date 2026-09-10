@@ -98,6 +98,24 @@ impl SchemaManager {
         }
     }
 
+    /// Build a manager sharing one schema-event registry with `IndexManager`.
+    ///
+    /// Single enum dual emission source: table/space DDL is emitted by
+    /// `SchemaManager`, index DDL by `IndexManager`; sharing one registry
+    /// lets observers subscribe once and receive both halves.
+    pub fn with_shared_schema_callbacks(
+        shared: Arc<EventSubscriptions<SchemaChangeEvent>>,
+    ) -> Self {
+        let mut manager = Self::new();
+        manager.schema_callbacks = shared;
+        manager
+    }
+
+    /// Shared schema-event registry behind this manager.
+    pub fn shared_schema_callbacks(&self) -> Arc<EventSubscriptions<SchemaChangeEvent>> {
+        Arc::clone(&self.schema_callbacks)
+    }
+
     /// Register a runtime observer for schema changes.
     pub fn register_schema_callback(&self, callback: SchemaChangeCallback) -> SubscriptionId {
         self.schema_callbacks.add(callback)

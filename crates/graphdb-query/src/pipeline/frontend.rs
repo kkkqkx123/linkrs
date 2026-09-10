@@ -13,7 +13,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_text: &str,
     ) -> DBResult<crate::parser::ParserResult> {
-        let mut parser = Parser::new(query_text)
+        // Experimental parser extensions get first shot at the raw text.
+        let rewritten_text;
+        let effective_text = match self.extensions.try_parse_transform(query_text) {
+            Some(Ok(rewritten)) => {
+                rewritten_text = rewritten;
+                rewritten_text.as_str()
+            }
+            Some(Err(error)) => return Err(error),
+            None => query_text,
+        };
+        let mut parser = Parser::new(effective_text)
             // User-defined type aliases resolve in CAST targets and DDL
             // column types against the shared engine-wide catalog.
             .with_type_alias_manager(self.type_alias_manager.clone());
@@ -62,6 +72,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .or_else(|| qctx.request_context().space_name.clone());
 
         let mut binder = Binder::new().with_space(space_name.clone(), space_id);
+
+        // Experimental binder extensions get first shot at the parsed AST.
+        let extension_ctx = crate::extensions::BinderExtensionContext {
+            space_name: space_name.clone(),
+            space_id,
+        };
+        if let Some(rewritten) = self.extensions.try_bind(&ast, &extension_ctx) {
+            return rewritten.map(Some);
+        }
 
         if let Some(ref schema_manager) = self.schema_manager {
             binder = binder.with_schema_manager(schema_manager.clone());

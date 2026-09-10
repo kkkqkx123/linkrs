@@ -13,6 +13,8 @@ use crate::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::engine::spiller::Spiller;
 use crate::index::IndexDataManagerImpl;
 use crate::vertex::IdKey;
+use graphdb_core::event_dispatch::EventSubscriptions;
+use graphdb_core::metadata::SchemaChangeEvent;
 use graphdb_core::metadata::{IndexManager, SchemaManager};
 use graphdb_core::types::{LabelId, TableTracker, TableTrackerConfig};
 use graphdb_core::UserStorage;
@@ -98,6 +100,9 @@ impl GraphStoragePersistent {
             flush_interval: config.flush_config.flush_interval,
         }));
 
+        // Single shared schema-event registry: SchemaManager emits table/space
+        // DDL, IndexManager emits index DDL; observers subscribe once.
+        let shared_schema_callbacks = Arc::new(EventSubscriptions::<SchemaChangeEvent>::new());
         (
             Arc::new(GraphDataStore::new()),
             cache_manager,
@@ -109,8 +114,12 @@ impl GraphStoragePersistent {
                     IndexDataManagerImpl::new_with_root(root)
                 }),
             )),
-            Arc::new(SchemaManager::new()),
-            Arc::new(IndexManager::new()),
+            Arc::new(SchemaManager::with_shared_schema_callbacks(Arc::clone(
+                &shared_schema_callbacks,
+            ))),
+            Arc::new(IndexManager::with_shared_schema_callbacks(
+                shared_schema_callbacks,
+            )),
             Arc::new(VersionManager::new()),
             Arc::new(UserStorage::new()),
             resource_accounting,
@@ -137,6 +146,8 @@ impl GraphStoragePersistent {
         let data_store = Arc::new(GraphDataStore::new());
         let cache_manager = Arc::new(cache_manager);
         let spiller = Self::new_spiller(&config, &resource_accounting, &data_store, &cache_manager);
+        // Single shared schema-event registry for SchemaManager + IndexManager.
+        let shared_schema_callbacks = Arc::new(EventSubscriptions::<SchemaChangeEvent>::new());
 
         Self {
             data_store,
@@ -156,8 +167,12 @@ impl GraphStoragePersistent {
                 Arc::new(RwLock::new(dm))
             },
             config,
-            schema_manager: Arc::new(SchemaManager::new()),
-            index_metadata_manager: Arc::new(IndexManager::new()),
+            schema_manager: Arc::new(SchemaManager::with_shared_schema_callbacks(Arc::clone(
+                &shared_schema_callbacks,
+            ))),
+            index_metadata_manager: Arc::new(IndexManager::with_shared_schema_callbacks(
+                shared_schema_callbacks,
+            )),
             version_manager: Arc::new(VersionManager::new()),
             user_storage: Arc::new(UserStorage::new()),
             persistence: None,

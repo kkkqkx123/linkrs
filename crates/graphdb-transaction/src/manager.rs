@@ -53,8 +53,12 @@ pub struct TransactionManager {
     pub(super) id_generator: AtomicU64,
     /// Statistics
     pub(super) stats: Arc<TransactionStats>,
-    pub(super) commit_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
-    pub(super) rollback_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
+    // Unified registry for the whole `TransactionEvent` enum.
+    // `register_commit/rollback_*` are compatibility vests with built-in
+    // filters; `register_txn_callback` receives everything;
+    // `BudgetWarning` has its own entry point and no longer rides the
+    // commit channel.
+    pub(super) txn_callbacks: Arc<EventSubscriptions<TransactionEvent>>,
     /// Whether shutdown
     pub(super) shutdown_flag: AtomicU64,
     /// Transaction monitor for metrics collection
@@ -93,8 +97,7 @@ impl TransactionManager {
             id_generator: AtomicU64::new(1),
             commits_since_checkpoint: AtomicU64::new(0),
             stats,
-            commit_callbacks: Arc::new(EventSubscriptions::new()),
-            rollback_callbacks: Arc::new(EventSubscriptions::new()),
+            txn_callbacks: Arc::new(EventSubscriptions::new()),
             shutdown_flag: AtomicU64::new(0),
             monitor,
             sync_manager: None,
@@ -124,71 +127,159 @@ impl TransactionManager {
         manager
     }
 
-    pub fn register_commit_callback(&self, callback: CommitCallback) -> SubscriptionId {
-        self.commit_callbacks.add(callback)
+    fn is_commit_event(event: &TransactionEvent) -> bool {
+        matches!(
+            event,
+            TransactionEvent::Committed { .. }
+                | TransactionEvent::CommitDurableButUnfinalized { .. }
+        )
     }
 
-    /// Register a filtered commit observer invoked only when `filter` returns true.
+    fn is_rollback_event(event: &TransactionEvent) -> bool {
+        matches!(event, TransactionEvent::Aborted { .. })
+    }
+
+    fn is_budget_warning_event(event: &TransactionEvent) -> bool {
+        matches!(event, TransactionEvent::BudgetWarning { .. })
+    }
+
+    /// Register an observer for every transaction lifecycle event.
+    pub fn register_txn_callback(&self, callback: TxnCallback) -> SubscriptionId {
+        self.txn_callbacks.add(callback)
+    }
+
+    /// Register a filtered observer over every transaction lifecycle event.
+    pub fn register_txn_callback_filtered(
+        &self,
+        callback: TxnCallback,
+        filter: EventFilter<TransactionEvent>,
+    ) -> SubscriptionId {
+        self.txn_callbacks.add_filtered(callback, Some(filter))
+    }
+
+    /// Remove a previously registered transaction observer. Returns true if present.
+    pub fn unregister_txn_callback(&self, id: SubscriptionId) -> bool {
+        self.txn_callbacks.remove(id)
+    }
+
+    /// Total number of observers on the unified transaction registry (all kinds).
+    pub fn txn_callback_count(&self) -> usize {
+        self.txn_callbacks.len()
+    }
+
+    /// Shared transaction-event registry behind this manager.
+    pub fn shared_txn_callbacks(&self) -> Arc<EventSubscriptions<TransactionEvent>> {
+        Arc::clone(&self.txn_callbacks)
+    }
+
+    /// Register a commit observer (compatibility vest: only
+    /// `Committed | CommitDurableButUnfinalized` pass the built-in filter).
+    pub fn register_commit_callback(&self, callback: CommitCallback) -> SubscriptionId {
+        self.txn_callbacks
+            .add_filtered(callback, Some(Arc::new(Self::is_commit_event)))
+    }
+
+    /// Register a filtered commit observer invoked only when both the
+    /// built-in commit filter and `filter` return true.
     pub fn register_commit_callback_filtered(
         &self,
         callback: CommitCallback,
         filter: EventFilter<TransactionEvent>,
     ) -> SubscriptionId {
-        self.commit_callbacks.add_filtered(callback, Some(filter))
+        let combined: EventFilter<TransactionEvent> =
+            Arc::new(move |event| Self::is_commit_event(event) && filter(event));
+        self.txn_callbacks.add_filtered(callback, Some(combined))
     }
 
     /// Remove a previously registered commit observer. Returns true if present.
     pub fn unregister_commit_callback(&self, id: SubscriptionId) -> bool {
-        self.commit_callbacks.remove(id)
+        self.txn_callbacks.remove(id)
     }
 
-    /// Number of registered commit observers.
+    /// Total observers on the unified registry (all kinds, not only commits).
     pub fn commit_callback_count(&self) -> usize {
-        self.commit_callbacks.len()
+        self.txn_callbacks.len()
     }
 
+    /// Register a rollback observer (compatibility vest: only `Aborted`
+    /// passes the built-in filter).
     pub fn register_rollback_callback(&self, callback: RollbackCallback) -> SubscriptionId {
-        self.rollback_callbacks.add(callback)
+        self.txn_callbacks
+            .add_filtered(callback, Some(Arc::new(Self::is_rollback_event)))
     }
 
-    /// Register a filtered rollback observer invoked only when `filter` returns true.
+    /// Register a filtered rollback observer invoked only when both the
+    /// built-in rollback filter and `filter` return true.
     pub fn register_rollback_callback_filtered(
         &self,
         callback: RollbackCallback,
         filter: EventFilter<TransactionEvent>,
     ) -> SubscriptionId {
-        self.rollback_callbacks.add_filtered(callback, Some(filter))
+        let combined: EventFilter<TransactionEvent> =
+            Arc::new(move |event| Self::is_rollback_event(event) && filter(event));
+        self.txn_callbacks.add_filtered(callback, Some(combined))
     }
 
     /// Remove a previously registered rollback observer. Returns true if present.
     pub fn unregister_rollback_callback(&self, id: SubscriptionId) -> bool {
-        self.rollback_callbacks.remove(id)
+        self.txn_callbacks.remove(id)
     }
 
-    /// Number of registered rollback observers.
+    /// Total observers on the unified registry (all kinds, not only rollbacks).
     pub fn rollback_callback_count(&self) -> usize {
-        self.rollback_callbacks.len()
+        self.txn_callbacks.len()
+    }
+
+    /// Register a budget-warning observer (only `BudgetWarning` passes).
+    pub fn register_budget_warning_callback(&self, callback: TxnCallback) -> SubscriptionId {
+        self.txn_callbacks
+            .add_filtered(callback, Some(Arc::new(Self::is_budget_warning_event)))
+    }
+
+    /// Register a filtered budget-warning observer invoked only when both
+    /// the built-in budget-warning filter and `filter` return true.
+    pub fn register_budget_warning_callback_filtered(
+        &self,
+        callback: TxnCallback,
+        filter: EventFilter<TransactionEvent>,
+    ) -> SubscriptionId {
+        let combined: EventFilter<TransactionEvent> =
+            Arc::new(move |event| Self::is_budget_warning_event(event) && filter(event));
+        self.txn_callbacks.add_filtered(callback, Some(combined))
+    }
+
+    /// Remove a previously registered budget-warning observer.
+    pub fn unregister_budget_warning_callback(&self, id: SubscriptionId) -> bool {
+        self.txn_callbacks.remove(id)
     }
 
     pub(super) fn emit_commit_event(&self, event: TransactionEvent) {
-        let panics = self.commit_callbacks.dispatch("commit", &event);
+        let panics = self.txn_callbacks.dispatch("commit", &event);
         for _ in 0..panics {
             self.stats.increment_cleanup_failure();
         }
     }
 
     pub(super) fn emit_rollback_event(&self, event: TransactionEvent) {
-        let panics = self.rollback_callbacks.dispatch("rollback", &event);
+        let panics = self.txn_callbacks.dispatch("rollback", &event);
+        for _ in 0..panics {
+            self.stats.increment_cleanup_failure();
+        }
+    }
+
+    pub(super) fn emit_budget_warning_event(&self, event: TransactionEvent) {
+        let panics = self.txn_callbacks.dispatch("txn-budget", &event);
         for _ in 0..panics {
             self.stats.increment_cleanup_failure();
         }
     }
 
     /// Drain pending budget warnings from a context and fan them out as
-    /// `TransactionEvent::BudgetWarning` through the commit observers.
+    /// `TransactionEvent::BudgetWarning` through the unified registry
+    /// (budget-warning observers only).
     pub fn drain_context_budget_warnings(&self, context: &TransactionContext) {
         for event in context.drain_budget_warnings() {
-            self.emit_commit_event(event);
+            self.emit_budget_warning_event(event);
         }
     }
 
@@ -949,7 +1040,7 @@ mod tests {
                 probe.fetch_add(1, Ordering::SeqCst);
             }
         }));
-        assert_eq!(manager.commit_callback_count(), 2);
+        assert_eq!(manager.commit_callback_count(), 3);
         assert!(manager.unregister_commit_callback(id));
         assert!(!manager.unregister_commit_callback(id));
 
@@ -960,6 +1051,75 @@ mod tests {
             .commit_transaction(txn_id)
             .expect("transaction should commit");
         assert_eq!(commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn unified_registry_delivers_commit_and_abort_to_single_subscription() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let commits = Arc::new(AtomicUsize::new(0));
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let commit_probe = Arc::clone(&commits);
+        let abort_probe = Arc::clone(&aborts);
+        // One unified subscription receives both halves.
+        manager.register_txn_callback(Arc::new(move |event| match event {
+            TransactionEvent::Committed { .. } => {
+                commit_probe.fetch_add(1, Ordering::SeqCst);
+            }
+            TransactionEvent::Aborted { .. } => {
+                abort_probe.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
+        }));
+
+        let committed = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("committed transaction should begin");
+        manager
+            .commit_transaction(committed)
+            .expect("transaction should commit");
+        let aborted = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("aborted transaction should begin");
+        manager
+            .abort_transaction(aborted)
+            .expect("transaction should abort");
+
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        assert_eq!(aborts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn commit_vest_filters_out_aborts_and_budget_warnings() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let probe = Arc::clone(&hits);
+        manager.register_commit_callback(Arc::new(move |_| {
+            probe.fetch_add(1, Ordering::SeqCst);
+        }));
+        let warnings = Arc::new(AtomicUsize::new(0));
+        let warning_probe = Arc::clone(&warnings);
+        manager.register_budget_warning_callback(Arc::new(move |_| {
+            warning_probe.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Budget warnings reach only the budget entry point, never the commit vest.
+        manager.emit_budget_warning_event(TransactionEvent::BudgetWarning {
+            txn_id: TransactionId(1),
+            resource: "memory".to_string(),
+            current: 8,
+            limit: 10,
+        });
+        assert_eq!(warnings.load(Ordering::SeqCst), 1);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Aborts never leak into the commit vest either.
+        let aborted = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("aborted transaction should begin");
+        manager
+            .abort_transaction(aborted)
+            .expect("transaction should abort");
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]

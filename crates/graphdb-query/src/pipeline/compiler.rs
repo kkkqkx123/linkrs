@@ -73,7 +73,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let space_name = query_context
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
-        self.optimize_execution_plan(execution_plan, space_name.as_deref())
+        let optimized = self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
+        // Experimental mapper extensions get a rewrite shot at the optimized plan.
+        match self.extensions.try_map(&optimized) {
+            Some(mapped) => mapped,
+            None => Ok(optimized),
+        }
     }
 
     pub(crate) fn generate_execution_plan_from_bound(
@@ -84,31 +89,43 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
         use crate::planning::planner::PlannerError;
 
-        let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(bound)
-            .ok_or_else(|| {
-            DBError::from(QueryError::pipeline_planning_error(
-                PlannerError::NoSuitablePlanner(format!(
-                    "No planner for bound statement: {}",
-                    bound.kind()
-                )),
-            ))
-        })?;
+        // Experimental planner extensions get first shot at the bound statement.
+        let sub_plan = match self.extensions.try_plan(bound) {
+            Some(claimed) => claimed.map_err(|e| {
+                DBError::from(QueryError::pipeline_planning_error(
+                    PlannerError::PlanGenerationFailed(e.to_string()),
+                ))
+            })?,
+            None => {
+                let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(
+                    bound,
+                )
+                .ok_or_else(|| {
+                    DBError::from(QueryError::pipeline_planning_error(
+                        PlannerError::NoSuitablePlanner(format!(
+                            "No planner for bound statement: {}",
+                            bound.kind()
+                        )),
+                    ))
+                })?;
 
-        // Build a lightweight ValidatedStatement for expression context (used
-        // by clause planners like MATCH that still need the AST expression
-        // analysis context for YIELD column construction).
-        let validated = super::prepared::build_validated_fallback(ast);
-        let metadata = self.build_metadata_context(&query_context, bound);
+                // Build a lightweight ValidatedStatement for expression context (used
+                // by clause planners like MATCH that still need the AST expression
+                // analysis context for YIELD column construction).
+                let validated = super::prepared::build_validated_fallback(ast);
+                let metadata = self.build_metadata_context(&query_context, bound);
 
-        let ctx = crate::planning::context::PlanContext::new(
-            bound,
-            query_context.clone(),
-            metadata.as_ref(),
-            &validated,
-        );
-        let sub_plan = planner_enum
-            .plan_bound(&ctx)
-            .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?;
+                let ctx = crate::planning::context::PlanContext::new(
+                    bound,
+                    query_context.clone(),
+                    metadata.as_ref(),
+                    &validated,
+                );
+                planner_enum
+                    .plan_bound(&ctx)
+                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+            }
+        };
 
         let root = sub_plan.root().clone();
         let mut execution_plan = crate::planning::plan::ExecutionPlan::new(root);

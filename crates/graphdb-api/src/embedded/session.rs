@@ -66,6 +66,10 @@ pub struct Session<S: StorageClient + Clone + 'static> {
     function_registry: Arc<RwLock<FunctionRegistry>>,
     /// Session-scoped user variables (`$name`) with transaction overlay.
     session_variables: Arc<crate::session_variables::SessionVariables>,
+    /// Cooperative interrupt flag: set by `interrupt()` or the C-API
+    /// `graphdb_connection_interrupt`; `execute*` entry points fail fast
+    /// when set. Queries already running need the kill path below instead.
+    interrupted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Internal structure of the database, used for sharing data between Session and GraphDatabase
@@ -79,6 +83,8 @@ pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) stats_manager: Arc<StatsManager>,
+    /// Central event-hook facade.
+    pub(crate) hooks: crate::embedded::hooks::HookBus,
     /// Tokio runtime for vector operations in embedded mode.
     /// Stored here to ensure the runtime lives as long as the database.
     #[cfg(feature = "vector")]
@@ -97,6 +103,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             statistics: SessionStatistics::new(),
             function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
             session_variables: Arc::new(crate::session_variables::SessionVariables::new()),
+            interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -218,6 +225,39 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         self.auto_commit
     }
 
+    // ── Cooperative interrupt ─────────────────────────────────────────
+
+    /// Request interruption of the next query on this session.
+    ///
+    /// Cooperative cancellation at the entry gate: `execute*` entry points
+    /// fail fast while the flag is set. A query already running is not
+    /// touched; stop those through the executor kill path and call
+    /// `clear_interrupt` to resume normal execution.
+    pub fn interrupt(&self) {
+        self.interrupted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether an interrupt has been requested and not yet cleared.
+    pub fn is_interrupted(&self) -> bool {
+        self.interrupted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Clear a previously requested interrupt.
+    pub fn clear_interrupt(&self) {
+        self.interrupted
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn ensure_not_interrupted(&self) -> CoreResult<()> {
+        if self.is_interrupted() {
+            return Err(CoreError::QueryExecutionFailed(
+                "query interrupted".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     // ── Session variables (`$name`) ─────────────────────────────────────
 
     /// Assign a session variable. Inside a text-begun transaction the
@@ -243,6 +283,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// Return the query results when successful.
     /// - Return error on failure
     pub fn execute(&self, query: &str) -> CoreResult<QueryResult> {
+        self.ensure_not_interrupted()?;
         // Reset the previous change history
         self.statistics.reset_last();
 
@@ -681,6 +722,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         query: &str,
         params: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
+        self.ensure_not_interrupted()?;
         // Transaction / session commands do not consume query parameters;
         // classify and route them through the unified command path.
         match Self::parse_command(query) {
@@ -754,6 +796,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         params: HashMap<String, Value>,
         session_variables: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
+        self.ensure_not_interrupted()?;
         // Transaction / session commands do not consume parameters or
         // session variables; classify and route them through the unified
         // command path.
@@ -1340,3 +1383,30 @@ impl<S: StorageClient + Clone + 'static> Drop for Session<S> {
 // Therefore, the Session can securely implement both the Send and Sync functions.
 unsafe impl<S: StorageClient + Clone + 'static> Send for Session<S> {}
 unsafe impl<S: StorageClient + Clone + 'static> Sync for Session<S> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedded::database::GraphDatabase;
+    use crate::storage::MockStorage;
+
+    #[test]
+    fn interrupt_flag_fails_execute_fast_and_clears() {
+        let db = GraphDatabase::<MockStorage>::open_test().expect("test database opens");
+        let session = db.session().expect("session creates");
+        assert!(!session.is_interrupted());
+
+        session.interrupt();
+        assert!(session.is_interrupted());
+        let err = session
+            .execute("MATCH (n) RETURN n")
+            .expect_err("interrupted session must fail fast");
+        assert!(
+            err.to_string().contains("interrupted"),
+            "unexpected error: {err}"
+        );
+
+        session.clear_interrupt();
+        assert!(!session.is_interrupted());
+    }
+}

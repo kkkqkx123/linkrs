@@ -1745,8 +1745,30 @@ void *graphdb_rollback_hook(struct graphdb_session_t *session,
  * - `user_data` is passed to the callback and must remain valid for the lifetime of the callback
  */
 void *graphdb_update_hook(struct graphdb_session_t *session,
-                          graphdb_update_hook_callback callback,
-                          void *user_data);
+                           graphdb_update_hook_callback callback,
+                           void *user_data);
+
+/**
+ * Interrupt a session's next query.
+ *
+ * Cooperative cancellation at the entry gate: sets the session interrupt
+ * flag so the next execute entry point fails fast with an interrupted
+ * error. A query already running is not touched; stop those through the
+ * executor kill path. Use `graphdb_connection_clear_interrupt` to resume
+ * normal execution.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `graphdb_session_create`
+ */
+int graphdb_connection_interrupt(struct graphdb_session_t *session);
+
+/**
+ * Clear a previously requested session interrupt.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `graphdb_session_create`
+ */
+int graphdb_connection_clear_interrupt(struct graphdb_session_t *session);
 
 /**
  * Get the number of rows affected by the last operation

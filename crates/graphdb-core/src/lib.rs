@@ -63,6 +63,10 @@ pub use permission::{Permission, RoleType};
 // Session statistics type
 pub use session_stats::SessionStatistics;
 
+// Compatibility re-export: observability primitives live in
+// `graphdb-metrics`; new code should depend on it directly.
+pub use graphdb_metrics as stats;
+
 // Utility re-exports
 pub use arena::{Arena, ArenaPool, ArenaStringBuilder, ArenaTokenizer, ArenaVec};
 pub use bloom_filter::{BloomFilter, ScalableBloomFilter};

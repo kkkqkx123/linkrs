@@ -93,7 +93,9 @@ pub struct GraphSessionManager {
     session_idle_timeout: Duration,
     /// Is the background cleanup task currently running?
     cleanup_task_running: Arc<AtomicBool>,
-    session_callbacks: EventSubscriptions<SessionEvent>,
+    // Shared with `QueryManager` when co-located: single enum dual emission
+    // source (`SessionCreated/Destroyed` here, `Query*` there).
+    session_callbacks: Arc<EventSubscriptions<SessionEvent>>,
 }
 
 impl std::fmt::Debug for GraphSessionManager {
@@ -117,6 +119,21 @@ impl GraphSessionManager {
         max_connections: usize,
         session_idle_timeout: Duration,
     ) -> Arc<Self> {
+        Self::new_with_shared(
+            host_addr,
+            max_connections,
+            session_idle_timeout,
+            Arc::new(EventSubscriptions::new()),
+        )
+    }
+
+    /// Build a manager sharing one session-event registry with `QueryManager`.
+    pub fn new_with_shared(
+        host_addr: String,
+        max_connections: usize,
+        session_idle_timeout: Duration,
+        shared: Arc<EventSubscriptions<SessionEvent>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sessions: Arc::new(DashMap::new()),
             active_sessions: Arc::new(DashMap::new()),
@@ -125,8 +142,22 @@ impl GraphSessionManager {
             max_connections,
             session_idle_timeout,
             cleanup_task_running: Arc::new(AtomicBool::new(false)),
-            session_callbacks: EventSubscriptions::new(),
+            session_callbacks: shared,
         })
+    }
+
+    /// Shared session-event registry behind this manager.
+    pub fn shared_session_callbacks(&self) -> Arc<EventSubscriptions<SessionEvent>> {
+        Arc::clone(&self.session_callbacks)
+    }
+
+    /// Point this manager at a shared session-event registry.
+    ///
+    /// The field is an `Arc`, so an already-published instance needs `&mut`
+    /// access to switch sources; managers behind `Arc` should prefer
+    /// `new_with_shared` at construction time instead.
+    pub fn set_shared_session_callbacks(&mut self, shared: Arc<EventSubscriptions<SessionEvent>>) {
+        self.session_callbacks = shared;
     }
 
     /// Register a runtime observer for session lifecycle events.
