@@ -75,7 +75,8 @@ pub enum SinkSpec {
     CopyFrom {
         space_name: String,
         target: CopyTarget,
-        file_path: String,
+        file_paths: Vec<String>,
+        by_column: bool,
         header: bool,
         delimiter: u8,
         batch_size: usize,

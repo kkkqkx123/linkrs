@@ -55,39 +55,7 @@ impl DdlParser {
             let name = ctx.expect_identifier()?;
 
             if ctx.match_token(TokenKind::As) {
-                ctx.expect_token(TokenKind::LParen)?;
-                let mut depth = 1;
-                let mut query_text = String::new();
-                while depth > 0 {
-                    match ctx.current_token().kind {
-                        crate::parser::TokenKind::LParen => {
-                            depth += 1;
-                            query_text.push('(');
-                            ctx.next_token();
-                        }
-                        crate::parser::TokenKind::RParen => {
-                            depth -= 1;
-                            if depth > 0 {
-                                query_text.push(')');
-                            }
-                            ctx.next_token();
-                        }
-                        crate::parser::TokenKind::Eof => {
-                            return Err(ParseError::new(
-                                ParseErrorKind::SyntaxError,
-                                "Unexpected end of input in subquery".to_string(),
-                                ctx.current_position(),
-                            ));
-                        }
-                        _ => {
-                            if !query_text.is_empty() {
-                                query_text.push(' ');
-                            }
-                            query_text.push_str(&ctx.current_token().lexeme);
-                            ctx.next_token();
-                        }
-                    }
-                }
+                let query_text = Self::capture_subquery_text(ctx)?;
                 let end_span = ctx.current_span();
                 let span = ctx.merge_span(start_span.start, end_span.end);
                 return Ok(Stmt::Create(CreateStmt {
@@ -116,6 +84,16 @@ impl DdlParser {
                 if_not_exists = true;
             }
             let name = ctx.expect_identifier()?;
+            if ctx.match_token(TokenKind::As) {
+                let query_text = Self::capture_subquery_text(ctx)?;
+                let end_span = ctx.current_span();
+                let span = ctx.merge_span(start_span.start, end_span.end);
+                return Ok(Stmt::Create(CreateStmt {
+                    span,
+                    target: CreateTarget::EdgeAsQuery { name, query_text },
+                    if_not_exists,
+                }));
+            }
             let (properties, ttl_duration, ttl_col) = self.parse_tag_edge_defs(ctx)?;
             let (src_tag, dst_tag) = self.parse_edge_src_dst(ctx)?;
             Ok(Stmt::Create(CreateStmt {
@@ -257,6 +235,14 @@ impl DdlParser {
                 if_not_exists = true;
             }
             let name = ctx.expect_identifier()?;
+            if ctx.match_token(TokenKind::As) {
+                let query_text = Self::capture_subquery_text(ctx)?;
+                return Ok(Stmt::Create(CreateStmt {
+                    span: start_span,
+                    target: CreateTarget::TagAsQuery { name, query_text },
+                    if_not_exists,
+                }));
+            }
             let (properties, ttl_duration, ttl_col) = self.parse_tag_edge_defs(ctx)?;
             Ok(Stmt::Create(CreateStmt {
                 span: start_span,
@@ -310,6 +296,14 @@ impl DdlParser {
                 if_not_exists = true;
             }
             let name = ctx.expect_identifier()?;
+            if ctx.match_token(TokenKind::As) {
+                let query_text = Self::capture_subquery_text(ctx)?;
+                return Ok(Stmt::Create(CreateStmt {
+                    span: start_span,
+                    target: CreateTarget::EdgeAsQuery { name, query_text },
+                    if_not_exists,
+                }));
+            }
             let (properties, ttl_duration, ttl_col) = self.parse_tag_edge_defs(ctx)?;
             let (src_tag, dst_tag) = self.parse_edge_src_dst(ctx)?;
             Ok(Stmt::Create(CreateStmt {
@@ -670,6 +664,47 @@ impl DdlParser {
         } else {
             Ok((None, None))
         }
+    }
+
+    /// Capture a parenthesized subquery as raw text by joining lexemes.
+    ///
+    /// The opening `(` is consumed here; tokens are collected until the
+    /// matching `)` so the text can be re-parsed when the statement executes.
+    fn capture_subquery_text(ctx: &mut ParseContext) -> Result<String, ParseError> {
+        ctx.expect_token(TokenKind::LParen)?;
+        let mut depth = 1;
+        let mut query_text = String::new();
+        while depth > 0 {
+            match ctx.current_token().kind {
+                crate::parser::TokenKind::LParen => {
+                    depth += 1;
+                    query_text.push('(');
+                    ctx.next_token();
+                }
+                crate::parser::TokenKind::RParen => {
+                    depth -= 1;
+                    if depth > 0 {
+                        query_text.push(')');
+                    }
+                    ctx.next_token();
+                }
+                crate::parser::TokenKind::Eof => {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "Unexpected end of input in subquery".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                _ => {
+                    if !query_text.is_empty() {
+                        query_text.push(' ');
+                    }
+                    query_text.push_str(&ctx.current_token().lexeme);
+                    ctx.next_token();
+                }
+            }
+        }
+        Ok(query_text)
     }
 
     /// Parse optional space parameters: (vid_type=..., comment='...') and

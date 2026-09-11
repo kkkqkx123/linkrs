@@ -244,11 +244,7 @@ fn index_scan_from_edge_hint(scan: &LogicalScanEdgesNode, hint: &IndexHint) -> P
 /// The mapped tree is rewritten in place while the physical tree is consumed
 /// by value, so each recursion level holds one pointer plus one owned node
 /// instead of two owned trees.
-fn merge_inner(
-    mapped: &mut PlanNodeEnum,
-    physical: PlanNodeEnum,
-    notes: &mut Vec<String>,
-) {
+fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Vec<String>) {
     // Factorization operators live only on the mapped side and are always
     // preserved; the merge continues below them against the same physical
     // node.
@@ -308,10 +304,7 @@ fn merge_inner(
         let mut mapped_children = mapped.take_children();
         let physical_children = physical.take_children();
         let mut new_children = Vec::with_capacity(mapped_children.len());
-        for (mapped_child, physical_child) in mapped_children
-            .drain(..)
-            .zip(physical_children)
-        {
+        for (mapped_child, physical_child) in mapped_children.drain(..).zip(physical_children) {
             let mut merged_child = mapped_child;
             merge_inner(&mut merged_child, physical_child, notes);
             new_children.push(merged_child);
@@ -355,9 +348,7 @@ pub(crate) fn logical_children(
         LogicalNodeEnum::Aggregate(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Assign(n) => {
-            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-        }
+        LogicalNodeEnum::Assign(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::PipeDeleteVertices(n) => {
             n.input.as_deref().map(|c| vec![c]).unwrap_or_default()

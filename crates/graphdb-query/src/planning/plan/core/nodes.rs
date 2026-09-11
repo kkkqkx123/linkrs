@@ -43,12 +43,12 @@ pub use management::{
     DescTagIndexNode, DescTagNode, DescribeUserNode, DropEdgeIndexNode, DropEdgeNode,
     DropMacroNode, DropSpaceNode, DropTagIndexNode, DropTagNode, DropTypeNode, DropUserNode,
     EdgeAlterInfo, EdgeManageInfo, GrantRoleNode, IndexManageInfo, MacroManageInfo,
-    RebuildEdgeIndexNode, RebuildTagIndexNode, RevokeRoleNode, ShowConfigsNode, ShowCreateEdgeNode,
-    ShowCreateIndexNode, ShowCreateSpaceNode, ShowCreateTagNode, ShowEdgeIndexesNode,
-    ShowEdgesNode, ShowIndexesNode, ShowQueriesNode, ShowRolesNode, ShowSessionsNode,
-    ShowSpacesNode, ShowStatsNode, ShowStatsType, ShowTagIndexesNode, ShowTagsNode, ShowUsersNode,
-    SpaceAlterOption, SpaceManageInfo, SwitchSpaceNode, TagAlterInfo, TagManageInfo,
-    TypeManageInfo,
+    RebuildEdgeIndexNode, RebuildTagIndexNode, RenameEdgeNode, RenameTagNode, RevokeRoleNode,
+    ShowConfigsNode, ShowCreateEdgeNode, ShowCreateIndexNode, ShowCreateSpaceNode,
+    ShowCreateTagNode, ShowEdgeIndexesNode, ShowEdgesNode, ShowIndexesNode, ShowQueriesNode,
+    ShowRolesNode, ShowSessionsNode, ShowSpacesNode, ShowStatsNode, ShowStatsType,
+    ShowTagIndexesNode, ShowTagsNode, ShowUsersNode, SpaceAlterOption, SpaceManageInfo,
+    SwitchSpaceNode, TagAlterInfo, TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
 };
 pub use operation::{FilterNode, LimitNode, ProjectNode, SampleNode, SortItem, SortNode, TopNNode};
 pub use plan_node_factory::PlanNodeFactory;

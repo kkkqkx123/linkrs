@@ -317,6 +317,14 @@ impl Binder {
                 Ok(Some(var))
             }
             Pattern::Edge(ep) => {
+                if ep.recursive_comprehension.is_some() {
+                    return Err(DBError::from(
+                        graphdb_core::error::QueryError::invalid_query(
+                            "Recursive comprehension with variable binding and projection is not yet supported; only plain variable-length traversal is executed"
+                                .to_string(),
+                        ),
+                    ));
+                }
                 let var = ep
                     .variable
                     .clone()
@@ -379,6 +387,14 @@ impl Binder {
                 Ok(Some(var))
             }
             PathElement::Edge(ep) => {
+                if ep.recursive_comprehension.is_some() {
+                    return Err(DBError::from(
+                        graphdb_core::error::QueryError::invalid_query(
+                            "Recursive comprehension with variable binding and projection is not yet supported; only plain variable-length traversal is executed"
+                                .to_string(),
+                        ),
+                    ));
+                }
                 let var = ep
                     .variable
                     .clone()

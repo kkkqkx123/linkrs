@@ -158,7 +158,8 @@ pub struct CopyStmt {
     pub target: CopyTarget,
     /// Import (`FROM`) or export (`TO`) direction.
     pub direction: CopyDirection,
-    pub file_path: String,
+    pub file_paths: Vec<String>,
+    pub by_column: bool,
     pub header: bool,
     pub delimiter: char,
     pub batch_size: Option<usize>,

@@ -19,7 +19,8 @@ use crate::planning::plan::core::nodes::management::catalog_nodes::{
     CreateMacroNode, CreateTypeNode, DropMacroNode, DropTypeNode,
 };
 use crate::planning::plan::core::nodes::management::edge_nodes::{
-    AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, ShowCreateEdgeNode, ShowEdgesNode,
+    AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, RenameEdgeNode, ShowCreateEdgeNode,
+    ShowEdgesNode, UpdateEdgeEndpointsNode,
 };
 use crate::planning::plan::core::nodes::management::index_nodes::{
     CreateEdgeIndexNode, CreateTagIndexNode, DescEdgeIndexNode, DescTagIndexNode,
@@ -32,7 +33,8 @@ use crate::planning::plan::core::nodes::management::space_nodes::{
     ImportDatabaseNode, ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::{
-    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
+    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,
+    ShowTagsNode,
 };
 use crate::planning::plan::core::nodes::management::user_nodes::{
     AlterUserNode, ChangePasswordNode, CreateUserNode, DescribeUserNode, DropUserNode,
@@ -199,6 +201,7 @@ define_manage_node_enum! {
     pub enum TagManageNode as TagManage {
         Create(CreateTagNode, "CreateTag", "create_tag", "Create Tag", "create_tag"),
         Alter(AlterTagNode, "AlterTag", "alter_tag", "Alter Tag", "alter_tag"),
+        Rename(RenameTagNode, "RenameTag", "rename_tag", "Rename Tag", "rename_tag"),
         Desc(DescTagNode, "DescTag", "desc_tag", "Describe Tag", "desc_tag"),
         Drop(DropTagNode, "DropTag", "drop_tag", "Drop Tag", "drop_tag"),
         Show(ShowTagsNode, "ShowTags", "show_tags", "Show Tags", "show_tags"),
@@ -211,6 +214,8 @@ define_manage_node_enum! {
     pub enum EdgeManageNode as EdgeManage {
         Create(CreateEdgeNode, "CreateEdge", "create_edge", "Create Edge", "create_edge"),
         Alter(AlterEdgeNode, "AlterEdge", "alter_edge", "Alter Edge", "alter_edge"),
+        Rename(RenameEdgeNode, "RenameEdge", "rename_edge", "Rename Edge", "rename_edge"),
+        UpdateEndpoints(UpdateEdgeEndpointsNode, "UpdateEdgeEndpoints", "update_edge_endpoints", "Update Edge Endpoints", "update_edge_endpoints"),
         Desc(DescEdgeNode, "DescEdge", "desc_edge", "Describe Edge", "desc_edge"),
         Drop(DropEdgeNode, "DropEdge", "drop_edge", "Drop Edge", "drop_edge"),
         Show(ShowEdgesNode, "ShowEdges", "show_edges", "Show Edges", "show_edges"),

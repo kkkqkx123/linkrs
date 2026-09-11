@@ -445,6 +445,16 @@ pub fn plan_pattern_edge(
     _space_name: &str,
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
+    if let Some(rc) = edge.recursive_comprehension.as_ref() {
+        return Err(PlannerError::UnsupportedOperation(format!(
+            "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
+            rc.variable,
+            rc.edge_variable,
+            rc.filter_predicate.is_some(),
+            rc.node_projection.is_some(),
+            rc.edge_projection.is_some()
+        )));
+    }
     let direction = match edge.direction {
         crate::parser::ast::types::EdgeDirection::Out => "out",
         crate::parser::ast::types::EdgeDirection::In => "in",
@@ -541,6 +551,16 @@ pub fn plan_pattern_edge_with_input(
     dst_var: Option<&str>,
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
+    if let Some(rc) = edge.recursive_comprehension.as_ref() {
+        return Err(PlannerError::UnsupportedOperation(format!(
+            "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
+            rc.variable,
+            rc.edge_variable,
+            rc.filter_predicate.is_some(),
+            rc.node_projection.is_some(),
+            rc.edge_projection.is_some()
+        )));
+    }
     let direction = match edge.direction {
         crate::parser::ast::types::EdgeDirection::Out => "out",
         crate::parser::ast::types::EdgeDirection::In => "in",
@@ -1060,7 +1080,9 @@ mod tests {
 
         match logical_root {
             LogicalNodeEnum::CrossJoin(join) => {
-                assert_eq!(join.deps.len(), 2);
+                // Alternative patterns fan out to a two-way join.
+                let children = [&join.left, &join.right];
+                assert_eq!(children.len(), 2);
             }
             other => panic!("unexpected logical root: {:?}", other),
         }
@@ -1088,8 +1110,9 @@ mod tests {
 
         match logical_root {
             LogicalNodeEnum::CrossJoin(join) => {
-                assert_eq!(join.deps.len(), 2);
-                match &join.deps[1] {
+                let children = [&join.left, &join.right];
+                assert_eq!(children.len(), 2);
+                match &*join.right {
                     LogicalNodeEnum::Loop(loop_node) => {
                         assert!(matches!(
                             loop_node.body(),

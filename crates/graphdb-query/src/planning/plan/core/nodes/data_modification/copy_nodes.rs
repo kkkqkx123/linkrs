@@ -31,7 +31,8 @@ define_plan_node! {
     pub struct CopyFromNode {
         space_name: String,
         target: CopyTarget,
-        file_path: String,
+        file_paths: Vec<String>,
+        by_column: bool,
         header: bool,
         delimiter: char,
         batch_size: usize,
@@ -41,11 +42,13 @@ define_plan_node! {
 }
 
 impl CopyFromNode {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: i64,
         space_name: String,
         target: CopyTarget,
-        file_path: String,
+        file_paths: Vec<String>,
+        by_column: bool,
         header: bool,
         delimiter: char,
         batch_size: usize,
@@ -54,7 +57,8 @@ impl CopyFromNode {
             id,
             space_name,
             target,
-            file_path,
+            file_paths,
+            by_column,
             header,
             delimiter,
             batch_size,
@@ -72,8 +76,16 @@ impl CopyFromNode {
         &self.target
     }
 
+    pub fn file_paths(&self) -> &[String] {
+        &self.file_paths
+    }
+
     pub fn file_path(&self) -> &str {
-        &self.file_path
+        self.file_paths.first().map(|s| s.as_str()).unwrap_or("")
+    }
+
+    pub fn by_column(&self) -> bool {
+        self.by_column
     }
 
     pub fn header(&self) -> bool {

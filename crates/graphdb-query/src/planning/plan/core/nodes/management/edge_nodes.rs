@@ -194,6 +194,97 @@ impl ShowCreateEdgeNode {
     }
 }
 
+define_plan_node! {
+    pub struct RenameEdgeNode {
+        space_name: String,
+        old_name: String,
+        new_name: String,
+    }
+    manage_enum: EdgeManageNode::Rename as EdgeManage
+    input: ZeroInputNode
+}
+
+impl RenameEdgeNode {
+    pub fn new(id: i64, space_name: String, old_name: String, new_name: String) -> Self {
+        Self {
+            id,
+            space_name,
+            old_name,
+            new_name,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn space_name(&self) -> &str {
+        &self.space_name
+    }
+
+    pub fn old_name(&self) -> &str {
+        &self.old_name
+    }
+
+    pub fn new_name(&self) -> &str {
+        &self.new_name
+    }
+}
+
+define_plan_node! {
+    pub struct UpdateEdgeEndpointsNode {
+        space_name: String,
+        edge_name: String,
+        src_tag_name: String,
+        dst_tag_name: String,
+        clear_constraint: bool,
+    }
+    manage_enum: EdgeManageNode::UpdateEndpoints as EdgeManage
+    input: ZeroInputNode
+}
+
+impl UpdateEdgeEndpointsNode {
+    pub fn new(
+        id: i64,
+        space_name: String,
+        edge_name: String,
+        src_tag_name: String,
+        dst_tag_name: String,
+        clear_constraint: bool,
+    ) -> Self {
+        Self {
+            id,
+            space_name,
+            edge_name,
+            src_tag_name,
+            dst_tag_name,
+            clear_constraint,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn space_name(&self) -> &str {
+        &self.space_name
+    }
+
+    pub fn edge_name(&self) -> &str {
+        &self.edge_name
+    }
+
+    pub fn src_tag_name(&self) -> &str {
+        &self.src_tag_name
+    }
+
+    pub fn dst_tag_name(&self) -> &str {
+        &self.dst_tag_name
+    }
+
+    pub fn clear_constraint(&self) -> bool {
+        self.clear_constraint
+    }
+}
+
 /// Edge Type Management Information
 #[derive(Debug, Clone)]
 pub struct EdgeManageInfo {

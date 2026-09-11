@@ -232,6 +232,44 @@ fn test_drop_edge_type() {
 }
 
 #[test]
+fn test_update_edge_endpoints() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+
+    assert!(storage
+        .update_edge_endpoints("test_space", "KNOWS", "Person", "Person")
+        .unwrap());
+    let edge = storage
+        .get_edge_type("test_space", "KNOWS")
+        .unwrap()
+        .expect("edge type exists");
+    assert_eq!(edge.src_tag_name, "Person");
+    assert_eq!(edge.dst_tag_name, "Person");
+
+    // Clearing restores the unconstrained state.
+    assert!(storage
+        .update_edge_endpoints("test_space", "KNOWS", "", "")
+        .unwrap());
+    let edge = storage
+        .get_edge_type("test_space", "KNOWS")
+        .unwrap()
+        .expect("edge type exists");
+    assert!(edge.src_tag_name.is_empty());
+    assert!(edge.dst_tag_name.is_empty());
+
+    // Unknown endpoint tags are rejected.
+    assert!(storage
+        .update_edge_endpoints("test_space", "KNOWS", "Ghost", "Person")
+        .is_err());
+    // Unknown edge types are rejected like other schema alters.
+    assert!(storage
+        .update_edge_endpoints("test_space", "GHOST", "", "")
+        .is_err());
+}
+
+#[test]
 fn test_schema_wal_replays_create_and_alter_after_restart() {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let work_dir = temp_dir.path().to_path_buf();

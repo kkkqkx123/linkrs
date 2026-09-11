@@ -722,13 +722,16 @@ mod tests {
     fn collect_returns_estimates_for_every_node() {
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let start = PlanNodeEnum::Start(
-            crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
-        );
+        // Direct constructors leave the placeholder id (-1); number the nodes
+        // explicitly like planner output, since estimates are keyed by node id.
+        let start = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new()
+            .clone_with_new_id(1);
         let sort = SortNode::new(start, vec![SortItem::column_asc("x".to_string())])
-            .expect("sort should build");
-        let limit = LimitNode::new(PlanNodeEnum::Sort(sort), 0, 5).expect("limit should build");
-        let plan = PlanNodeEnum::Limit(limit);
+            .expect("sort should build")
+            .clone_with_new_id(2);
+        let plan = LimitNode::new(sort, 0, 5)
+            .expect("limit should build")
+            .clone_with_new_id(3);
         let estimates = collect_node_row_estimates(&plan, &view, &selectivity);
         assert_eq!(estimates.len(), 3);
         assert!(estimates.contains_key(&plan.id()));

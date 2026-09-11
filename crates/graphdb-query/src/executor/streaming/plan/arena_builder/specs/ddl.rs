@@ -274,7 +274,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_copy_from_spec(
             .clone()
             .unwrap_or_else(|| node.space_name().to_string()),
         target,
-        file_path: node.file_path().to_string(),
+        file_paths: node.file_paths().to_vec(),
+        by_column: node.by_column(),
         header: node.header(),
         delimiter: node.delimiter() as u8,
         batch_size: node.batch_size(),
@@ -399,6 +400,10 @@ fn tag_manage_to_command(
         Desc(n) => TagManageCommand::Desc {
             tag_name: n.tag_name().to_string(),
         },
+        Rename(n) => TagManageCommand::Rename {
+            old_name: n.old_name().to_string(),
+            new_name: n.new_name().to_string(),
+        },
         Drop(n) => TagManageCommand::Drop {
             tag_name: n.tag_name().to_string(),
             if_exists: n.if_exists(),
@@ -434,6 +439,16 @@ fn edge_manage_to_command(
                 deletions: info.deletions.clone(),
             }
         }
+        Rename(n) => EdgeManageCommand::Rename {
+            old_name: n.old_name().to_string(),
+            new_name: n.new_name().to_string(),
+        },
+        UpdateEndpoints(n) => EdgeManageCommand::UpdateEndpoints {
+            edge_name: n.edge_name().to_string(),
+            src_tag_name: n.src_tag_name().to_string(),
+            dst_tag_name: n.dst_tag_name().to_string(),
+            clear_constraint: n.clear_constraint(),
+        },
         Desc(n) => EdgeManageCommand::Desc {
             edge_name: n.edge_name().to_string(),
         },

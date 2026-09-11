@@ -211,11 +211,16 @@ impl<'a> ParseContext<'a> {
         self.expr_context.clone()
     }
 
-    pub fn take_recursive_comprehension(&mut self) -> Option<crate::parser::ast::pattern::RecursiveComprehension> {
+    pub fn take_recursive_comprehension(
+        &mut self,
+    ) -> Option<crate::parser::ast::pattern::RecursiveComprehension> {
         self.recursive_comprehension.take()
     }
 
-    pub fn set_recursive_comprehension(&mut self, rc: crate::parser::ast::pattern::RecursiveComprehension) {
+    pub fn set_recursive_comprehension(
+        &mut self,
+        rc: crate::parser::ast::pattern::RecursiveComprehension,
+    ) {
         self.recursive_comprehension = Some(rc);
     }
 

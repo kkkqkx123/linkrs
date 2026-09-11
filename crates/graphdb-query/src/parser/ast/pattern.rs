@@ -73,11 +73,11 @@ pub struct EdgePattern {
 /// Path semantic types for variable-length patterns
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathSemantic {
-    Walk,                    // * (default, allows repeated nodes/edges)
-    Trail,                   // *TRAIL (no repeated nodes)
-    Acyclic,                 // *ACYCLIC (no repeated edges)
-    Shortest,                // *SHORTEST
-    AllShortest,             // *ALL SHORTEST
+    Walk,                     // * (default, allows repeated nodes/edges)
+    Trail,                    // *TRAIL (no repeated nodes)
+    Acyclic,                  // *ACYCLIC (no repeated edges)
+    Shortest,                 // *SHORTEST
+    AllShortest,              // *ALL SHORTEST
     WeightedShortest(String), // *WEIGHTED(weight_prop)
 }
 

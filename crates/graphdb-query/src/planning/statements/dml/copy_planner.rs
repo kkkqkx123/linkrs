@@ -74,9 +74,14 @@ impl Planner for CopyPlanner {
             ));
         }
 
-        if copy.file_path.trim().is_empty() {
+        if copy.file_paths.is_empty() || copy.file_paths.iter().any(|p| p.trim().is_empty()) {
             return Err(PlannerError::PlanGenerationFailed(
                 "COPY file path must not be empty".to_string(),
+            ));
+        }
+        if copy.direction == CopyDirection::To && copy.file_paths.len() > 1 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "COPY TO supports a single file path".to_string(),
             ));
         }
 
@@ -85,7 +90,8 @@ impl Planner for CopyPlanner {
                 id: next_node_id(),
                 space_name,
                 target,
-                file_path: copy.file_path.clone(),
+                file_paths: copy.file_paths.clone(),
+                by_column: copy.by_column,
                 header: copy.header,
                 delimiter: copy.delimiter,
                 batch_size,
@@ -97,7 +103,7 @@ impl Planner for CopyPlanner {
                 id: next_node_id(),
                 space_name,
                 target,
-                file_path: copy.file_path.clone(),
+                file_path: copy.file_paths.first().cloned().unwrap_or_default(),
                 header: copy.header,
                 delimiter: copy.delimiter,
                 output_var: None,
@@ -133,9 +139,16 @@ impl Planner for CopyPlanner {
         }
 
         // Validate file path is not empty (both directions).
-        if copy_stmt.file_path.trim().is_empty() {
+        if copy_stmt.file_paths.is_empty()
+            || copy_stmt.file_paths.iter().any(|p| p.trim().is_empty())
+        {
             return Err(PlannerError::PlanGenerationFailed(
                 "COPY file path must not be empty".to_string(),
+            ));
+        }
+        if copy_stmt.direction == CopyDirection::To && copy_stmt.file_paths.len() > 1 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "COPY TO supports a single file path".to_string(),
             ));
         }
 
@@ -144,7 +157,8 @@ impl Planner for CopyPlanner {
                 id: next_node_id(),
                 space_name,
                 target,
-                file_path: copy_stmt.file_path,
+                file_paths: copy_stmt.file_paths.clone(),
+                by_column: copy_stmt.by_column,
                 header: copy_stmt.header,
                 delimiter: copy_stmt.delimiter,
                 batch_size,
@@ -156,7 +170,7 @@ impl Planner for CopyPlanner {
                 id: next_node_id(),
                 space_name,
                 target,
-                file_path: copy_stmt.file_path,
+                file_path: copy_stmt.file_paths.first().cloned().unwrap_or_default(),
                 header: copy_stmt.header,
                 delimiter: copy_stmt.delimiter,
                 output_var: None,
@@ -196,7 +210,8 @@ mod tests {
             span: Span::default(),
             target,
             direction: CopyDirection::From,
-            file_path: "data.csv".to_string(),
+            file_paths: vec!["data.csv".to_string()],
+            by_column: false,
             header: true,
             delimiter: ',',
             batch_size: Some(100),

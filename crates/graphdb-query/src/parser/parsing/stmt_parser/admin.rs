@@ -1,12 +1,12 @@
 //! Administrative / utility statements: MIGRATE, COMMENT ON, CHECKPOINT,
 //! LOAD FROM, and extension management.
 
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
-use graphdb_core::types::expr::Expression as CoreExpression;
+use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression as CoreExpression;
 
 pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     let start_span = ctx.current_span();

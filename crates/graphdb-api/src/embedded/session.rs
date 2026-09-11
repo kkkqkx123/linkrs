@@ -201,7 +201,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// Build a single-row, single-column result carrying an admin message.
     fn single_message_result(message: String) -> QueryResult {
         let columns = vec!["result".to_string()];
-        let rows = vec![vec![Value::String(message)]];
+        let rows = vec![vec![Value::string(message)]];
         let execution = graphdb_query::executor::base::ExecutionResult::from_data_set(
             graphdb_core::types::DataSet::from_rows(rows, columns),
         );
@@ -212,6 +212,329 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                 ..Default::default()
             },
         ))
+    }
+
+    /// Detect `CREATE TAG/EDGE ... AS (query)` statements.
+    ///
+    /// Returns the parsed `CreateStmt` when the statement materializes a
+    /// table from a query; regular statements yield `None` and malformed
+    /// input falls through to the normal pipeline for error reporting.
+    fn parse_create_as(query: &str) -> Option<graphdb_query::parser::ast::stmt::CreateStmt> {
+        if !Self::is_create_as_query(query) {
+            return None;
+        }
+        let mut parser = Parser::new(query);
+        match parser.parse() {
+            Ok(result) if !parser.has_errors() => match result.ast.stmt() {
+                Stmt::Create(stmt) => match &stmt.target {
+                    graphdb_query::parser::ast::stmt::CreateTarget::TagAsQuery { .. }
+                    | graphdb_query::parser::ast::stmt::CreateTarget::EdgeAsQuery { .. } => {
+                        Some(stmt.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Check whether `query` looks like `CREATE TAG/EDGE ... AS (query)`.
+    ///
+    /// Only a cheap keyword prefix check; full validation happens in the
+    /// parser so nested subqueries are never misclassified here.
+    fn is_create_as_query(query: &str) -> bool {
+        let mut words = query.split_whitespace();
+        let head = (
+            words.next().map(|w| w.to_ascii_uppercase()),
+            words.next().map(|w| w.to_ascii_uppercase()),
+            words.next().map(|w| w.to_ascii_uppercase()),
+        );
+        if !matches!(
+            head,
+            (Some(ref a), Some(ref b), _) if a == "CREATE" && (b == "TAG" || b == "EDGE")
+        ) {
+            return false;
+        }
+        let upper = query.to_ascii_uppercase();
+        upper.contains(" AS ") && upper.contains('(')
+    }
+
+    /// Execute `CREATE TAG/EDGE <name> AS (<query>)`.
+    ///
+    /// Runs the inner query on this session, derives the new table schema
+    /// from its output columns, creates the table, and bulk-loads one
+    /// vertex or edge per result row. Vertex imports require a `vid`/`id`
+    /// column; edge imports require `src` and `dst` columns.
+    fn execute_create_as(
+        &self,
+        stmt: &graphdb_query::parser::ast::stmt::CreateStmt,
+    ) -> CoreResult<QueryResult> {
+        use graphdb_query::parser::ast::stmt::CreateTarget;
+
+        let (name, query_text, is_edge) = match &stmt.target {
+            CreateTarget::TagAsQuery { name, query_text } => {
+                (name.clone(), query_text.clone(), false)
+            }
+            CreateTarget::EdgeAsQuery { name, query_text } => {
+                (name.clone(), query_text.clone(), true)
+            }
+            _ => {
+                return Err(CoreError::InvalidParameter(
+                    "Not a CREATE ... AS statement".to_string(),
+                ));
+            }
+        };
+        if name.trim().is_empty() {
+            return Err(CoreError::InvalidParameter(
+                "CREATE ... AS requires a table name".to_string(),
+            ));
+        }
+        if query_text.trim().is_empty() {
+            return Err(CoreError::InvalidParameter(
+                "CREATE ... AS requires a subquery".to_string(),
+            ));
+        }
+        if self.current_transaction.read().is_some() {
+            return Err(CoreError::InvalidParameter(
+                "CREATE ... AS cannot run inside an explicit transaction".to_string(),
+            ));
+        }
+        if Self::is_create_as_query(&query_text) {
+            return Err(CoreError::InvalidParameter(
+                "Nested CREATE ... AS is not supported".to_string(),
+            ));
+        }
+
+        let inner = self.execute(&query_text)?;
+        let columns = inner.columns().to_vec();
+        if columns.is_empty() {
+            return Err(CoreError::InvalidParameter(
+                "CREATE ... AS inner query returned no columns".to_string(),
+            ));
+        }
+
+        let space_name = self
+            .space_name()
+            .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
+        let space_id = match *self.space_id.read() {
+            Some(id) => id,
+            None => self.db.schema_api.use_space(&space_name)?,
+        };
+
+        if is_edge {
+            self.create_edge_as(
+                &space_name,
+                space_id,
+                &name,
+                stmt.if_not_exists,
+                &columns,
+                &inner,
+            )
+        } else {
+            self.create_tag_as(
+                &space_name,
+                space_id,
+                &name,
+                stmt.if_not_exists,
+                &columns,
+                &inner,
+            )
+        }
+    }
+
+    /// Materialize inner query rows as a new tag (vertex table).
+    fn create_tag_as(
+        &self,
+        space_name: &str,
+        space_id: u64,
+        name: &str,
+        if_not_exists: bool,
+        columns: &[String],
+        inner: &QueryResult,
+    ) -> CoreResult<QueryResult> {
+        let vid_col = find_result_column(columns, &["vid", "id", "_id", "vertex_id"])
+            .ok_or_else(|| {
+                CoreError::InvalidParameter(
+                    "CREATE TAG ... AS requires the inner query to output a vertex id column (vid/id)"
+                        .to_string(),
+                )
+            })?;
+        let prop_cols: Vec<String> = columns.iter().filter(|c| *c != &vid_col).cloned().collect();
+
+        let exists = self
+            .db
+            .storage
+            .read()
+            .get_tag(space_name, name)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?
+            .is_some();
+        if exists {
+            if if_not_exists {
+                return Ok(Self::single_message_result(format!(
+                    "Tag '{name}' already exists"
+                )));
+            }
+            return Err(CoreError::InvalidParameter(format!(
+                "Tag '{name}' already exists"
+            )));
+        }
+
+        let properties = infer_result_properties(&prop_cols, inner.rows());
+        self.db
+            .schema_api
+            .create_tag(space_id, name, properties)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+
+        let mut vertices = Vec::with_capacity(inner.len());
+        for row in inner.rows() {
+            let vid_value = row.get(&vid_col).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE TAG ... AS: missing vertex id in column '{vid_col}'"
+                ))
+            })?;
+            let vid = vid_from_value(vid_value).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE TAG ... AS: value in column '{vid_col}' cannot be used as a vertex id"
+                ))
+            })?;
+            let mut props = std::collections::HashMap::new();
+            for col in &prop_cols {
+                if let Some(value) = row.get(col) {
+                    ensure_scalar_property(col, value)?;
+                    if matches!(value, Value::Null(_) | graphdb_core::Value::Empty) {
+                        continue;
+                    }
+                    props.insert(col.clone(), value.clone());
+                }
+            }
+            vertices.push(graphdb_core::Vertex::new(
+                vid,
+                vec![graphdb_core::Tag::new(name.to_string(), props)],
+            ));
+        }
+        let count = self.batch_insert_vertices(vertices)?;
+        self.statistics.record_changes(count as u64);
+        Ok(Self::single_message_result(format!(
+            "Created tag '{name}' with {count} vertices from query"
+        )))
+    }
+
+    /// Materialize inner query rows as a new edge type.
+    fn create_edge_as(
+        &self,
+        space_name: &str,
+        space_id: u64,
+        name: &str,
+        if_not_exists: bool,
+        columns: &[String],
+        inner: &QueryResult,
+    ) -> CoreResult<QueryResult> {
+        let src_col = find_result_column(columns, &["src", "_src", "source"]);
+        let dst_col = find_result_column(columns, &["dst", "_dst", "destination", "dest"]);
+        let (src_col, dst_col) = match (src_col, dst_col) {
+            (Some(s), Some(d)) => {
+                if s == d {
+                    return Err(CoreError::InvalidParameter(
+                        "CREATE EDGE ... AS: src and dst resolve to the same column".to_string(),
+                    ));
+                }
+                (s, d)
+            }
+            (None, None) => {
+                return Err(CoreError::InvalidParameter(
+                    "CREATE EDGE ... AS requires the inner query to output src and dst columns"
+                        .to_string(),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(CoreError::InvalidParameter(
+                    "CREATE EDGE ... AS: inner query names a source column but no destination column (dst)"
+                        .to_string(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(CoreError::InvalidParameter(
+                    "CREATE EDGE ... AS: inner query names a destination column but no source column (src)"
+                        .to_string(),
+                ));
+            }
+        };
+        let prop_cols: Vec<String> = columns
+            .iter()
+            .filter(|c| *c != &src_col && *c != &dst_col)
+            .cloned()
+            .collect();
+
+        let exists = self
+            .db
+            .storage
+            .read()
+            .get_edge_type(space_name, name)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?
+            .is_some();
+        if exists {
+            if if_not_exists {
+                return Ok(Self::single_message_result(format!(
+                    "Edge type '{name}' already exists"
+                )));
+            }
+            return Err(CoreError::InvalidParameter(format!(
+                "Edge type '{name}' already exists"
+            )));
+        }
+
+        let properties = infer_result_properties(&prop_cols, inner.rows());
+        self.db
+            .schema_api
+            .create_edge_type(space_id, name, properties)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+
+        let mut edges = Vec::with_capacity(inner.len());
+        for row in inner.rows() {
+            let src_value = row.get(&src_col).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE EDGE ... AS: missing source id in column '{src_col}'"
+                ))
+            })?;
+            let dst_value = row.get(&dst_col).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE EDGE ... AS: missing destination id in column '{dst_col}'"
+                ))
+            })?;
+            let src = vid_from_value(src_value).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE EDGE ... AS: value in column '{src_col}' cannot be used as a vertex id"
+                ))
+            })?;
+            let dst = vid_from_value(dst_value).ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "CREATE EDGE ... AS: value in column '{dst_col}' cannot be used as a vertex id"
+                ))
+            })?;
+            let mut props = std::collections::HashMap::new();
+            for col in &prop_cols {
+                if let Some(value) = row.get(col) {
+                    ensure_scalar_property(col, value)?;
+                    if matches!(value, Value::Null(_) | graphdb_core::Value::Empty) {
+                        continue;
+                    }
+                    props.insert(col.clone(), value.clone());
+                }
+            }
+            edges.push(graphdb_core::Edge::new(
+                src,
+                dst,
+                name.to_string(),
+                0,
+                props,
+            ));
+        }
+        let count = self.batch_insert_edges(edges)?;
+        self.statistics.record_changes(count as u64);
+        Ok(Self::single_message_result(format!(
+            "Created edge type '{name}' with {count} edges from query"
+        )))
     }
 
     /// Obtain a reference to the function registry.
@@ -436,6 +759,12 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                 }
             }
             Ok(None) => {}
+        }
+
+        // `CREATE TAG/EDGE ... AS (query)` materializes the inner query
+        // result as a new table through the session pipeline.
+        if let Some(create_stmt) = Self::parse_create_as(query) {
+            return self.execute_create_as(&create_stmt);
         }
 
         // Statements inside a text-begun transaction run against the
@@ -1523,6 +1852,116 @@ impl<S: StorageClient + Clone + 'static> Drop for Session<S> {
 // Therefore, the Session can securely implement both the Send and Sync functions.
 unsafe impl<S: StorageClient + Clone + 'static> Send for Session<S> {}
 unsafe impl<S: StorageClient + Clone + 'static> Sync for Session<S> {}
+
+/// Locate a result column by case-insensitive name among several aliases.
+fn find_result_column(columns: &[String], aliases: &[&str]) -> Option<String> {
+    columns
+        .iter()
+        .find(|c| aliases.iter().any(|a| c.eq_ignore_ascii_case(a)))
+        .cloned()
+}
+
+/// Derive property definitions from query result columns.
+///
+/// Each column takes the type of its first non-null value; columns that
+/// only carry nulls default to strings.
+fn infer_result_properties(
+    columns: &[String],
+    rows: &[crate::embedded::result::Row],
+) -> Vec<crate::api_core::types::PropertyDef> {
+    columns
+        .iter()
+        .map(|col| {
+            let mut data_type = graphdb_core::DataType::String;
+            for row in rows {
+                match row.get(col) {
+                    Some(Value::Null(_)) | Some(graphdb_core::Value::Empty) | None => continue,
+                    Some(value) => {
+                        data_type = infer_result_data_type(value);
+                        break;
+                    }
+                }
+            }
+            crate::api_core::types::PropertyDef {
+                name: col.clone(),
+                data_type,
+                nullable: true,
+                default_value: None,
+                comment: None,
+            }
+        })
+        .collect()
+}
+
+/// Map a result value to the table column type used for `CREATE ... AS`.
+fn infer_result_data_type(value: &Value) -> graphdb_core::DataType {
+    use graphdb_core::DataType;
+    match value {
+        Value::Null(_) | Value::Empty => DataType::String,
+        Value::Bool(_) => DataType::Bool,
+        Value::SmallInt(_) => DataType::SmallInt,
+        Value::Int(_) => DataType::Int,
+        Value::BigInt(_) => DataType::BigInt,
+        Value::Float(_) => DataType::Float,
+        Value::Double(_) => DataType::Double,
+        Value::Decimal128(_) => DataType::Decimal128,
+        Value::String(_) | Value::FixedString(_) => DataType::String,
+        Value::Date(_) => DataType::Date,
+        Value::Time(_) => DataType::Time,
+        Value::DateTime(_) => DataType::DateTime,
+        Value::Uuid(_) => DataType::Uuid,
+        Value::Json(_) => DataType::Json,
+        Value::JsonB(_) => DataType::JsonB,
+        Value::Blob(_) => DataType::Blob,
+        Value::List(_) => DataType::List(Box::new(DataType::Empty)),
+        Value::Map(_) => DataType::Map(Box::new(DataType::Empty)),
+        Value::Set(_) => DataType::Set(Box::new(DataType::Empty)),
+        _ => DataType::String,
+    }
+}
+
+/// Reject graph and container values as table property columns.
+fn ensure_scalar_property(col: &str, value: &Value) -> CoreResult<()> {
+    let complex = matches!(
+        value,
+        Value::Vertex(_)
+            | Value::Edge(_)
+            | Value::Path(_)
+            | Value::List(_)
+            | Value::Map(_)
+            | Value::Set(_)
+            | Value::DataSet(_)
+            | Value::Struct(_)
+            | Value::Array(_)
+            | Value::Vector(_)
+            | Value::VertexId(_)
+            | Value::EdgeId(_)
+    );
+    if complex {
+        return Err(CoreError::InvalidParameter(format!(
+            "CREATE ... AS: column '{col}' carries a graph or container value; project scalar properties instead"
+        )));
+    }
+    Ok(())
+}
+
+/// Read a vertex id from a result value.
+///
+/// Numeric values map to the integer id domain, strings become string ids,
+/// and vertex values contribute their own id.
+fn vid_from_value(value: &Value) -> Option<graphdb_core::types::storage_ids::VertexId> {
+    use graphdb_core::types::storage_ids::VertexId;
+    match value {
+        Value::SmallInt(i) => Some(VertexId::from_int64(i64::from(*i))),
+        Value::Int(i) => Some(VertexId::from_int64(i64::from(*i))),
+        Value::BigInt(i) => Some(VertexId::from_int64(*i)),
+        Value::String(s) => Some(VertexId::from_string(s.to_string())),
+        Value::FixedString(s) => Some(VertexId::from_string(s.clone())),
+        Value::Vertex(v) => Some(*v.vid()),
+        Value::VertexId(id) => Some(*id),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {

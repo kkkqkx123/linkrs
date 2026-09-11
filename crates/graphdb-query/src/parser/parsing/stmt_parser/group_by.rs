@@ -1,13 +1,13 @@
 //! GROUP BY statement parsing, including ROLLUP / CUBE / GROUPING SETS.
 
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::{GroupByStmt, GroupingType, Stmt, YieldClause, YieldItem};
 use crate::parser::core::error::ParseError;
 use crate::parser::parsing::clause_parser::ClauseParser;
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
-use graphdb_core::types::expr::Expression;
+use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
+use graphdb_core::types::expr::Expression;
 
 /// Analysis of the GROUP BY statement
 pub(super) fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {

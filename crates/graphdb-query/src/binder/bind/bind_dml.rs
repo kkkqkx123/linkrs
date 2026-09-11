@@ -319,17 +319,25 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::CopyStmt,
     ) -> DBResult<BoundStatement> {
-        if stmt.file_path.is_empty() {
+        if stmt.file_paths.is_empty() || stmt.file_paths.iter().any(|p| p.trim().is_empty()) {
             return Err(graphdb_core::error::DBError::from(
                 graphdb_core::error::QueryError::invalid_query(
                     "COPY file path cannot be empty".to_string(),
                 ),
             ));
         }
+        if stmt.direction == crate::parser::ast::CopyDirection::To && stmt.file_paths.len() > 1 {
+            return Err(graphdb_core::error::DBError::from(
+                graphdb_core::error::QueryError::invalid_query(
+                    "COPY TO supports a single file path".to_string(),
+                ),
+            ));
+        }
         Ok(BoundStatement::Copy(BoundCopy {
             target: stmt.target.clone(),
             direction: stmt.direction,
-            file_path: stmt.file_path.clone(),
+            file_paths: stmt.file_paths.clone(),
+            by_column: stmt.by_column,
             header: stmt.header,
             delimiter: stmt.delimiter,
             batch_size: stmt.batch_size,

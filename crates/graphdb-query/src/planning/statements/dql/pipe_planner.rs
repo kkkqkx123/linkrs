@@ -459,10 +459,7 @@ fn take_single_input(input_mut: &mut PlanNodeEnum) -> PlanNodeEnum {
 /// Rewrites in place through `&mut` so deep pipe chains only hold two
 /// pointers per recursion level instead of two owned trees.
 fn replace_argument_node(plan: &mut PlanNodeEnum, replacement: &PlanNodeEnum) {
-    if matches!(
-        plan,
-        PlanNodeEnum::Argument(_) | PlanNodeEnum::Start(_)
-    ) {
+    if matches!(plan, PlanNodeEnum::Argument(_) | PlanNodeEnum::Start(_)) {
         *plan = replacement.clone();
         return;
     }
@@ -477,8 +474,7 @@ fn replace_argument_node(plan: &mut PlanNodeEnum, replacement: &PlanNodeEnum) {
         let wired = match owned {
             PlanNodeEnum::DeleteVertices(delete_vertices) => {
                 let info = delete_vertices.info().clone();
-                let node =
-                    PipeDeleteVerticesNode::new(next_node_id(), info, replacement.clone());
+                let node = PipeDeleteVerticesNode::new(next_node_id(), info, replacement.clone());
                 PlanNodeEnum::PipeDeleteVertices(node)
             }
             PlanNodeEnum::DeleteEdges(delete_edges) => {

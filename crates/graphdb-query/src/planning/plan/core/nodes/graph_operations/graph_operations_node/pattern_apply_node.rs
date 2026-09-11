@@ -232,10 +232,6 @@ impl MemoryEstimatable for PatternApplyNode {
             Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
         >() * 2;
 
-        base + keys_size
-            + is_anti_size
-            + col_names_size
-            + output_var_size
-            + left_right_size
+        base + keys_size + is_anti_size + col_names_size + output_var_size + left_right_size
     }
 }

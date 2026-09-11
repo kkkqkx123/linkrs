@@ -603,7 +603,6 @@ mod factorization_fallback_tests {
             id: next_node_id(),
             left: Box::new(left),
             right: Box::new(right),
-            deps: vec![left, right],
             space_id: 1,
             steps: 3,
             edge_types: vec!["knows".to_string()],

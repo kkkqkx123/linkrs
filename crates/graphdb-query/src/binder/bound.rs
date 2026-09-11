@@ -828,7 +828,8 @@ pub struct BoundAssignmentStatement {
 pub struct BoundCopy {
     pub target: crate::parser::ast::CopyTarget,
     pub direction: crate::parser::ast::CopyDirection,
-    pub file_path: String,
+    pub file_paths: Vec<String>,
+    pub by_column: bool,
     pub header: bool,
     pub delimiter: char,
     pub batch_size: Option<usize>,

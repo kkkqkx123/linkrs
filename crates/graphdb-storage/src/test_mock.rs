@@ -301,6 +301,7 @@ impl StorageSchemaOps for MockStorage {
     mock_stub!(&mut self, create_edge_type(_space: &str, _info: &EdgeTypeSchema) -> Result<u32, StorageError>, Ok(1));
     mock_stub!(&mut self, alter_edge_type(_space: &str, _edge_type: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, rename_edge_type(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, update_edge_endpoints(_space: &str, _edge_type: &str, _src_tag: &str, _dst_tag: &str) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, drop_edge_type(_space: &str, _edge_type: &str) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, create_tag_index(_space: &str, _info: &Index) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, drop_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));

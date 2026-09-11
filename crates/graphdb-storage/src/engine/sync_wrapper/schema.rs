@@ -68,6 +68,13 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             old_name: &str,
             new_name: &str,
         ) -> Result<bool, StorageError>;
+        fn update_edge_endpoints(
+            &mut self,
+            space: &str,
+            edge_type: &str,
+            src_tag: &str,
+            dst_tag: &str,
+        ) -> Result<bool, StorageError>;
         fn drop_edge_type(&mut self, space: &str, edge: &str) -> Result<bool, StorageError>;
         fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
         fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;

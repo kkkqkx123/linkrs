@@ -1139,3 +1139,111 @@ fn test_parse_use_graph_aliases_use() {
         panic!("Expected Use statement: {:?}", result.err());
     }
 }
+
+#[test]
+fn test_parse_copy_multi_file_by_column() {
+    let mut ctx = create_parser_context("COPY person FROM ('a.csv', 'b.csv') BY COLUMN");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Copy(copy)) = result {
+        assert_eq!(copy.file_paths, vec!["a.csv", "b.csv"]);
+        assert!(copy.by_column);
+    } else {
+        panic!("Expected Copy statement: {:?}", result.err());
+    }
+}
+
+#[test]
+fn test_parse_copy_single_file_defaults() {
+    let mut ctx = create_parser_context("COPY person FROM 'single.csv'");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Copy(copy)) = result {
+        assert_eq!(copy.file_paths, vec!["single.csv"]);
+        assert!(!copy.by_column);
+    } else {
+        panic!("Expected Copy statement: {:?}", result.err());
+    }
+
+    let mut ctx = create_parser_context("COPY person FROM ('a.csv', 'b.csv')");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Copy(copy)) = result {
+        assert_eq!(copy.file_paths.len(), 2);
+        assert!(!copy.by_column);
+    } else {
+        panic!("Expected Copy statement: {:?}", result.err());
+    }
+}
+
+#[test]
+fn test_parse_copy_to_rejects_multi_file() {
+    let mut ctx = create_parser_context("COPY person TO ('a.csv', 'b.csv')");
+    assert!(
+        StmtParser::parse_statement(&mut ctx).is_err(),
+        "COPY TO with multiple files must fail"
+    );
+}
+
+#[test]
+fn test_parse_create_edge_as_query() {
+    let mut ctx = create_parser_context("CREATE EDGE worked AS (MATCH (n) RETURN n)");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Create(create)) = result {
+        match &create.target {
+            CreateTarget::EdgeAsQuery { name, query_text } => {
+                assert_eq!(name, "worked");
+                assert!(query_text.contains("MATCH"));
+            }
+            other => panic!("Expected EdgeAsQuery: {other:?}"),
+        }
+    } else {
+        panic!("Expected Create statement: {:?}", result.err());
+    }
+}
+
+#[test]
+fn test_parse_create_tag_as_query() {
+    let mut ctx = create_parser_context("CREATE TAG adults AS (MATCH (n) RETURN n)");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Create(create)) = result {
+        assert!(
+            matches!(create.target, CreateTarget::TagAsQuery { ref name, .. } if name == "adults"),
+            "expected TagAsQuery: {:?}",
+            create.target
+        );
+    } else {
+        panic!("Expected Create statement: {:?}", result.err());
+    }
+}
+
+#[test]
+fn test_parse_alter_edge_add_drop_from() {
+    let mut ctx = create_parser_context("ALTER EDGE works_at ADD FROM person TO company");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Alter(alter)) = result {
+        match &alter.target {
+            AlterTarget::AddFrom {
+                edge_name,
+                src_tag,
+                dst_tag,
+            } => {
+                assert_eq!(edge_name, "works_at");
+                assert_eq!(src_tag, "person");
+                assert_eq!(dst_tag, "company");
+            }
+            other => panic!("Expected AddFrom: {other:?}"),
+        }
+    } else {
+        panic!("Expected Alter statement: {:?}", result.err());
+    }
+
+    let mut ctx = create_parser_context("ALTER EDGE works_at DROP FROM person TO company");
+    let result = StmtParser::parse_statement(&mut ctx);
+    if let Ok(Stmt::Alter(alter)) = result {
+        assert!(
+            matches!(alter.target, AlterTarget::DropFrom { ref edge_name, .. } if edge_name == "works_at"),
+            "expected DropFrom: {:?}",
+            alter.target
+        );
+    } else {
+        panic!("Expected Alter statement: {:?}", result.err());
+    }
+}

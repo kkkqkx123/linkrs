@@ -193,6 +193,7 @@ impl<S: StorageClient> StorageSchemaOps for MetricsStorage<S> {
         fn create_edge_type(&mut self, space: &str, edge: &EdgeTypeInfo) -> Result<u32, StorageError>;
         fn alter_edge_type(&mut self, space: &str, edge_type: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>;
         fn rename_edge_type(&mut self, space: &str, old_name: &str, new_name: &str) -> Result<bool, StorageError>;
+        fn update_edge_endpoints(&mut self, space: &str, edge_type: &str, src_tag: &str, dst_tag: &str) -> Result<bool, StorageError>;
         fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
         fn create_tag_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;
         fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;

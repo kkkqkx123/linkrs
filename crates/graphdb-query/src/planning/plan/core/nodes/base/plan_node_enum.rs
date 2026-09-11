@@ -80,7 +80,7 @@ pub use crate::planning::plan::core::nodes::management::manage_node_enums::{
 // Re-export individual management node types for backward compatibility
 pub use crate::planning::plan::core::nodes::management::edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, EdgeAlterInfo, EdgeManageInfo,
-    ShowCreateEdgeNode, ShowEdgesNode,
+    RenameEdgeNode, ShowCreateEdgeNode, ShowEdgesNode, UpdateEdgeEndpointsNode,
 };
 pub use crate::planning::plan::core::nodes::management::index_nodes::{
     CreateEdgeIndexNode, CreateTagIndexNode, DescEdgeIndexNode, DescTagIndexNode,
@@ -104,8 +104,8 @@ pub use crate::planning::plan::core::nodes::management::system_nodes::{
     ShowSessionsNode as ShowSessionsNodeType,
 };
 pub use crate::planning::plan::core::nodes::management::tag_nodes::{
-    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
-    TagAlterInfo, TagManageInfo,
+    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,
+    ShowTagsNode, TagAlterInfo, TagManageInfo,
 };
 pub use crate::planning::plan::core::nodes::management::user_nodes::{
     AlterUserNode, ChangePasswordNode, CreateUserNode, DropUserNode, GrantRoleNode, RevokeRoleNode,

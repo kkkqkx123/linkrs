@@ -20,9 +20,9 @@ use crate::planning::plan::core::nodes::management::system_nodes::{
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
 use crate::planning::plan::core::nodes::{
     AlterEdgeNode, AlterTagNode, CreateEdgeNode, CreateMacroNode, CreateTagNode, CreateTypeNode,
-    DropMacroNode, DropTypeNode, EdgeManageInfo, MacroManageInfo, ShowCreateEdgeNode,
-    ShowCreateIndexNode, ShowCreateSpaceNode, ShowCreateTagNode, ShowEdgesNode, ShowIndexesNode,
-    ShowTagsNode, TagManageInfo, TypeManageInfo,
+    DropMacroNode, DropTypeNode, EdgeManageInfo, MacroManageInfo, RenameEdgeNode, RenameTagNode,
+    ShowCreateEdgeNode, ShowCreateIndexNode, ShowCreateSpaceNode, ShowCreateTagNode, ShowEdgesNode,
+    ShowIndexesNode, ShowTagsNode, TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
 };
 use crate::planning::plan::core::{
     node_id_generator::next_node_id, AlterSpaceNode, ClearSpaceNode, PlanNodeEnum, ShowSpacesNode,
@@ -245,9 +245,18 @@ impl MaintainPlanner {
                 // Sequence creation will be handled by the executor in S-7
                 Ok(None)
             }
-            CreateTarget::TagAsQuery { name, .. } => Err(PlannerError::UnsupportedOperation(
-                format!("CREATE TAG {} AS (query) is not yet supported", name),
-            )),
+            CreateTarget::TagAsQuery { name, .. } => {
+                Err(PlannerError::UnsupportedOperation(format!(
+                    "CREATE TAG {} AS (query) is only supported through the session API",
+                    name
+                )))
+            }
+            CreateTarget::EdgeAsQuery { name, .. } => {
+                Err(PlannerError::UnsupportedOperation(format!(
+                    "CREATE EDGE {} AS (query) is only supported through the session API",
+                    name
+                )))
+            }
         }
     }
 
@@ -342,7 +351,11 @@ impl MaintainPlanner {
         PlanNodeEnum::TypeManage(TypeManageNode::Drop(node))
     }
 
-    fn plan_alter(&self, target: &AlterTarget, current_space: &str) -> PlanNodeEnum {
+    fn plan_alter(
+        &self,
+        target: &AlterTarget,
+        current_space: &str,
+    ) -> Result<PlanNodeEnum, PlannerError> {
         match target {
             AlterTarget::Space {
                 space_name,
@@ -359,7 +372,7 @@ impl MaintainPlanner {
                     })
                     .unwrap_or_default();
                 let node = AlterSpaceNode::new(next_node_id(), space_name.clone(), options);
-                PlanNodeEnum::SpaceManage(SpaceManageNode::Alter(node))
+                Ok(PlanNodeEnum::SpaceManage(SpaceManageNode::Alter(node)))
             }
             AlterTarget::Tag {
                 tag_name,
@@ -373,7 +386,7 @@ impl MaintainPlanner {
                     .with_changes(changes.clone());
 
                 let node = AlterTagNode::new(next_node_id(), alter_info);
-                PlanNodeEnum::TagManage(TagManageNode::Alter(node))
+                Ok(PlanNodeEnum::TagManage(TagManageNode::Alter(node)))
             }
             AlterTarget::Edge {
                 edge_name,
@@ -393,43 +406,85 @@ impl MaintainPlanner {
                 }
 
                 let node = AlterEdgeNode::new(next_node_id(), alter_info);
-                PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node))
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node)))
             }
-            AlterTarget::Sequence { .. } => {
-                // Sequence alteration will be handled by the executor in S-7
-                // Return a placeholder for now
-                unreachable!("ALTER SEQUENCE planning not yet implemented")
-            }
-            AlterTarget::RenameTag {
-                old_name,
-                new_name: _,
-            } => {
-                let node = crate::planning::plan::core::nodes::management::tag_nodes::AlterTagNode::new(
+            AlterTarget::Sequence { .. } => Err(PlannerError::UnsupportedOperation(
+                "ALTER SEQUENCE planning not yet implemented".to_string(),
+            )),
+            AlterTarget::RenameTag { old_name, new_name } => {
+                if old_name.trim().is_empty() || new_name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "RENAME TAG requires non-empty old and new names".to_string(),
+                    ));
+                }
+                let node = RenameTagNode::new(
                     next_node_id(),
-                    crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo::new(
-                        current_space.to_string(),
-                        old_name.clone(),
-                    ),
+                    current_space.to_string(),
+                    old_name.clone(),
+                    new_name.clone(),
                 );
-                PlanNodeEnum::TagManage(TagManageNode::Alter(node))
+                Ok(PlanNodeEnum::TagManage(TagManageNode::Rename(node)))
             }
-            AlterTarget::RenameEdge {
-                old_name,
-                new_name: _,
-            } => {
-                let node = crate::planning::plan::core::nodes::management::edge_nodes::AlterEdgeNode::new(
+            AlterTarget::RenameEdge { old_name, new_name } => {
+                if old_name.trim().is_empty() || new_name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "RENAME EDGE requires non-empty old and new names".to_string(),
+                    ));
+                }
+                let node = RenameEdgeNode::new(
                     next_node_id(),
-                    crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo::new(
-                        current_space.to_string(),
-                        old_name.clone(),
-                    ),
+                    current_space.to_string(),
+                    old_name.clone(),
+                    new_name.clone(),
                 );
-                PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node))
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Rename(node)))
             }
-            AlterTarget::AddFrom { .. } | AlterTarget::DropFrom { .. } => {
-                // Endpoint-pair constraints (ADD/DROP FROM) are enforced by the
-                // executor directly; planning support not yet implemented.
-                unreachable!("ALTER EDGE ADD/DROP FROM planning not yet implemented")
+            AlterTarget::AddFrom {
+                edge_name,
+                src_tag,
+                dst_tag,
+            } => {
+                if edge_name.trim().is_empty()
+                    || src_tag.trim().is_empty()
+                    || dst_tag.trim().is_empty()
+                {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "ALTER EDGE ADD FROM requires edge, src and dst names".to_string(),
+                    ));
+                }
+                let node = UpdateEdgeEndpointsNode::new(
+                    next_node_id(),
+                    current_space.to_string(),
+                    edge_name.clone(),
+                    src_tag.clone(),
+                    dst_tag.clone(),
+                    false,
+                );
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::UpdateEndpoints(
+                    node,
+                )))
+            }
+            AlterTarget::DropFrom {
+                edge_name,
+                src_tag,
+                dst_tag,
+            } => {
+                if edge_name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "ALTER EDGE DROP FROM requires an edge name".to_string(),
+                    ));
+                }
+                let node = UpdateEdgeEndpointsNode::new(
+                    next_node_id(),
+                    current_space.to_string(),
+                    edge_name.clone(),
+                    src_tag.clone(),
+                    dst_tag.clone(),
+                    true,
+                );
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::UpdateEndpoints(
+                    node,
+                )))
             }
         }
     }
@@ -487,34 +542,46 @@ impl MaintainPlanner {
         target: &crate::parser::ast::stmt::DropTarget,
         if_exists: bool,
         current_space: &str,
-    ) -> PlanNodeEnum {
+    ) -> Result<PlanNodeEnum, PlannerError> {
         use crate::parser::ast::stmt::DropTarget;
 
         match target {
             DropTarget::Tags(tag_names) if !tag_names.is_empty() => {
+                if tag_names.len() > 1 {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "DROP TAG with multiple names is not yet supported; drop one tag per statement"
+                            .to_string(),
+                    ));
+                }
                 let node = crate::planning::plan::core::nodes::DropTagNode::new(
                     next_node_id(),
                     current_space.to_string(),
                     tag_names[0].clone(),
                 )
                 .with_if_exists(if_exists);
-                PlanNodeEnum::TagManage(TagManageNode::Drop(node))
+                Ok(PlanNodeEnum::TagManage(TagManageNode::Drop(node)))
             }
             DropTarget::Edges(edge_names) if !edge_names.is_empty() => {
+                if edge_names.len() > 1 {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "DROP EDGE with multiple names is not yet supported; drop one edge type per statement"
+                            .to_string(),
+                    ));
+                }
                 let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
                     next_node_id(),
                     current_space.to_string(),
                     edge_names[0].clone(),
                 )
                 .with_if_exists(if_exists);
-                PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node))
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node)))
             }
             DropTarget::Space(space_name) => {
                 let node = crate::planning::plan::core::nodes::DropSpaceNode::new(
                     next_node_id(),
                     space_name.clone(),
                 );
-                PlanNodeEnum::SpaceManage(SpaceManageNode::Drop(node))
+                Ok(PlanNodeEnum::SpaceManage(SpaceManageNode::Drop(node)))
             }
             DropTarget::TagIndex {
                 space_name,
@@ -530,7 +597,9 @@ impl MaintainPlanner {
                     resolved_space,
                     index_name.clone(),
                 );
-                PlanNodeEnum::IndexManage(IndexManageNode::DropTagIndex(node))
+                Ok(PlanNodeEnum::IndexManage(IndexManageNode::DropTagIndex(
+                    node,
+                )))
             }
             DropTarget::EdgeIndex {
                 space_name,
@@ -546,7 +615,9 @@ impl MaintainPlanner {
                     resolved_space,
                     index_name.clone(),
                 );
-                PlanNodeEnum::IndexManage(IndexManageNode::DropEdgeIndex(node))
+                Ok(PlanNodeEnum::IndexManage(IndexManageNode::DropEdgeIndex(
+                    node,
+                )))
             }
             DropTarget::Tags(_) => {
                 let node = crate::planning::plan::core::nodes::DropTagNode::new(
@@ -555,7 +626,7 @@ impl MaintainPlanner {
                     String::new(),
                 )
                 .with_if_exists(if_exists);
-                PlanNodeEnum::TagManage(TagManageNode::Drop(node))
+                Ok(PlanNodeEnum::TagManage(TagManageNode::Drop(node)))
             }
             DropTarget::Edges(_) => {
                 let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
@@ -564,12 +635,11 @@ impl MaintainPlanner {
                     String::new(),
                 )
                 .with_if_exists(if_exists);
-                PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node))
+                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node)))
             }
-            DropTarget::Sequence(_) => {
-                // Sequence dropping will be handled by the executor in S-7
-                unreachable!("DROP SEQUENCE planning not yet implemented")
-            }
+            DropTarget::Sequence(_) => Err(PlannerError::UnsupportedOperation(
+                "DROP SEQUENCE planning not yet implemented".to_string(),
+            )),
         }
     }
 
@@ -629,8 +699,8 @@ impl Planner for MaintainPlanner {
         let final_node = match bound {
             BoundStatement::Show(s) => self.plan_show(&s.target, &space),
             BoundStatement::ShowCreate(s) => self.plan_show_create(&s.target, &space),
-            BoundStatement::Drop(s) => self.plan_drop(&s.target, s.if_exists, &space),
-            BoundStatement::Alter(s) => self.plan_alter(&s.target, &space),
+            BoundStatement::Drop(s) => self.plan_drop(&s.target, s.if_exists, &space)?,
+            BoundStatement::Alter(s) => self.plan_alter(&s.target, &space)?,
             BoundStatement::Desc(s) => self.plan_desc(&s.target, &space),
             BoundStatement::ClearSpace(s) => {
                 let node = ClearSpaceNode::new(next_node_id(), s.space_name.clone());
@@ -709,7 +779,7 @@ impl Planner for MaintainPlanner {
 
             Stmt::DropType(drop_type_stmt) => self.plan_drop_type(drop_type_stmt),
 
-            Stmt::Alter(alter_stmt) => self.plan_alter(&alter_stmt.target, &current_space),
+            Stmt::Alter(alter_stmt) => self.plan_alter(&alter_stmt.target, &current_space)?,
 
             Stmt::ClearSpace(clear_stmt) => {
                 let node = ClearSpaceNode::new(next_node_id(), clear_stmt.space_name.clone());
@@ -766,7 +836,7 @@ impl Planner for MaintainPlanner {
             }
 
             Stmt::Drop(drop_stmt) => {
-                self.plan_drop(&drop_stmt.target, drop_stmt.if_exists, &current_space)
+                self.plan_drop(&drop_stmt.target, drop_stmt.if_exists, &current_space)?
             }
 
             Stmt::Migrate(m) => match m {

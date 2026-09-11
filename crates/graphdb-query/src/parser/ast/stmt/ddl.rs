@@ -65,6 +65,10 @@ pub enum CreateTarget {
         name: String,
         query_text: String,
     },
+    EdgeAsQuery {
+        name: String,
+        query_text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

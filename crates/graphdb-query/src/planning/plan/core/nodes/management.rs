@@ -14,7 +14,7 @@ pub use catalog_nodes::{
 
 pub use edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, EdgeAlterInfo, EdgeManageInfo,
-    ShowCreateEdgeNode, ShowEdgesNode,
+    RenameEdgeNode, ShowCreateEdgeNode, ShowEdgesNode, UpdateEdgeEndpointsNode,
 };
 pub use index_nodes::{
     CreateEdgeIndexNode, CreateTagIndexNode, DescEdgeIndexNode, DescTagIndexNode,
@@ -36,8 +36,8 @@ pub use system_nodes::{
     ShowFunctionsNode, ShowGraphsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 pub use tag_nodes::{
-    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
-    TagAlterInfo, TagManageInfo,
+    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,
+    ShowTagsNode, TagAlterInfo, TagManageInfo,
 };
 pub use user_nodes::{
     AlterUserNode, ChangePasswordNode, CreateUserNode, DescribeUserNode, DropUserNode,

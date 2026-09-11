@@ -108,6 +108,12 @@ pub enum EdgeManageCommand {
         old_name: String,
         new_name: String,
     },
+    UpdateEndpoints {
+        edge_name: String,
+        src_tag_name: String,
+        dst_tag_name: String,
+        clear_constraint: bool,
+    },
     Desc {
         edge_name: String,
     },
@@ -401,9 +407,11 @@ impl EdgeManageCommand {
     /// Whether the command mutates stored state.
     pub fn is_write(&self) -> bool {
         match self {
-            Self::Create { .. } | Self::Alter { .. } | Self::Rename { .. } | Self::Drop { .. } => {
-                true
-            }
+            Self::Create { .. }
+            | Self::Alter { .. }
+            | Self::Rename { .. }
+            | Self::UpdateEndpoints { .. }
+            | Self::Drop { .. } => true,
             Self::Desc { .. } | Self::Show | Self::ShowCreate { .. } => false,
         }
     }

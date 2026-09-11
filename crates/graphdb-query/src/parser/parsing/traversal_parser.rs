@@ -832,13 +832,13 @@ impl TraversalParser {
                     let start_span = ctx.current_span();
                     // Parse node variable
                     let variable = ctx.expect_identifier()?;
-                    
+
                     // Parse optional edge variable
                     let mut edge_variable = None;
                     if ctx.match_token(TokenKind::Comma) {
                         edge_variable = Some(ctx.expect_identifier()?);
                     }
-                    
+
                     // Parse optional filter predicate
                     let mut filter_predicate = None;
                     if ctx.match_token(TokenKind::Pipe) {
@@ -847,7 +847,7 @@ impl TraversalParser {
                             filter_predicate = Some(self.parse_expression(ctx)?);
                         }
                     }
-                    
+
                     // Parse optional projections
                     let mut node_projection = None;
                     let mut edge_projection = None;
@@ -865,12 +865,12 @@ impl TraversalParser {
                             }
                         }
                     }
-                    
+
                     ctx.expect_token(TokenKind::RParen)?;
-                    
+
                     let end_span = ctx.current_span();
                     let span = ctx.merge_span(start_span.start, end_span.end);
-                    
+
                     // Create RecursiveComprehension and store it in EdgePattern
                     // We signal this via a special path_semantic + the recursive_comprehension field
                     let rc = RecursiveComprehension {
@@ -885,7 +885,7 @@ impl TraversalParser {
                     // We'll need to modify the EdgePattern construction below
                     path_semantic = Some(PathSemantic::Walk); // Marker for planner
                     range = Some(EdgeRange::any());
-                    
+
                     // Store in a temporary location - we'll attach it after EdgePattern construction
                     // For now, use a thread-local or just return a different structure
                     // Actually, we can modify the return to include the RC

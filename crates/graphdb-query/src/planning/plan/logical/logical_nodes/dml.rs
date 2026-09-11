@@ -108,7 +108,8 @@ define_logical_plan_node! {
     pub struct LogicalCopyFromNode {
         space_name: String,
         target: CopyTarget,
-        file_path: String,
+        file_paths: Vec<String>,
+        by_column: bool,
         header: bool,
         delimiter: char,
         batch_size: usize,

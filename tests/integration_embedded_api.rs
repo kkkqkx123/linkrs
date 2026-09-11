@@ -641,7 +641,7 @@ fn test_batch_result_merge() {
 fn test_batch_config_default() {
     let config = BatchConfig::default();
     assert_eq!(config.batch_size, 1000);
-    assert!(config.auto_commit);
+    assert!(config.auto_flush);
     assert!(config.continue_on_error);
     assert_eq!(config.max_errors, Some(100));
 }
@@ -650,12 +650,12 @@ fn test_batch_config_default() {
 fn test_batch_config_builder() {
     let config = BatchConfig::new()
         .with_batch_size(500)
-        .with_auto_commit(false)
+        .with_auto_flush(false)
         .with_continue_on_error(false)
         .with_max_errors(Some(50));
 
     assert_eq!(config.batch_size, 500);
-    assert!(!config.auto_commit);
+    assert!(!config.auto_flush);
     assert!(!config.continue_on_error);
     assert_eq!(config.max_errors, Some(50));
 }
@@ -974,4 +974,369 @@ fn test_multiple_sessions() {
     let session2 = db.session().expect("创建会话失败");
 
     assert_eq!(session1.current_space(), session2.current_space());
+}
+
+// ==================== Phase 4: ALTER ADD/DROP FROM ====================
+
+fn setup_phase4_graph(
+    session: &mut graphdb::api::embedded::Session<graphdb::storage::GraphStorage>,
+) {
+    session
+        .create_space("phase4", SpaceConfig::default())
+        .expect("create space");
+    session.use_space("phase4").expect("use space");
+    session
+        .execute("CREATE TAG person(name: STRING, age: INT)")
+        .expect("create tag person");
+    session
+        .execute("CREATE TAG company(name: STRING)")
+        .expect("create tag company");
+    session
+        .execute("CREATE EDGE works_at(since: INT)")
+        .expect("create edge works_at");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30), 'p2':('Bob', 25)")
+        .expect("insert persons");
+    session
+        .execute("INSERT VERTEX company(name) VALUES 'c1':('Acme')")
+        .expect("insert company");
+    session
+        .execute("INSERT EDGE works_at(since) VALUES 'p1' -> 'c1': (2020)")
+        .expect("insert edge");
+}
+
+fn desc_default_for(result: &graphdb::api::embedded::QueryResult, field: &str) -> Option<String> {
+    result.rows().iter().find_map(|row| {
+        let is_field = matches!(row.get("Field"), Some(Value::String(s)) if s.as_str() == field);
+        if !is_field {
+            return None;
+        }
+        match row.get("Default") {
+            Some(Value::String(s)) => Some(s.to_string()),
+            other => Some(format!("{other:?}")),
+        }
+    })
+}
+
+#[test]
+fn test_alter_edge_add_drop_from_desc_visible() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    session
+        .execute("ALTER EDGE works_at ADD FROM person TO company")
+        .expect("ADD FROM succeeds");
+
+    let desc = session
+        .execute("DESC EDGE works_at")
+        .expect("DESC succeeds");
+    assert_eq!(
+        desc_default_for(&desc, "src_tag").as_deref(),
+        Some("person"),
+        "ADD FROM endpoint visible in DESC"
+    );
+    assert_eq!(
+        desc_default_for(&desc, "dst_tag").as_deref(),
+        Some("company"),
+        "ADD FROM endpoint visible in DESC"
+    );
+
+    let show = session.execute("SHOW EDGES").expect("SHOW EDGES succeeds");
+    let edge_row = show
+        .rows()
+        .iter()
+        .find(|row| row.get("name") == Some(&Value::string("works_at")))
+        .expect("works_at listed");
+    assert_eq!(
+        edge_row.get("src_tag"),
+        Some(&Value::string("person")),
+        "ADD FROM endpoint visible in SHOW EDGES"
+    );
+
+    session
+        .execute("ALTER EDGE works_at DROP FROM person TO company")
+        .expect("DROP FROM succeeds");
+
+    let desc = session
+        .execute("DESC EDGE works_at")
+        .expect("DESC succeeds");
+    assert_eq!(
+        desc_default_for(&desc, "src_tag").as_deref(),
+        Some("(unconstrained)"),
+        "DROP FROM clears the constraint"
+    );
+    assert_eq!(
+        desc_default_for(&desc, "dst_tag").as_deref(),
+        Some("(unconstrained)"),
+        "DROP FROM clears the constraint"
+    );
+}
+
+#[test]
+fn test_alter_edge_add_from_rejects_missing_tag() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let err = session
+        .execute("ALTER EDGE works_at ADD FROM nosuch TO company")
+        .expect_err("missing source tag must fail");
+    assert!(
+        err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_rename_tag_and_edge() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    session
+        .execute("ALTER TAG person RENAME TO customer")
+        .expect("rename tag succeeds");
+    let tags = session.execute("SHOW TAGS").expect("SHOW TAGS succeeds");
+    assert!(
+        tags.rows()
+            .iter()
+            .any(|row| row.get("name") == Some(&Value::string("customer"))),
+        "renamed tag visible"
+    );
+
+    session
+        .execute("ALTER EDGE works_at RENAME TO employed_by")
+        .expect("rename edge succeeds");
+    let edges = session.execute("SHOW EDGES").expect("SHOW EDGES succeeds");
+    assert!(
+        edges
+            .rows()
+            .iter()
+            .any(|row| row.get("name") == Some(&Value::string("employed_by"))),
+        "renamed edge visible"
+    );
+}
+
+#[test]
+fn test_drop_multi_name_rejected_explicitly() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let err = session
+        .execute("DROP TAG person, company")
+        .expect_err("multi-drop must not silently drop one table");
+    assert!(
+        err.to_string().contains("multiple names"),
+        "unexpected error: {err}"
+    );
+}
+
+// ==================== Phase 4: COPY multi-file ====================
+
+#[test]
+fn test_copy_multi_file_row_concat() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let csv_dir = tempfile::tempdir().expect("create csv dir");
+    let f1 = csv_dir.path().join("p10.csv");
+    let f2 = csv_dir.path().join("p11.csv");
+    std::fs::write(&f1, "vid,name,age\np10,Carol,28\n").expect("write f1");
+    std::fs::write(&f2, "vid,name,age\np11,Dave,22\n").expect("write f2");
+
+    session
+        .execute(&format!(
+            "COPY person FROM ('{}', '{}')",
+            f1.to_string_lossy(),
+            f2.to_string_lossy()
+        ))
+        .expect("multi-file COPY succeeds");
+
+    let result = session
+        .execute("MATCH (p:person) RETURN p.name")
+        .expect("MATCH succeeds");
+    assert_eq!(result.len(), 4, "row-concat import adds both files");
+}
+
+#[test]
+fn test_copy_multi_file_by_column() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let csv_dir = tempfile::tempdir().expect("create csv dir");
+    let f1 = csv_dir.path().join("ids.csv");
+    let f2 = csv_dir.path().join("attrs.csv");
+    std::fs::write(&f1, "vid\np20\np21\n").expect("write ids");
+    std::fs::write(&f2, "name,age\nErin,31\nFrank,29\n").expect("write attrs");
+
+    session
+        .execute(&format!(
+            "COPY person FROM ('{}', '{}') BY COLUMN",
+            f1.to_string_lossy(),
+            f2.to_string_lossy()
+        ))
+        .expect("BY COLUMN COPY succeeds");
+
+    let result = session
+        .execute("MATCH (p:person) RETURN p.name")
+        .expect("MATCH succeeds");
+    assert_eq!(result.len(), 4, "column-merge import adds zipped rows");
+}
+
+#[test]
+fn test_copy_by_column_row_mismatch_rejected() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let csv_dir = tempfile::tempdir().expect("create csv dir");
+    let f1 = csv_dir.path().join("ids2.csv");
+    let f2 = csv_dir.path().join("attrs2.csv");
+    std::fs::write(&f1, "vid\np30\np31\np32\n").expect("write ids");
+    std::fs::write(&f2, "name,age\nGail,40\n").expect("write attrs");
+
+    let err = session
+        .execute(&format!(
+            "COPY person FROM ('{}', '{}') BY COLUMN",
+            f1.to_string_lossy(),
+            f2.to_string_lossy()
+        ))
+        .expect_err("row-count mismatch must fail");
+    assert!(err.to_string().contains("rows"), "unexpected error: {err}");
+}
+
+// ==================== Phase 4: CREATE ... AS ====================
+
+#[test]
+fn test_create_tag_as_query() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    session
+        .execute("CREATE TAG adults AS (MATCH (p:person) RETURN id(p) AS vid, p.name AS name, p.age AS age)")
+        .expect("CREATE TAG AS succeeds");
+
+    let tags = session.execute("SHOW TAGS").expect("SHOW TAGS succeeds");
+    assert!(
+        tags.rows()
+            .iter()
+            .any(|row| row.get("name") == Some(&Value::string("adults"))),
+        "new tag visible"
+    );
+
+    let desc = session.execute("DESC TAG adults").expect("DESC succeeds");
+    assert!(
+        desc.rows()
+            .iter()
+            .any(|row| row.get("Field") == Some(&Value::string("name"))),
+        "inferred schema visible"
+    );
+
+    let result = session
+        .execute("MATCH (a:adults) RETURN a.name")
+        .expect("MATCH new tag succeeds");
+    assert_eq!(result.len(), 2, "materialized rows match query output");
+}
+
+#[test]
+fn test_create_edge_as_query() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    session
+        .execute("CREATE EDGE worked AS (MATCH (a:person)-[e:works_at]->(b:company) RETURN id(a) AS src, id(b) AS dst, e.since AS since)")
+        .expect("CREATE EDGE AS succeeds");
+
+    let result = session
+        .execute("MATCH (a:person)-[e:worked]->(b:company) RETURN e.since")
+        .expect("MATCH new edge succeeds");
+    assert_eq!(result.len(), 1, "materialized edge matches query output");
+    assert_eq!(
+        result.first().and_then(|r| r.get_by_index(0)),
+        Some(&Value::Int(2020)),
+        "edge property data consistent"
+    );
+}
+
+#[test]
+fn test_create_as_rejects_missing_key_and_duplicates() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let err = session
+        .execute("CREATE TAG no_vid AS (MATCH (p:person) RETURN p.name AS name)")
+        .expect_err("missing vid column must fail");
+    assert!(
+        err.to_string().contains("vertex id"),
+        "unexpected error: {err}"
+    );
+
+    session
+        .execute("CREATE TAG adults AS (MATCH (p:person) RETURN id(p) AS vid, p.name AS name)")
+        .expect("first CREATE succeeds");
+    let err = session
+        .execute("CREATE TAG adults AS (MATCH (p:person) RETURN id(p) AS vid, p.name AS name)")
+        .expect_err("duplicate without IF NOT EXISTS must fail");
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+
+    session
+        .execute("CREATE TAG IF NOT EXISTS adults AS (MATCH (p:person) RETURN id(p) AS vid)")
+        .expect("IF NOT EXISTS skips existing table");
+}
+
+// ==================== Legacy: traversal semantics ====================
+
+#[test]
+fn test_weighted_shortest_returns_path() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    session
+        .create_space("weighted", SpaceConfig::default())
+        .expect("create space");
+    session.use_space("weighted").expect("use space");
+    session
+        .execute("CREATE TAG city(name: STRING)")
+        .expect("create tag");
+    session
+        .execute("CREATE EDGE road(w: INT)")
+        .expect("create edge");
+    session
+        .execute("INSERT VERTEX city(name) VALUES 'a':('A'), 'b':('B'), 'c':('C')")
+        .expect("insert cities");
+    session
+        .execute("INSERT EDGE road(w) VALUES 'a' -> 'b': (10), 'a' -> 'c': (1), 'c' -> 'b': (1)")
+        .expect("insert roads");
+
+    let result = session
+        .execute("MATCH (x:city)-[*WEIGHTED(w)]->(y:city) WHERE x.name == 'A' RETURN y.name")
+        .expect("weighted traversal succeeds");
+    assert!(
+        !result.is_empty(),
+        "weighted traversal must return reachable vertices"
+    );
+}
+
+#[test]
+fn test_recursive_comprehension_rejected_explicitly() {
+    let test_db = create_test_database();
+    let mut session = test_db.db.session().expect("create session");
+    setup_phase4_graph(&mut session);
+
+    let err = session
+        .execute("MATCH (a:person)-[e*(v, r | WHERE v.age > 20)]->(b:person) RETURN b")
+        .expect_err("recursive comprehension must not silently degrade");
+    assert!(
+        err.to_string().contains("not yet supported"),
+        "unexpected error: {err}"
+    );
 }

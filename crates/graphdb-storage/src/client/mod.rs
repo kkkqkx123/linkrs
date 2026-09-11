@@ -566,6 +566,13 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         old_name: &str,
         new_name: &str,
     ) -> Result<bool, StorageError>;
+    fn update_edge_endpoints(
+        &mut self,
+        space: &str,
+        edge_type: &str,
+        src_tag_name: &str,
+        dst_tag_name: &str,
+    ) -> Result<bool, StorageError>;
     fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
 
     fn create_tag_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;

@@ -1,10 +1,10 @@
 //! Database-level statements: CALL, EXPORT / IMPORT / ATTACH / DETACH DATABASE.
 
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::clause_parser::ClauseParser;
 use crate::parser::parsing::parse_context::ParseContext;
+use crate::parser::TokenKind;
 
 /// Parse `CALL <func>(<args>) [YIELD ...]`.
 pub(super) fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {

@@ -84,13 +84,13 @@ impl StorageSchemaOps for GraphStorage {
         new_name: &str,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
+        let label_id = ops::tag_label_id(&self.ctx, space, old_name)?
+            .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
         let renamed = self
             .ctx
             .schema_manager()
             .rename_tag(space, old_name, new_name)?;
         if renamed {
-            let label_id = ops::tag_label_id(&self.ctx, space, old_name)?
-                .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
             schema_engine::rename_vertex_label(&self.ctx, label_id, new_name)?;
         }
         Ok(renamed)
@@ -128,16 +128,33 @@ impl StorageSchemaOps for GraphStorage {
         new_name: &str,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
+        let label_id = ops::edge_label_id(&self.ctx, space, old_name)?
+            .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
         let renamed = self
             .ctx
             .schema_manager()
             .rename_edge_type(space, old_name, new_name)?;
         if renamed {
-            let label_id = ops::edge_label_id(&self.ctx, space, old_name)?
-                .ok_or_else(|| StorageError::label_not_found(old_name.to_string()))?;
             schema_engine::rename_edge_label(&self.ctx, label_id, new_name)?;
         }
         Ok(renamed)
+    }
+
+    fn update_edge_endpoints(
+        &mut self,
+        space: &str,
+        edge_type: &str,
+        src_tag_name: &str,
+        dst_tag_name: &str,
+    ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
+        schema_writer::update_edge_endpoints(
+            &self.ctx,
+            space,
+            edge_type,
+            src_tag_name,
+            dst_tag_name,
+        )
     }
 
     fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError> {

@@ -12,6 +12,37 @@ use graphdb_core::types::space::SpaceInfo;
 use graphdb_core::types::tag::TagInfo;
 use graphdb_core::{NullType, Value};
 
+/// Describe rows for an edge type's endpoint constraints.
+///
+/// The two leading `DESC EDGE` rows expose the current `src_tag` /
+/// `dst_tag` constraint so `ALTER EDGE ... ADD/DROP FROM` changes are
+/// directly observable. An empty constraint renders as `(unconstrained)`.
+fn endpoint_rows(edge_type: &EdgeTypeInfo) -> Vec<Vec<Value>> {
+    let constraint = |tag: &str| {
+        if tag.is_empty() {
+            "(unconstrained)".to_string()
+        } else {
+            tag.to_string()
+        }
+    };
+    vec![
+        vec![
+            Value::string("src_tag"),
+            Value::string("TAG"),
+            Value::Bool(false),
+            Value::string(constraint(&edge_type.src_tag_name)),
+            Value::string("edge endpoint constraint"),
+        ],
+        vec![
+            Value::string("dst_tag"),
+            Value::string("TAG"),
+            Value::Bool(false),
+            Value::string(constraint(&edge_type.dst_tag_name)),
+            Value::string("edge endpoint constraint"),
+        ],
+    ]
+}
+
 pub(super) fn execute_space_manage(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -559,6 +590,7 @@ pub(super) fn execute_edge_manage(
             old_name: edge_name,
             ..
         }
+        | EdgeManageCommand::UpdateEndpoints { edge_name, .. }
         | EdgeManageCommand::Desc { edge_name }
         | EdgeManageCommand::Drop { edge_name, .. }
         | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
@@ -626,6 +658,27 @@ pub(super) fn execute_edge_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
+        EdgeManageCommand::UpdateEndpoints {
+            edge_name,
+            src_tag_name,
+            dst_tag_name,
+            clear_constraint,
+        } => super::exec_ddl(storage, |s| {
+            let (src, dst) = if *clear_constraint {
+                (String::new(), String::new())
+            } else {
+                (src_tag_name.clone(), dst_tag_name.clone())
+            };
+            let updated =
+                StorageSchemaOps::update_edge_endpoints(s, space_name, edge_name, &src, &dst)
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+            if !updated {
+                return Err(QueryError::execution(format!(
+                    "Edge type '{edge_name}' not found"
+                )));
+            }
+            Ok(())
+        }),
         EdgeManageCommand::Desc { .. } | EdgeManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;
             let name = edge_type.as_deref().unwrap_or("");
@@ -656,10 +709,9 @@ pub(super) fn execute_edge_manage(
                             data_type: "string".to_string(),
                         },
                     ]));
-                    let rows: Vec<Vec<Value>> = et
-                        .properties
-                        .iter()
-                        .map(|p| {
+                    let rows: Vec<Vec<Value>> = endpoint_rows(&et)
+                        .into_iter()
+                        .chain(et.properties.iter().map(|p| {
                             vec![
                                 Value::string(&p.name),
                                 Value::string(p.data_type.to_string()),
@@ -673,7 +725,7 @@ pub(super) fn execute_edge_manage(
                                     .map(|c| Value::string(c.clone()))
                                     .unwrap_or_else(|| Value::string("")),
                             ]
-                        })
+                        }))
                         .collect();
                     Ok(Some(DataChunk::new(rows, schema)))
                 }

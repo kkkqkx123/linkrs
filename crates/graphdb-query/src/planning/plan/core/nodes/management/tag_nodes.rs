@@ -261,3 +261,39 @@ impl ShowCreateTagNode {
         &self.tag_name
     }
 }
+
+define_plan_node! {
+    pub struct RenameTagNode {
+        space_name: String,
+        old_name: String,
+        new_name: String,
+    }
+    manage_enum: TagManageNode::Rename as TagManage
+    input: ZeroInputNode
+}
+
+impl RenameTagNode {
+    pub fn new(id: i64, space_name: String, old_name: String, new_name: String) -> Self {
+        Self {
+            id,
+            space_name,
+            old_name,
+            new_name,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn space_name(&self) -> &str {
+        &self.space_name
+    }
+
+    pub fn old_name(&self) -> &str {
+        &self.old_name
+    }
+
+    pub fn new_name(&self) -> &str {
+        &self.new_name
+    }
+}

@@ -326,7 +326,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 columns: vec![yield_col],
                 output_var: None,
                 col_names: vec!["a2".to_string()],
@@ -354,7 +353,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 condition: ctx_b,
                 output_var: None,
                 col_names: vec![],
@@ -383,7 +381,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 group_key_exprs: vec![ctx_a],
                 aggregation_functions: vec![],
                 aggregation_args: vec![],
@@ -448,7 +445,6 @@ mod tests {
                 right: Box::new(scan()),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![scan(), scan()],
                 recommended_algorithm: None,
                 output_var: None,
                 col_names: vec![],
@@ -495,7 +491,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 alias: "x".to_string(),
                 list_expression: {
                     let raw_ctx = ExpressionAnalysisContext::new();
@@ -563,7 +558,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 alias: alias.to_string(),
                 list_expression,
                 output_var: None,
@@ -606,7 +600,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
-                deps: vec![scan()],
                 alias: "item".to_string(),
                 list_expression,
                 output_var: None,
@@ -749,6 +742,7 @@ mod tests {
                 include_empty_paths: false,
                 input_var: Some("a".to_string()),
                 path_semantic: None,
+                deps: vec![],
                 output_var: None,
                 col_names: vec!["e".to_string()],
                 column_types: vec![],
@@ -820,7 +814,6 @@ mod tests {
                 meeting_point_var: None,
                 left: Box::new(scan()),
                 right: Box::new(scan()),
-                deps: vec![scan(), scan()],
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],
@@ -845,7 +838,6 @@ mod tests {
         LogicalNodeEnum::Assign(LogicalAssignNode {
             id: next_node_id(),
             input: Some(Box::new(scan())),
-            deps: vec![scan()],
             assignments: vec![("c".to_string(), rhs)],
             output_var: None,
             col_names: vec![],
@@ -922,7 +914,6 @@ mod tests {
             right: Box::new(scan()),
             hash_keys: vec![key],
             probe_keys: vec![],
-            deps: vec![scan(), scan()],
             join_condition: None,
             anti: false,
             output_var: None,
@@ -964,7 +955,6 @@ mod tests {
             right: Box::new(scan()),
             hash_keys: vec![],
             probe_keys: vec![key],
-            deps: vec![scan(), scan()],
             output_var: None,
             col_names: vec![],
             column_types: vec![],
@@ -992,7 +982,6 @@ mod tests {
                 right: Box::new(scan()),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![scan(), scan()],
                 recommended_algorithm: None,
                 output_var: None,
                 col_names: vec![],
@@ -1032,7 +1021,6 @@ mod tests {
             right: Box::new(scan()),
             hash_keys: vec![left_key],
             probe_keys: vec![right_key],
-            deps: vec![scan(), scan()],
             output_var: None,
             col_names: vec![],
             column_types: vec![],
@@ -1082,7 +1070,6 @@ mod tests {
                 right: Box::new(scan()),
                 hash_keys: vec![left_key],
                 probe_keys: vec![right_key],
-                deps: vec![scan(), scan()],
                 recommended_algorithm: None,
                 output_var: None,
                 col_names: vec![],

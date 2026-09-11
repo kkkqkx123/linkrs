@@ -1,11 +1,11 @@
 //! Cross-cutting helpers: shared expression parsing plus the extended
 //! UPDATE / CREATE dispatch and `$var =` assignment statements.
 
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
+use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 
 /// Analyzing expressions (auxiliary method)

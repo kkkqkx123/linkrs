@@ -239,7 +239,7 @@ impl<'a> TraversalRuntime<'a> {
 
     /// Weighted-shortest expansion (Dijkstra).
     ///
-    /// Runs from the single seeded vertex, finalizing the cheapest path to
+    /// Runs from each seeded vertex, finalizing the cheapest path to
     /// every reachable vertex within `[min_depth, max_depth]` hops. The edge
     /// weight is read from the property named by the semantic; a missing or
     /// non-numeric property is treated as weight `1.0`, and negative weights
@@ -250,96 +250,109 @@ impl<'a> TraversalRuntime<'a> {
             _ => String::new(),
         };
 
-        // The seeded vertex is the only source: BFS-style frontier holds it.
-        let seed = match self.frontier.pop_front() {
-            Some(s) => s,
-            None => {
-                self.exhausted = true;
-                return Ok(());
-            }
-        };
-        let seed_id = seed.vertex_id;
+        // Drain every seeded source. Callers normally seed exactly one
+        // vertex per runtime, but draining avoids silently dropping
+        // additional seeds when several are queued.
+        let seeds: Vec<TraversalItem> = std::mem::take(&mut self.frontier).into_iter().collect();
+        if seeds.is_empty() {
+            self.exhausted = true;
+            return Ok(());
+        }
 
-        let mut dist: std::collections::HashMap<VertexId, f64> = std::collections::HashMap::new();
-        dist.insert(seed_id, 0.0);
-        let mut heap: BinaryHeap<WeightedItem> = BinaryHeap::new();
-        heap.push(WeightedItem {
-            cost: 0.0,
-            depth: 0,
-            vertex: seed.vertex,
-            vertex_id: seed_id,
-            edge: None,
-        });
-
-        while let Some(top) = heap.pop() {
+        for seed in seeds {
             self.check_cancel()?;
             if self.exhausted || self.check_limit() {
                 self.exhausted = true;
                 return Ok(());
             }
-            // Skip stale heap entries superseded by a cheaper finalized cost.
-            if self.visited.contains(&top.vertex_id) {
-                continue;
-            }
-            self.visited.insert(top.vertex_id);
+            // Seeds are pre-marked in `visited` by `seed_from_vertex`;
+            // allow the source itself to be processed so its neighborhood
+            // is expanded instead of being skipped as already finalized.
+            let seed_id = seed.vertex_id;
+            self.visited.remove(&seed_id);
 
-            if self.should_emit(top.depth) {
-                self.results.push_back(TraversalEvent {
-                    vertex: top.vertex.clone(),
-                    depth: top.depth,
-                    edge: top.edge.clone(),
-                });
-                self.total_emitted += 1;
-                self.stats.record_path_emitted();
-            }
+            let mut dist: std::collections::HashMap<VertexId, f64> =
+                std::collections::HashMap::new();
+            dist.insert(seed_id, 0.0);
+            let mut heap: BinaryHeap<WeightedItem> = BinaryHeap::new();
+            heap.push(WeightedItem {
+                cost: 0.0,
+                depth: 0,
+                vertex: seed.vertex,
+                vertex_id: seed_id,
+                edge: None,
+            });
 
-            if top.depth >= self.config.max_depth {
-                continue;
-            }
-
-            let edges = self.reader.get_edges(
-                &self.config.space_name,
-                &top.vertex_id,
-                self.config.direction,
-            );
-            self.stats.record_edge_scan(edges.len());
-            let filtered = self.reader.filter_edges(&edges, &self.config.edge_types);
-
-            for edge in filtered {
+            while let Some(top) = heap.pop() {
                 self.check_cancel()?;
-                let neighbor_id = self
-                    .reader
-                    .get_neighbor_id(edge, &top.vertex_id, self.config.direction);
-                let weight = edge_weight(edge, &weight_prop);
-                let next_cost = top.cost + weight;
-                if self.visited.contains(&neighbor_id) {
+                if self.exhausted || self.check_limit() {
+                    self.exhausted = true;
+                    return Ok(());
+                }
+                // Skip stale heap entries superseded by a cheaper finalized cost.
+                if self.visited.contains(&top.vertex_id) {
                     continue;
                 }
-                let better = match dist.get(&neighbor_id) {
-                    Some(old) => next_cost < *old,
-                    None => true,
-                };
-                if !better {
-                    continue;
-                }
-                dist.insert(neighbor_id, next_cost);
-                if let Some(vertex) = self
-                    .reader
-                    .get_vertex(&self.config.space_name, &neighbor_id)
-                {
-                    self.stats.record_vertex_visit();
-                    let new_depth = top.depth + 1;
-                    self.stats.update_depth(new_depth);
-                    heap.push(WeightedItem {
-                        cost: next_cost,
-                        depth: new_depth,
-                        vertex,
-                        vertex_id: neighbor_id,
-                        edge: Some(edge.clone()),
+                self.visited.insert(top.vertex_id);
+
+                if self.should_emit(top.depth) {
+                    self.results.push_back(TraversalEvent {
+                        vertex: top.vertex.clone(),
+                        depth: top.depth,
+                        edge: top.edge.clone(),
                     });
+                    self.total_emitted += 1;
+                    self.stats.record_path_emitted();
                 }
+
+                if top.depth >= self.config.max_depth {
+                    continue;
+                }
+
+                let edges = self.reader.get_edges(
+                    &self.config.space_name,
+                    &top.vertex_id,
+                    self.config.direction,
+                );
+                self.stats.record_edge_scan(edges.len());
+                let filtered = self.reader.filter_edges(&edges, &self.config.edge_types);
+
+                for edge in filtered {
+                    self.check_cancel()?;
+                    let neighbor_id =
+                        self.reader
+                            .get_neighbor_id(edge, &top.vertex_id, self.config.direction);
+                    let weight = edge_weight(edge, &weight_prop);
+                    let next_cost = top.cost + weight;
+                    if self.visited.contains(&neighbor_id) {
+                        continue;
+                    }
+                    let better = match dist.get(&neighbor_id) {
+                        Some(old) => next_cost < *old,
+                        None => true,
+                    };
+                    if !better {
+                        continue;
+                    }
+                    dist.insert(neighbor_id, next_cost);
+                    if let Some(vertex) = self
+                        .reader
+                        .get_vertex(&self.config.space_name, &neighbor_id)
+                    {
+                        self.stats.record_vertex_visit();
+                        let new_depth = top.depth + 1;
+                        self.stats.update_depth(new_depth);
+                        heap.push(WeightedItem {
+                            cost: next_cost,
+                            depth: new_depth,
+                            vertex,
+                            vertex_id: neighbor_id,
+                            edge: Some(edge.clone()),
+                        });
+                    }
+                }
+                self.stats.update_frontier(heap.len());
             }
-            self.stats.update_frontier(heap.len());
         }
 
         self.exhausted = true;
@@ -396,7 +409,10 @@ impl PartialOrd for WeightedItem {
 
 impl Ord for WeightedItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
     }
 }
 

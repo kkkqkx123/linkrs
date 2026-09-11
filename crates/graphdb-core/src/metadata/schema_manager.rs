@@ -1091,6 +1091,52 @@ impl SchemaManager {
         Ok(false)
     }
 
+    pub fn update_edge_endpoints(
+        &self,
+        space_name: &str,
+        edge_type_name: &str,
+        src_tag_name: &str,
+        dst_tag_name: &str,
+    ) -> Result<bool, StorageError> {
+        let space_info = self.get_space(space_name)?.ok_or_else(|| {
+            StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
+        })?;
+
+        let applied: Option<u32> = {
+            let mut edge_types = self.edge_types.write();
+            let key = edge_types
+                .iter()
+                .find(|((sid, _), data)| {
+                    *sid == space_info.space_id && data.info.edge_type_name == edge_type_name
+                })
+                .map(|(k, _)| *k);
+
+            if let Some(k) = key {
+                if let Some(data) = edge_types.get_mut(&k) {
+                    data.info.src_tag_name = src_tag_name.to_string();
+                    data.info.dst_tag_name = dst_tag_name.to_string();
+                    Some(data.info.edge_type_id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(edge_type_id) = applied {
+            self.emit_schema_event(SchemaChangeEvent::EdgeTypeAltered {
+                space_id: space_info.space_id,
+                space_name: space_name.to_string(),
+                edge_type_id,
+                type_name: edge_type_name.to_string(),
+                added_properties: Vec::new(),
+                removed_properties: Vec::new(),
+            });
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub fn save_schema(&self, path: &Path) -> Result<(), StorageError> {
         use std::fs::{self, File};
         use std::io::Write;

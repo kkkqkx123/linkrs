@@ -107,7 +107,8 @@ impl DdlParser {
         // Edge endpoint-constraint changes:
         // `ALTER EDGE <name> ADD FROM <src> TO <dst>` /
         // `ALTER EDGE <name> DROP FROM <src> TO <dst>`.
-        if !is_tag && matches!(ctx.current_token().kind, TokenKind::Add | TokenKind::Drop)
+        if !is_tag
+            && matches!(ctx.current_token().kind, TokenKind::Add | TokenKind::Drop)
             && matches!(ctx.peek_token().kind, TokenKind::From)
         {
             let is_add = matches!(ctx.current_token().kind, TokenKind::Add);

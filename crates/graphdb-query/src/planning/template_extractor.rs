@@ -939,26 +939,26 @@ impl TemplateExtractor {
                             format!("{}{}", Self::path_element_to_template(elem), rep_str)
                         }
                         crate::parser::ast::PathElement::Recursive(rc) => {
-                        let mut parts = vec![rc.variable.clone()];
-                        if let Some(ref edge_var) = rc.edge_variable {
-                            parts.push(edge_var.clone());
-                        }
-                        if rc.filter_predicate.is_some() {
-                            parts.push("WHERE".to_string());
-                        }
-                        if rc.node_projection.is_some() || rc.edge_projection.is_some() {
-                            parts.push("|".to_string());
-                            let mut projs = vec![];
-                            if rc.node_projection.is_some() {
-                                projs.push("{node}".to_string());
+                            let mut parts = vec![rc.variable.clone()];
+                            if let Some(ref edge_var) = rc.edge_variable {
+                                parts.push(edge_var.clone());
                             }
-                            if rc.edge_projection.is_some() {
-                                projs.push("{edge}".to_string());
+                            if rc.filter_predicate.is_some() {
+                                parts.push("WHERE".to_string());
                             }
-                            parts.push(projs.join(", "));
+                            if rc.node_projection.is_some() || rc.edge_projection.is_some() {
+                                parts.push("|".to_string());
+                                let mut projs = vec![];
+                                if rc.node_projection.is_some() {
+                                    projs.push("{node}".to_string());
+                                }
+                                if rc.edge_projection.is_some() {
+                                    projs.push("{edge}".to_string());
+                                }
+                                parts.push(projs.join(", "));
+                            }
+                            format!("*({})", parts.join(", "))
                         }
-                        format!("*({})", parts.join(", "))
-                    }
                     })
                     .collect();
                 elements.join("")

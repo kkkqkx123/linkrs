@@ -4,7 +4,6 @@ use super::admin;
 use super::database;
 use super::group_by;
 use super::misc;
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
@@ -13,6 +12,7 @@ use crate::parser::parsing::{
     session_parser::SessionParser, show_parser::ShowParser, transaction_parser::TransactionParser,
     traversal_parser::TraversalParser, user_parser::UserParser, util_stmt_parser::UtilStmtParser,
 };
+use crate::parser::TokenKind;
 
 /// Dispatch statements recognized by a leading keyword (MIGRATE, COMMENT,
 /// CHECKPOINT, LOAD, INSTALL, CALL, EXPORT, ...). Returns `None` when the

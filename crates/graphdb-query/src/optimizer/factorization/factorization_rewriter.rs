@@ -655,12 +655,12 @@ impl FactorizationRewriter {
             LogicalNodeEnum::VectorSearch(_)
             | LogicalNodeEnum::VectorLookup(_)
             | LogicalNodeEnum::VectorMatch(_) => node.compute_factorized_schema(&[]),
-                LogicalNodeEnum::Assign(n) => {
-                    let mut child_schema = if let Some(child) = n.input.as_mut() {
-                        self.visit_operator(child)
-                    } else {
-                        FactorizedSchema::new()
-                    };
+            LogicalNodeEnum::Assign(n) => {
+                let mut child_schema = if let Some(child) = n.input.as_mut() {
+                    self.visit_operator(child)
+                } else {
+                    FactorizedSchema::new()
+                };
                 // Per-assignment granularity: each right-hand side flattens
                 // only the groups it depends on, against the running schema
                 // that already reflects earlier flattens. A bulk pass over
@@ -1786,7 +1786,6 @@ mod tests {
         let mut sort = LogicalNodeEnum::Sort(LogicalSortNode {
             id: next_node_id(),
             input: Some(Box::new(scan())),
-            deps: vec![scan()],
             sort_items: vec![SortItem::column_asc("a".to_string())],
             limit: None,
             output_var: None,

@@ -712,3 +712,30 @@ pub(crate) fn alter_edge_type(
 
     Ok(true)
 }
+
+pub(crate) fn update_edge_endpoints(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type_name: &str,
+    src_tag_name: &str,
+    dst_tag_name: &str,
+) -> StorageResult<bool> {
+    let _ = ctx.schema_manager().get_space_id(space)?;
+    let edge_type = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type_name)?
+        .ok_or_else(|| StorageError::label_not_found(edge_type_name.to_string()))?;
+    let _ = edge_type;
+    if !src_tag_name.is_empty() && endpoint_label_id(ctx, space, src_tag_name)?.is_none() {
+        return Err(StorageError::not_found(format!(
+            "Source tag {src_tag_name} not found"
+        )));
+    }
+    if !dst_tag_name.is_empty() && endpoint_label_id(ctx, space, dst_tag_name)?.is_none() {
+        return Err(StorageError::not_found(format!(
+            "Destination tag {dst_tag_name} not found"
+        )));
+    }
+    ctx.schema_manager()
+        .update_edge_endpoints(space, edge_type_name, src_tag_name, dst_tag_name)
+}

@@ -2,11 +2,11 @@
 
 use super::group_by;
 use super::misc;
-use crate::parser::TokenKind;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::ParseError;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::parsing::util_stmt_parser::UtilStmtParser;
+use crate::parser::TokenKind;
 
 /// Analyzing the pipe suffix (the | operator)
 pub(super) fn parse_pipe_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {

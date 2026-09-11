@@ -1067,7 +1067,64 @@ impl DmlParser {
             ctx.expect_token(TokenKind::From)?;
             CopyDirection::From
         };
-        let file_path = ctx.expect_string_literal()?;
+        let mut file_paths = Vec::new();
+        if ctx.check_token(TokenKind::LParen) {
+            ctx.expect_token(TokenKind::LParen)?;
+            loop {
+                if ctx.check_token(TokenKind::RParen) {
+                    ctx.next_token();
+                    break;
+                }
+                file_paths.push(ctx.expect_string_literal()?);
+                if ctx.match_token(TokenKind::Comma) {
+                    continue;
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+                break;
+            }
+            if file_paths.is_empty() {
+                return Err(ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::SyntaxError,
+                    "COPY FROM file list must contain at least one file".to_string(),
+                    ctx.current_position(),
+                ));
+            }
+        } else {
+            file_paths.push(ctx.expect_string_literal()?);
+        }
+        // Optional `BY COLUMN` marker right after the file list: column-wise
+        // merge for multi-file imports. Also accepted as a trailing marker
+        // after the option list below.
+        let mut by_column = false;
+        if ctx.check_token(TokenKind::By) || ctx.check_keyword("BY") {
+            if !ctx.match_token(TokenKind::By) {
+                let _ = ctx.consume_keyword("BY");
+            }
+            if ctx.check_keyword("COLUMN") {
+                let _ = ctx.consume_keyword("COLUMN");
+                by_column = true;
+            } else {
+                return Err(ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::SyntaxError,
+                    "Expected COLUMN after BY in COPY statement".to_string(),
+                    ctx.current_position(),
+                ));
+            }
+        }
+        if direction == CopyDirection::To && file_paths.len() > 1 {
+            return Err(ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "COPY TO supports a single file path".to_string(),
+                ctx.current_position(),
+            ));
+        }
+        if direction == CopyDirection::To && by_column {
+            return Err(ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "BY COLUMN is only valid for COPY FROM".to_string(),
+                ctx.current_position(),
+            ));
+        }
 
         // Defaults
         let mut header = true;
@@ -1208,6 +1265,30 @@ impl DmlParser {
             break;
         }
 
+        // Trailing `BY COLUMN` marker after the option list.
+        if !by_column && (ctx.check_token(TokenKind::By) || ctx.check_keyword("BY")) {
+            if !ctx.match_token(TokenKind::By) {
+                let _ = ctx.consume_keyword("BY");
+            }
+            if ctx.check_keyword("COLUMN") {
+                let _ = ctx.consume_keyword("COLUMN");
+                by_column = true;
+            } else {
+                return Err(ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::SyntaxError,
+                    "Expected COLUMN after BY in COPY statement".to_string(),
+                    ctx.current_position(),
+                ));
+            }
+        }
+        if direction == CopyDirection::To && by_column {
+            return Err(ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "BY COLUMN is only valid for COPY FROM".to_string(),
+                ctx.current_position(),
+            ));
+        }
+
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
@@ -1215,7 +1296,8 @@ impl DmlParser {
             span,
             target,
             direction,
-            file_path,
+            file_paths,
+            by_column,
             header,
             delimiter,
             batch_size,
