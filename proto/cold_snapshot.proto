@@ -19,13 +19,9 @@ message SnapshotDescriptor {
   uint32 checksum = 7;
 }
 
-// Push a complete .lkcs file to a replica.
-message PushSnapshotRequest {
-  string file_name = 1;
-  uint32 checksum = 2;
-  bytes data = 3;
-}
-
+// Result of a streaming push. The sender splits the `.lkcs` file into
+// `SnapshotChunk` messages (about 1MB each) so arbitrarily large snapshots
+// never exceed the gRPC per-message size limit.
 message PushSnapshotResponse {
   bool accepted = 1;
   string message = 2;
@@ -55,7 +51,7 @@ message ListSnapshotsResponse {
 }
 
 service ColdSnapshotService {
-  rpc PushSnapshot(PushSnapshotRequest) returns (PushSnapshotResponse);
+  rpc PushSnapshot(stream SnapshotChunk) returns (PushSnapshotResponse);
   rpc PullSnapshot(PullSnapshotRequest) returns (stream SnapshotChunk);
-  rpc ListRemoteSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
 }

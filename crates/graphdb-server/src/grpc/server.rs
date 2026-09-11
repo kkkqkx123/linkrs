@@ -1115,24 +1115,57 @@ pub async fn run_server<
     config: Config,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = GraphDBService::new(app_state.clone(), config);
+    let service = GraphDBService::new(app_state.clone(), config.clone());
 
     tracing::info!("GraphDB gRPC service listening on {}", addr);
 
-    let mut builder = Server::builder().add_service(GraphDbServiceServer::new(service));
+    let grpc_cfg = config.grpc().clone();
+    let builder = Server::builder();
+    let builder = if grpc_cfg.request_timeout_secs > 0 {
+        builder.timeout(std::time::Duration::from_secs(
+            grpc_cfg.request_timeout_secs,
+        ))
+    } else {
+        builder
+    };
+    let builder = if grpc_cfg.keepalive_interval_secs > 0 {
+        builder.http2_keepalive_interval(Some(std::time::Duration::from_secs(
+            grpc_cfg.keepalive_interval_secs,
+        )))
+    } else {
+        builder
+    };
+    let mut builder = if grpc_cfg.keepalive_timeout_secs > 0 {
+        builder.http2_keepalive_timeout(Some(std::time::Duration::from_secs(
+            grpc_cfg.keepalive_timeout_secs,
+        )))
+    } else {
+        builder
+    };
+    let router = builder.add_service(
+        GraphDbServiceServer::new(service)
+            .max_decoding_message_size(grpc_cfg.max_request_size)
+            .max_encoding_message_size(grpc_cfg.max_response_size),
+    );
 
-    // Serve the cold snapshot share alongside the main service when the
-    // engine has a snapshot directory configured.
-    if let Some(dir) = app_state.server.get_storage().read().cold_snapshot_dir() {
+    // The cold snapshot share stays on the same port: chunked streaming keeps
+    // each message within the shared size limit, and a single listener avoids
+    // extra ops cost for single-node deployments. Split to a dedicated port
+    // only when replication needs network isolation or independent QoS.
+    let router = if let Some(dir) = app_state.server.get_storage().read().cold_snapshot_dir() {
         tracing::info!("Cold snapshot gRPC share serving from {}", dir.display());
-        builder = builder.add_service(
+        router.add_service(
             crate::grpc::proto::coldsnapshot::cold_snapshot_service_server::ColdSnapshotServiceServer::new(
                 crate::grpc::ColdSnapshotServer::new(dir),
-            ),
-        );
-    }
+            )
+            .max_decoding_message_size(grpc_cfg.max_request_size)
+            .max_encoding_message_size(grpc_cfg.max_response_size),
+        )
+    } else {
+        router
+    };
 
-    builder.serve(addr).await?;
+    router.serve(addr).await?;
 
     Ok(())
 }

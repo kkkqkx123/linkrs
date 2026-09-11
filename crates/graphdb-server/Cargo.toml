@@ -9,7 +9,6 @@ homepage.workspace = true
 
 [build-dependencies]
 tonic-build = { workspace = true, optional = true }
-prost-build = { workspace = true, optional = true }
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
@@ -55,7 +54,7 @@ graphdb-embedding = { path = "../graphdb-embedding", optional = true }
 reqwest = { workspace = true, optional = true }
 
 [features]
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:prost-build"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
 vector = [
     "dep:vector-search",
     "graphdb-config/vector",

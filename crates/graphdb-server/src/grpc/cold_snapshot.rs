@@ -11,8 +11,7 @@ use tonic::{Request, Response, Status};
 
 use crate::grpc::proto::coldsnapshot::{
     cold_snapshot_service_server::ColdSnapshotService, ListSnapshotsRequest, ListSnapshotsResponse,
-    PullSnapshotRequest, PushSnapshotRequest, PushSnapshotResponse, SnapshotChunk,
-    SnapshotDescriptor,
+    PullSnapshotRequest, PushSnapshotResponse, SnapshotChunk, SnapshotDescriptor,
 };
 
 const CHUNK_SIZE: usize = 1024 * 1024;
@@ -64,7 +63,7 @@ fn snapshot_descriptor(path: &Path) -> Option<SnapshotDescriptor> {
 
 #[tonic::async_trait]
 impl ColdSnapshotService for ColdSnapshotServer {
-    async fn list_remote_snapshots(
+    async fn list_snapshots(
         &self,
         _request: Request<ListSnapshotsRequest>,
     ) -> Result<Response<ListSnapshotsResponse>, Status> {
@@ -180,33 +179,70 @@ impl ColdSnapshotService for ColdSnapshotServer {
 
     async fn push_snapshot(
         &self,
-        request: Request<PushSnapshotRequest>,
+        request: Request<tonic::Streaming<SnapshotChunk>>,
     ) -> Result<Response<PushSnapshotResponse>, Status> {
-        let req = request.into_inner();
-        let Some(path) = self.resolve(&req.file_name) else {
+        let mut stream = request.into_inner();
+        let mut file_name: Option<String> = None;
+        let mut expected_checksum: u32 = 0;
+        let mut buffer: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.message().await? {
+            if chunk.file_name.is_empty() {
+                return Err(Status::invalid_argument("snapshot chunk has no file name"));
+            }
+            match &file_name {
+                None => file_name = Some(chunk.file_name.clone()),
+                Some(name) if *name != chunk.file_name => {
+                    return Err(Status::invalid_argument(
+                        "snapshot chunks carry inconsistent file names",
+                    ));
+                }
+                Some(_) => {}
+            }
+            if expected_checksum == 0 && chunk.checksum != 0 {
+                expected_checksum = chunk.checksum;
+            } else if chunk.checksum != 0 && chunk.checksum != expected_checksum {
+                return Err(Status::invalid_argument(
+                    "snapshot chunks carry inconsistent checksums",
+                ));
+            }
+            if chunk.offset != buffer.len() as u64 {
+                return Err(Status::invalid_argument(format!(
+                    "non-contiguous snapshot chunk: offset {} but received {} bytes so far",
+                    chunk.offset,
+                    buffer.len()
+                )));
+            }
+            buffer.extend_from_slice(&chunk.data);
+        }
+        let file_name =
+            file_name.ok_or_else(|| Status::invalid_argument("empty snapshot stream"))?;
+        if buffer.is_empty() {
+            return Err(Status::invalid_argument("empty snapshot payload"));
+        }
+        let Some(path) = self.resolve(&file_name) else {
             return Err(Status::invalid_argument("invalid snapshot file name"));
         };
-        let actual_crc = crc32fast::hash(&req.data);
-        if actual_crc != req.checksum {
+        let actual_crc = crc32fast::hash(&buffer);
+        if expected_checksum != 0 && actual_crc != expected_checksum {
             return Err(Status::invalid_argument(format!(
                 "checksum mismatch: got {:#x}, expected {:#x}",
-                actual_crc, req.checksum
+                actual_crc, expected_checksum
             )));
         }
         // Sanity-check the payload parses as a snapshot before persisting.
-        if crate::storage::cold::ColdSnapshot::from_bytes(&req.data).is_err() {
+        if crate::storage::cold::ColdSnapshot::from_bytes(&buffer).is_err() {
             return Err(Status::invalid_argument(
                 "payload is not a valid .lkcs snapshot",
             ));
         }
         std::fs::create_dir_all(&self.snapshot_dir)
             .map_err(|e| Status::internal(format!("cannot create snapshot dir: {}", e)))?;
-        std::fs::write(&path, &req.data)
+        std::fs::write(&path, &buffer)
             .map_err(|e| Status::internal(format!("cannot write snapshot file: {}", e)))?;
         log::info!(
             "Cold snapshot pushed: {} ({} bytes)",
             path.display(),
-            req.data.len()
+            buffer.len()
         );
         Ok(Response::new(PushSnapshotResponse {
             accepted: true,
@@ -229,7 +265,9 @@ impl ColdSnapshotClient {
     /// Wrap an established gRPC channel.
     pub fn with_channel(channel: tonic::transport::Channel) -> Self {
         Self {
-            inner: crate::grpc::proto::coldsnapshot::cold_snapshot_service_client::ColdSnapshotServiceClient::new(channel),
+            inner: crate::grpc::proto::coldsnapshot::cold_snapshot_service_client::ColdSnapshotServiceClient::new(channel)
+                .max_decoding_message_size(16 * 1024 * 1024)
+                .max_encoding_message_size(16 * 1024 * 1024),
         }
     }
 
@@ -242,10 +280,7 @@ impl ColdSnapshotClient {
     }
 
     pub async fn list(&mut self) -> Result<Vec<SnapshotDescriptor>, Status> {
-        let response = self
-            .inner
-            .list_remote_snapshots(ListSnapshotsRequest {})
-            .await?;
+        let response = self.inner.list_snapshots(ListSnapshotsRequest {}).await?;
         Ok(response.into_inner().snapshots)
     }
 
@@ -291,22 +326,35 @@ impl ColdSnapshotClient {
     }
 
     /// Push a local `.lkcs` file to the remote share.
+    ///
+    /// The file is split into 1MB chunks so the transfer never exceeds
+    /// the gRPC per-message size limit, no matter how large the snapshot is.
     pub async fn push(&mut self, path: &Path) -> Result<(), Status> {
         let data = std::fs::read(path)
             .map_err(|e| Status::internal(format!("cannot read snapshot file: {}", e)))?;
+        if data.is_empty() {
+            return Err(Status::invalid_argument("snapshot file is empty"));
+        }
         let checksum = crc32fast::hash(&data);
         let file_name = path
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .ok_or_else(|| Status::invalid_argument("path has no file name"))?;
-        let response = self
-            .inner
-            .push_snapshot(PushSnapshotRequest {
-                file_name,
+        let total = data.len() as u64;
+        let mut chunks = Vec::new();
+        let mut offset = 0u64;
+        for part in data.chunks(CHUNK_SIZE) {
+            let last = offset + part.len() as u64 >= total;
+            chunks.push(SnapshotChunk {
+                file_name: file_name.clone(),
                 checksum,
-                data,
-            })
-            .await?;
+                offset,
+                data: part.to_vec(),
+                last,
+            });
+            offset += part.len() as u64;
+        }
+        let response = self.inner.push_snapshot(tokio_stream::iter(chunks)).await?;
         let accepted = response.into_inner();
         if !accepted.accepted {
             return Err(Status::internal(format!(
@@ -339,7 +387,7 @@ mod tests {
 
         // Listing extracts descriptors from .lkcs headers.
         let response = server
-            .list_remote_snapshots(tonic::Request::new(ListSnapshotsRequest {}))
+            .list_snapshots(tonic::Request::new(ListSnapshotsRequest {}))
             .await
             .unwrap()
             .into_inner();
@@ -357,28 +405,25 @@ mod tests {
             .await
             .is_err());
 
-        // Push with a wrong checksum is rejected.
-        assert!(server
-            .push_snapshot(tonic::Request::new(PushSnapshotRequest {
-                file_name: "bad.lkcs".to_string(),
-                checksum: 0,
-                data: vec![1, 2, 3],
-            }))
-            .await
-            .is_err());
+        // File-name validation rejects path traversal.
+        assert!(server.resolve("../evil.lkcs").is_none());
+        assert!(server.resolve("sub/dir.lkcs").is_none());
+        assert!(server.resolve("plain.txt").is_none());
+    }
 
-        // A valid payload is persisted.
-        let src = make_snapshot_file(share_dir.path(), 1, 200);
-        let data = std::fs::read(&src).unwrap();
-        server
-            .push_snapshot(tonic::Request::new(PushSnapshotRequest {
-                file_name: "copied.lkcs".to_string(),
-                checksum: crc32fast::hash(&data),
-                data,
-            }))
-            .await
-            .unwrap();
-        assert!(share_dir.path().join("copied.lkcs").exists());
+    async fn start_server(share_dir: &Path) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let dir = share_dir.to_path_buf();
+        let handle = tokio::spawn(async move {
+            let server = ColdSnapshotServer::new(dir);
+            tonic::transport::Server::builder()
+                .add_service(ColdSnapshotServiceServer::new(server))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        (addr, handle)
     }
 
     #[tokio::test]
@@ -386,17 +431,7 @@ mod tests {
         let share_dir = tempfile::tempdir().unwrap();
         let src = make_snapshot_file(share_dir.path(), 0, 100);
 
-        // Serve the share on an ephemeral port.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let server = ColdSnapshotServer::new(share_dir.path());
-            tonic::transport::Server::builder()
-                .add_service(ColdSnapshotServiceServer::new(server))
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
+        let (addr, _handle) = start_server(share_dir.path()).await;
 
         let mut client = ColdSnapshotClient::connect_addr(&format!("http://{}", addr))
             .await
@@ -418,5 +453,61 @@ mod tests {
 
         // Pulling a timestamp that does not exist fails cleanly.
         assert!(client.pull(0, Some(999), &dest).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cold_snapshot_grpc_push_streaming() {
+        let share_dir = tempfile::tempdir().unwrap();
+        let (addr, _handle) = start_server(share_dir.path()).await;
+        let mut client = ColdSnapshotClient::connect_addr(&format!("http://{}", addr))
+            .await
+            .unwrap();
+
+        // Push a valid snapshot through the streaming RPC.
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = make_snapshot_file(src_dir.path(), 1, 200);
+        client.push(&src).await.unwrap();
+        let pushed_name = src.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(share_dir.path().join(&pushed_name).exists());
+
+        // The pushed snapshot becomes listable.
+        let listing = client.list().await.unwrap();
+        assert!(listing.iter().any(|s| s.file_name == pushed_name));
+
+        // Push with a corrupt checksum is rejected.
+        let data = std::fs::read(&src).unwrap();
+        let bad = vec![SnapshotChunk {
+            file_name: "bad.lkcs".to_string(),
+            checksum: crc32fast::hash(&data).wrapping_add(1),
+            offset: 0,
+            data,
+            last: true,
+        }];
+        assert!(client
+            .inner
+            .push_snapshot(tokio_stream::iter(bad))
+            .await
+            .is_err());
+
+        // Push with non-contiguous offsets is rejected.
+        let chunk_a = SnapshotChunk {
+            file_name: "gap.lkcs".to_string(),
+            checksum: 1,
+            offset: 0,
+            data: vec![0u8; 8],
+            last: false,
+        };
+        let chunk_b = SnapshotChunk {
+            file_name: "gap.lkcs".to_string(),
+            checksum: 1,
+            offset: 999,
+            data: vec![0u8; 8],
+            last: true,
+        };
+        assert!(client
+            .inner
+            .push_snapshot(tokio_stream::iter(vec![chunk_a, chunk_b]))
+            .await
+            .is_err());
     }
 }
