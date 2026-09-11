@@ -2,11 +2,12 @@
 //!
 //! Provide database opening, closing and basic management functions
 
+use crate::embedded::c_api::config::GraphDbConfigHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, graphdb_error_code_t, set_last_error_message,
 };
 use crate::embedded::c_api::types::{
-    graphdb_t, GRAPHDB_OPEN_CREATE, GRAPHDB_OPEN_READONLY, GRAPHDB_OPEN_READWRITE,
+    graphdb_config_t, graphdb_t, GRAPHDB_OPEN_CREATE, GRAPHDB_OPEN_READONLY, GRAPHDB_OPEN_READWRITE,
 };
 use crate::embedded::{DatabaseConfig, GraphDatabase};
 use crate::storage::GraphStorage;
@@ -139,6 +140,56 @@ pub unsafe extern "C" fn graphdb_open_v2(
 
     // Open database
     match GraphDatabase::open_with_config(config) {
+        Ok(graphdb) => {
+            let handle = Box::new(GraphDbHandle {
+                inner: Arc::new(graphdb),
+                last_error: None,
+            });
+            unsafe {
+                *db = Box::into_raw(handle) as *mut graphdb_t;
+            }
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        }
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            let error_msg = format!("{}", e);
+            set_last_error_message(error_msg);
+            unsafe {
+                *db = ptr::null_mut();
+            }
+            error_code
+        }
+    }
+}
+
+/// Open the database with a configuration handle.
+///
+/// The configuration handle stays valid after the call: it can be reused
+/// and must still be released with `graphdb_config_free`.
+///
+/// # Arguments
+/// - `config`: Configuration handle from `graphdb_config_new/_file/_memory`
+/// - `db`: Output parameter, database handle
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+/// - `db` must be a valid pointer to store the database handle
+/// - The caller is responsible for closing the database using `graphdb_close` when done
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_open_with_config(
+    config: *mut graphdb_config_t,
+    db: *mut *mut graphdb_t,
+) -> c_int {
+    if config.is_null() || db.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+
+    let config_handle = &*(config as *mut GraphDbConfigHandle);
+    match GraphDatabase::open_with_config(config_handle.inner.clone()) {
         Ok(graphdb) => {
             let handle = Box::new(GraphDbHandle {
                 inner: Arc::new(graphdb),

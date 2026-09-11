@@ -97,6 +97,11 @@ pub unsafe extern "C" fn graphdb_execute(
 
 /// Execute a parameterized query
 ///
+/// Positional binding: `params[i]` binds to the `@param_{i}` query
+/// parameter (e.g. `params[0]` fills `@param_0`). This mirrors the Rust
+/// `Session::execute_with_params` named-parameter map with synthesized
+/// `param_{i}` keys.
+///
 /// # Arguments
 /// - `session`: Session handle
 /// - `query`: Query statement (UTF-8 encoded)
@@ -197,18 +202,24 @@ pub unsafe extern "C" fn graphdb_execute_params(
 
 /// Convert a C value to a Rust value.
 ///
+/// Integer inputs map to `BigInt` and float inputs to `Double`: these are
+/// the engine's canonical numeric types (integer literals parse as
+/// `BigInt`), so narrowing to `Int`/`Float` would break round-trips.
+/// Blob inputs copy the referenced bytes. Complex types (list/map/
+/// vertex/edge/path) have no C representation and fall back to Null.
+///
 /// # Safety
 ///
 /// `c_value` must be a valid pointer to a properly initialized `graphdb_value_t` struct.
-/// The caller must ensure that string pointers within the value are valid and properly aligned.
+/// The caller must ensure that string/blob pointers within the value are valid and properly aligned.
 pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
     use crate::embedded::c_api::types::graphdb_value_type_t;
 
     match c_value.type_ {
         graphdb_value_type_t::GRAPHDB_NULL => Value::Null(graphdb_core::value::NullType::Null),
         graphdb_value_type_t::GRAPHDB_BOOL => Value::Bool(c_value.data.boolean),
-        graphdb_value_type_t::GRAPHDB_INT => Value::Int(c_value.data.integer as i32),
-        graphdb_value_type_t::GRAPHDB_FLOAT => Value::Float(c_value.data.floating as f32),
+        graphdb_value_type_t::GRAPHDB_INT => Value::BigInt(c_value.data.integer),
+        graphdb_value_type_t::GRAPHDB_FLOAT => Value::Double(c_value.data.floating),
         graphdb_value_type_t::GRAPHDB_STRING => {
             if c_value.data.string.data.is_null() || c_value.data.string.len == 0 {
                 Value::string("")
@@ -219,6 +230,15 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
                 );
                 let s = String::from_utf8_unchecked(slice.to_vec());
                 Value::string(s)
+            }
+        }
+        graphdb_value_type_t::GRAPHDB_BLOB => {
+            if c_value.data.blob.data.is_null() || c_value.data.blob.len == 0 {
+                Value::Blob(Vec::new())
+            } else {
+                let slice =
+                    std::slice::from_raw_parts(c_value.data.blob.data, c_value.data.blob.len);
+                Value::Blob(slice.to_vec())
             }
         }
         _ => Value::Null(graphdb_core::value::NullType::Null),
@@ -319,5 +339,138 @@ mod tests {
         unsafe { graphdb_result_free(result) };
         unsafe { graphdb_session_close(session) };
         unsafe { graphdb_close(db) };
+    }
+
+    #[test]
+    fn test_literal_int_roundtrip_through_wide_getter() {
+        use crate::embedded::c_api::result::{
+            graphdb_column_type, graphdb_get_int_by_index, graphdb_result_execution_time_ms,
+            graphdb_result_rows_scanned,
+        };
+        use crate::embedded::c_api::types::graphdb_value_type_t;
+
+        let db = create_test_db();
+        let mut session: *mut graphdb_session_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_session_create(db, &mut session) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+
+        // Integer literals evaluate to `BigInt`; the wide getter must accept them.
+        let query = CString::new("RETURN 1").unwrap();
+        let mut result: *mut graphdb_result_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_execute(session, query.as_ptr(), &mut result) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        assert_eq!(
+            unsafe { graphdb_column_type(result, 0) },
+            graphdb_value_type_t::GRAPHDB_INT
+        );
+        let mut value: i64 = 0;
+        assert_eq!(
+            unsafe { graphdb_get_int_by_index(result, 0, 0, &mut value) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        assert_eq!(value, 1);
+
+        let mut ms: u64 = 0;
+        assert_eq!(
+            unsafe { graphdb_result_execution_time_ms(result, &mut ms) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        let mut scanned: u64 = 0;
+        assert_eq!(
+            unsafe { graphdb_result_rows_scanned(result, &mut scanned) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        assert_eq!(
+            unsafe { graphdb_result_execution_time_ms(ptr::null_mut(), &mut ms) },
+            graphdb_error_code_t::GRAPHDB_MISUSE as c_int
+        );
+
+        unsafe { graphdb_result_free(result) };
+        unsafe { graphdb_session_close(session) };
+        unsafe { graphdb_close(db) };
+    }
+
+    #[test]
+    fn test_execute_params_positional_binding() {
+        use crate::embedded::c_api::result::{graphdb_get_int_by_index, graphdb_result_free};
+        use crate::embedded::c_api::types::{
+            graphdb_value_data_t, graphdb_value_t, graphdb_value_type_t,
+        };
+
+        let db = create_test_db();
+        let mut session: *mut graphdb_session_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_session_create(db, &mut session) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+
+        // `params[i]` binds `@param_{i}`.
+        let query = CString::new("RETURN @param_0").unwrap();
+        let param = graphdb_value_t {
+            type_: graphdb_value_type_t::GRAPHDB_INT,
+            data: graphdb_value_data_t { integer: 41 },
+        };
+        let mut result: *mut graphdb_result_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_execute_params(session, query.as_ptr(), &param, 1, &mut result) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        let mut value: i64 = 0;
+        assert_eq!(
+            unsafe { graphdb_get_int_by_index(result, 0, 0, &mut value) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        assert_eq!(value, 41);
+
+        unsafe { graphdb_result_free(result) };
+        unsafe { graphdb_session_close(session) };
+        unsafe { graphdb_close(db) };
+    }
+
+    #[test]
+    fn test_read_only_write_maps_to_readonly_code() {
+        use crate::embedded::c_api::config::{
+            graphdb_config_file, graphdb_config_free, graphdb_config_set_read_only,
+        };
+        use crate::embedded::c_api::database::graphdb_open_with_config;
+
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join("graphdb_c_api_test");
+        std::fs::create_dir_all(&temp_dir).ok();
+        let db_path = temp_dir.join(format!("test_ro_{}_{}.db", std::process::id(), counter));
+        let path_cstring = CString::new(db_path.to_str().expect("Invalid path")).unwrap();
+
+        let config = unsafe { graphdb_config_file(path_cstring.as_ptr()) };
+        assert!(!config.is_null());
+        assert_eq!(
+            unsafe { graphdb_config_set_read_only(config, 1) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        let mut db: *mut graphdb_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_open_with_config(config, &mut db) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        assert!(!db.is_null());
+
+        let mut session: *mut graphdb_session_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_session_create(db, &mut session) },
+            graphdb_error_code_t::GRAPHDB_OK as c_int
+        );
+        let query = CString::new("DROP SPACE nosuch").unwrap();
+        let mut result: *mut graphdb_result_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { graphdb_execute(session, query.as_ptr(), &mut result) },
+            graphdb_error_code_t::GRAPHDB_READONLY as c_int
+        );
+
+        unsafe { graphdb_session_close(session) };
+        unsafe { graphdb_close(db) };
+        unsafe { graphdb_config_free(config) };
     }
 }

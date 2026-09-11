@@ -30,33 +30,15 @@ pub struct graphdb_result_t;
 #[repr(C)]
 pub struct graphdb_batch_t;
 
-/// Database Configuration
+/// Database configuration handle (opaque pointer).
+///
+/// The handle owns a `DatabaseConfig` and must be created with
+/// `graphdb_config_new/_file/_memory`, tuned with the `graphdb_config_set_*`
+/// setters, consumed with `graphdb_open_with_config`, and released with
+/// `graphdb_config_free`. It is opaque on purpose: pattern matches the other
+/// handle types in this module.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct graphdb_config_t {
-    /// Read-only or not
-    pub read_only: bool,
-    /// If it doesn't exist is it created
-    pub create_if_missing: bool,
-    /// Cache size (MB)
-    pub cache_size_mb: c_int,
-    /// Maximum number of open files
-    pub max_open_files: c_int,
-    /// Whether to enable compression
-    pub enable_compression: bool,
-}
-
-impl Default for graphdb_config_t {
-    fn default() -> Self {
-        Self {
-            read_only: false,
-            create_if_missing: true,
-            cache_size_mb: 256,
-            max_open_files: 1000,
-            enable_compression: true,
-        }
-    }
-}
+pub struct graphdb_config_t;
 
 /// Database open flag
 pub const GRAPHDB_OPEN_READONLY: c_int = 0x00000001;

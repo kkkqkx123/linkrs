@@ -13,6 +13,37 @@ pub struct GraphDbResultHandle {
     pub(crate) inner: QueryResult,
 }
 
+/// Extract an integer across all engine integer widths.
+///
+/// Literals and most expressions evaluate to `BigInt`; narrow `SmallInt` /
+/// `Int` storage values must read back through the same accessor.
+fn value_as_i64(value: &graphdb_core::Value) -> Option<i64> {
+    match value {
+        graphdb_core::Value::SmallInt(v) => Some(*v as i64),
+        graphdb_core::Value::Int(v) => Some(*v as i64),
+        graphdb_core::Value::BigInt(v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Extract a float across both engine float widths.
+fn value_as_f64(value: &graphdb_core::Value) -> Option<f64> {
+    match value {
+        graphdb_core::Value::Float(v) => Some(*v as f64),
+        graphdb_core::Value::Double(v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Extract a string across both engine string variants.
+fn value_as_str(value: &graphdb_core::Value) -> Option<&str> {
+    match value {
+        graphdb_core::Value::String(s) => Some(s.as_str()),
+        graphdb_core::Value::FixedString(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
 /// Releasing the result set
 ///
 /// # Arguments
@@ -151,11 +182,13 @@ pub unsafe extern "C" fn graphdb_get_int(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
-            Some(graphdb_core::Value::Int(i)) => {
-                *value = *i as i64;
-                graphdb_error_code_t::GRAPHDB_OK as c_int
-            }
-            Some(_) => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            Some(v) => match value_as_i64(v) {
+                Some(i) => {
+                    *value = i;
+                    graphdb_error_code_t::GRAPHDB_OK as c_int
+                }
+                None => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            },
             None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
         },
         None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
@@ -211,21 +244,23 @@ pub unsafe extern "C" fn graphdb_get_string(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
-            Some(graphdb_core::Value::String(s)) => {
-                if !len.is_null() {
-                    *len = s.len() as c_int;
+            Some(v) => match value_as_str(v) {
+                Some(s) => {
+                    if !len.is_null() {
+                        *len = s.len() as c_int;
+                    }
+                    match CString::new(s) {
+                        Ok(c_str) => c_str.into_raw(),
+                        Err(_) => ptr::null_mut(),
+                    }
                 }
-                match CString::new(s.as_str()) {
-                    Ok(c_str) => c_str.into_raw(),
-                    Err(_) => ptr::null_mut(),
+                None => {
+                    if !len.is_null() {
+                        *len = -1;
+                    }
+                    ptr::null_mut()
                 }
-            }
-            Some(_) => {
-                if !len.is_null() {
-                    *len = -1;
-                }
-                ptr::null_mut()
-            }
+            },
             None => ptr::null_mut(),
         },
         None => ptr::null_mut(),
@@ -347,11 +382,13 @@ pub unsafe extern "C" fn graphdb_get_int_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(graphdb_core::Value::Int(i)) => {
-                *value = *i as i64;
-                graphdb_error_code_t::GRAPHDB_OK as c_int
-            }
-            Some(_) => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            Some(v) => match value_as_i64(v) {
+                Some(i) => {
+                    *value = i;
+                    graphdb_error_code_t::GRAPHDB_OK as c_int
+                }
+                None => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            },
             None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
         },
         None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
@@ -408,21 +445,23 @@ pub unsafe extern "C" fn graphdb_get_string_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(graphdb_core::Value::String(s)) => {
-                if !len.is_null() {
-                    *len = s.len() as c_int;
+            Some(v) => match value_as_str(v) {
+                Some(s) => {
+                    if !len.is_null() {
+                        *len = s.len() as c_int;
+                    }
+                    match CString::new(s) {
+                        Ok(c_str) => c_str.into_raw(),
+                        Err(_) => ptr::null_mut(),
+                    }
                 }
-                match CString::new(s.as_str()) {
-                    Ok(c_str) => c_str.into_raw(),
-                    Err(_) => ptr::null_mut(),
+                None => {
+                    if !len.is_null() {
+                        *len = -1;
+                    }
+                    ptr::null_mut()
                 }
-            }
-            Some(_) => {
-                if !len.is_null() {
-                    *len = -1;
-                }
-                ptr::null_mut()
-            }
+            },
             None => {
                 if !len.is_null() {
                     *len = -1;
@@ -526,11 +565,13 @@ pub unsafe extern "C" fn graphdb_get_float_by_index(
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
-            Some(graphdb_core::Value::Float(f)) => {
-                *value = *f as f64;
-                graphdb_error_code_t::GRAPHDB_OK as c_int
-            }
-            Some(_) => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            Some(v) => match value_as_f64(v) {
+                Some(f) => {
+                    *value = f;
+                    graphdb_error_code_t::GRAPHDB_OK as c_int
+                }
+                None => graphdb_error_code_t::GRAPHDB_MISMATCH as c_int,
+            },
             None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
         },
         None => graphdb_error_code_t::GRAPHDB_NOTFOUND as c_int,
@@ -652,9 +693,15 @@ pub unsafe extern "C" fn graphdb_column_type(
                 Some(value) => match value {
                     graphdb_core::Value::Null(_) => graphdb_value_type_t::GRAPHDB_NULL,
                     graphdb_core::Value::Bool(_) => graphdb_value_type_t::GRAPHDB_BOOL,
-                    graphdb_core::Value::Int(_) => graphdb_value_type_t::GRAPHDB_INT,
-                    graphdb_core::Value::Float(_) => graphdb_value_type_t::GRAPHDB_FLOAT,
-                    graphdb_core::Value::String(_) => graphdb_value_type_t::GRAPHDB_STRING,
+                    graphdb_core::Value::SmallInt(_)
+                    | graphdb_core::Value::Int(_)
+                    | graphdb_core::Value::BigInt(_) => graphdb_value_type_t::GRAPHDB_INT,
+                    graphdb_core::Value::Float(_) | graphdb_core::Value::Double(_) => {
+                        graphdb_value_type_t::GRAPHDB_FLOAT
+                    }
+                    graphdb_core::Value::String(_) | graphdb_core::Value::FixedString(_) => {
+                        graphdb_value_type_t::GRAPHDB_STRING
+                    }
                     graphdb_core::Value::Blob(_) => graphdb_value_type_t::GRAPHDB_BLOB,
                     graphdb_core::Value::List(_) => graphdb_value_type_t::GRAPHDB_LIST,
                     graphdb_core::Value::Map(_) => graphdb_value_type_t::GRAPHDB_MAP,
@@ -668,6 +715,60 @@ pub unsafe extern "C" fn graphdb_column_type(
         }
         None => graphdb_value_type_t::GRAPHDB_NULL,
     }
+}
+
+/// Get the query execution time in milliseconds.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `out_ms`: Output parameter, execution time in milliseconds
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `graphdb_execute` or `graphdb_execute_params`
+/// - `out_ms` must be a valid pointer to store the result
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_result_execution_time_ms(
+    result: *mut graphdb_result_t,
+    out_ms: *mut u64,
+) -> c_int {
+    if result.is_null() || out_ms.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+
+    let handle = &*(result as *mut GraphDbResultHandle);
+    *out_ms = handle.inner.metadata().execution_time.as_millis() as u64;
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
+/// Get the number of rows scanned while producing the result set.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `out_rows`: Output parameter, scanned row count
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `graphdb_execute` or `graphdb_execute_params`
+/// - `out_rows` must be a valid pointer to store the result
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_result_rows_scanned(
+    result: *mut graphdb_result_t,
+    out_rows: *mut u64,
+) -> c_int {
+    if result.is_null() || out_rows.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+
+    let handle = &*(result as *mut GraphDbResultHandle);
+    *out_rows = handle.inner.metadata().rows_scanned;
+    graphdb_error_code_t::GRAPHDB_OK as c_int
 }
 
 #[cfg(test)]

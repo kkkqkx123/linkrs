@@ -194,6 +194,14 @@ pub enum graphdb_error_code_t {
 
 /// Converting from core error codes to C error codes and extended error codes
 pub fn error_code_from_core_error(error: &CoreError) -> (i32, graphdb_extended_error_code_t) {
+    // Read-only violations surface as GRAPHDB_READONLY regardless of the
+    // carrying variant (the session gate emits them as `StorageError`).
+    if error.to_string().contains("read-only") {
+        return (
+            graphdb_error_code_t::GRAPHDB_READONLY as i32,
+            graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
+        );
+    }
     match error {
         CoreError::DetailedQueryError { extended_code, .. } => {
             let basic_code = match extended_code {

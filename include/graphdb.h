@@ -239,29 +239,9 @@ typedef struct graphdb_value_t {
 } graphdb_value_t;
 
 /**
- * Database Configuration
+ * Database configuration handle (opaque pointer)
  */
 typedef struct graphdb_config_t {
-  /**
-   * Read-only or not
-   */
-  bool read_only;
-  /**
-   * If it doesn't exist is it created
-   */
-  bool create_if_missing;
-  /**
-   * Cache size (MB)
-   */
-  int cache_size_mb;
-  /**
-   * Maximum number of open files
-   */
-  int max_open_files;
-  /**
-   * Whether to enable compression
-   */
-  bool enable_compression;
 } graphdb_config_t;
 
 /**
@@ -778,6 +758,22 @@ int graphdb_config_set_create_if_missing(struct graphdb_config_t *config, int cr
 int graphdb_config_set_enable_wal(struct graphdb_config_t *config, int enable);
 
 /**
+ * Set the synchronization mode (mirrors `SyncMode`).
+ *
+ * # Arguments
+ * - `config`: Configuration handle
+ * - `mode`: 0 = Full (every write synced), 1 = Normal (default), 2 = Off
+ *
+ * # Returns
+ * - Success: GRAPHDB_OK
+ * - Failure: GRAPHDB_MISUSE for null handles or out-of-range modes
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ */
+int graphdb_config_set_sync_mode(struct graphdb_config_t *config, int mode);
+
+/**
  * Open database
  *
  * # Arguments
@@ -821,6 +817,27 @@ int graphdb_open(const char *path, struct graphdb_t **db);
  * - The database handle must not be used after closing
  */
 int graphdb_open_v2(const char *path, struct graphdb_t **db, int flags, const char *_vfs);
+
+/**
+ * Open the database with a configuration handle.
+ *
+ * The configuration handle stays valid after the call: it can be reused
+ * and must still be released with `graphdb_config_free`.
+ *
+ * # Arguments
+ * - `config`: Configuration handle from `graphdb_config_new/_file/_memory`
+ * - `db`: Output parameter, database handle
+ *
+ * # Returns
+ * - Success: GRAPHDB_OK
+ * - Failure: Error code
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ * - `db` must be a valid pointer to store the database handle
+ * - The caller is responsible for closing the database using `graphdb_close` when done
+ */
+int graphdb_open_with_config(struct graphdb_config_t *config, struct graphdb_t **db);
 
 /**
  * Closing the database
@@ -1148,6 +1165,11 @@ int graphdb_execute(struct graphdb_session_t *session,
 /**
  * Execute a parameterized query
  *
+ * Positional binding: `params[i]` binds to the `@param_{i}` query
+ * parameter (e.g. `params[0]` fills `@param_0`). This mirrors the Rust
+ * `Session::execute_with_params` named-parameter map with synthesized
+ * `param_{i}` keys.
+ *
  * # Arguments
  * - `session`: Session handle
  * - `query`: Query statement (UTF-8 encoded)
@@ -1448,6 +1470,40 @@ const uint8_t *graphdb_get_blob_by_index(struct graphdb_result_t *result,
  * - `col` must be a valid column index (0 <= col < column count)
  */
 enum graphdb_value_type_t graphdb_column_type(struct graphdb_result_t *result, int col);
+
+/**
+ * Get the query execution time in milliseconds.
+ *
+ * # Arguments
+ * - `result`: Result set handle
+ * - `out_ms`: Output parameter, execution time in milliseconds
+ *
+ * # Returns
+ * - Success: GRAPHDB_OK
+ * - Failure: Error code
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `graphdb_execute` or `graphdb_execute_params`
+ * - `out_ms` must be a valid pointer to store the result
+ */
+int graphdb_result_execution_time_ms(struct graphdb_result_t *result, uint64_t *out_ms);
+
+/**
+ * Get the number of rows scanned while producing the result set.
+ *
+ * # Arguments
+ * - `result`: Result set handle
+ * - `out_rows`: Output parameter, scanned row count
+ *
+ * # Returns
+ * - Success: GRAPHDB_OK
+ * - Failure: Error code
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `graphdb_execute` or `graphdb_execute_params`
+ * - `out_rows` must be a valid pointer to store the result
+ */
+int graphdb_result_rows_scanned(struct graphdb_result_t *result, uint64_t *out_rows);
 
 /**
  * Create a session

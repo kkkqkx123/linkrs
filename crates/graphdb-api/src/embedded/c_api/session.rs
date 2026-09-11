@@ -180,7 +180,12 @@ pub unsafe extern "C" fn graphdb_session_create(
 
     match db_handle.inner.session() {
         Ok(sess) => {
-            let handle = Box::new(GraphDbSessionHandle::new(sess));
+            let mut handle = Box::new(GraphDbSessionHandle::new(sess));
+            // Inherit the database default timeout so the C
+            // `graphdb_config_set_timeout` setting takes effect instead of
+            // the fixed 5s fallback inside the handle constructor.
+            let timeout_ms = db_handle.inner.config().default_timeout.as_millis();
+            handle.busy_timeout_ms = timeout_ms.min(u32::MAX as u128) as u32;
             *session = Box::into_raw(handle) as *mut graphdb_session_t;
             graphdb_error_code_t::GRAPHDB_OK as c_int
         }

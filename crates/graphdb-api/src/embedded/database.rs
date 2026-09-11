@@ -408,6 +408,7 @@ impl GraphDatabase<GraphStorage> {
             hooks,
             #[cfg(feature = "vector")]
             vector_runtime,
+            read_only: config.read_only,
         });
 
         Ok(Self { inner, config })
@@ -590,6 +591,7 @@ impl GraphDatabase<MockStorage> {
             hooks,
             #[cfg(feature = "vector")]
             vector_runtime,
+            read_only: false,
         });
 
         Ok(Self {
@@ -610,6 +612,32 @@ mod tests {
 
         let config = DatabaseConfig::file("/tmp/test.db");
         assert!(!config.is_memory());
+    }
+
+    #[test]
+    fn test_read_only_database_rejects_writes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let db_path = directory.path().join("ro.db");
+
+        let db =
+            GraphDatabase::open_with_config(DatabaseConfig::file(&db_path).with_read_only(true))
+                .unwrap();
+        let session = db.session().unwrap();
+
+        let err = session.execute("DROP SPACE nosuch").unwrap_err();
+        assert!(
+            err.to_string().contains("read-only"),
+            "unexpected error: {}",
+            err
+        );
+
+        assert!(session.execute("RETURN 1").is_ok());
+
+        assert!(session.begin_transaction().is_err());
+        let txn = session
+            .begin_transaction_with_config(crate::embedded::TransactionConfig::new().read_only())
+            .unwrap();
+        txn.rollback().unwrap();
     }
 
     #[cfg(feature = "vector")]

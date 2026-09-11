@@ -89,6 +89,9 @@ pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
     /// Stored here to ensure the runtime lives as long as the database.
     #[cfg(feature = "vector")]
     pub(crate) vector_runtime: Arc<tokio::runtime::Runtime>,
+    /// Whether the database was opened read-only. Sessions consult this
+    /// flag to reject mutating statements up front.
+    pub(crate) read_only: bool,
 }
 
 impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S> {
@@ -700,6 +703,44 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         Ok(())
     }
 
+    /// Reject mutating operations on read-only databases (flag-only check
+    /// for schema/batch paths that carry no query text).
+    pub(crate) fn ensure_writable_op(&self) -> CoreResult<()> {
+        if self.db.read_only {
+            return Err(CoreError::StorageError(
+                "database is read-only; write operations are not allowed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reject mutating statements on read-only databases.
+    ///
+    /// `classify_dml` covers DML plus leading CREATE/DROP/ALTER/INSERT/
+    /// DELETE-family keywords; the extra set closes the remaining mutating
+    /// openers (bulk load/export/attach and extension management).
+    pub(crate) fn ensure_writable(&self, query: &str) -> CoreResult<()> {
+        if !self.db.read_only {
+            return Ok(());
+        }
+        if graphdb_query::classify_dml(query).is_some() {
+            return self.ensure_writable_op();
+        }
+        let keyword = leading_keyword(query);
+        if keyword.eq_ignore_ascii_case("LOAD")
+            || keyword.eq_ignore_ascii_case("IMPORT")
+            || keyword.eq_ignore_ascii_case("EXPORT")
+            || keyword.eq_ignore_ascii_case("ATTACH")
+            || keyword.eq_ignore_ascii_case("COPY")
+            || keyword.eq_ignore_ascii_case("INSTALL")
+            || keyword.eq_ignore_ascii_case("UNINSTALL")
+            || keyword.eq_ignore_ascii_case("UPDATE")
+        {
+            return self.ensure_writable_op();
+        }
+        Ok(())
+    }
+
     // ── Session variables (`$name`) ─────────────────────────────────────
 
     /// Assign a session variable. Inside a text-begun transaction the
@@ -726,6 +767,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Return error on failure
     pub fn execute(&self, query: &str) -> CoreResult<QueryResult> {
         self.ensure_not_interrupted()?;
+        self.ensure_writable(query)?;
         // Reset the previous change history
         self.statistics.reset_last();
 
@@ -897,6 +939,11 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                 if let Some(read_only) = begin_stmt.read_only {
                     options.read_only = read_only;
                 }
+                if self.db.read_only && !options.read_only {
+                    return Err(CoreError::StorageError(
+                        "database is read-only; use a read-only transaction".to_string(),
+                    ));
+                }
                 let txn_id = txn_manager
                     .begin_transaction_with_owner(options, "embedded".to_string())
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
@@ -1041,6 +1088,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         txn_id: TransactionId,
         parameters: Option<HashMap<String, Value>>,
     ) -> CoreResult<QueryResult> {
+        self.ensure_writable(query)?;
         let txn_manager = self.txn_manager();
         let (ctx, statement_start) = txn_manager
             .begin_statement(txn_id)
@@ -1191,6 +1239,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         params: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
         self.ensure_not_interrupted()?;
+        self.ensure_writable(query)?;
         // Transaction / session commands do not consume query parameters;
         // classify and route them through the unified command path.
         match Self::parse_command(query) {
@@ -1270,6 +1319,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         session_variables: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
         self.ensure_not_interrupted()?;
+        self.ensure_writable(query)?;
         // Transaction / session commands do not consume parameters or
         // session variables; classify and route them through the unified
         // command path.
@@ -1344,6 +1394,11 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns the transaction handle on success
     /// - Return error on failure
     pub fn begin_transaction(&self) -> CoreResult<Transaction<'_, S>> {
+        if self.db.read_only {
+            return Err(CoreError::StorageError(
+                "database is read-only; use a read-only transaction".to_string(),
+            ));
+        }
         let options = TransactionOptions::default();
         let txn_id = self
             .db
@@ -1387,6 +1442,11 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         &self,
         config: TransactionConfig,
     ) -> CoreResult<Transaction<'_, S>> {
+        if self.db.read_only && !config.read_only {
+            return Err(CoreError::StorageError(
+                "database is read-only; use a read-only transaction".to_string(),
+            ));
+        }
         let options = config.into_options();
         let txn_id = self
             .db
@@ -1438,6 +1498,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         name: &str,
         config: crate::api_core::types::SpaceConfig,
     ) -> CoreResult<()> {
+        self.ensure_writable_op()?;
         self.db.schema_api.create_space(name, config)
     }
 
@@ -1450,6 +1511,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns on success ()
     /// - Return error on failure
     pub fn drop_space(&self, name: &str) -> CoreResult<()> {
+        self.ensure_writable_op()?;
         self.db.schema_api.drop_space(name)
     }
 
@@ -1539,6 +1601,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns the number of vertices inserted on success
     /// - Return error on failure
     pub fn batch_insert_vertices(&self, vertices: Vec<graphdb_core::Vertex>) -> CoreResult<usize> {
+        self.ensure_writable_op()?;
         let space_name = self
             .space_name()
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
@@ -1561,6 +1624,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns the number of edges inserted on success
     /// - Return error on failure
     pub fn batch_insert_edges(&self, edges: Vec<graphdb_core::Edge>) -> CoreResult<usize> {
+        self.ensure_writable_op()?;
         let space_name = self
             .space_name()
             .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
@@ -1868,6 +1932,18 @@ fn find_result_column(columns: &[String], aliases: &[&str]) -> Option<String> {
         .iter()
         .find(|c| aliases.iter().any(|a| c.eq_ignore_ascii_case(a)))
         .cloned()
+}
+
+/// First whitespace-delimited keyword of a statement, used only for the
+/// read-only gate (comment stripping is intentionally minimal: statements
+/// are classified by `classify_dml` first, this covers the remaining
+/// mutating openers).
+fn leading_keyword(query: &str) -> &str {
+    let rest = query.trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 /// Derive property definitions from query result columns.

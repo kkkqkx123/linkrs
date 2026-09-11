@@ -4,7 +4,7 @@
 
 use crate::embedded::c_api::error::graphdb_error_code_t;
 use crate::embedded::c_api::types::graphdb_config_t;
-use crate::embedded::DatabaseConfig;
+use crate::embedded::{DatabaseConfig, SyncMode};
 use std::ffi::{c_char, c_int, CStr};
 use std::time::Duration;
 
@@ -237,6 +237,38 @@ pub unsafe extern "C" fn graphdb_config_set_enable_wal(
     graphdb_error_code_t::GRAPHDB_OK as c_int
 }
 
+/// Set the synchronization mode (mirrors `SyncMode`).
+///
+/// # Arguments
+/// - `config`: Configuration handle
+/// - `mode`: 0 = Full (every write synced), 1 = Normal (default), 2 = Off
+///
+/// # Returns
+/// - Success: GRAPHDB_OK
+/// - Failure: GRAPHDB_MISUSE for null handles or out-of-range modes
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_config_set_sync_mode(
+    config: *mut graphdb_config_t,
+    mode: c_int,
+) -> c_int {
+    if config.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+    let sync_mode = match mode {
+        0 => SyncMode::Full,
+        1 => SyncMode::Normal,
+        2 => SyncMode::Off,
+        _ => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
+    };
+
+    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    handle.inner = handle.inner.clone().with_sync_mode(sync_mode);
+    graphdb_error_code_t::GRAPHDB_OK as c_int
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +317,46 @@ mod tests {
             let config = graphdb_config_memory();
             assert_eq!(graphdb_config_set_timeout(config, 5000), 0);
             assert_eq!(graphdb_config_free(config), 0);
+        }
+    }
+
+    #[test]
+    fn test_config_sync_mode_values() {
+        unsafe {
+            let config = graphdb_config_memory();
+            assert_eq!(graphdb_config_set_sync_mode(config, 0), 0);
+            assert_eq!(graphdb_config_set_sync_mode(config, 1), 0);
+            assert_eq!(graphdb_config_set_sync_mode(config, 2), 0);
+            assert_eq!(
+                graphdb_config_set_sync_mode(config, 7),
+                graphdb_error_code_t::GRAPHDB_MISUSE as c_int
+            );
+            assert_eq!(
+                graphdb_config_set_sync_mode(std::ptr::null_mut(), 1),
+                graphdb_error_code_t::GRAPHDB_MISUSE as c_int
+            );
+            assert_eq!(graphdb_config_free(config), 0);
+        }
+    }
+
+    #[test]
+    fn test_open_with_config_memory() {
+        use crate::embedded::c_api::database::{graphdb_close, graphdb_open_with_config};
+        use crate::embedded::c_api::types::graphdb_t;
+
+        unsafe {
+            let config = graphdb_config_memory();
+            assert!(!config.is_null());
+            let mut db: *mut graphdb_t = std::ptr::null_mut();
+            assert_eq!(graphdb_open_with_config(config, &mut db), 0);
+            assert!(!db.is_null());
+            assert_eq!(graphdb_close(db), 0);
+            assert_eq!(graphdb_config_free(config), 0);
+            let mut db: *mut graphdb_t = std::ptr::null_mut();
+            assert_eq!(
+                graphdb_open_with_config(std::ptr::null_mut(), &mut db),
+                graphdb_error_code_t::GRAPHDB_MISUSE as c_int
+            );
         }
     }
 }

@@ -188,6 +188,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
     /// - Returns an error if the transaction has been committed or rolled back
     pub fn execute(&self, query: &str) -> CoreResult<QueryResult> {
         self.check_active()?;
+        self.session.ensure_writable(query)?;
 
         let txn_manager = self.session.txn_manager();
         let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
@@ -229,6 +230,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
         params: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
         self.check_active()?;
+        self.session.ensure_writable(query)?;
 
         let txn_manager = self.session.txn_manager();
         let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
