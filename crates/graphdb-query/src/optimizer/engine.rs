@@ -504,7 +504,7 @@ impl OptimizerEngine {
         if plan.logical_plan.is_none() {
             if let Some(root) = plan.root.as_ref() {
                 let node_type = root.type_name().to_string();
-                match crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(&root) {
+                match crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(root) {
                     Ok(logical) => {
                         plan.set_logical_plan(logical);
                     }
@@ -1216,11 +1216,11 @@ impl OptimizerEngine {
         space: Option<&str>,
     ) -> ExecutionPlan {
         let stats = StatsView::new(&self.stats_manager, space);
-        if plan.logical_plan.is_some() {
+        if let Some(logical) = plan.logical_plan.as_ref() {
             // Clone the logical root once for a speculative rewrite; the
             // clone is committed back only when a rewrite fired and the
             // factorized invariant still holds.
-            let mut root = plan.logical_plan.as_ref().expect("checked").root.clone();
+            let mut root = logical.root.clone();
             let mut notes = Vec::new();
             let mut rewrite_count = 0u64;
             Self::rewrite_intersect_to_join(

@@ -1110,7 +1110,7 @@ impl ExecutionRuntime {
     /// attached QueryManager, and cancels the registry entry (if configured).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
         self.cancel_token_v2.lock().cancel(reason.clone());
-        if let Some(ref qm) = self.query_manager.lock().as_ref() {
+        if let Some(qm) = self.query_manager.lock().as_ref() {
             let id = self.query_id();
             let _ = qm.kill_query(id.query_id as i64);
         }

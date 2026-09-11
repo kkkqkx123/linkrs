@@ -268,13 +268,10 @@ fn test_session_text_transaction_commands() {
     // COMMIT without an active transaction fails clearly.
     assert!(session.execute("COMMIT").is_err());
 
-    // LET is not supported in embedded sessions (no session-variable store).
-    let err = session.execute("LET $x = 1").expect_err("LET must fail");
-    assert!(
-        err.to_string().contains("not supported in embedded"),
-        "unexpected error: {}",
-        err
-    );
+    // LET assigns session variables in embedded sessions.
+    let result = session.execute("LET $x = 1").expect("LET should succeed");
+    let value = result.rows().first().expect("let row").get("x");
+    assert_eq!(value, Some(&graphdb::core::Value::BigInt(1)));
 }
 
 #[test]
@@ -480,8 +477,8 @@ fn test_transaction_with_config() {
     assert!(txn.is_active());
 }
 
-#[tokio::test]
-async fn test_transaction_commit() {
+#[test]
+fn test_transaction_commit() {
     let test_db = create_test_database();
     let db = &test_db.db;
     let session = db.session().expect("创建会话失败");
@@ -491,8 +488,8 @@ async fn test_transaction_commit() {
     txn.commit().expect("提交事务失败");
 }
 
-#[tokio::test]
-async fn test_transaction_rollback() {
+#[test]
+fn test_transaction_rollback() {
     let test_db = create_test_database();
     let db = &test_db.db;
     let session = db.session().expect("创建会话失败");
@@ -557,8 +554,8 @@ fn test_transaction_auto_rollback_on_drop() {
     }
 }
 
-#[tokio::test]
-async fn test_session_with_transaction() {
+#[test]
+fn test_session_with_transaction() {
     let test_db = create_test_database();
     let db = &test_db.db;
     let session = db.session().expect("创建会话失败");
@@ -570,8 +567,8 @@ async fn test_session_with_transaction() {
     assert_eq!(result, 42);
 }
 
-#[tokio::test]
-async fn test_session_with_transaction_rollback_on_error() {
+#[test]
+fn test_session_with_transaction_rollback_on_error() {
     let test_db = create_test_database();
     let db = &test_db.db;
     let session = db.session().expect("创建会话失败");
@@ -715,7 +712,7 @@ fn test_batch_inserter_add_edge() {
 
 #[test]
 fn test_batch_error_create() {
-    let error = BatchError::new(0, BatchItemType::Vertex, "测试错误");
+    let error = BatchError::new(0, BatchItemType::Vertex, "test error");
     assert_eq!(error.index, 0);
     assert_eq!(error.item_type, BatchItemType::Vertex);
     assert_eq!(error.error, "test error");

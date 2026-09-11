@@ -428,13 +428,10 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok("weight".to_string())
             }
-            TokenKind::User => {
+            TokenKind::User | TokenKind::Order => {
+                let s = self.current_token.lexeme.clone();
                 self.next_token();
-                Ok("User".to_string())
-            }
-            TokenKind::Order => {
-                self.next_token();
-                Ok("Order".to_string())
+                Ok(s)
             }
             TokenKind::Status => {
                 self.next_token();

@@ -144,7 +144,7 @@ fn substitute_inner(
             distinct,
             filter,
         } => Expression::Aggregate {
-            func: func.clone(),
+            func: *func,
             args: args
                 .iter()
                 .map(|e| substitute_inner(e, mapping, shadowed))

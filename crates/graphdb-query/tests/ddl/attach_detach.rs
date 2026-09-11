@@ -76,3 +76,52 @@ fn test_create_graph_then_use_graph() {
         .query("USE GRAPH graph_space_b")
         .assert_success();
 }
+
+#[test]
+fn test_qualified_node_match_on_attached_alias_reports_catalog_only() {
+    clear_attached_databases();
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("attach_space")
+        .query("ATTACH '/tmp/analytics' AS analytics")
+        .assert_success()
+        .query("MATCH (n:analytics.Person) RETURN n");
+    let err = scenario.error().unwrap_or_default().to_string();
+    assert!(
+        err.contains("catalog-only"),
+        "Expected catalog-only error, got: {err}"
+    );
+    clear_attached_databases();
+}
+
+#[test]
+fn test_qualified_edge_match_on_attached_alias_reports_catalog_only() {
+    clear_attached_databases();
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("attach_space")
+        .query("ATTACH '/tmp/analytics' AS analytics")
+        .assert_success()
+        .query("MATCH (a)-[e:analytics.KNOWS]->(b) RETURN e");
+    let err = scenario.error().unwrap_or_default().to_string();
+    assert!(
+        err.contains("catalog-only"),
+        "Expected catalog-only error, got: {err}"
+    );
+    clear_attached_databases();
+}
+
+#[test]
+fn test_qualified_match_on_unknown_alias_reports_unsupported() {
+    clear_attached_databases();
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("attach_space")
+        .query("MATCH (n:ghost.Person) RETURN n");
+    let err = scenario.error().unwrap_or_default().to_string();
+    assert!(
+        err.contains("not supported"),
+        "Expected unsupported-qualified-name error, got: {err}"
+    );
+    clear_attached_databases();
+}

@@ -97,7 +97,7 @@ impl<'a> NodeEstimator for ControlFlowEstimator<'a> {
                     .get(1)
                     .copied()
                     .unwrap_or(NodeCostEstimate::new(0.0, 0.0, 0));
-                let iterations = u64::from(n.max_iterations().min(u32::MAX as u64));
+                let iterations = n.max_iterations().min(u64::from(u32::MAX));
                 let step_cost = self
                     .cost_calculator
                     .calculate_loop_cost(step_estimate.total_cost, iterations as u32);

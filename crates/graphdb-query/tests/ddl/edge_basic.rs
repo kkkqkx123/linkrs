@@ -8,6 +8,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use graphdb_core::Value;
 use graphdb_query::parser::Parser;
 
 // ==================== CREATE EDGE Parser Tests ====================
@@ -267,7 +268,10 @@ fn test_desc_execution_edge() {
         .assert_success()
         .query("DESCRIBE EDGE KNOWS")
         .assert_success()
-        .assert_result_count(1);
+        // 1 property row + 2 leading endpoint-constraint rows (src_tag/dst_tag).
+        .assert_result_count(3)
+        .assert_result_contains(vec![Value::string("src_tag")])
+        .assert_result_contains(vec![Value::string("dst_tag")]);
 }
 
 // ==================== Edge Lifecycle Tests ====================

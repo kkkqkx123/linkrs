@@ -317,7 +317,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "INSERT VERTEX User(id, name) VALUES @__dml_0: (upper(@__dml_1), @__dml_2)"
+            "INSERT VERTEX user(id, name) VALUES @__dml_0: (upper(@__dml_1), @__dml_2)"
         );
     }
 

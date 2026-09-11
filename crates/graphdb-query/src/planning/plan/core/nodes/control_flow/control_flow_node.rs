@@ -1113,7 +1113,7 @@ impl RecursiveCteNode {
     }
 
     pub fn set_anchor(&mut self, anchor: PlanNodeEnum) {
-        self.anchor = Box::new(anchor);
+        *self.anchor = anchor;
     }
 
     pub fn step(&self) -> Option<&PlanNodeEnum> {

@@ -690,6 +690,15 @@ impl TraversalParser {
             // Parse the list of tags (multiple tags are supported, e.g.: Person:Actor)
             loop {
                 let label = ctx.expect_identifier()?;
+                if ctx.match_token(TokenKind::Dot) {
+                    let table = ctx.expect_identifier()?;
+                    let pos = ctx.current_position();
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken,
+                        crate::attached::qualified_reference_message(&label, &table),
+                        pos,
+                    ));
+                }
                 labels.push(label);
                 if !ctx.check_token(TokenKind::Colon) {
                     break;
@@ -779,6 +788,15 @@ impl TraversalParser {
                 if ctx.check_token(TokenKind::Colon) {
                     variable = Some(name);
                 } else {
+                    if ctx.match_token(TokenKind::Dot) {
+                        let table = ctx.expect_identifier()?;
+                        let pos = ctx.current_position();
+                        return Err(ParseError::new(
+                            ParseErrorKind::UnexpectedToken,
+                            crate::attached::qualified_reference_message(&name, &table),
+                            pos,
+                        ));
+                    }
                     edge_types.push(name);
                 }
             }
@@ -788,6 +806,15 @@ impl TraversalParser {
                     // Handle optional colon before edge type (e.g., :KNOWS|:FOLLOWS or :KNOWS|FOLLOWS)
                     ctx.match_token(TokenKind::Colon);
                     let edge_type = ctx.expect_identifier()?;
+                    if ctx.match_token(TokenKind::Dot) {
+                        let table = ctx.expect_identifier()?;
+                        let pos = ctx.current_position();
+                        return Err(ParseError::new(
+                            ParseErrorKind::UnexpectedToken,
+                            crate::attached::qualified_reference_message(&edge_type, &table),
+                            pos,
+                        ));
+                    }
                     edge_types.push(edge_type);
                     if !ctx.match_token(TokenKind::Pipe) {
                         break;
@@ -841,11 +868,9 @@ impl TraversalParser {
 
                     // Parse optional filter predicate
                     let mut filter_predicate = None;
-                    if ctx.match_token(TokenKind::Pipe) {
-                        if ctx.check_keyword("WHERE") {
-                            ctx.consume_keyword("WHERE")?;
-                            filter_predicate = Some(self.parse_expression(ctx)?);
-                        }
+                    if ctx.match_token(TokenKind::Pipe) && ctx.check_keyword("WHERE") {
+                        ctx.consume_keyword("WHERE")?;
+                        filter_predicate = Some(self.parse_expression(ctx)?);
                     }
 
                     // Parse optional projections
@@ -858,11 +883,9 @@ impl TraversalParser {
                             ctx.expect_token(TokenKind::RBrace)?;
                         }
                         // Optional edge projection
-                        if ctx.match_token(TokenKind::Comma) {
-                            if ctx.match_token(TokenKind::LBrace) {
-                                edge_projection = Some(self.parse_expression(ctx)?);
-                                ctx.expect_token(TokenKind::RBrace)?;
-                            }
+                        if ctx.match_token(TokenKind::Comma) && ctx.match_token(TokenKind::LBrace) {
+                            edge_projection = Some(self.parse_expression(ctx)?);
+                            ctx.expect_token(TokenKind::RBrace)?;
                         }
                     }
 

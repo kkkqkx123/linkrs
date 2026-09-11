@@ -949,7 +949,17 @@ impl DmlParser {
         let mut labels = Vec::new();
         if ctx.match_token(TokenKind::Colon) {
             loop {
-                labels.push(ctx.expect_identifier()?);
+                let label = ctx.expect_identifier()?;
+                if ctx.match_token(TokenKind::Dot) {
+                    let table = ctx.expect_identifier()?;
+                    let pos = ctx.current_position();
+                    return Err(ParseError::new(
+                        crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                        crate::attached::qualified_reference_message(&label, &table),
+                        pos,
+                    ));
+                }
+                labels.push(label);
                 if !ctx.match_token(TokenKind::Colon) {
                     break;
                 }
@@ -1005,7 +1015,17 @@ impl DmlParser {
 
         let mut edge_types = Vec::new();
         if ctx.match_token(TokenKind::Colon) {
-            edge_types.push(ctx.expect_identifier()?);
+            let edge_type = ctx.expect_identifier()?;
+            if ctx.match_token(TokenKind::Dot) {
+                let table = ctx.expect_identifier()?;
+                let pos = ctx.current_position();
+                return Err(ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                    crate::attached::qualified_reference_message(&edge_type, &table),
+                    pos,
+                ));
+            }
+            edge_types.push(edge_type);
         }
 
         let properties = if ctx.match_token(TokenKind::LBrace) {

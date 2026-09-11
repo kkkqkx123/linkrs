@@ -15,8 +15,10 @@ impl TransactionManager {
     /// 1. Check state and timeout (transaction still active)
     /// 2. Transition to Committing (marks in-progress, prevents concurrent operations)
     /// 3. Certify the write set (pre-check; conflicts abort before any I/O)
+    ///
     /// 3b. Evaluate commit-veto hooks (first veto fails the commit without
-    ///    aborting; the caller must roll back)
+    ///     aborting; the caller must roll back)
+    ///
     /// 4. Persist through the configured storage commit sink with exponential backoff retries
     /// 5. Publish the write set into the certifier
     /// 6. Finalize through the commit sink (storage visibility point)

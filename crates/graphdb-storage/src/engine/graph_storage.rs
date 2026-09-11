@@ -912,11 +912,10 @@ impl GraphStorage {
         &self,
         callback: crate::engine::persistence_coordinator::StorageEventCallback,
     ) -> Option<graphdb_core::event_dispatch::SubscriptionId> {
-        if let Some(persistence) = self.ctx.persistence() {
-            Some(persistence.read().register_storage_callback(callback))
-        } else {
-            None
-        }
+        self.ctx
+            .persistence()
+            .as_ref()
+            .map(|persistence| persistence.read().register_storage_callback(callback))
     }
 
     /// Register a filtered storage-lifecycle observer (only invoked when
@@ -928,15 +927,11 @@ impl GraphStorage {
             crate::engine::persistence_coordinator::StorageEvent,
         >,
     ) -> Option<graphdb_core::event_dispatch::SubscriptionId> {
-        if let Some(persistence) = self.ctx.persistence() {
-            Some(
-                persistence
-                    .read()
-                    .register_storage_callback_filtered(callback, filter),
-            )
-        } else {
-            None
-        }
+        self.ctx.persistence().as_ref().map(|persistence| {
+            persistence
+                .read()
+                .register_storage_callback_filtered(callback, filter)
+        })
     }
 
     /// Remove a previously registered storage-lifecycle observer.
@@ -972,11 +967,10 @@ impl GraphStorage {
             >,
         >,
     > {
-        if let Some(persistence) = self.ctx.persistence() {
-            Some(persistence.read().shared_storage_callbacks())
-        } else {
-            None
-        }
+        self.ctx
+            .persistence()
+            .as_ref()
+            .map(|persistence| persistence.read().shared_storage_callbacks())
     }
 
     /// Batch delete vertices by external string IDs.

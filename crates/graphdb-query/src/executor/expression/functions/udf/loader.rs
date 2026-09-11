@@ -130,9 +130,8 @@ impl UdfLoader {
                 format!("expected a '*.{expected}' dynamic library"),
             ));
         }
-        Ok(path
-            .canonicalize()
-            .map_err(|e| UdfError::Io(display, e.to_string()))?)
+        path.canonicalize()
+            .map_err(|e| UdfError::Io(display, e.to_string()))
     }
 
     fn expected_extension() -> &'static str {

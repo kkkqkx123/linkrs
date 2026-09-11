@@ -2,8 +2,16 @@
 //!
 //! Tracks external data sources registered through `ATTACH DATABASE` for the
 //! lifetime of the process. Federation (cross-source query routing) is not
-//! implemented yet; the catalog records the attachment so clients and
-//! `SHOW ATTACHED DATABASES` can observe it.
+//! implemented: the catalog records the attachment so clients and
+//! `SHOW ATTACHED DATABASES` can observe it, and qualified `alias.table`
+//! references are rejected with an actionable error (see
+//! [`qualified_reference_message`]) that points at `IMPORT DATABASE` or
+//! `LOAD FROM` materialization instead.
+//!
+//! The registry is process-global (a `OnceLock` static), not session-scoped.
+//! Migrating it to session scope requires threading a session-level registry
+//! through the query API into planning and execution, which is deferred until
+//! multi-tenant isolation is actually needed.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -71,6 +79,30 @@ pub fn clear_attached_databases() {
     registry().write().clear();
 }
 
+/// Check whether `alias` currently names an attached database.
+pub fn is_attached(alias: &str) -> bool {
+    registry().read().contains_key(alias)
+}
+
+/// Build the error message for a qualified `alias.table` reference.
+///
+/// Attached aliases get a catalog-only hint pointing at materialization
+/// (`IMPORT DATABASE` / `LOAD FROM`); unknown aliases get a plain
+/// unsupported-qualified-name message so typos fail loudly.
+pub fn qualified_reference_message(alias: &str, table: &str) -> String {
+    if is_attached(alias) {
+        format!(
+            "Database '{alias}' is attached as catalog-only; cross-source queries are not yet supported. \
+             Use IMPORT DATABASE or LOAD FROM to materialize '{table}' into the current space"
+        )
+    } else {
+        format!(
+            "Qualified table name '{alias}.{table}' is not supported; use '{table}' within the current space \
+             (cross-source ATTACH queries are not yet implemented)"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +139,24 @@ mod tests {
         assert!(detach_database("a").is_err());
         clear_attached_databases();
         assert!(list_attached_databases().is_empty());
+    }
+
+    #[test]
+    fn qualified_reference_message_hints_materialization_for_attached() {
+        clear_attached_databases();
+        attach_database(AttachedDatabase::new(
+            "analytics".to_string(),
+            "/tmp/analytics".to_string(),
+            None,
+        ))
+        .expect("attach succeeds");
+        assert!(is_attached("analytics"));
+        assert!(!is_attached("ghost"));
+        let msg = qualified_reference_message("analytics", "Person");
+        assert!(msg.contains("catalog-only"));
+        assert!(msg.contains("IMPORT DATABASE"));
+        let unknown = qualified_reference_message("ghost", "Person");
+        assert!(unknown.contains("not supported"));
+        clear_attached_databases();
     }
 }

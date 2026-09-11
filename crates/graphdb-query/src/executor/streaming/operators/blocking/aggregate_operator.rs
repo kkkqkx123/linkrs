@@ -393,6 +393,18 @@ pub(super) fn next_aggregate(
             }
             result_rows.push(result_row);
         }
+        // Global aggregation (no GROUP BY keys) over empty input still emits
+        // a single row with default aggregate values (e.g. count = 0).
+        // (Empty input never spills, so the spilled path needs no equivalent.)
+        if !has_group_keys && result_rows.is_empty() {
+            let mut result_row = Vec::new();
+            for (func, args) in aggregate_functions.iter() {
+                let acc = AggregateAccumulator::for_function(func, args)
+                    .expect("every aggregate function has an accumulator");
+                result_row.push(acc.finalize());
+            }
+            result_rows.push(result_row);
+        }
 
         let mut result_iter = result_rows.into_iter();
         let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();

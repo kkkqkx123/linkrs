@@ -130,7 +130,8 @@ fn test_alter_edge_execution_add_multiple() {
         .assert_success()
         .query("DESCRIBE EDGE KNOWS")
         .assert_success()
-        .assert_result_count(4);
+        // 4 property rows + 2 leading endpoint-constraint rows (src_tag/dst_tag).
+        .assert_result_count(6);
 }
 
 #[test]
@@ -147,7 +148,8 @@ fn test_alter_edge_execution_drop_multiple() {
         .assert_success()
         .query("DESCRIBE EDGE KNOWS")
         .assert_success()
-        .assert_result_count(1);
+        // 1 remaining property row + 2 leading endpoint-constraint rows.
+        .assert_result_count(3);
 }
 
 #[test]

@@ -773,7 +773,7 @@ impl RecursiveFragmentOperator {
         exec.reset()?;
         while let Some(mut chunk) = exec.advance()? {
             chunk.normalize_for_opaque("RecursiveFixpoint");
-            rows.extend(chunk.rows.drain(..));
+            rows.append(&mut chunk.rows);
         }
         Ok(rows)
     }

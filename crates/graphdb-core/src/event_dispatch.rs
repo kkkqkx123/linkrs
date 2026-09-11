@@ -19,11 +19,10 @@ use std::sync::Arc;
 /// the callback; observers needing data afterwards must clone explicitly
 /// and pay that cost themselves. Prefer filtered subscriptions over
 /// cloning the full event stream.
-pub fn dispatch_event_callbacks<E>(
-    owner: &str,
-    callbacks: &[Arc<dyn Fn(&E) + Send + Sync>],
-    event: &E,
-) -> usize {
+/// Event-hook observer callbacks run inline on the emitter path.
+pub type EventCallbacks<E> = [Arc<dyn Fn(&E) + Send + Sync>];
+
+pub fn dispatch_event_callbacks<E>(owner: &str, callbacks: &EventCallbacks<E>, event: &E) -> usize {
     let mut panics = 0;
     for (index, callback) in callbacks.iter().enumerate() {
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

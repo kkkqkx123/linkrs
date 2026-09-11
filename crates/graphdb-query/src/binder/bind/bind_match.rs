@@ -436,6 +436,15 @@ impl Binder {
     // ── Catalog resolution ─────────────────────────────────────────────────
 
     pub(crate) fn resolve_tags(&self, labels: &[String]) -> DBResult<Vec<BoundTagRef>> {
+        for label in labels {
+            if let Some((alias, table)) = label.split_once('.') {
+                return Err(DBError::from(
+                    graphdb_core::error::QueryError::invalid_query(
+                        crate::attached::qualified_reference_message(alias, table),
+                    ),
+                ));
+            }
+        }
         if labels.is_empty() {
             return Ok(vec![]);
         }
@@ -520,6 +529,15 @@ impl Binder {
         &self,
         edge_types: &[String],
     ) -> DBResult<Vec<BoundEdgeTypeRef>> {
+        for et in edge_types {
+            if let Some((alias, table)) = et.split_once('.') {
+                return Err(DBError::from(
+                    graphdb_core::error::QueryError::invalid_query(
+                        crate::attached::qualified_reference_message(alias, table),
+                    ),
+                ));
+            }
+        }
         if edge_types.is_empty() {
             return Ok(vec![]);
         }

@@ -435,7 +435,7 @@ pub(super) fn execute_tag_manage(
             Ok(())
         }),
         TagManageCommand::Rename { old_name, new_name } => super::exec_ddl(storage, |s| {
-            StorageSchemaOps::rename_tag(s, space_name, &old_name, &new_name)
+            StorageSchemaOps::rename_tag(s, space_name, old_name, new_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
@@ -654,7 +654,7 @@ pub(super) fn execute_edge_manage(
             Ok(())
         }),
         EdgeManageCommand::Rename { old_name, new_name } => super::exec_ddl(storage, |s| {
-            StorageSchemaOps::rename_edge_type(s, space_name, &old_name, &new_name)
+            StorageSchemaOps::rename_edge_type(s, space_name, old_name, new_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),

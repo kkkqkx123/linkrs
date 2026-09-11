@@ -925,21 +925,30 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                                 savepoint_name
                             ))
                         })?;
-                    let storage = self.storage_mut();
-                    txn_manager
-                        .rollback_to_savepoint(txn_id, savepoint_info.id, &*storage)
-                        .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    // Drop the storage write guard before running the command
+                    // plan: plan execution re-locks storage internally, and
+                    // holding the guard across it self-deadlocks.
+                    {
+                        let storage = self.storage_mut();
+                        txn_manager
+                            .rollback_to_savepoint(txn_id, savepoint_info.id, &*storage)
+                            .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    }
                     self.session_variables.rollback_variables_to(savepoint_name);
                     self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
                 } else {
                     let txn_id = require_transaction("rollback")?;
                     // The embedded database has no commit sink, so the undo
                     // log must be applied explicitly (mirroring
-                    // `rollback_to_savepoint`).
-                    let mut storage = self.storage_mut();
-                    txn_manager
-                        .abort_transaction_with_undo(txn_id, &mut *storage)
-                        .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    // `rollback_to_savepoint`). The write guard is scoped to
+                    // the abort: holding it across `execute_command_plan`
+                    // below self-deadlocks (plan execution re-locks storage).
+                    {
+                        let mut storage = self.storage_mut();
+                        txn_manager
+                            .abort_transaction_with_undo(txn_id, &mut *storage)
+                            .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    }
                     *self.current_transaction.write() = None;
                     self.session_variables.rollback_variables();
                     self.execute_command_plan(query, parsed_ast, Some(txn_id), false)
