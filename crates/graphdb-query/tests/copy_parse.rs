@@ -49,7 +49,7 @@ fn test_copy_parsing() {
                         "  Copy target: {:?} dir: {:?} file: {} header: {} delim: '{}' batch: {:?}",
                         copy.target,
                         copy.direction,
-                        copy.file_path,
+                        copy.file_paths.join(", "),
                         copy.header,
                         copy.delimiter,
                         copy.batch_size

@@ -122,7 +122,6 @@ fn exec_filter_on_unflat_flattens() {
     let mut filter_node = LogicalNodeEnum::Filter(LogicalFilterNode {
         id: next_node_id(),
         input: Some(Box::new(scan())),
-        deps: vec![scan()],
         condition: ctx_pred,
         output_var: None,
         col_names: vec![],
@@ -157,7 +156,6 @@ fn exec_union_flattens_all() {
 
     let mut union_node = LogicalNodeEnum::Union(LogicalUnionNode {
         id: next_node_id(),
-        input: Some(Box::new(scan())),
         deps: vec![scan(), scan()],
         distinct: false,
         output_var: None,

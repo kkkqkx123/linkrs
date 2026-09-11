@@ -2313,6 +2313,15 @@ mod tests {
         fn rebuild_edge_index(&mut self, _space: &str, _index: &str) -> Result<bool, StorageError> {
             Ok(true)
         }
+        fn update_edge_endpoints(
+            &mut self,
+            _space: &str,
+            _edge_type: &str,
+            _src_tag_name: &str,
+            _dst_tag_name: &str,
+        ) -> Result<bool, StorageError> {
+            Ok(true)
+        }
     }
 
     #[test]

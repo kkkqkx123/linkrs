@@ -7,7 +7,7 @@ use graphdb::api::api_core::query_api::QueryApi;
 use graphdb::api::api_core::types::QueryResult;
 use graphdb::api::api_core::CoreResult;
 use graphdb::core::metadata::SchemaManager;
-use graphdb::core::StatsManager;
+use graphdb::core::stats::StatsManager;
 use graphdb::core::Value;
 use graphdb::query::executor::streaming::StreamingQueryResult;
 use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaContextOps};

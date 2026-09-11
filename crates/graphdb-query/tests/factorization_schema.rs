@@ -224,7 +224,6 @@ fn e2e_filter_needs_flatten() {
         graphdb_query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode {
             id: next_node_id(),
             input: Some(Box::new(scan())),
-            deps: vec![scan()],
             condition: ctx_pred,
             output_var: None,
             col_names: vec![],
@@ -272,7 +271,6 @@ fn e2e_union_flattens() {
     let mut union_node = LogicalNodeEnum::Union(
         graphdb_query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode {
             id: next_node_id(),
-            input: Some(Box::new(scan())),
             deps: vec![scan(), scan()],
             distinct: false,
             output_var: None,
@@ -330,7 +328,6 @@ fn unwind_passthrough() {
         graphdb_query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
             id: next_node_id(),
             input: Some(Box::new(scan())),
-            deps: vec![scan()],
             alias: "x".to_string(),
             list_expression: {
                 let ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -432,7 +429,6 @@ fn factorization_disabled_vs_enabled_semantics() {
         graphdb_query::planning::plan::logical::logical_nodes::operation::LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(scan())),
-            deps: vec![scan()],
             columns: vec![graphdb_core::YieldColumn {
                 expression: ContextualExpression::new(id_a.clone(), ctx.clone()),
                 alias: "a".to_string(),
@@ -529,7 +525,6 @@ fn assign_over_expansion_keeps_factorization() {
     let mut plan = LogicalNodeEnum::Assign(LogicalAssignNode {
         id: next_node_id(),
         input: Some(Box::new(nbr)),
-        deps: vec![],
         assignments: vec![(
             "c".to_string(),
             ContextualExpression::new(rhs_id, ctx.clone()),
@@ -682,7 +677,6 @@ fn right_join_rewriter_flattens_build_keys() {
         right: Box::new(nbr),
         hash_keys: vec![],
         probe_keys: vec![ContextualExpression::new(out_id, ctx)],
-        deps: vec![],
         output_var: None,
         col_names: vec![],
         column_types: vec![],
@@ -726,7 +720,6 @@ fn rollup_apply_barrier_inserts_flatten_and_outputs_flat() {
     let mut plan = LogicalNodeEnum::RollUpApply(LogicalRollUpApplyNode {
         id: next_node_id(),
         input: Some(Box::new(nbr)),
-        deps: vec![],
         left_input_var: None,
         right_input_var: None,
         compare_cols: vec![],

@@ -8,9 +8,10 @@
 //! Run with:
 //!   cargo bench --bench traversal_perf_bench
 
+use graphdb::core::stats::StatsManager;
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, StatsManager, Value, Vertex};
+use graphdb::core::{DataType, Edge, Value, Vertex};
 use graphdb::query::optimizer::{OptimizerEngine, PartitioningConfig};
 use graphdb::query::pipeline::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
