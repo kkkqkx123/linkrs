@@ -73,8 +73,7 @@ fn logical_scan_vertices(
 fn logical_filter(input: LogicalNodeEnum, condition: ContextualExpression) -> LogicalNodeEnum {
     LogicalNodeEnum::Filter(LogicalFilterNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         condition,
         output_var: None,
         col_names: vec![],

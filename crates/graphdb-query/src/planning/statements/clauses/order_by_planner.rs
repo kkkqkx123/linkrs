@@ -119,8 +119,7 @@ impl ClausePlanner for OrderByClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Sort(LogicalSortNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 sort_items,
                 limit: None,
                 output_var: None,

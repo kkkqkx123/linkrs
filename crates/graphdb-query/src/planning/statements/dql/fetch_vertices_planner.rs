@@ -132,8 +132,7 @@ impl Planner for FetchVerticesPlanner {
             let root = PlanNodeEnum::Project(project_node);
             current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
-                input: Some(Box::new(current_logical.clone())),
-                deps: vec![current_logical],
+                input: Some(Box::new(current_logical)),
                 columns,
                 output_var: None,
                 col_names: root.col_names().to_vec(),

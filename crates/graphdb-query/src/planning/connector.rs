@@ -152,11 +152,10 @@ fn join_logical_roots(
         LogicalJoinKind::Inner => Some(LogicalNodeEnum::InnerJoin(
             crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
                 id: next_node_id(),
-                left: Box::new(left_logical.clone()),
-                right: Box::new(right_logical.clone()),
+                left: Box::new(left_logical),
+                right: Box::new(right_logical),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![left_logical, right_logical],
                 recommended_algorithm: None,
                 output_var: None,
                 col_names,
@@ -166,11 +165,10 @@ fn join_logical_roots(
         LogicalJoinKind::Left => Some(LogicalNodeEnum::LeftJoin(
             crate::planning::plan::logical::logical_nodes::join::LogicalLeftJoinNode {
                 id: next_node_id(),
-                left: Box::new(left_logical.clone()),
-                right: Box::new(right_logical.clone()),
+                left: Box::new(left_logical),
+                right: Box::new(right_logical),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![left_logical, right_logical],
                 output_var: None,
                 col_names,
                 column_types: vec![],
@@ -179,11 +177,10 @@ fn join_logical_roots(
         LogicalJoinKind::Cross => Some(LogicalNodeEnum::CrossJoin(
             crate::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode {
                 id: next_node_id(),
-                left: Box::new(left_logical.clone()),
-                right: Box::new(right_logical.clone()),
+                left: Box::new(left_logical),
+                right: Box::new(right_logical),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![left_logical, right_logical],
                 output_var: None,
                 col_names,
                 column_types: vec![],

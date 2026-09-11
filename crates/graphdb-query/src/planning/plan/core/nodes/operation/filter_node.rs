@@ -13,7 +13,7 @@ use graphdb_core::types::{ContextualExpression, SerializableExpression};
 define_plan_node_with_deps! {
     pub struct FilterNode {
         condition: ContextualExpression,
-        condition_serializable: Option<SerializableExpression>,
+        condition_serializable: Option<Box<SerializableExpression>>,
         // Expression-level EXISTS / IN subqueries compiled for this filter
         // Pre-execution only; never serialized.
         subqueries: Vec<PlannedSubquery>,
@@ -34,8 +34,7 @@ impl FilterNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             condition,
             condition_serializable: None,
             subqueries: Vec::new(),
@@ -79,14 +78,15 @@ impl FilterNode {
     }
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
-        self.condition_serializable =
-            Some(SerializableExpression::from_contextual(&self.condition)?);
+        self.condition_serializable = Some(Box::new(SerializableExpression::from_contextual(
+            &self.condition,
+        )?));
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.condition_serializable {
-            self.condition = ser_expr.clone().to_contextual(ctx);
+            self.condition = ser_expr.as_ref().clone().to_contextual(ctx);
         }
     }
 }

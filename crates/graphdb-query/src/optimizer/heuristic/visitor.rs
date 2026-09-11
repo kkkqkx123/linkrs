@@ -217,6 +217,8 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_assign => AssignNode, Assign,
         visit_remove => RemoveNode, Remove,
         visit_window => WindowNode, Window,
+        visit_traverse => TraverseNode, Traverse,
+        visit_materialize => MaterializeNode, Materialize,
     );
 
     // Multi-input nodes (using inputs)
@@ -348,11 +350,9 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 
     // Multi-input nodes (using dependencies)
     impl_multi_input_deps_rewrite!(
-        visit_materialize => MaterializeNode, Materialize,
         visit_union => UnionNode, Union,
         visit_minus => MinusNode, Minus,
         visit_intersect => IntersectNode, Intersect,
-        visit_traverse => TraverseNode, Traverse,
         visit_wco_intersect => WcoIntersectNode, WcoIntersect,
     );
 

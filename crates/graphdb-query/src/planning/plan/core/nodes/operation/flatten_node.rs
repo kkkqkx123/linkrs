@@ -19,8 +19,7 @@ impl FlattenNode {
         let col_names = input.col_names().to_vec();
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             group_pos,
             group_columns: Vec::new(),
             expected_groups: None,

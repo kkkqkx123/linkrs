@@ -449,26 +449,22 @@ impl BatchPlanAnalyzer {
             }
 
             // Algorithm nodes
-            PlanNodeEnum::ShortestPath(n) => n
-                .dependencies()
-                .iter()
-                .map(|dep| self.analyze_recursive(dep, context, Some(node_id)))
-                .sum(),
-            PlanNodeEnum::MultiShortestPath(n) => n
-                .dependencies()
-                .iter()
-                .map(|dep| self.analyze_recursive(dep, context, Some(node_id)))
-                .sum(),
-            PlanNodeEnum::BFSShortest(n) => n
-                .dependencies()
-                .iter()
-                .map(|dep| self.analyze_recursive(dep, context, Some(node_id)))
-                .sum(),
-            PlanNodeEnum::AllPaths(n) => n
-                .dependencies()
-                .iter()
-                .map(|dep| self.analyze_recursive(dep, context, Some(node_id)))
-                .sum(),
+            PlanNodeEnum::ShortestPath(n) => {
+                self.analyze_recursive(n.left_input(), context, Some(node_id))
+                    + self.analyze_recursive(n.right_input(), context, Some(node_id))
+            }
+            PlanNodeEnum::MultiShortestPath(n) => {
+                self.analyze_recursive(n.left_input(), context, Some(node_id))
+                    + self.analyze_recursive(n.right_input(), context, Some(node_id))
+            }
+            PlanNodeEnum::BFSShortest(n) => {
+                self.analyze_recursive(n.left_input(), context, Some(node_id))
+                    + self.analyze_recursive(n.right_input(), context, Some(node_id))
+            }
+            PlanNodeEnum::AllPaths(n) => {
+                self.analyze_recursive(n.left_input(), context, Some(node_id))
+                    + self.analyze_recursive(n.right_input(), context, Some(node_id))
+            }
 
             // Data processing nodes
             PlanNodeEnum::Assign(n) => n

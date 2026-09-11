@@ -1062,7 +1062,7 @@ fn convert_roll_up_apply(
 fn convert_union(
     n: crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode,
 ) -> PlanNodeEnum {
-    let input = convert_logical_to_physical(*n.input.expect("UnionNode missing input"));
+    let input = convert_logical_to_physical(n.deps[0].clone());
     let union_input = convert_logical_to_physical(n.deps[1].clone());
     let mut node = crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode::new(
                 input, union_input, n.distinct,
@@ -1078,7 +1078,7 @@ fn convert_union(
 fn convert_minus(
     n: crate::planning::plan::logical::logical_nodes::graph_ops::LogicalMinusNode,
 ) -> PlanNodeEnum {
-    let input = convert_logical_to_physical(*n.input.expect("MinusNode missing input"));
+    let input = convert_logical_to_physical(n.deps[0].clone());
     let minus_input = convert_logical_to_physical(n.deps[1].clone());
     let mut node =
         crate::planning::plan::core::nodes::graph_operations::set_operations_node::MinusNode::new(
@@ -1097,7 +1097,7 @@ fn convert_minus(
 fn convert_intersect(
     n: crate::planning::plan::logical::logical_nodes::graph_ops::LogicalIntersectNode,
 ) -> PlanNodeEnum {
-    let input = convert_logical_to_physical(*n.input.expect("IntersectNode missing input"));
+    let input = convert_logical_to_physical(n.deps[0].clone());
     let intersect_input = convert_logical_to_physical(n.deps[1].clone());
     let mut node = crate::planning::plan::core::nodes::graph_operations::set_operations_node::IntersectNode::new(
                 input, intersect_input,

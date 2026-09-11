@@ -1,4 +1,10 @@
-/// Define a macro for planning nodes with dependencies
+/// Define a macro for single-input planning nodes.
+///
+/// The child subtree has a single owner: the typed `input` slot. The former
+/// `deps` mirror (a second full copy of the subtree per node) was removed:
+/// it doubled heap usage on every plan level, doubled every clone, and gave
+/// the mirror copy diverging node ids. `dependencies()` is a computed view
+/// over `input` so existing tree walkers keep compiling unchanged.
 #[macro_export]
 macro_rules! define_plan_node_with_deps {
     (
@@ -14,7 +20,6 @@ macro_rules! define_plan_node_with_deps {
         pub struct $name {
             id: i64,
             input: Option<Box<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
-            deps: Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
@@ -27,7 +32,6 @@ macro_rules! define_plan_node_with_deps {
                 Self {
                     id: next_node_id(),
                     input: self.input.clone(),
-                    deps: self.deps.clone(),
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
@@ -70,15 +74,10 @@ macro_rules! define_plan_node_with_deps {
             }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
-                &self.deps
-            }
-
-            pub fn dependencies_mut(&mut self) -> &mut Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum> {
-                &mut self.deps
-            }
-
-            pub fn set_dependencies(&mut self, deps: Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>) {
-                self.deps = deps;
+                self.input
+                    .as_deref()
+                    .map(std::slice::from_ref)
+                    .unwrap_or(&[])
             }
 
             pub fn clone_plan_node(&self) -> $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -120,9 +119,7 @@ macro_rules! define_plan_node_with_deps {
             }
 
             fn set_input(&mut self, input: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
-                self.input = Some(Box::new(input.clone()));
-                self.deps.clear();
-                self.deps.push(input);
+                self.input = Some(Box::new(input));
             }
         }
 
@@ -150,9 +147,7 @@ macro_rules! define_plan_node_with_deps {
 
                 let input_size = std::mem::size_of::<Option<Box<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>>();
 
-                let deps_size = std::mem::size_of::<Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>();
-
-                base + col_names_size + column_types_size + output_var_size + input_size + deps_size
+                base + col_names_size + column_types_size + output_var_size + input_size
             }
         }
     };

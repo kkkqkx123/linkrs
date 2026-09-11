@@ -85,8 +85,7 @@ impl Planner for FetchEdgesPlanner {
             let root = PlanNodeEnum::Project(project_node);
             let logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
-                input: Some(Box::new(get_edges_logical.clone())),
-                deps: vec![get_edges_logical],
+                input: Some(Box::new(get_edges_logical)),
                 columns,
                 output_var: None,
                 col_names: root.col_names().to_vec(),

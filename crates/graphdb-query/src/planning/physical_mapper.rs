@@ -76,8 +76,9 @@ impl PhysicalMapper {
         physical: PlanNodeEnum,
     ) -> (PlanNodeEnum, Vec<String>) {
         let mut notes = Vec::new();
-        let merged = merge_inner(mapped, physical, &mut notes);
-        (merged, notes)
+        let mut mapped = mapped;
+        merge_inner(&mut mapped, physical, &mut notes);
+        (mapped, notes)
     }
 
     /// Collect factorization operator positions for plan diagnostics.
@@ -239,51 +240,57 @@ fn index_scan_from_edge_hint(scan: &LogicalScanEdgesNode, hint: &IndexHint) -> P
 }
 
 /// Merge one mapped/physical node pair; collects divergence notes.
+///
+/// The mapped tree is rewritten in place while the physical tree is consumed
+/// by value, so each recursion level holds one pointer plus one owned node
+/// instead of two owned trees.
 fn merge_inner(
-    mapped: PlanNodeEnum,
+    mapped: &mut PlanNodeEnum,
     physical: PlanNodeEnum,
     notes: &mut Vec<String>,
-) -> PlanNodeEnum {
+) {
     // Factorization operators live only on the mapped side and are always
     // preserved; the merge continues below them against the same physical
     // node.
-    if let PlanNodeEnum::Flatten(mut flatten) = mapped {
+    if let PlanNodeEnum::Flatten(flatten) = mapped {
         let placeholder = PlanNodeEnum::Start(crate::planning::plan::core::nodes::StartNode::new());
-        let child = std::mem::replace(flatten.input_mut(), placeholder);
-        let merged_child = merge_inner(child, physical, notes);
-        flatten.set_input(merged_child);
-        return PlanNodeEnum::Flatten(flatten);
+        let mut child = std::mem::replace(flatten.input_mut(), placeholder);
+        merge_inner(&mut child, physical, notes);
+        flatten.set_input(child);
+        return;
     }
     // A cost-based index scan (with limits) always wins over a mapped
     // full scan or a limit-less mapped index scan.
     if let PlanNodeEnum::IndexScan(_) = &physical {
         if matches!(
-            mapped,
+            &*mapped,
             PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::IndexScan(_)
         ) {
-            return physical;
+            *mapped = physical;
+            return;
         }
     }
     // A mapped index scan wins over a physical full scan: the logical
     // decision fired where the physical rewrite did not.
-    if let PlanNodeEnum::IndexScan(_) = &mapped {
+    if let PlanNodeEnum::IndexScan(_) = &*mapped {
         if matches!(
-            physical,
+            &physical,
             PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_)
         ) {
-            return mapped;
+            return;
         }
     }
     // A wired TopN wins over the Sort+Limit shape it was built from.
     if let PlanNodeEnum::TopN(_) = &physical {
         if matches!(
-            mapped,
+            &*mapped,
             PlanNodeEnum::TopN(_) | PlanNodeEnum::Sort(_) | PlanNodeEnum::Limit(_)
         ) {
-            return physical;
+            *mapped = physical;
+            return;
         }
     }
-    if std::mem::discriminant(&mapped) == std::mem::discriminant(&physical) {
+    if std::mem::discriminant(&*mapped) == std::mem::discriminant(&physical) {
         use crate::optimizer::cost::child_accessor::ChildAccessor;
 
         // Compare child counts before detaching either side so the
@@ -294,33 +301,41 @@ fn merge_inner(
                 mapped.type_name(),
                 physical.type_name()
             ));
-            return physical;
+            *mapped = physical;
+            return;
         }
-        let mut mapped = mapped;
         let mut physical = physical;
-        let mapped_children = mapped.take_children();
+        let mut mapped_children = mapped.take_children();
         let physical_children = physical.take_children();
         let mut new_children = Vec::with_capacity(mapped_children.len());
-        for (mapped_child, physical_child) in mapped_children.into_iter().zip(physical_children) {
-            new_children.push(merge_inner(mapped_child, physical_child, notes));
+        for (mapped_child, physical_child) in mapped_children
+            .drain(..)
+            .zip(physical_children)
+        {
+            let mut merged_child = mapped_child;
+            merge_inner(&mut merged_child, physical_child, notes);
+            new_children.push(merged_child);
         }
         match physical.set_children(new_children) {
-            Ok(()) => return physical,
+            Ok(()) => {
+                *mapped = physical;
+            }
             Err(message) => {
                 notes.push(format!(
                     "PhysicalMapping: rebuild failed for {} ({message}); kept physical subtree",
                     physical.type_name()
                 ));
-                return physical;
+                *mapped = physical;
             }
         }
+        return;
     }
     notes.push(format!(
         "PhysicalMapping: structure diverged (mapped {} vs physical {}); kept physical subtree",
         mapped.type_name(),
         physical.type_name()
     ));
-    physical
+    *mapped = physical;
 }
 
 pub(crate) fn logical_children(
@@ -341,14 +356,7 @@ pub(crate) fn logical_children(
         LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Assign(n) => {
-            let mut v = Vec::new();
-            if let Some(c) = n.input.as_deref() {
-                v.push(c);
-            }
-            for d in &n.deps {
-                v.push(d);
-            }
-            v
+            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
         }
         LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::PipeDeleteVertices(n) => {
@@ -477,8 +485,7 @@ mod tests {
         let id = context.register_expression(ExpressionMeta::new(expression));
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: 2,
-            input: Some(Box::new(logical_input.clone())),
-            deps: vec![logical_input],
+            input: Some(Box::new(logical_input)),
             condition: ContextualExpression::new(id, context),
             output_var: None,
             col_names: vec![],

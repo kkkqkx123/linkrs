@@ -82,8 +82,7 @@ impl SortNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             sort_items,
             limit: None,
             has_folded_expressions: false,
@@ -144,8 +143,7 @@ impl LimitNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             offset,
             count,
             output_var: None,
@@ -185,8 +183,7 @@ impl TopNNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             sort_items,
             limit,
             output_var: None,

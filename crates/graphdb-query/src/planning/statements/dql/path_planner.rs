@@ -329,9 +329,8 @@ impl PathPlanner {
         let right = Self::logical_start_leaf();
         LogicalNodeEnum::ShortestPath(LogicalShortestPathNode {
             id: next_node_id(),
-            left: Box::new(left.clone()),
-            right: Box::new(right.clone()),
-            deps: vec![left, right],
+            left: Box::new(left),
+            right: Box::new(right),
             space_id,
             edge_types,
             max_step: max_steps,
@@ -386,9 +385,8 @@ impl PathPlanner {
         let right = Self::logical_start_leaf();
         LogicalNodeEnum::AllPaths(LogicalAllPathsNode {
             id: next_node_id(),
-            left: Box::new(left.clone()),
-            right: Box::new(right.clone()),
-            deps: vec![left, right],
+            left: Box::new(left),
+            right: Box::new(right),
             space_id,
             steps: max_steps,
             edge_types,

@@ -1089,4 +1089,29 @@ mod tests {
         let node = PlanNodeEnum::default();
         assert!(PlanNodeEnum::ALL_VARIANT_NAMES.contains(&node.type_name()));
     }
+
+    /// Stack-footprint guard: plan trees are held by value in recursive
+    /// planning/optimization passes, so every inline byte multiplies across
+    /// frames (worse in debug builds). Snapshot-serializable expression
+    /// payloads must stay behind `Box`; a new inline 200+ byte field will
+    /// trip these caps.
+    #[test]
+    fn plan_type_sizes_stay_stack_friendly() {
+        assert!(
+            std::mem::size_of::<PlanNodeEnum>() <= 384,
+            "PlanNodeEnum grew past 384 bytes; box the new large variant/field"
+        );
+        assert!(
+            std::mem::size_of::<crate::planning::plan::logical::LogicalNodeEnum>() <= 448,
+            "LogicalNodeEnum grew past 448 bytes; box the new large variant/field"
+        );
+        assert!(
+            std::mem::size_of::<crate::planning::plan::SubPlan>() <= 1216,
+            "SubPlan grew past 1216 bytes; pass by &mut instead of by value"
+        );
+        assert!(
+            std::mem::size_of::<crate::planning::plan::ExecutionPlan>() <= 1216,
+            "ExecutionPlan grew past 1216 bytes; pass by &mut instead of by value"
+        );
+    }
 }

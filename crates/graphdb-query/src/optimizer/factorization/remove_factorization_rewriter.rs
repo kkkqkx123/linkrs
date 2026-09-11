@@ -192,12 +192,6 @@ impl RemoveFactorizationRewriter {
                     n.set_input(new_input);
                     child_schemas.push(schema);
                 }
-                for dep in &mut n.deps {
-                    let old = std::mem::take(dep);
-                    let (new_dep, schema) = Self::visit_operator(old);
-                    *dep = new_dep;
-                    child_schemas.push(schema);
-                }
                 let mut node = LogicalNodeEnum::Assign(n);
                 let schema = node.compute_flat_schema(&child_schemas);
                 (node, schema)
@@ -309,9 +303,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::InnerJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::InnerJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -319,9 +312,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::LeftJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::LeftJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -329,9 +321,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::RightJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::RightJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -339,9 +330,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::CrossJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::CrossJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -349,9 +339,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::FullOuterJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::FullOuterJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -359,9 +348,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::SemiJoin(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::SemiJoin(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -369,9 +357,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::PatternApply(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::PatternApply(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -379,9 +366,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::CorrelatedApply(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::CorrelatedApply(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -454,9 +440,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::BiExpand(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::BiExpand(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -464,9 +449,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::BiTraverse(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::BiTraverse(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -474,9 +458,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::MultiShortestPath(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::MultiShortestPath(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -484,9 +467,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::BFSShortest(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::BFSShortest(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -494,9 +476,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::AllPaths(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::AllPaths(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -504,9 +485,8 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::ShortestPath(mut n) => {
                 let (left, left_schema) = Self::visit_operator(*n.left);
                 let (right, right_schema) = Self::visit_operator(*n.right);
-                n.deps = vec![left, right];
-                n.left = Box::new(n.deps[0].clone());
-                n.right = Box::new(n.deps[1].clone());
+                n.left = Box::new(left);
+                n.right = Box::new(right);
                 let mut node = LogicalNodeEnum::ShortestPath(n);
                 let schema = node.compute_flat_schema(&[left_schema, right_schema]);
                 (node, schema)
@@ -716,10 +696,7 @@ impl RemoveFactorizationRewriter {
             }
             LogicalNodeEnum::GetVertices(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::GetNeighbors(n) => n.deps.iter().any(Self::has_flatten),
-            LogicalNodeEnum::Assign(n) => {
-                n.input.as_deref().is_some_and(Self::has_flatten)
-                    || n.deps.iter().any(Self::has_flatten)
-            }
+            LogicalNodeEnum::Assign(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Remove(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::DataCollect(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Materialize(n) => n.input.as_deref().is_some_and(Self::has_flatten),
@@ -838,7 +815,6 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode {
                 id: next_node_id(),
                 input: Some(Box::new(flatten)),
-                deps: vec![],
                 assignments: vec![],
                 output_var: None,
                 col_names: vec![],
@@ -858,8 +834,7 @@ mod tests {
             crate::planning::plan::logical::logical_nodes::traversal::LogicalBiTraverseNode {
                 id: next_node_id(),
                 left: Box::new(flatten_left),
-                right: Box::new(right.clone()),
-                deps: vec![],
+                right: Box::new(right),
                 space_id: 1,
                 left_src_var: "a".to_string(),
                 right_src_var: "b".to_string(),

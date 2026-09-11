@@ -152,8 +152,7 @@ fn plan_simple_filter(
     let logical_root = wrap_logical(&input_plan, |input| {
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             condition,
             output_var: None,
             col_names: vec![],
@@ -183,8 +182,7 @@ fn plan_simple_filter_with(
     let logical_root = wrap_logical(&input_plan, |input| {
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             condition,
             output_var: None,
             col_names: vec![],

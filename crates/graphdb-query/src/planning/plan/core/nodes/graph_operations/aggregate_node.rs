@@ -45,8 +45,7 @@ impl AggregateNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             group_keys,
             group_key_exprs: None,
             aggregation_functions,
@@ -76,8 +75,7 @@ impl AggregateNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             group_keys,
             group_key_exprs: None,
             aggregation_functions,

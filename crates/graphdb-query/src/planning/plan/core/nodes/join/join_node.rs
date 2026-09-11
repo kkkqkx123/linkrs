@@ -41,15 +41,12 @@ impl InnerJoinNode {
             }
         }
 
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: -1,
             left: Box::new(left),
             right: Box::new(right),
             hash_keys,
             probe_keys,
-            deps,
             has_folded_expressions: false,
             output_var: None,
             col_names,
@@ -107,15 +104,12 @@ impl LeftJoinNode {
             }
         }
 
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: -1,
             left: Box::new(left),
             right: Box::new(right),
             hash_keys,
             probe_keys,
-            deps,
             has_folded_expressions: false,
             output_var: None,
             col_names,
@@ -168,13 +162,10 @@ impl CrossJoinNode {
             }
         }
 
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: next_node_id(),
             left: Box::new(left),
             right: Box::new(right),
-            deps,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -214,15 +205,12 @@ impl FullOuterJoinNode {
             }
         }
 
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: -1,
             left: Box::new(left),
             right: Box::new(right),
             hash_keys,
             probe_keys,
-            deps,
             has_folded_expressions: false,
             output_var: None,
             col_names,
@@ -273,15 +261,12 @@ impl RightJoinNode {
             }
         }
 
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: -1,
             left: Box::new(left),
             right: Box::new(right),
             hash_keys,
             probe_keys,
-            deps,
             has_folded_expressions: false,
             output_var: None,
             col_names,
@@ -350,15 +335,12 @@ impl SemiJoinNode {
         anti: bool,
     ) -> Result<Self, crate::planning::planner::PlannerError> {
         let col_names = left.col_names().to_vec();
-        let deps = vec![left.clone(), right.clone()];
-
         Ok(Self {
             id: -1,
             left: Box::new(left),
             right: Box::new(right),
             hash_keys,
             probe_keys,
-            deps,
             anti,
             has_folded_expressions: false,
             join_condition: None,

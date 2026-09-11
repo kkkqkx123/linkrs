@@ -271,8 +271,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let project_logical = wrap_logical(&input_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     columns: project_columns.clone(),
                     output_var: None,
                     col_names: project_columns
@@ -317,8 +316,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let mut logical_root = wrap_logical(&project_plan, |input| {
                 LogicalNodeEnum::Aggregate(LogicalAggregateNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     group_key_exprs: group_key_exprs.clone(),
                     aggregation_functions: agg_functions,
                     aggregation_args: logical_agg_args.clone(),
@@ -345,8 +343,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Filter(LogicalFilterNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         condition: having_expr,
                         output_var: None,
                         col_names: vec![],
@@ -362,8 +359,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Dedup(LogicalDedupNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         output_var: None,
                         col_names: vec![],
                         column_types: vec![],
@@ -379,8 +375,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Sample(LogicalSampleNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         count: sample_count as i64,
                         output_var: None,
                         col_names: vec![],
@@ -449,8 +444,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let project_logical = wrap_logical(&input_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     columns: project_columns.clone(),
                     output_var: None,
                     col_names: project_columns
@@ -463,8 +457,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let mut logical_root = project_logical.map(|input| {
                 LogicalNodeEnum::Window(LogicalWindowNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     window_functions: window_specs,
                     output_var: None,
                     col_names: vec![],
@@ -479,8 +472,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Dedup(LogicalDedupNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         output_var: None,
                         col_names: vec![],
                         column_types: vec![],
@@ -495,8 +487,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Sample(LogicalSampleNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         count: sample_count as i64,
                         output_var: None,
                         col_names: vec![],
@@ -527,8 +518,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let mut logical_root = wrap_logical(&input_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     columns: yield_columns.clone(),
                     output_var: None,
                     col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
@@ -540,8 +530,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Dedup(LogicalDedupNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         output_var: None,
                         col_names: vec![],
                         column_types: vec![],
@@ -557,8 +546,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Sample(LogicalSampleNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         count: sample_count as i64,
                         output_var: None,
                         col_names: vec![],

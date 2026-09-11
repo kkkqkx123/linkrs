@@ -68,8 +68,7 @@ impl ClausePlanner for PaginationPlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Limit(LogicalLimitNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 offset: pagination.skip as i64,
                 count: pagination.limit as i64,
                 output_var: None,

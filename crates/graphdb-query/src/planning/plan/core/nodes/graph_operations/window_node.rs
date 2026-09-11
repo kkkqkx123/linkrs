@@ -35,8 +35,7 @@ impl WindowNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             window_functions,
             has_folded_expressions: false,
             output_var: None,

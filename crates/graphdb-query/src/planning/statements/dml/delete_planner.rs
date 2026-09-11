@@ -278,7 +278,6 @@ impl DeletePlanner {
                     LogicalNodeEnum::PipeDeleteVertices(LogicalPipeDeleteVerticesNode {
                         id: next_node_id(),
                         input: Some(Box::new(input)),
-                        deps: vec![],
                         info,
                         output_var: None,
                         col_names: vec!["deleted".to_string()],
@@ -309,7 +308,6 @@ impl DeletePlanner {
                     LogicalNodeEnum::PipeDeleteEdges(LogicalPipeDeleteEdgesNode {
                         id: next_node_id(),
                         input: Some(Box::new(input)),
-                        deps: vec![],
                         info,
                         output_var: None,
                         col_names: vec!["deleted".to_string()],

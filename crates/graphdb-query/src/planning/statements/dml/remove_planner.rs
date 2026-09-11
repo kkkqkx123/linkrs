@@ -88,7 +88,6 @@ impl Planner for RemovePlanner {
         let logical_remove = LogicalNodeEnum::Remove(LogicalRemoveNode {
             id: next_node_id(),
             input: Some(Box::new(arg_logical)),
-            deps: vec![],
             remove_items,
             output_var: None,
             col_names: vec![],
@@ -110,7 +109,6 @@ impl Planner for RemovePlanner {
         let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_remove)),
-            deps: vec![],
             columns: yield_columns,
             output_var: None,
             col_names: vec!["removed_count".to_string()],
@@ -173,7 +171,6 @@ impl Planner for RemovePlanner {
         let logical_remove = LogicalNodeEnum::Remove(LogicalRemoveNode {
             id: next_node_id(),
             input: Some(Box::new(arg_logical)),
-            deps: vec![],
             remove_items,
             output_var: None,
             col_names: vec![],
@@ -196,7 +193,6 @@ impl Planner for RemovePlanner {
         let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_remove)),
-            deps: vec![],
             columns: yield_columns,
             output_var: None,
             col_names: vec!["removed_count".to_string()],

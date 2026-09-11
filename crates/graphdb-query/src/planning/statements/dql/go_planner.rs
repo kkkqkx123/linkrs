@@ -177,7 +177,6 @@ impl Planner for GoPlanner {
             logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 condition: condition.clone(),
                 output_var: None,
                 col_names: vec![],
@@ -189,7 +188,6 @@ impl Planner for GoPlanner {
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
-            deps: vec![],
             columns: project_columns.clone(),
             output_var: None,
             col_names: project_columns
@@ -203,7 +201,6 @@ impl Planner for GoPlanner {
             logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],
@@ -327,7 +324,6 @@ impl Planner for GoPlanner {
             logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 condition,
                 output_var: None,
                 col_names: vec![],
@@ -340,7 +336,6 @@ impl Planner for GoPlanner {
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
-            deps: vec![],
             columns: project_columns.clone(),
             output_var: None,
             col_names: project_columns
@@ -354,7 +349,6 @@ impl Planner for GoPlanner {
             logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],

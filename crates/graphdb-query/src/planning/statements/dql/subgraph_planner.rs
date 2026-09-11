@@ -123,8 +123,7 @@ impl Planner for SubgraphPlanner {
             for condition in conditions {
                 current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
                     id: next_node_id(),
-                    input: Some(Box::new(current_logical.clone())),
-                    deps: vec![current_logical],
+                    input: Some(Box::new(current_logical)),
                     condition,
                     output_var: None,
                     col_names: current_node.col_names().to_vec(),
@@ -137,8 +136,7 @@ impl Planner for SubgraphPlanner {
                     let project_enum = PlanNodeEnum::Project(node);
                     current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                         id: next_node_id(),
-                        input: Some(Box::new(current_logical.clone())),
-                        deps: vec![current_logical],
+                        input: Some(Box::new(current_logical)),
                         columns: vec![],
                         output_var: None,
                         col_names: project_enum.col_names().to_vec(),
@@ -217,8 +215,7 @@ impl Planner for SubgraphPlanner {
         for condition in conditions {
             current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
                 id: next_node_id(),
-                input: Some(Box::new(current_logical.clone())),
-                deps: vec![current_logical],
+                input: Some(Box::new(current_logical)),
                 condition,
                 output_var: None,
                 col_names: current_node.col_names().to_vec(),
@@ -231,8 +228,7 @@ impl Planner for SubgraphPlanner {
                 let project_enum = PlanNodeEnum::Project(node);
                 current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(current_logical.clone())),
-                    deps: vec![current_logical],
+                    input: Some(Box::new(current_logical)),
                     columns: vec![],
                     output_var: None,
                     col_names: project_enum.col_names().to_vec(),
@@ -339,8 +335,7 @@ impl Planner for SubgraphPlanner {
                 if matches!(current_node, PlanNodeEnum::Filter(_)) {
                     current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
                         id: next_node_id(),
-                        input: Some(Box::new(current_logical.clone())),
-                        deps: vec![current_logical],
+                        input: Some(Box::new(current_logical)),
                         condition,
                         output_var: None,
                         col_names: current_node.col_names().to_vec(),
@@ -354,8 +349,7 @@ impl Planner for SubgraphPlanner {
                     let project_enum = PlanNodeEnum::Project(node);
                     current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                         id: next_node_id(),
-                        input: Some(Box::new(current_logical.clone())),
-                        deps: vec![current_logical],
+                        input: Some(Box::new(current_logical)),
                         columns: vec![],
                         output_var: None,
                         col_names: project_enum.col_names().to_vec(),
@@ -426,8 +420,7 @@ impl Planner for SubgraphPlanner {
             if matches!(current_node, PlanNodeEnum::Filter(_)) {
                 current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
                     id: next_node_id(),
-                    input: Some(Box::new(current_logical.clone())),
-                    deps: vec![current_logical],
+                    input: Some(Box::new(current_logical)),
                     condition,
                     output_var: None,
                     col_names: current_node.col_names().to_vec(),
@@ -441,8 +434,7 @@ impl Planner for SubgraphPlanner {
                 let project_enum = PlanNodeEnum::Project(node);
                 current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(current_logical.clone())),
-                    deps: vec![current_logical],
+                    input: Some(Box::new(current_logical)),
                     columns: vec![],
                     output_var: None,
                     col_names: project_enum.col_names().to_vec(),

@@ -25,8 +25,7 @@ impl UnwindNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             alias: alias.to_string(),
             list_expression,
             output_var: None,

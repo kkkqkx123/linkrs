@@ -19,7 +19,6 @@ pub struct PatternApplyNode {
     id: i64,
     left_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     right_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-    deps: Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     hash_keys: Vec<graphdb_core::types::ContextualExpression>,
     probe_keys: Vec<graphdb_core::types::ContextualExpression>,
     is_anti_predicate: bool,
@@ -37,13 +36,11 @@ impl PatternApplyNode {
         is_anti_predicate: bool,
     ) -> Result<Self, crate::planning::planner::PlannerError> {
         let col_names = left_input.col_names().to_vec();
-        let deps = vec![left_input.clone(), right_input.clone()];
 
         Ok(Self {
             id: -1,
             left_input: Box::new(left_input),
             right_input: Box::new(right_input),
-            deps,
             hash_keys,
             probe_keys,
             is_anti_predicate,
@@ -93,25 +90,6 @@ impl PatternApplyNode {
         &self.col_names
     }
 
-    pub fn dependencies(
-        &self,
-    ) -> &[crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
-        &self.deps
-    }
-
-    pub fn add_dependency(
-        &mut self,
-        dep: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
-    ) {
-        *self.left_input = dep.clone();
-        self.deps.clear();
-        self.deps.push(dep);
-    }
-
-    pub fn remove_dependency(&mut self, _id: i64) -> bool {
-        false
-    }
-
     pub fn set_output_var(&mut self, var: String) {
         self.output_var = Some(var);
     }
@@ -127,7 +105,6 @@ impl PatternApplyNode {
             id: self.id,
             left_input: self.left_input.clone(),
             right_input: self.right_input.clone(),
-            deps: self.deps.clone(),
             hash_keys: self.hash_keys.clone(),
             probe_keys: self.probe_keys.clone(),
             is_anti_predicate: self.is_anti_predicate,
@@ -218,9 +195,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
         &mut self,
         input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
     ) {
-        *self.left_input = input.clone();
-        self.deps.clear();
-        self.deps.push(input);
+        *self.left_input = input;
     }
 }
 
@@ -257,16 +232,10 @@ impl MemoryEstimatable for PatternApplyNode {
             Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
         >() * 2;
 
-        // Estimate deps Vec<PlanNodeEnum>
-        let deps_size = std::mem::size_of::<
-            Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-        >();
-
         base + keys_size
             + is_anti_size
             + col_names_size
             + output_var_size
             + left_right_size
-            + deps_size
     }
 }

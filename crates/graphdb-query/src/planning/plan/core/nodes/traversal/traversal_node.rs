@@ -21,7 +21,7 @@ define_plan_node! {
         direction: EdgeDirection,
         step_limit: Option<u32>,
         filter: Option<ContextualExpression>,
-        filter_serializable: Option<SerializableExpression>,
+        filter_serializable: Option<Box<SerializableExpression>>,
     }
     enum: Expand
     input: MultipleInputNode
@@ -80,14 +80,15 @@ impl ExpandNode {
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.filter_serializable {
-            self.filter = Some(ser_expr.clone().to_contextual(ctx));
+            self.filter = Some(ser_expr.as_ref().clone().to_contextual(ctx));
         }
     }
 }
@@ -199,7 +200,7 @@ pub struct ExpandAllNode {
     edge_props: Vec<EdgeProp>,
     vertex_props: Vec<TagProp>,
     filter: Option<ContextualExpression>,
-    filter_serializable: Option<SerializableExpression>,
+    filter_serializable: Option<Box<SerializableExpression>>,
     src_vids: Vec<graphdb_core::Value>,
     include_empty_paths: bool,
     output_var: Option<String>,
@@ -363,14 +364,15 @@ impl ExpandAllNode {
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.filter_serializable {
-            self.filter = Some(ser_expr.clone().to_contextual(ctx));
+            self.filter = Some(ser_expr.as_ref().clone().to_contextual(ctx));
         }
     }
 
@@ -508,11 +510,11 @@ define_plan_node_with_deps! {
         edge_alias: Option<String>,
         vertex_alias: Option<String>,
         e_filter: Option<ContextualExpression>,
-        e_filter_serializable: Option<SerializableExpression>,
+        e_filter_serializable: Option<Box<SerializableExpression>>,
         v_filter: Option<ContextualExpression>,
-        v_filter_serializable: Option<SerializableExpression>,
+        v_filter_serializable: Option<Box<SerializableExpression>>,
         first_step_filter: Option<ContextualExpression>,
-        first_step_filter_serializable: Option<SerializableExpression>,
+        first_step_filter_serializable: Option<Box<SerializableExpression>>,
         path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     }
     enum: Traverse
@@ -524,7 +526,6 @@ impl TraverseNode {
         Self {
             id: next_node_id(),
             input: None,
-            deps: Vec::new(),
             space_id,
             start_vids: start_vids.to_string(),
             end_vids: None,
@@ -676,27 +677,29 @@ impl TraverseNode {
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.e_filter {
-            self.e_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.e_filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         if let Some(ref ctx_expr) = self.v_filter {
-            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.v_filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         if let Some(ref ctx_expr) = self.first_step_filter {
             self.first_step_filter_serializable =
-                Some(SerializableExpression::from_contextual(ctx_expr)?);
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.e_filter_serializable {
-            self.e_filter = Some(ser_expr.clone().to_contextual(ctx.clone()));
+            self.e_filter = Some(ser_expr.as_ref().clone().to_contextual(ctx.clone()));
         }
         if let Some(ref ser_expr) = self.v_filter_serializable {
-            self.v_filter = Some(ser_expr.clone().to_contextual(ctx.clone()));
+            self.v_filter = Some(ser_expr.as_ref().clone().to_contextual(ctx.clone()));
         }
         if let Some(ref ser_expr) = self.first_step_filter_serializable {
-            self.first_step_filter = Some(ser_expr.clone().to_contextual(ctx));
+            self.first_step_filter = Some(ser_expr.as_ref().clone().to_contextual(ctx));
         }
     }
 }
@@ -707,16 +710,16 @@ define_plan_node! {
         vertex_tag: String,
         vertex_props: Vec<TagProp>,
         filter: Option<ContextualExpression>,
-        filter_serializable: Option<SerializableExpression>,
+        filter_serializable: Option<Box<SerializableExpression>>,
         input_var: Option<String>,
         src_expression: Option<ContextualExpression>,
-        src_expression_serializable: Option<SerializableExpression>,
+        src_expression_serializable: Option<Box<SerializableExpression>>,
         dedup: bool,
         need_fetch_prop: bool,
         vids: Vec<String>,
         tag_ids: Vec<i32>,
         v_filter: Option<ContextualExpression>,
-        v_filter_serializable: Option<SerializableExpression>,
+        v_filter_serializable: Option<Box<SerializableExpression>>,
         node_alias: Option<String>,
     }
     enum: AppendVertices
@@ -837,27 +840,29 @@ impl AppendVerticesNode {
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         if let Some(ref ctx_expr) = self.src_expression {
             self.src_expression_serializable =
-                Some(SerializableExpression::from_contextual(ctx_expr)?);
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         if let Some(ref ctx_expr) = self.v_filter {
-            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
+            self.v_filter_serializable =
+                Some(Box::new(SerializableExpression::from_contextual(ctx_expr)?));
         }
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.filter_serializable {
-            self.filter = Some(ser_expr.clone().to_contextual(ctx.clone()));
+            self.filter = Some(ser_expr.as_ref().clone().to_contextual(ctx.clone()));
         }
         if let Some(ref ser_expr) = self.src_expression_serializable {
-            self.src_expression = Some(ser_expr.clone().to_contextual(ctx.clone()));
+            self.src_expression = Some(ser_expr.as_ref().clone().to_contextual(ctx.clone()));
         }
         if let Some(ref ser_expr) = self.v_filter_serializable {
-            self.v_filter = Some(ser_expr.clone().to_contextual(ctx));
+            self.v_filter = Some(ser_expr.as_ref().clone().to_contextual(ctx));
         }
     }
 
@@ -905,7 +910,6 @@ impl BiExpandNode {
             id: next_node_id(),
             left: Box::new(left_input),
             right: Box::new(right_input),
-            deps: Vec::new(),
             space_id,
             left_direction,
             right_direction,
@@ -986,7 +990,6 @@ impl BiTraverseNode {
             id: next_node_id(),
             left: Box::new(params.left_input),
             right: Box::new(params.right_input),
-            deps: Vec::new(),
             space_id: params.space_id,
             left_src_var: params.left_src_var,
             right_src_var: params.right_src_var,

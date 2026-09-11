@@ -123,7 +123,6 @@ pub fn rewrite_sort_with_limits_logical(
                         crate::planning::plan::logical::logical_nodes::operation::LogicalTopNNode {
                             id: crate::planning::plan::core::node_id_generator::next_node_id(),
                             input: Some(Box::new(sort.input().clone())),
-                            deps: vec![sort.input().clone()],
                             sort_items: sort.sort_items.clone(),
                             limit: total,
                             output_var: sort.output_var.clone(),

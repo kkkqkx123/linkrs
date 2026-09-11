@@ -59,7 +59,7 @@ impl PassThroughNode {
 pub struct SelectNode {
     id: i64,
     condition: ContextualExpression,
-    condition_serializable: Option<SerializableExpression>,
+    condition_serializable: Option<Box<SerializableExpression>>,
     if_branch: Option<Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     else_branch:
         Option<Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
@@ -147,14 +147,15 @@ impl SelectNode {
     }
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
-        self.condition_serializable =
-            Some(SerializableExpression::from_contextual(&self.condition)?);
+        self.condition_serializable = Some(Box::new(SerializableExpression::from_contextual(
+            &self.condition,
+        )?));
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.condition_serializable {
-            self.condition = ser_expr.clone().to_contextual(ctx);
+            self.condition = ser_expr.as_ref().clone().to_contextual(ctx);
         }
     }
 
@@ -251,7 +252,7 @@ impl MemoryEstimatable for SelectNode {
             + std::mem::size_of::<Arc<ExpressionAnalysisContext>>();
 
         // Estimate condition_serializable
-        let serializable_size = std::mem::size_of::<Option<SerializableExpression>>();
+        let serializable_size = std::mem::size_of::<Option<Box<SerializableExpression>>>();
         let serializable_data_size = if self.condition_serializable.is_some() {
             std::mem::size_of::<SerializableExpression>()
         } else {
@@ -292,7 +293,7 @@ impl MemoryEstimatable for SelectNode {
 pub struct LoopNode {
     id: i64,
     condition: ContextualExpression,
-    condition_serializable: Option<SerializableExpression>,
+    condition_serializable: Option<Box<SerializableExpression>>,
     body: Option<Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
@@ -356,14 +357,15 @@ impl LoopNode {
     }
 
     pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
-        self.condition_serializable =
-            Some(SerializableExpression::from_contextual(&self.condition)?);
+        self.condition_serializable = Some(Box::new(SerializableExpression::from_contextual(
+            &self.condition,
+        )?));
         Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
         if let Some(ref ser_expr) = self.condition_serializable {
-            self.condition = ser_expr.clone().to_contextual(ctx);
+            self.condition = ser_expr.as_ref().clone().to_contextual(ctx);
         }
     }
 
@@ -460,7 +462,7 @@ impl MemoryEstimatable for LoopNode {
             + std::mem::size_of::<Arc<ExpressionAnalysisContext>>();
 
         // Estimate condition_serializable
-        let serializable_size = std::mem::size_of::<Option<SerializableExpression>>();
+        let serializable_size = std::mem::size_of::<Option<Box<SerializableExpression>>>();
         let serializable_data_size = if self.condition_serializable.is_some() {
             std::mem::size_of::<SerializableExpression>()
         } else {

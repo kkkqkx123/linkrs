@@ -297,16 +297,10 @@ impl RequiredPropertyAnalyzer {
                     }
                 }
                 self.propagate(n.input(), &passed, map);
-                for dep in n.dependencies() {
-                    self.propagate(dep, &[], map);
-                }
             }
             Filter(n) => {
                 merge_expr(n.condition(), &mut passed);
                 self.propagate(n.input(), &passed, map);
-                for dep in n.dependencies() {
-                    self.propagate(dep, &[], map);
-                }
             }
             Sort(n) => self.propagate_single(n.input(), &passed, map),
             Limit(n) => self.propagate_single(n.input(), &passed, map),
@@ -385,14 +379,12 @@ impl RequiredPropertyAnalyzer {
                 }
             }
             BiExpand(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
             BiTraverse(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
 
             // Pattern apply: the left input is the main pipeline; the right
@@ -428,24 +420,20 @@ impl RequiredPropertyAnalyzer {
 
             // Algorithm nodes: pass requirements into their inputs.
             ShortestPath(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
             MultiShortestPath(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
             BFSShortest(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
             AllPaths(n) => {
-                for dep in n.dependencies() {
-                    self.propagate(dep, &passed, map);
-                }
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &passed, map);
             }
 
             // Data processing nodes.

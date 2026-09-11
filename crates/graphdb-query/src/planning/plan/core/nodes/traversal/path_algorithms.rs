@@ -31,9 +31,8 @@ impl MultiShortestPathNode {
         let right_box = Box::new(right);
         Self {
             id: next_node_id(),
-            left: left_box.clone(),
-            right: right_box.clone(),
-            deps: vec![*left_box, *right_box],
+            left: left_box,
+            right: right_box,
             steps,
             left_vid_var: String::new(),
             right_vid_var: String::new(),
@@ -138,9 +137,8 @@ impl BFSShortestNode {
         let right_box = Box::new(right);
         Self {
             id: next_node_id(),
-            left: left_box.clone(),
-            right: right_box.clone(),
-            deps: vec![*left_box, *right_box],
+            left: left_box,
+            right: right_box,
             space_id,
             steps,
             edge_types,
@@ -230,9 +228,8 @@ impl AllPathsNode {
         let right_box = Box::new(right);
         Self {
             id: next_node_id(),
-            left: left_box.clone(),
-            right: right_box.clone(),
-            deps: vec![*left_box, *right_box],
+            left: left_box,
+            right: right_box,
             space_id,
             steps,
             edge_types,
@@ -360,9 +357,8 @@ impl ShortestPathNode {
         let right_box = Box::new(right);
         Self {
             id: next_node_id(),
-            left: left_box.clone(),
-            right: right_box.clone(),
-            deps: vec![*left_box, *right_box],
+            left: left_box,
+            right: right_box,
             space_id,
             edge_types,
             max_step,

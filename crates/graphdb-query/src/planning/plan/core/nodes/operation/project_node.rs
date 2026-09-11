@@ -34,8 +34,7 @@ impl ProjectNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             columns,
             columns_serializable: None,
             subqueries: Vec::new(),

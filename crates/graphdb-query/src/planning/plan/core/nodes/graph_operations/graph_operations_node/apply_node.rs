@@ -15,7 +15,6 @@ pub struct ApplyNode {
     id: i64,
     left_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     right_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-    deps: Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     left_input_var: Option<String>,
     right_input_var: Option<String>,
     correlated_cols: Vec<String>,
@@ -48,13 +47,11 @@ impl ApplyNode {
         apply_kind: ApplyKind,
     ) -> Result<Self, crate::planning::planner::PlannerError> {
         let col_names = left_input.col_names().to_vec();
-        let deps = vec![left_input.clone(), right_input.clone()];
 
         Ok(Self {
             id: -1,
             left_input: Box::new(left_input),
             right_input: Box::new(right_input),
-            deps,
             left_input_var: None,
             right_input_var: None,
             correlated_cols,
@@ -117,12 +114,6 @@ impl ApplyNode {
         &self.col_names
     }
 
-    pub fn dependencies(
-        &self,
-    ) -> &[crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
-        &self.deps
-    }
-
     pub fn set_output_var(&mut self, var: String) {
         self.output_var = Some(var);
     }
@@ -146,7 +137,6 @@ impl ApplyNode {
             id: self.id,
             left_input: self.left_input.clone(),
             right_input: self.right_input.clone(),
-            deps: self.deps.clone(),
             left_input_var: self.left_input_var.clone(),
             right_input_var: self.right_input_var.clone(),
             correlated_cols: self.correlated_cols.clone(),
@@ -290,15 +280,10 @@ impl MemoryEstimatable for ApplyNode {
             Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
         >() * 2;
 
-        let deps_size = std::mem::size_of::<
-            Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-        >();
-
         base + input_var_size
             + correlated_cols_size
             + col_names_size
             + output_var_size
             + left_right_size
-            + deps_size
     }
 }

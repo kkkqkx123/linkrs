@@ -102,7 +102,7 @@ impl RewriteRule for PushFilterDownGetNbrsRule {
             if let Some(existing_expr) = existing_ctx.get_expression() {
                 Expression::Binary {
                     op: BinaryOperator::And,
-                    left: Box::new(existing_expr.clone()),
+                    left: Box::new(existing_expr),
                     right: Box::new(expr),
                 }
             } else {

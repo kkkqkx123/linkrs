@@ -502,7 +502,7 @@ impl OptimizerEngine {
 
     fn ensure_logical_plan(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
         if plan.logical_plan.is_none() {
-            if let Some(root) = plan.root.clone() {
+            if let Some(root) = plan.root.as_ref() {
                 let node_type = root.type_name().to_string();
                 match crate::planning::plan::logical_plan::LogicalPlan::from_plan_node(&root) {
                     Ok(logical) => {
@@ -544,12 +544,13 @@ impl OptimizerEngine {
         // the cost-based choices that live only there (index scan limits,
         // TopN wiring). Structural divergences keep the physical subtree
         // and are recorded in `cbo_notes` instead of failing.
-        if let Some(logical) = plan.logical_plan.clone() {
-            if !crate::planning::physical_mapper::PhysicalMapper::needs_physical_mapping(
-                &logical.root,
-            ) {
-                return plan;
-            }
+        let needs_mapping = plan.logical_plan.as_ref().is_some_and(|logical| {
+            crate::planning::physical_mapper::PhysicalMapper::needs_physical_mapping(&logical.root)
+        });
+        if !needs_mapping {
+            return plan;
+        }
+        if let Some(logical) = plan.logical_plan.as_ref() {
             if let Some(root) = plan.root.take() {
                 let mapped =
                     crate::planning::physical_mapper::PhysicalMapper::map(logical.root.clone());
@@ -628,9 +629,8 @@ impl OptimizerEngine {
     fn apply_logical_heuristic(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         self.logical_heuristic
             .set_max_iterations(self.max_heuristic_iterations);
-        if let Some(mut logical) = plan.logical_plan.clone() {
+        if let Some(logical) = plan.logical_plan.as_mut() {
             self.logical_heuristic.optimize(&mut logical.root)?;
-            plan.set_logical_plan(logical);
         }
         Ok(plan)
     }
@@ -638,15 +638,14 @@ impl OptimizerEngine {
     /// Apply physical heuristic rules on the physical root.
     fn apply_physical_heuristic(
         &self,
-        plan: ExecutionPlan,
+        mut plan: ExecutionPlan,
         max_iterations: usize,
     ) -> OptimizeResult<ExecutionPlan> {
         // Interior mutability via AtomicUsize: set_max_iterations does not need &mut self.
         self.physical_heuristic.set_max_iterations(max_iterations);
 
-        let root = match plan.root.clone() {
-            Some(root) => root,
-            None => return Ok(plan),
+        let Some(root) = plan.root.take() else {
+            return Ok(plan);
         };
         let result = self
             .physical_heuristic
@@ -655,9 +654,8 @@ impl OptimizerEngine {
         if let Ok(mut guard) = self.last_batch_statistics.lock() {
             *guard = result.batch_statistics.clone();
         }
-        let mut new_plan = plan;
-        new_plan.set_root(result.optimized_plan);
-        Ok(new_plan)
+        plan.set_root(result.optimized_plan);
+        Ok(plan)
     }
 
     /// Apply cost-based optimization strategies.
@@ -677,10 +675,10 @@ impl OptimizerEngine {
         let mut plan = plan;
         let stats = StatsView::new(&self.stats_manager, space);
 
-        let logical = plan.logical_plan().cloned();
-        match logical {
-            Some(_) => self.optimize_logical(&stats, space, &mut plan)?,
-            None => self.optimize_plan_nodes(&stats, space, &mut plan)?,
+        if plan.logical_plan().is_some() {
+            self.optimize_logical(&stats, space, &mut plan)?;
+        } else {
+            self.optimize_plan_nodes(&stats, space, &mut plan)?;
         }
         Ok(plan)
     }
@@ -750,12 +748,12 @@ impl OptimizerEngine {
         self.apply_unnesting(plan, stats);
 
         // Join order optimization
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let mut notes = Vec::new();
             let mut decisions = std::collections::HashMap::new();
             let rewritten = crate::optimizer::cost_based::join_order_rewriter::
                 walk_and_optimize_joins_with_decisions(
-                    root,
+                    &root,
                     stats,
                     &self.cost_calculator,
                     &mut notes,
@@ -767,14 +765,14 @@ impl OptimizerEngine {
         }
 
         // Cost-based index selection (ScanVertices → IndexScan)
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let selector = IndexSelector::new(
                 self.cost_calculator.clone(),
                 self.selectivity_estimator.clone(),
             );
             let mut notes = Vec::new();
             let rewritten = crate::optimizer::cost_based::index_selection::rewrite_index_scans(
-                root,
+                &root,
                 &selector,
                 &self.stats_manager,
                 space,
@@ -788,10 +786,10 @@ impl OptimizerEngine {
         self.apply_topn_wiring(plan, stats);
 
         // Aggregate strategy selection (decision notes)
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
             let mut notes = Vec::new();
-            let rewritten = self.select_aggregate_strategies(root, stats, &selector, &mut notes);
+            let rewritten = self.select_aggregate_strategies(&root, stats, &selector, &mut notes);
             plan.set_root(rewritten);
             plan.cbo_notes.extend(notes);
         }
@@ -807,9 +805,9 @@ impl OptimizerEngine {
 
     /// Subquery unnesting: PatternApply → SemiJoin when cost-beneficial.
     fn apply_unnesting(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let mut notes = Vec::new();
-            let rewritten = self.unnest_subqueries(root, stats, &mut notes);
+            let rewritten = self.unnest_subqueries(&root, stats, &mut notes);
             plan.set_root(rewritten);
             plan.cbo_notes.extend(notes);
         }
@@ -858,12 +856,12 @@ impl OptimizerEngine {
         // Structural rewrite on the physical root. The physical walker
         // recomputes the same decision; its notes are discarded here because
         // the logical walker is the note source.
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let mut scratch = Vec::new();
             let mut decisions = std::collections::HashMap::new();
             let rewritten = crate::optimizer::cost_based::join_order_rewriter::
                 walk_and_optimize_joins_with_decisions(
-                    root,
+                    &root,
                     stats,
                     &self.cost_calculator,
                     &mut scratch,
@@ -907,10 +905,10 @@ impl OptimizerEngine {
 
         // Structural rewrite on the physical root (notes recomputed there
         // are discarded — the logical walker is the note source).
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let mut scratch = Vec::new();
             let rewritten = crate::optimizer::cost_based::index_selection::rewrite_index_scans(
-                root,
+                &root,
                 &selector,
                 &self.stats_manager,
                 space,
@@ -964,11 +962,11 @@ impl OptimizerEngine {
 
     /// Sort + Limit → TopN conversion (residual patterns, cost-based).
     fn apply_topn_wiring(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.take() {
             let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
             let mut notes = Vec::new();
             let rewritten = crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits(
-                root,
+                &root,
                 &optimizer,
                 stats,
                 &self.selectivity_estimator,
@@ -982,7 +980,7 @@ impl OptimizerEngine {
 
     /// Collect per-node row estimates for estimated_rows writeback.
     fn apply_row_estimates(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.as_ref() {
             plan.row_estimates =
                 crate::optimizer::cost_based::row_estimates::collect_node_row_estimates(
                     root,
@@ -995,7 +993,7 @@ impl OptimizerEngine {
     /// Expression precomputation decisions (note-only; EXPLAIN observability
     /// for expressions worth precomputing).
     fn apply_precompute_notes(&self, plan: &mut ExecutionPlan) {
-        if let Some(ref root) = plan.root.clone() {
+        if let Some(root) = plan.root.as_ref() {
             let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator.clone());
             let notes =
                 crate::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
@@ -1136,12 +1134,9 @@ impl OptimizerEngine {
     }
 
     fn apply_remove_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
-        if let Some(logical) = plan.logical_plan.clone() {
-            let mut root = logical.root.clone();
-            crate::optimizer::factorization::RemoveFactorizationRewriter::new().rewrite(&mut root);
-            let mut updated = logical.clone();
-            updated.root = root;
-            plan.set_logical_plan(updated);
+        if let Some(logical) = plan.logical_plan.as_mut() {
+            crate::optimizer::factorization::RemoveFactorizationRewriter::new()
+                .rewrite(&mut logical.root);
             plan.cbo_notes
                 .push("factorization: removed LogicalFlatten".to_string());
         }
@@ -1149,16 +1144,12 @@ impl OptimizerEngine {
     }
 
     fn apply_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
-        if let Some(logical) = plan.logical_plan.clone() {
-            let mut root = logical.root.clone();
+        if let Some(logical) = plan.logical_plan.as_mut() {
             let mut rewriter = crate::optimizer::factorization::FactorizationRewriter::new();
-            rewriter.rewrite(&mut root);
-            let mut updated = logical.clone();
-            updated.root = root.clone();
-            plan.set_logical_plan(updated);
+            rewriter.rewrite(&mut logical.root);
             let mut flattens = Vec::new();
             crate::planning::physical_mapper::PhysicalMapper::collect_flatten_positions(
-                &root,
+                &logical.root,
                 &mut flattens,
             );
             flattens.sort_unstable();
@@ -1193,7 +1184,7 @@ impl OptimizerEngine {
             // is rebuilt on DataChunk (the removed heap row store is not
             // reused); record the retention so the degradation is visible
             // in EXPLAIN rather than silent.
-            if Self::logical_contains_expand_all(&root) {
+            if Self::logical_contains_expand_all(&logical.root) {
                 plan.cbo_notes.push(
                     crate::executor::streaming::operators::graph_operator::expand::expand_all_row_path_note()
                         .to_string(),
@@ -1225,8 +1216,11 @@ impl OptimizerEngine {
         space: Option<&str>,
     ) -> ExecutionPlan {
         let stats = StatsView::new(&self.stats_manager, space);
-        if let Some(ref logical) = plan.logical_plan.clone() {
-            let mut root = logical.root.clone();
+        if plan.logical_plan.is_some() {
+            // Clone the logical root once for a speculative rewrite; the
+            // clone is committed back only when a rewrite fired and the
+            // factorized invariant still holds.
+            let mut root = plan.logical_plan.as_ref().expect("checked").root.clone();
             let mut notes = Vec::new();
             let mut rewrite_count = 0u64;
             Self::rewrite_intersect_to_join(
@@ -1238,9 +1232,9 @@ impl OptimizerEngine {
             );
             if rewrite_count > 0 {
                 if Self::validate_factorized_invariant(&root) {
-                    let mut updated = logical.clone();
-                    updated.root = root;
-                    plan.set_logical_plan(updated);
+                    if let Some(logical) = plan.logical_plan.as_mut() {
+                        logical.root = root;
+                    }
                     plan.cbo_notes.extend(notes);
                     plan.cbo_notes.push(format!(
                         "factorization: intersect_to_join_rewrite_total={}",
@@ -1354,15 +1348,12 @@ impl OptimizerEngine {
                     col_names.push(col.clone());
                 }
             }
-            let left = acc.clone();
-            let right = build.clone();
             let join = LogicalInnerJoinNode {
                 id: next_node_id(),
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+                left: Box::new(acc.clone()),
+                right: Box::new(build.clone()),
                 hash_keys: vec![intersect_key.clone()],
                 probe_keys: vec![intersect_key.clone()],
-                deps: vec![left, right],
                 recommended_algorithm: None,
                 output_var: wco.output_var().map(|s| s.to_string()),
                 col_names,
@@ -1449,12 +1440,7 @@ impl OptimizerEngine {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
             LogicalNodeEnum::Assign(n) => {
-                let mut out = Vec::new();
-                if let Some(c) = n.input.as_deref_mut() {
-                    out.push(c);
-                }
-                out.extend(n.deps.iter_mut());
-                out
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
             LogicalNodeEnum::Select(n) => {
                 let mut out = Vec::new();

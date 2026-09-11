@@ -531,7 +531,6 @@ pub fn wrap_pattern_apply(
                 right: Box::new(right_logical.clone()),
                 hash_keys: planned.hash_keys.clone(),
                 probe_keys: planned.probe_keys.clone(),
-                deps: vec![left_logical.clone(), right_logical.clone()],
                 is_anti_predicate: anti,
                 output_var: None,
                 col_names: vec![],
@@ -571,7 +570,6 @@ pub fn wrap_correlated_apply(
                 right: Box::new(right_logical.clone()),
                 hash_keys: vec![],
                 probe_keys: vec![],
-                deps: vec![left_logical.clone(), right_logical.clone()],
                 is_anti_predicate: anti,
                 output_var: None,
                 col_names: vec![],
@@ -620,7 +618,6 @@ pub fn wrap_mark_join(
                 right: Box::new(right_logical.clone()),
                 hash_keys: planned.hash_keys.clone(),
                 probe_keys: planned.probe_keys.clone(),
-                deps: vec![left_logical.clone(), right_logical.clone()],
                 join_condition: Some(condition.clone()),
                 anti,
                 output_var: None,
@@ -679,8 +676,7 @@ fn build_group_join_right_subtree(
     let logical_root = sub_plan.logical_root().cloned().map(|input| {
         let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             columns: columns.clone(),
             output_var: None,
             col_names: project_col_names.clone(),
@@ -688,8 +684,7 @@ fn build_group_join_right_subtree(
         });
         LogicalNodeEnum::Aggregate(LogicalAggregateNode {
             id: next_node_id(),
-            input: Some(Box::new(logical_project.clone())),
-            deps: vec![logical_project],
+            input: Some(Box::new(logical_project)),
             group_key_exprs: group_key_exprs.clone(),
             aggregation_functions: vec![agg_func],
             aggregation_args: aggregate.aggregation_args().to_vec(),
@@ -745,19 +740,17 @@ fn build_correlated_right_subtree(
         });
         let logical_cross = LogicalNodeEnum::CrossJoin(LogicalCrossJoinNode {
             id: next_node_id(),
-            left: Box::new(logical_argument.clone()),
-            right: Box::new(sub_logical.clone()),
+            left: Box::new(logical_argument),
+            right: Box::new(sub_logical),
             hash_keys: vec![],
             probe_keys: vec![],
-            deps: vec![logical_argument.clone(), sub_logical.clone()],
             output_var: None,
             col_names: vec![],
             column_types: vec![],
         });
         let logical_filter = LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),
-            input: Some(Box::new(logical_cross.clone())),
-            deps: vec![logical_cross],
+            input: Some(Box::new(logical_cross)),
             condition: correlated_condition,
             output_var: None,
             col_names: vec![],

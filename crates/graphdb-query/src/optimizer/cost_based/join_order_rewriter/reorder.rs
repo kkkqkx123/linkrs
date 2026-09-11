@@ -787,11 +787,10 @@ fn build_logical_inner_join(
 
     LogicalNodeEnum::InnerJoin(LogicalInnerJoinNode {
         id: next_node_id(),
-        left: Box::new(left.clone()),
-        right: Box::new(right.clone()),
+        left: Box::new(left),
+        right: Box::new(right),
         hash_keys,
         probe_keys,
-        deps: vec![left, right],
         recommended_algorithm,
         output_var: None,
         col_names,
@@ -1274,8 +1273,8 @@ mod tests {
             .collect();
         LogicalNodeEnum::InnerJoin(LogicalInnerJoinNode {
             id: crate::planning::plan::core::node_id_generator::next_node_id(),
-            left: Box::new(left.clone()),
-            right: Box::new(right.clone()),
+            left: Box::new(left),
+            right: Box::new(right),
             hash_keys,
             probe_keys,
             deps: vec![left, right],
@@ -1347,8 +1346,8 @@ mod tests {
         let left_join = LogicalNodeEnum::LeftJoin(
             crate::planning::plan::logical::logical_nodes::join::LogicalLeftJoinNode {
                 id: crate::planning::plan::core::node_id_generator::next_node_id(),
-                left: Box::new(inner.clone()),
-                right: Box::new(c.clone()),
+                left: Box::new(inner),
+                right: Box::new(c),
                 hash_keys: vec![],
                 probe_keys: vec![],
                 deps: vec![inner, c],

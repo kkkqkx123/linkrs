@@ -209,10 +209,10 @@ impl PlanNodeEnum {
     /// Move all children out of the node, leaving it detached.
     ///
     /// The returned children are in the same order as [`children`](Self::children).
-    /// Typed input slots are left holding a `Start` placeholder and mirror
-    /// slots are cleared, so the node must be restored with
-    /// [`set_children`](Self::set_children) before further use. Moving
-    /// instead of cloning is what lets tree rewrites recurse by value.
+    /// Typed input slots are left holding a `Start` placeholder, so the node
+    /// must be restored with [`set_children`](Self::set_children) before
+    /// further use. Moving instead of cloning is what lets tree rewrites
+    /// recurse without duplicating subtrees.
     pub fn take_children(&mut self) -> Vec<PlanNodeEnum> {
         let expected = self.children().len();
         let mut taken = Vec::with_capacity(expected);
@@ -225,7 +225,6 @@ impl PlanNodeEnum {
             }
         }
         debug_assert_eq!(taken.len(), expected);
-        self.detach_child_mirrors();
         taken
     }
 
@@ -280,30 +279,18 @@ impl PlanNodeEnum {
             }
             PlanNodeEnum::Union(node) => {
                 *node.dependencies_mut() = children;
-                if let Some(first) = node.dependencies().first().cloned() {
-                    *node.input_mut() = first;
-                }
                 Ok(())
             }
             PlanNodeEnum::Minus(node) => {
                 *node.dependencies_mut() = children;
-                if let Some(first) = node.dependencies().first().cloned() {
-                    *node.input_mut() = first;
-                }
                 Ok(())
             }
             PlanNodeEnum::Intersect(node) => {
                 *node.dependencies_mut() = children;
-                if let Some(first) = node.dependencies().first().cloned() {
-                    *node.input_mut() = first;
-                }
                 Ok(())
             }
             PlanNodeEnum::WcoIntersect(node) => {
                 *node.dependencies_mut() = children;
-                if let Some(first) = node.dependencies().first().cloned() {
-                    *node.input_mut() = first;
-                }
                 Ok(())
             }
             PlanNodeEnum::Loop(node) => {
@@ -359,58 +346,9 @@ impl PlanNodeEnum {
             }
         }
     }
-
-    /// Detach the mirror copies of typed inputs after the canonical slots
-    /// have been taken, so no stale duplicate subtree is retained.
-    fn detach_child_mirrors(&mut self) {
-        match self {
-            PlanNodeEnum::Project(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Filter(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Sort(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Limit(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::TopN(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Sample(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Flatten(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Dedup(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::DataCollect(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Aggregate(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Window(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Unwind(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Assign(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Materialize(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::Traverse(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::PipeDeleteVertices(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::PipeDeleteEdges(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::InnerJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::LeftJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::RightJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::CrossJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::FullOuterJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::SemiJoin(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::BiExpand(node) => node.dependencies_mut().clear(),
-            PlanNodeEnum::BiTraverse(node) => node.dependencies_mut().clear(),
-            // Dependency-based set operators keep every child in `deps` and
-            // mirror the first one in the typed `input` slot; detach that
-            // mirror so the taken children are the only owners.
-            PlanNodeEnum::Union(node) => {
-                *node.input_mut() = PlanNodeEnum::Start(StartNode::new());
-            }
-            PlanNodeEnum::Minus(node) => {
-                *node.input_mut() = PlanNodeEnum::Start(StartNode::new());
-            }
-            PlanNodeEnum::Intersect(node) => {
-                *node.input_mut() = PlanNodeEnum::Start(StartNode::new());
-            }
-            PlanNodeEnum::WcoIntersect(node) => {
-                *node.input_mut() = PlanNodeEnum::Start(StartNode::new());
-            }
-            _ => {}
-        }
-    }
 }
 
-/// Restore the single child of a single-input node through its setter so
-/// the typed slot and the `deps` mirror stay consistent.
+/// Restore the single child of a single-input node through its setter.
 fn set_single_child<N>(node: &mut N, children: Vec<PlanNodeEnum>) -> Result<(), String>
 where
     N: SingleInputNode,
@@ -426,8 +364,7 @@ where
     Ok(())
 }
 
-/// Restore both children of a binary node through its setters so the typed
-/// slots and the `deps` mirrors stay consistent.
+/// Restore both children of a binary node through its setters.
 fn set_binary_children<N>(node: &mut N, children: Vec<PlanNodeEnum>) -> Result<(), String>
 where
     N: super::plan_node_traits::BinaryInputNode,

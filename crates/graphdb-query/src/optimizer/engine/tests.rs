@@ -334,8 +334,7 @@ mod factorization_fallback_tests {
     fn limit_logical(input: LogicalNodeEnum, count: i64) -> LogicalNodeEnum {
         LogicalNodeEnum::Limit(LogicalLimitNode {
             id: crate::planning::plan::core::node_id_generator::next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             offset: 0,
             count,
             output_var: None,
@@ -602,8 +601,8 @@ mod factorization_fallback_tests {
         let right = LogicalNodeEnum::Start(LogicalStartNode::new());
         LogicalNodeEnum::AllPaths(LogicalAllPathsNode {
             id: next_node_id(),
-            left: Box::new(left.clone()),
-            right: Box::new(right.clone()),
+            left: Box::new(left),
+            right: Box::new(right),
             deps: vec![left, right],
             space_id: 1,
             steps: 3,

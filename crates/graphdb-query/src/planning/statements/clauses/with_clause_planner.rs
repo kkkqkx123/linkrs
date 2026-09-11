@@ -63,8 +63,7 @@ impl WithClausePlanner {
             let logical_root = wrap_logical(&current_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     columns: with_ctx.yield_clause.yield_columns.clone(),
                     output_var: None,
                     col_names: project_node.col_names().to_vec(),
@@ -85,8 +84,7 @@ impl WithClausePlanner {
                 let logical_root = wrap_logical(&current_plan, |input| {
                     LogicalNodeEnum::Filter(LogicalFilterNode {
                         id: next_node_id(),
-                        input: Some(Box::new(input.clone())),
-                        deps: vec![input],
+                        input: Some(Box::new(input)),
                         condition: filter.clone(),
                         output_var: None,
                         col_names: filter_node.col_names().to_vec(),
@@ -202,8 +200,7 @@ impl WithClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Sort(LogicalSortNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 sort_items,
                 limit: None,
                 output_var: None,
@@ -236,8 +233,7 @@ impl WithClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Limit(LogicalLimitNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 offset: pagination.skip,
                 count: pagination.limit,
                 output_var: None,
@@ -270,8 +266,7 @@ impl WithClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],

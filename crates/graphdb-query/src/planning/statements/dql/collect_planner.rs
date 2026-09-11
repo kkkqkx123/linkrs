@@ -55,8 +55,7 @@ impl CollectPlanner {
         let width = aggregate_node.aggregation_functions().len();
         LogicalNodeEnum::Aggregate(LogicalAggregateNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             group_key_exprs: vec![],
             aggregation_functions: aggregate_node.aggregation_functions().to_vec(),
             aggregation_args: aggregate_node.aggregation_args().to_vec(),

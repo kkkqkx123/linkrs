@@ -53,8 +53,7 @@ impl ClausePlanner for UnwindClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Unwind(LogicalUnwindNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 alias: variable.clone(),
                 list_expression: expression.clone(),
                 output_var: None,

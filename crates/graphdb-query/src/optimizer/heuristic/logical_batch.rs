@@ -181,14 +181,9 @@ fn logical_children_mut(node: &mut LogicalNodeEnum) -> Vec<&mut LogicalNodeEnum>
         LogicalNodeEnum::RollUpApply(n) => {
             n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
         }
-        LogicalNodeEnum::Assign(n) => {
-            let mut out = Vec::new();
-            if let Some(c) = n.input.as_deref_mut() {
-                out.push(c);
+            LogicalNodeEnum::Assign(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
-            out.extend(n.deps.iter_mut());
-            out
-        }
         LogicalNodeEnum::Select(n) => {
             let mut out = Vec::new();
             if let Some(b) = n.if_branch.as_deref_mut() {

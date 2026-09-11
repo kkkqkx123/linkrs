@@ -153,16 +153,19 @@ impl ExecutionPlan {
     }
 
     /// Calculate the number of nodes in the plan.
-    /// Recursively traverse the entire execution plan tree and count all the nodes.
+    /// Traverses the execution plan tree with an explicit stack instead of
+    /// recursion so deeply nested plans cannot overflow the call stack.
     pub fn node_count(&self) -> usize {
-        fn count_nodes(node: &PlanNodeEnum) -> usize {
-            let mut count = 1;
-            for child in node.children() {
-                count += count_nodes(child);
-            }
-            count
+        let Some(root) = self.root.as_ref() else {
+            return 0;
+        };
+        let mut count = 0;
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            count += 1;
+            stack.extend(node.children());
         }
-        self.root.as_ref().map_or(0, count_nodes)
+        count
     }
 }
 

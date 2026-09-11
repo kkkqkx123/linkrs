@@ -21,8 +21,7 @@ impl DataCollectNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             collect_kind: collect_kind.to_string(),
             output_var: None,
             col_names,

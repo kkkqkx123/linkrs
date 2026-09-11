@@ -190,7 +190,6 @@ impl Planner for SetPlanner {
             let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
                 id: next_node_id(),
                 input: Some(Box::new(arg_logical)),
-                deps: vec![],
                 assignments: variable_assignments,
                 output_var: None,
                 col_names: vec![],
@@ -322,7 +321,6 @@ impl Planner for SetPlanner {
             let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
                 id: next_node_id(),
                 input: Some(Box::new(arg_logical)),
-                deps: vec![],
                 assignments: variable_assignments,
                 output_var: None,
                 col_names: vec![],

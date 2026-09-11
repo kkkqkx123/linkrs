@@ -68,19 +68,19 @@ impl Planner for PipePlanner {
 
         let mut left_planner = PlannerEnum::from_stmt_ref(left_validated.stmt())
             .ok_or_else(|| PlannerError::NoSuitablePlanner("left statement".to_string()))?;
-        let left_plan = left_planner.transform(&left_validated, qctx.clone())?;
+        let mut left_plan = left_planner.transform(&left_validated, qctx.clone())?;
 
         let mut right_planner = PlannerEnum::from_stmt_ref(right_validated.stmt())
             .ok_or_else(|| PlannerError::NoSuitablePlanner("right statement".to_string()))?;
 
-        let right_plan = right_planner.transform(&right_validated, qctx)?;
+        let mut right_plan = right_planner.transform(&right_validated, qctx)?;
 
-        let left_logical = left_plan.logical_root().cloned();
-        let left_root = left_plan.root.ok_or_else(|| {
+        let left_logical = left_plan.logical_root.take();
+        let left_root = left_plan.root.take().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
         })?;
-        let right_logical = right_plan.logical_root().cloned();
-        let right_root = right_plan.root.ok_or_else(|| {
+        let right_logical = right_plan.logical_root.take();
+        let right_root = right_plan.root.take().ok_or_else(|| {
             PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
         })?;
 
@@ -97,7 +97,8 @@ impl Planner for PipePlanner {
             left_root
         };
 
-        let combined_root = replace_argument_node(right_root, left_root);
+        let mut combined_root = right_root;
+        replace_argument_node(&mut combined_root, &left_root);
 
         let combined_logical = match (left_logical, right_logical) {
             (Some(left_logical), Some(right_logical)) => {
@@ -106,7 +107,9 @@ impl Planner for PipePlanner {
                 } else {
                     left_logical
                 };
-                Some(replace_logical_argument(right_logical, left_logical))
+                let mut combined = right_logical;
+                replace_logical_argument(&mut combined, &left_logical);
+                Some(combined)
             }
             _ => None,
         };
@@ -176,15 +179,17 @@ impl Planner for PipePlanner {
             combined_plan = match combined_plan {
                 None => Some(sub_plan),
                 Some(prev_plan) => {
-                    let prev_logical = prev_plan.logical_root().cloned();
-                    let prev_root = prev_plan.root.ok_or_else(|| {
+                    let mut prev_plan = prev_plan;
+                    let mut sub_plan = sub_plan;
+                    let prev_logical = prev_plan.logical_root.take();
+                    let prev_root = prev_plan.root.take().ok_or_else(|| {
                         PlannerError::PlanGenerationFailed(
                             "Previous pipe stage has no root node".to_string(),
                         )
                     })?;
 
-                    let new_logical = sub_plan.logical_root().cloned();
-                    let new_root = sub_plan.root.ok_or_else(|| {
+                    let new_logical = sub_plan.logical_root.take();
+                    let new_root = sub_plan.root.take().ok_or_else(|| {
                         PlannerError::PlanGenerationFailed(
                             "Current pipe stage has no root node".to_string(),
                         )
@@ -197,10 +202,13 @@ impl Planner for PipePlanner {
                     let prev_root = elide_go_default_adapter(prev_root);
                     let prev_logical = prev_logical.map(elide_go_default_adapter_logical);
 
-                    let combined_root = replace_argument_node(new_root, prev_root);
+                    let mut combined_root = new_root;
+                    replace_argument_node(&mut combined_root, &prev_root);
                     let combined_logical = match (prev_logical, new_logical) {
                         (Some(left_logical), Some(right_logical)) => {
-                            Some(replace_logical_argument(right_logical, left_logical))
+                            let mut combined = right_logical;
+                            replace_logical_argument(&mut combined, &left_logical);
+                            Some(combined)
                         }
                         _ => None,
                     };
@@ -284,23 +292,32 @@ fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
 /// Mirror of [`replace_argument_node`] on the native logical tree: swap the
 /// standalone seed (argument/start) of a downstream stage with the upstream
 /// logical tree so piped stages keep one chained logical plan.
-fn replace_logical_argument(
-    plan: LogicalNodeEnum,
-    replacement: LogicalNodeEnum,
-) -> LogicalNodeEnum {
+///
+/// Rewrites in place through `&mut` so deep pipe chains only hold two
+/// pointers per recursion level instead of two owned trees.
+fn replace_logical_argument(plan: &mut LogicalNodeEnum, replacement: &LogicalNodeEnum) {
+    use crate::planning::plan::logical::logical_node_traits::{
+        LogicalMultipleInputNode, LogicalSingleInputNode,
+    };
+    if matches!(
+        plan,
+        LogicalNodeEnum::Argument(_) | LogicalNodeEnum::Start(_)
+    ) {
+        *plan = replacement.clone();
+        return;
+    }
     match plan {
-        LogicalNodeEnum::Argument(_) | LogicalNodeEnum::Start(_) => replacement,
-        LogicalNodeEnum::Project(mut project) => {
-            if let Some(input) = project.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                project.set_input(new_input);
+        LogicalNodeEnum::Project(project) => {
+            if let Some(mut input) = project.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                project.set_input(*input);
             }
-            LogicalNodeEnum::Project(project)
         }
-        LogicalNodeEnum::Aggregate(mut aggregate) => {
+        LogicalNodeEnum::Aggregate(aggregate) => {
             // Mirror the standalone GROUP BY adapter elision: an aggregate
             // over Project -> ScanVertices consumes the piped rows directly.
-            let new_input = match aggregate.input.take() {
+            let taken = aggregate.input.take();
+            let new_input = match taken {
                 Some(boxed) => match *boxed {
                     LogicalNodeEnum::Project(mut project) => {
                         let is_adapter = matches!(
@@ -308,78 +325,69 @@ fn replace_logical_argument(
                             Some(LogicalNodeEnum::ScanVertices(_))
                         );
                         if is_adapter {
-                            replacement
+                            replacement.clone()
                         } else {
-                            if let Some(inner) = project.input.take() {
-                                let new_inner = replace_logical_argument(*inner, replacement);
-                                project.set_input(new_inner);
+                            if let Some(mut inner) = project.input.take() {
+                                replace_logical_argument(&mut inner, replacement);
+                                project.set_input(*inner);
                             }
                             LogicalNodeEnum::Project(project)
                         }
                     }
-                    other => replace_logical_argument(other, replacement),
+                    mut other => {
+                        replace_logical_argument(&mut other, replacement);
+                        other
+                    }
                 },
-                None => replacement,
+                None => replacement.clone(),
             };
             aggregate.set_input(new_input);
-            LogicalNodeEnum::Aggregate(aggregate)
         }
-        LogicalNodeEnum::Filter(mut filter) => {
-            if let Some(input) = filter.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                filter.set_input(new_input);
+        LogicalNodeEnum::Filter(filter) => {
+            if let Some(mut input) = filter.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                filter.set_input(*input);
             }
-            LogicalNodeEnum::Filter(filter)
         }
-        LogicalNodeEnum::Sort(mut sort) => {
-            if let Some(input) = sort.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                sort.set_input(new_input);
+        LogicalNodeEnum::Sort(sort) => {
+            if let Some(mut input) = sort.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                sort.set_input(*input);
             }
-            LogicalNodeEnum::Sort(sort)
         }
-        LogicalNodeEnum::Limit(mut limit) => {
-            if let Some(input) = limit.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                limit.set_input(new_input);
+        LogicalNodeEnum::Limit(limit) => {
+            if let Some(mut input) = limit.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                limit.set_input(*input);
             }
-            LogicalNodeEnum::Limit(limit)
         }
-        LogicalNodeEnum::Dedup(mut dedup) => {
-            if let Some(input) = dedup.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                dedup.set_input(new_input);
+        LogicalNodeEnum::Dedup(dedup) => {
+            if let Some(mut input) = dedup.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                dedup.set_input(*input);
             }
-            LogicalNodeEnum::Dedup(dedup)
         }
-        LogicalNodeEnum::Unwind(mut unwind) => {
+        LogicalNodeEnum::Unwind(unwind) => {
             let replacement_cols = replacement.col_names().to_vec();
-            if let Some(input) = unwind.input.take() {
-                let new_input = replace_logical_argument(*input, replacement);
-                unwind.set_input(new_input);
+            if let Some(mut input) = unwind.input.take() {
+                replace_logical_argument(&mut input, replacement);
+                unwind.set_input(*input);
             }
             let mut new_col_names = replacement_cols;
             new_col_names.push(unwind.alias.clone());
             unwind.col_names = new_col_names;
-            LogicalNodeEnum::Unwind(unwind)
         }
-        LogicalNodeEnum::ExpandAll(mut expand) => {
-            expand.deps = expand
-                .deps
-                .into_iter()
-                .map(|d| replace_logical_argument(d, replacement.clone()))
-                .collect();
-            LogicalNodeEnum::ExpandAll(expand)
+        LogicalNodeEnum::ExpandAll(expand) => {
+            for dep in expand.inputs_mut() {
+                replace_logical_argument(dep, replacement);
+            }
         }
-        LogicalNodeEnum::GetVertices(mut gv) => {
-            gv.deps = gv
-                .deps
-                .into_iter()
-                .map(|d| replace_logical_argument(d, replacement.clone()))
-                .collect();
-            LogicalNodeEnum::GetVertices(gv)
+        LogicalNodeEnum::GetVertices(gv) => {
+            for dep in gv.inputs_mut() {
+                replace_logical_argument(dep, replacement);
+            }
         }
-        other => other,
+        _ => {}
     }
 }
 
@@ -448,17 +456,48 @@ fn take_single_input(input_mut: &mut PlanNodeEnum) -> PlanNodeEnum {
     std::mem::replace(input_mut, placeholder)
 }
 
-fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanNodeEnum {
+/// Rewrites in place through `&mut` so deep pipe chains only hold two
+/// pointers per recursion level instead of two owned trees.
+fn replace_argument_node(plan: &mut PlanNodeEnum, replacement: &PlanNodeEnum) {
+    if matches!(
+        plan,
+        PlanNodeEnum::Argument(_) | PlanNodeEnum::Start(_)
+    ) {
+        *plan = replacement.clone();
+        return;
+    }
+    // Pipe DELETE wiring consumes the whole node; take it out first so the
+    // replacement subtree is moved without borrowing the node being replaced.
+    if matches!(
+        plan,
+        PlanNodeEnum::DeleteVertices(_) | PlanNodeEnum::DeleteEdges(_)
+    ) {
+        let placeholder = PlanNodeEnum::Start(StartNode::new());
+        let owned = std::mem::replace(plan, placeholder);
+        let wired = match owned {
+            PlanNodeEnum::DeleteVertices(delete_vertices) => {
+                let info = delete_vertices.info().clone();
+                let node =
+                    PipeDeleteVerticesNode::new(next_node_id(), info, replacement.clone());
+                PlanNodeEnum::PipeDeleteVertices(node)
+            }
+            PlanNodeEnum::DeleteEdges(delete_edges) => {
+                let info = delete_edges.info().clone();
+                let node = PipeDeleteEdgesNode::new(next_node_id(), info, replacement.clone());
+                PlanNodeEnum::PipeDeleteEdges(node)
+            }
+            _ => unreachable!("variant checked above"),
+        };
+        *plan = wired;
+        return;
+    }
     match plan {
-        PlanNodeEnum::Argument(_) => replacement,
-        PlanNodeEnum::Start(_) => replacement,
-        PlanNodeEnum::Project(mut project) => {
-            let input = take_single_input(project.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            project.set_input(new_input);
-            PlanNodeEnum::Project(project)
+        PlanNodeEnum::Project(project) => {
+            let mut input = take_single_input(project.input_mut());
+            replace_argument_node(&mut input, replacement);
+            project.set_input(input);
         }
-        PlanNodeEnum::Aggregate(mut aggregate) => {
+        PlanNodeEnum::Aggregate(aggregate) => {
             // A standalone GROUP BY is planned as Aggregate -> Project -> Scan.
             // When the GROUP BY appears on the right side of a pipe, replace the
             // whole adapter with the left plan so the aggregate consumes the
@@ -467,94 +506,72 @@ fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanN
             let new_input = match input {
                 PlanNodeEnum::Project(mut project) => {
                     if matches!(project.input(), PlanNodeEnum::ScanVertices(_)) {
-                        replacement
+                        replacement.clone()
                     } else {
-                        let project_input = take_single_input(project.input_mut());
-                        let new_project_input = replace_argument_node(project_input, replacement);
-                        project.set_input(new_project_input);
+                        let mut project_input = take_single_input(project.input_mut());
+                        replace_argument_node(&mut project_input, replacement);
+                        project.set_input(project_input);
                         PlanNodeEnum::Project(project)
                     }
                 }
-                other => replace_argument_node(other, replacement),
+                mut other => {
+                    replace_argument_node(&mut other, replacement);
+                    other
+                }
             };
             aggregate.set_input(new_input);
-            PlanNodeEnum::Aggregate(aggregate)
         }
-        PlanNodeEnum::Filter(mut filter) => {
-            let input = take_single_input(filter.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            filter.set_input(new_input);
-            PlanNodeEnum::Filter(filter)
+        PlanNodeEnum::Filter(filter) => {
+            let mut input = take_single_input(filter.input_mut());
+            replace_argument_node(&mut input, replacement);
+            filter.set_input(input);
         }
-        PlanNodeEnum::Sort(mut sort) => {
-            let input = take_single_input(sort.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            sort.set_input(new_input);
-            PlanNodeEnum::Sort(sort)
+        PlanNodeEnum::Sort(sort) => {
+            let mut input = take_single_input(sort.input_mut());
+            replace_argument_node(&mut input, replacement);
+            sort.set_input(input);
         }
-        PlanNodeEnum::Limit(mut limit) => {
-            let input = take_single_input(limit.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            limit.set_input(new_input);
-            PlanNodeEnum::Limit(limit)
+        PlanNodeEnum::Limit(limit) => {
+            let mut input = take_single_input(limit.input_mut());
+            replace_argument_node(&mut input, replacement);
+            limit.set_input(input);
         }
-        PlanNodeEnum::Dedup(mut dedup) => {
-            let input = take_single_input(dedup.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            dedup.set_input(new_input);
-            PlanNodeEnum::Dedup(dedup)
+        PlanNodeEnum::Dedup(dedup) => {
+            let mut input = take_single_input(dedup.input_mut());
+            replace_argument_node(&mut input, replacement);
+            dedup.set_input(input);
         }
-        PlanNodeEnum::Unwind(mut unwind) => {
+        PlanNodeEnum::Unwind(unwind) => {
             let mut new_col_names = replacement.col_names().to_vec();
             if let Some(alias) = unwind.col_names().last().cloned() {
                 new_col_names.push(alias);
             }
-            let input = take_single_input(unwind.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            unwind.set_input(new_input);
+            let mut input = take_single_input(unwind.input_mut());
+            replace_argument_node(&mut input, replacement);
+            unwind.set_input(input);
 
             unwind.set_col_names(new_col_names);
-
-            PlanNodeEnum::Unwind(unwind)
         }
-        PlanNodeEnum::DeleteVertices(delete_vertices) => {
-            let info = delete_vertices.info().clone();
-            let node = PipeDeleteVerticesNode::new(next_node_id(), info, replacement);
-            PlanNodeEnum::PipeDeleteVertices(node)
+        PlanNodeEnum::PipeDeleteVertices(pipe_delete_vertices) => {
+            let mut input = take_single_input(pipe_delete_vertices.input_mut());
+            replace_argument_node(&mut input, replacement);
+            pipe_delete_vertices.set_input(input);
         }
-        PlanNodeEnum::DeleteEdges(delete_edges) => {
-            let info = delete_edges.info().clone();
-            let node = PipeDeleteEdgesNode::new(next_node_id(), info, replacement);
-            PlanNodeEnum::PipeDeleteEdges(node)
+        PlanNodeEnum::PipeDeleteEdges(pipe_delete_edges) => {
+            let mut input = take_single_input(pipe_delete_edges.input_mut());
+            replace_argument_node(&mut input, replacement);
+            pipe_delete_edges.set_input(input);
         }
-        PlanNodeEnum::PipeDeleteVertices(mut pipe_delete_vertices) => {
-            let input = take_single_input(pipe_delete_vertices.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            pipe_delete_vertices.set_input(new_input);
-            PlanNodeEnum::PipeDeleteVertices(pipe_delete_vertices)
-        }
-        PlanNodeEnum::PipeDeleteEdges(mut pipe_delete_edges) => {
-            let input = take_single_input(pipe_delete_edges.input_mut());
-            let new_input = replace_argument_node(input, replacement);
-            pipe_delete_edges.set_input(new_input);
-            PlanNodeEnum::PipeDeleteEdges(pipe_delete_edges)
-        }
-        PlanNodeEnum::ExpandAll(mut expand) => {
-            let old_inputs = std::mem::take(expand.inputs_mut());
-            for inp in old_inputs {
-                let wired = replace_argument_node(inp, replacement.clone());
-                expand.add_input(wired);
+        PlanNodeEnum::ExpandAll(expand) => {
+            for inp in expand.inputs_mut() {
+                replace_argument_node(inp, replacement);
             }
-            PlanNodeEnum::ExpandAll(expand)
         }
-        PlanNodeEnum::GetVertices(mut gv) => {
-            let old_inputs = std::mem::take(gv.inputs_mut());
-            for inp in old_inputs {
-                let wired = replace_argument_node(inp, replacement.clone());
-                gv.add_input(wired);
+        PlanNodeEnum::GetVertices(gv) => {
+            for inp in gv.inputs_mut() {
+                replace_argument_node(inp, replacement);
             }
-            PlanNodeEnum::GetVertices(gv)
         }
-        other => other,
+        _ => {}
     }
 }

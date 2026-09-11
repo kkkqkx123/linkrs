@@ -377,6 +377,14 @@ macro_rules! define_plan_node {
                 &self.deps
             }
 
+            pub fn dependencies_mut(&mut self) -> &mut Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum> {
+                &mut self.deps
+            }
+
+            pub fn set_dependencies(&mut self, deps: Vec<$crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>) {
+                self.deps = deps;
+            }
+
             pub fn add_dependency(&mut self, dep: $crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum) {
                 self.deps.push(dep);
             }

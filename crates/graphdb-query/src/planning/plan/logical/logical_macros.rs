@@ -186,7 +186,6 @@ macro_rules! define_logical_plan_node_with_deps {
         pub struct $name {
             pub id: i64,
             pub input: Option<Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>>,
-            pub deps: Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
@@ -199,7 +198,6 @@ macro_rules! define_logical_plan_node_with_deps {
                 Self {
                     id: next_node_id(),
                     input: self.input.clone(),
-                    deps: self.deps.clone(),
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
@@ -219,15 +217,10 @@ macro_rules! define_logical_plan_node_with_deps {
             pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
             pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
-                &self.deps
-            }
-
-            pub fn dependencies_mut(&mut self) -> &mut Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum> {
-                &mut self.deps
-            }
-
-            pub fn set_dependencies(&mut self, deps: Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>) {
-                self.deps = deps;
+                self.input
+                    .as_deref()
+                    .map(std::slice::from_ref)
+                    .unwrap_or(&[])
             }
 
             pub fn clone_logical_node(&self) -> $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum {
@@ -259,9 +252,7 @@ macro_rules! define_logical_plan_node_with_deps {
             }
 
             fn set_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.input = Some(Box::new(input.clone()));
-                self.deps.clear();
-                self.deps.push(input);
+                self.input = Some(Box::new(input));
             }
         }
     };
@@ -284,7 +275,6 @@ macro_rules! define_logical_join_node {
             pub right: Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             pub hash_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
             pub probe_keys: Vec<graphdb_core::types::expr::contextual::ContextualExpression>,
-            pub deps: Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
@@ -300,7 +290,6 @@ macro_rules! define_logical_join_node {
                     right: self.right.clone(),
                     hash_keys: self.hash_keys.clone(),
                     probe_keys: self.probe_keys.clone(),
-                    deps: self.deps.clone(),
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
@@ -318,10 +307,6 @@ macro_rules! define_logical_join_node {
             pub fn set_col_names(&mut self, names: Vec<String>) { self.col_names = names; }
             pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
             pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
-
-            pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
-                &self.deps
-            }
 
             pub fn hash_keys(&self) -> &[graphdb_core::types::expr::contextual::ContextualExpression] {
                 &self.hash_keys
@@ -348,45 +333,11 @@ macro_rules! define_logical_join_node {
             }
 
             pub fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.left = Box::new(input.clone());
-                if self.deps.len() > 0 {
-                    self.deps[0] = input;
-                }
+                self.left = Box::new(input);
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.right = Box::new(input.clone());
-                if self.deps.len() > 1 {
-                    self.deps[1] = input;
-                }
-            }
-
-            pub fn add_dependency(&mut self, _dep: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) -> Result<(), $crate::planning::planner::PlannerError> {
-                Err($crate::planning::planner::PlannerError::InvalidOperation(
-                    format!("The {} node does not support adding dependencies, it requires exactly two inputs", stringify!($name))
-                ))
-            }
-
-            pub fn remove_dependency(&mut self, id: i64) -> bool {
-                let initial_len = self.deps.len();
-                self.deps.retain(|dep| dep.id() != id);
-                let final_len = self.deps.len();
-
-                if initial_len != final_len {
-                    if self.left.id() == id {
-                        if let Some(new_left) = self.deps.get(0) {
-                            self.left = Box::new(new_left.clone());
-                        }
-                    }
-                    if self.right.id() == id {
-                        if let Some(new_right) = self.deps.get(1) {
-                            self.right = Box::new(new_right.clone());
-                        }
-                    }
-                    true
-                } else {
-                    false
-                }
+                self.right = Box::new(input);
             }
 
             pub fn clone_logical_node(&self) -> $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum {
@@ -426,17 +377,11 @@ macro_rules! define_logical_join_node {
             }
 
             fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.left = Box::new(input.clone());
-                if self.deps.len() > 0 {
-                    self.deps[0] = input;
-                }
+                self.left = Box::new(input);
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.right = Box::new(input.clone());
-                if self.deps.len() > 1 {
-                    self.deps[1] = input;
-                }
+                self.right = Box::new(input);
             }
         }
 
@@ -468,7 +413,6 @@ macro_rules! define_logical_binary_input_node {
             pub id: i64,
             pub left: Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             pub right: Box<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
-            pub deps: Vec<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum>,
             $(pub $field: $type,)*
             pub output_var: Option<String>,
             pub col_names: Vec<String>,
@@ -482,7 +426,6 @@ macro_rules! define_logical_binary_input_node {
                     id: next_node_id(),
                     left: self.left.clone(),
                     right: self.right.clone(),
-                    deps: self.deps.clone(),
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
@@ -501,10 +444,6 @@ macro_rules! define_logical_binary_input_node {
             pub fn column_types(&self) -> &[graphdb_core::DataType] { &self.column_types }
             pub fn set_column_types(&mut self, types: Vec<graphdb_core::DataType>) { self.column_types = types; }
 
-            pub fn dependencies(&self) -> &[$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum] {
-                &self.deps
-            }
-
             pub fn left_input(&self) -> &$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum {
                 &self.left
             }
@@ -522,17 +461,11 @@ macro_rules! define_logical_binary_input_node {
             }
 
             pub fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.left = Box::new(input.clone());
-                if self.deps.len() > 0 {
-                    self.deps[0] = input;
-                }
+                self.left = Box::new(input);
             }
 
             pub fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.right = Box::new(input.clone());
-                if self.deps.len() > 1 {
-                    self.deps[1] = input;
-                }
+                self.right = Box::new(input);
             }
 
             pub fn clone_logical_node(&self) -> $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum {
@@ -572,17 +505,11 @@ macro_rules! define_logical_binary_input_node {
             }
 
             fn set_left_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.left = Box::new(input.clone());
-                if self.deps.len() > 0 {
-                    self.deps[0] = input;
-                }
+                self.left = Box::new(input);
             }
 
             fn set_right_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
-                self.right = Box::new(input.clone());
-                if self.deps.len() > 1 {
-                    self.deps[1] = input;
-                }
+                self.right = Box::new(input);
             }
         }
     };

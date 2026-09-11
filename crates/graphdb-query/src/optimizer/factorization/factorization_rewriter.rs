@@ -655,15 +655,12 @@ impl FactorizationRewriter {
             LogicalNodeEnum::VectorSearch(_)
             | LogicalNodeEnum::VectorLookup(_)
             | LogicalNodeEnum::VectorMatch(_) => node.compute_factorized_schema(&[]),
-            LogicalNodeEnum::Assign(n) => {
-                let mut child_schema = if let Some(child) = n.input.as_mut() {
-                    self.visit_operator(child)
-                } else {
-                    FactorizedSchema::new()
-                };
-                for dep in &mut n.deps {
-                    self.visit_operator(dep);
-                }
+                LogicalNodeEnum::Assign(n) => {
+                    let mut child_schema = if let Some(child) = n.input.as_mut() {
+                        self.visit_operator(child)
+                    } else {
+                        FactorizedSchema::new()
+                    };
                 // Per-assignment granularity: each right-hand side flattens
                 // only the groups it depends on, against the running schema
                 // that already reflects earlier flattens. A bulk pass over
@@ -1392,8 +1389,7 @@ mod tests {
         let mut agg = LogicalNodeEnum::Aggregate(
             crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode {
                 id: next_node_id(),
-                input: Some(Box::new(scan.clone())),
-                deps: vec![scan],
+                input: Some(Box::new(scan)),
                 group_key_exprs: vec![ctx_a],
                 aggregation_functions: vec![],
                 aggregation_args: vec![],
@@ -1429,8 +1425,7 @@ mod tests {
         let mut window = LogicalNodeEnum::Window(
             crate::planning::plan::logical::logical_nodes::operation::LogicalWindowNode {
                 id: next_node_id(),
-                input: Some(Box::new(scan.clone())),
-                deps: vec![scan],
+                input: Some(Box::new(scan)),
                 window_functions: vec![],
                 output_var: None,
                 col_names: vec![],
@@ -1537,7 +1532,6 @@ mod tests {
         let mut assign = LogicalNodeEnum::Assign(LogicalAssignNode {
             id: next_node_id(),
             input: Some(Box::new(nbr)),
-            deps: vec![],
             assignments: vec![("c".to_string(), rhs)],
             output_var: None,
             col_names: vec![],
@@ -1574,7 +1568,6 @@ mod tests {
         let mut assign = LogicalNodeEnum::Assign(LogicalAssignNode {
             id: next_node_id(),
             input: Some(Box::new(nbr)),
-            deps: vec![],
             assignments: vec![("c".to_string(), rhs)],
             output_var: None,
             col_names: vec![],
@@ -1604,7 +1597,6 @@ mod tests {
             right: Box::new(scan()),
             hash_keys: vec![out_expr],
             probe_keys: vec![],
-            deps: vec![],
             join_condition: None,
             anti: false,
             output_var: None,
@@ -1639,7 +1631,6 @@ mod tests {
             right: Box::new(right),
             hash_keys: vec![left_key],
             probe_keys: vec![right_key],
-            deps: vec![],
             output_var: None,
             col_names: vec![],
             column_types: vec![],
@@ -1685,8 +1676,7 @@ mod tests {
         let nbr = get_neighbors_with_output(out_expr);
         let mut project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(nbr.clone())),
-            deps: vec![nbr],
+            input: Some(Box::new(nbr)),
             columns: vec![graphdb_core::YieldColumn::new(rand_expr, "r".to_string())],
             output_var: None,
             col_names: vec!["r".to_string()],
@@ -1722,8 +1712,7 @@ mod tests {
         let nbr = get_neighbors_with_output(out_expr);
         let mut project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(nbr.clone())),
-            deps: vec![nbr],
+            input: Some(Box::new(nbr)),
             columns: vec![graphdb_core::YieldColumn::new(col_expr, "b".to_string())],
             output_var: None,
             col_names: vec!["b".to_string()],
@@ -1747,8 +1736,7 @@ mod tests {
         let nbr = get_neighbors_with_output(out_expr);
         let mut limit = LogicalNodeEnum::Limit(LogicalLimitNode {
             id: next_node_id(),
-            input: Some(Box::new(nbr.clone())),
-            deps: vec![nbr],
+            input: Some(Box::new(nbr)),
             offset: 0,
             count: 10,
             output_var: None,
@@ -1774,8 +1762,7 @@ mod tests {
         let nbr = get_neighbors_with_output(out_expr);
         let mut sort = LogicalNodeEnum::Sort(LogicalSortNode {
             id: next_node_id(),
-            input: Some(Box::new(nbr.clone())),
-            deps: vec![nbr],
+            input: Some(Box::new(nbr)),
             sort_items: vec![SortItem::column_asc("b".to_string())],
             limit: None,
             output_var: None,
@@ -1827,7 +1814,6 @@ mod tests {
         let sort = LogicalSortNode {
             id: next_node_id(),
             input: None,
-            deps: vec![],
             sort_items: (0..1500)
                 .map(|i| SortItem::column_asc(format!("c{i}")))
                 .collect(),
@@ -1858,8 +1844,7 @@ mod tests {
         let nbr = get_neighbors_with_output(out_expr);
         let mut sort = LogicalNodeEnum::Sort(LogicalSortNode {
             id: next_node_id(),
-            input: Some(Box::new(nbr.clone())),
-            deps: vec![nbr],
+            input: Some(Box::new(nbr)),
             sort_items: vec![SortItem::column_asc("ghost".to_string())],
             limit: None,
             output_var: None,
@@ -1901,7 +1886,6 @@ mod tests {
         let mut assign = LogicalNodeEnum::Assign(LogicalAssignNode {
             id: next_node_id(),
             input: Some(Box::new(nbr)),
-            deps: vec![],
             assignments: vec![("c".to_string(), rhs1), ("d".to_string(), rhs2)],
             output_var: None,
             col_names: vec![],
@@ -2069,7 +2053,6 @@ mod tests {
             right: Box::new(right),
             hash_keys: vec![probe_key],
             probe_keys: vec![build_key],
-            deps: vec![],
             recommended_algorithm: None,
             output_var: None,
             col_names: vec![],

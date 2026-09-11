@@ -6,19 +6,21 @@
 //! the probe scope); execution intersects the per-bound adjacency lists.
 //! The node mirrors
 //! [`LogicalWcoIntersectNode`](crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode):
-//! `input` is the probe side and `deps[0]`/`deps[1..]` are the probe/build
-//! sides, so plan children enumerate every input.
+//! `deps[0]`/`deps[1..]` are the probe/build sides, so plan children
+//! enumerate every input.
 
-use crate::define_plan_node_with_deps;
+use crate::define_plan_node;
+use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use graphdb_core::types::ContextualExpression;
 
-define_plan_node_with_deps! {
+define_plan_node! {
     pub struct WcoIntersectNode {
         intersect_key: ContextualExpression,
         bound_keys: Vec<ContextualExpression>,
     }
     enum: WcoIntersect
-    input: SingleInputNode
+    input: MultipleInputNode
 }
 
 impl WcoIntersectNode {
@@ -56,11 +58,10 @@ impl WcoIntersectNode {
             }
         }
         let mut deps = Vec::with_capacity(builds.len() + 1);
-        deps.push(probe.clone());
+        deps.push(probe);
         deps.extend(builds);
         Ok(Self {
             id: -1,
-            input: Some(Box::new(probe)),
             deps,
             intersect_key,
             bound_keys,
@@ -80,7 +81,7 @@ impl WcoIntersectNode {
         &self.bound_keys
     }
 
-    /// Probe side (`input`, also `deps[0]`).
+    /// Probe side (`deps[0]`).
     pub fn probe_input(
         &self,
     ) -> &crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -96,6 +97,25 @@ impl WcoIntersectNode {
 
     pub fn num_builds(&self) -> usize {
         self.deps.len().saturating_sub(1)
+    }
+}
+
+// The probe side is `deps[0]`; there is no second copy of the subtree.
+impl SingleInputNode for WcoIntersectNode {
+    fn input(&self) -> &PlanNodeEnum {
+        &self.deps[0]
+    }
+
+    fn input_mut(&mut self) -> &mut PlanNodeEnum {
+        &mut self.deps[0]
+    }
+
+    fn set_input(&mut self, input: PlanNodeEnum) {
+        if self.deps.is_empty() {
+            self.deps.push(input);
+        } else {
+            self.deps[0] = input;
+        }
     }
 }
 

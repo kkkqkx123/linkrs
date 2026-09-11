@@ -57,8 +57,7 @@ pub(crate) fn wrap_logical_project(
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Project(LogicalProjectNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         columns,
         output_var: None,
         col_names,
@@ -74,8 +73,7 @@ pub(crate) fn wrap_logical_filter(
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Filter(LogicalFilterNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         condition,
         output_var: None,
         col_names,
@@ -90,8 +88,7 @@ pub(crate) fn wrap_logical_dedup(
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Dedup(LogicalDedupNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         output_var: None,
         col_names,
         column_types: vec![],
@@ -106,8 +103,7 @@ pub(crate) fn wrap_logical_sort(
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Sort(LogicalSortNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         sort_items,
         limit: None,
         output_var: None,
@@ -125,8 +121,7 @@ pub(crate) fn wrap_logical_limit(
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Limit(LogicalLimitNode {
         id: next_node_id(),
-        input: Some(Box::new(input.clone())),
-        deps: vec![input],
+        input: Some(Box::new(input)),
         offset,
         count,
         output_var: None,
@@ -205,11 +200,10 @@ pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planne
                 }
                 Some(LogicalNodeEnum::CrossJoin(LogicalCrossJoinNode {
                     id: next_node_id(),
-                    left: Box::new(left.clone()),
-                    right: Box::new(right.clone()),
+                    left: Box::new(left),
+                    right: Box::new(right),
                     hash_keys: vec![],
                     probe_keys: vec![],
-                    deps: vec![left, right],
                     output_var: join_node.output_var().map(|s| s.to_string()),
                     col_names: vec![],
                     column_types: vec![],
@@ -342,11 +336,10 @@ pub fn left_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planner
     let logical_root = match (left.logical_root().cloned(), right.logical_root().cloned()) {
         (Some(left), Some(right)) => Some(LogicalNodeEnum::LeftJoin(LogicalLeftJoinNode {
             id: next_node_id(),
-            left: Box::new(left.clone()),
-            right: Box::new(right.clone()),
+            left: Box::new(left),
+            right: Box::new(right),
             hash_keys: vec![],
             probe_keys: vec![],
-            deps: vec![left, right],
             output_var: None,
             col_names: vec![],
             column_types: vec![],
@@ -381,7 +374,6 @@ pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerErro
     let logical_root = match (left.logical_root().cloned(), right.logical_root().cloned()) {
         (Some(left), Some(right)) => Some(LogicalNodeEnum::Union(LogicalUnionNode {
             id: next_node_id(),
-            input: Some(Box::new(left.clone())),
             deps: vec![left, right],
             distinct: true,
             output_var: None,

@@ -28,8 +28,7 @@ impl AssignNode {
 
         Ok(Self {
             id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             assignments,
             subqueries: Vec::new(),
             has_folded_expressions: false,

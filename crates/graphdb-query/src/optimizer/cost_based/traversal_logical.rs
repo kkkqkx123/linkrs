@@ -119,8 +119,7 @@ mod tests {
         );
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: 100,
-            input: Some(Box::new(node.clone())),
-            deps: vec![node],
+            input: Some(Box::new(node)),
             condition,
             output_var: None,
             col_names: vec![],

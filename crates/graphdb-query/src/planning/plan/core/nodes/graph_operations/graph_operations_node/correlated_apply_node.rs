@@ -20,7 +20,6 @@ pub struct CorrelatedApplyNode {
     id: i64,
     left_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     right_input: Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-    deps: Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     is_anti_predicate: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
@@ -34,13 +33,11 @@ impl CorrelatedApplyNode {
         is_anti_predicate: bool,
     ) -> Result<Self, crate::planning::planner::PlannerError> {
         let col_names = left_input.col_names().to_vec();
-        let deps = vec![left_input.clone(), right_input.clone()];
 
         Ok(Self {
             id: -1,
             left_input: Box::new(left_input),
             right_input: Box::new(right_input),
-            deps,
             is_anti_predicate,
             output_var: None,
             col_names,
@@ -88,25 +85,6 @@ impl CorrelatedApplyNode {
         self.column_types = types;
     }
 
-    pub fn dependencies(
-        &self,
-    ) -> &[crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
-        &self.deps
-    }
-
-    pub fn add_dependency(
-        &mut self,
-        dep: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
-    ) {
-        *self.left_input = dep.clone();
-        self.deps.clear();
-        self.deps.push(dep);
-    }
-
-    pub fn remove_dependency(&mut self, _id: i64) -> bool {
-        false
-    }
-
     pub fn set_output_var(&mut self, var: String) {
         self.output_var = Some(var);
     }
@@ -123,7 +101,6 @@ impl CorrelatedApplyNode {
                 id: self.id,
                 left_input: self.left_input.clone(),
                 right_input: self.right_input.clone(),
-                deps: self.deps.clone(),
                 is_anti_predicate: self.is_anti_predicate,
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
@@ -217,9 +194,7 @@ impl crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode
         &mut self,
         input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
     ) {
-        *self.left_input = input.clone();
-        self.deps.clear();
-        self.deps.push(input);
+        *self.left_input = input;
     }
 }
 
@@ -251,11 +226,6 @@ impl MemoryEstimatable for CorrelatedApplyNode {
             Box<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
         >() * 2;
 
-        // Estimate deps Vec<PlanNodeEnum>
-        let deps_size = std::mem::size_of::<
-            Vec<crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-        >();
-
-        base + is_anti_size + col_names_size + output_var_size + left_right_size + deps_size
+        base + is_anti_size + col_names_size + output_var_size + left_right_size
     }
 }

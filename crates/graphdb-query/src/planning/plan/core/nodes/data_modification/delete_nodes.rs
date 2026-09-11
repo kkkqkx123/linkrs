@@ -219,8 +219,7 @@ impl PipeDeleteVerticesNode {
     ) -> Self {
         Self {
             id,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
@@ -272,8 +271,7 @@ impl PipeDeleteEdgesNode {
     ) -> Self {
         Self {
             id,
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],

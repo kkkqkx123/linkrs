@@ -795,8 +795,7 @@ mod tests {
         let ctx_expr = graphdb_core::types::expr::contextual::ContextualExpression::new(id, ctx);
         let aggregate = LogicalNodeEnum::Aggregate(LogicalAggregateNode {
             id: 2,
-            input: Some(Box::new(scan.clone())),
-            deps: vec![scan],
+            input: Some(Box::new(scan)),
             group_key_exprs: vec![ctx_expr],
             aggregation_functions: vec![],
             aggregation_args: vec![],

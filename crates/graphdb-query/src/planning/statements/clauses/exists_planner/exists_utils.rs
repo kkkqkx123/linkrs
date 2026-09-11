@@ -126,8 +126,7 @@ pub(crate) fn wrap_filter(
     let logical_root = plan.logical_root().cloned().map(|input| {
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             condition,
             output_var: None,
             col_names: vec![],
@@ -157,8 +156,7 @@ pub(crate) fn wrap_filter_with_subqueries(
     let logical_root = plan.logical_root().cloned().map(|input| {
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             condition,
             output_var: None,
             col_names: vec![],
@@ -191,8 +189,7 @@ pub(crate) fn wrap_project_with_subqueries(
     let logical_root = plan.logical_root().cloned().map(|input| {
         LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(input.clone())),
-            deps: vec![input],
+            input: Some(Box::new(input)),
             columns: vec![column],
             output_var: None,
             col_names: vec![],

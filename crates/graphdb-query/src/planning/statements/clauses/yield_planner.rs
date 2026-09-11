@@ -64,8 +64,7 @@ impl YieldClausePlanner {
             let logical_root = wrap_logical(&current_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     columns: yield_columns.to_vec(),
                     output_var: None,
                     col_names: project_node.col_names().to_vec(),
@@ -85,8 +84,7 @@ impl YieldClausePlanner {
             let logical_root = wrap_logical(&current_plan, |input| {
                 LogicalNodeEnum::Filter(LogicalFilterNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     condition: filter_condition.clone(),
                     output_var: None,
                     col_names: filter_node.col_names().to_vec(),
@@ -115,8 +113,7 @@ impl YieldClausePlanner {
             let logical_root = wrap_logical(&current_plan, |input| {
                 LogicalNodeEnum::Sample(LogicalSampleNode {
                     id: next_node_id(),
-                    input: Some(Box::new(input.clone())),
-                    deps: vec![input],
+                    input: Some(Box::new(input)),
                     count: sample_count as i64,
                     output_var: None,
                     col_names: vec![],
@@ -195,8 +192,7 @@ impl YieldClausePlanner {
         let logical_root = wrap_logical(&input_plan, |input| {
             LogicalNodeEnum::Limit(LogicalLimitNode {
                 id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
+                input: Some(Box::new(input)),
                 offset,
                 count,
                 output_var: None,

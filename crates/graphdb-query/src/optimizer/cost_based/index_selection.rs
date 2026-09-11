@@ -675,8 +675,7 @@ mod tests {
         let contextual = ContextualExpression::new(id, context);
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: 2,
-            input: Some(Box::new(scan.clone())),
-            deps: vec![scan],
+            input: Some(Box::new(scan)),
             condition: contextual,
             output_var: None,
             col_names: vec![],

@@ -166,8 +166,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Project(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     columns: n.columns().to_vec(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -181,8 +180,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Filter(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     condition: n.condition().clone(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -196,8 +194,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Sort(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalSortNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     sort_items: n.sort_items().to_vec(),
                     limit: n.limit(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -213,8 +210,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 return Ok(LogicalNodeEnum::Skip(
                     crate::planning::plan::logical::logical_nodes::operation::LogicalSkipNode {
                         id: n.id(),
-                        input: Some(Box::new(logical_input.clone())),
-                        deps: vec![logical_input],
+                        input: Some(Box::new(logical_input)),
                         offset: n.offset(),
                         output_var: n.output_var().map(|s| s.to_string()),
                         col_names: n.col_names().to_vec(),
@@ -225,8 +221,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Limit(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalLimitNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     offset: n.offset(),
                     count: n.count(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -241,8 +236,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::TopN(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalTopNNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     sort_items: n.sort_items().to_vec(),
                     limit: n.limit(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -257,8 +251,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Sample(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalSampleNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     count: n.count(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -272,8 +265,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Dedup(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalDedupNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -287,8 +279,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 Ok(LogicalNodeEnum::Aggregate(
                     crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode {
                         id: n.id(),
-                        input: Some(Box::new(logical_input.clone())),
-                        deps: vec![logical_input],
+                        input: Some(Box::new(logical_input)),
                         group_key_exprs: exprs.to_vec(),
                         aggregation_functions: n.aggregation_functions().to_vec(),
                         aggregation_args: n.aggregation_args().to_vec(),
@@ -312,8 +303,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Window(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalWindowNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     window_functions: n.window_functions().to_vec(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -329,11 +319,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::InnerJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
                     recommended_algorithm: None,
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -348,11 +337,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::LeftJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalLeftJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -366,11 +354,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::RightJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalRightJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -384,11 +371,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::CrossJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: vec![],
                     probe_keys: vec![],
-                    deps: vec![logical_left, logical_right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -402,11 +388,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::FullOuterJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalFullOuterJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -420,11 +405,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::SemiJoin(
                 crate::planning::plan::logical::logical_nodes::join::LogicalSemiJoinNode {
                     id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
                     join_condition: n.join_condition().cloned(),
                     anti: n.is_anti(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -442,8 +426,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     group_pos: n.group_pos(),
                     group_columns: n.group_columns().to_vec(),
                     expected_groups: n.expected_groups(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -523,8 +506,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     v_filter: n.v_filter().cloned(),
                     first_step_filter: n.first_step_filter().cloned(),
                     path_semantic: n.path_semantic(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),
@@ -573,9 +555,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     edge_types: n.edge_types().to_vec(),
                     max_hops: n.max_hops(),
                     meeting_point_var: n.meeting_point_var().cloned(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
-                    deps: vec![logical_left, logical_right],
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: vec![],
@@ -600,9 +581,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     path_var: n.path_var().to_string(),
                     edge_alias: n.edge_alias().cloned(),
                     vertex_alias: n.vertex_alias().cloned(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
-                    deps: vec![logical_left, logical_right],
+                    left: Box::new(logical_left),
+                    right: Box::new(logical_right),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: vec![],
@@ -657,8 +637,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Assign(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     assignments: n.assignments().to_vec(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -672,8 +651,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Remove(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalRemoveNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     remove_items: n.remove_items().to_vec(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -687,8 +665,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::DataCollect(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalDataCollectNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     collect_kind: n.collect_kind().to_string(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -702,8 +679,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Materialize(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalMaterializeNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: vec![],
@@ -717,7 +693,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Union(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode {
                     id: n.id(),
-                    input: Some(Box::new(left.clone())),
                     deps: vec![left, right],
                     distinct: n.distinct(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -733,7 +708,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Minus(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalMinusNode {
                     id: n.id(),
-                    input: Some(Box::new(left.clone())),
                     deps: vec![left, right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -748,7 +722,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Intersect(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalIntersectNode {
                     id: n.id(),
-                    input: Some(Box::new(left.clone())),
                     deps: vec![left, right],
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -762,8 +735,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Unwind(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     alias: n.alias().to_string(),
                     list_expression: n.list_expression().clone(),
                     output_var: n.output_var().map(|s| s.to_string()),
@@ -798,9 +770,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::Apply(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalApplyNode {
                     id: n.id(),
-                    left: Box::new(left.clone()),
-                    right: Box::new(right.clone()),
-                    deps: vec![left, right],
+                    left: Box::new(left),
+                    right: Box::new(right),
                     left_input_var: None,
                     right_input_var: None,
                     correlated_cols: n.correlated_cols().to_vec(),
@@ -818,11 +789,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::PatternApply(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternApplyNode {
                     id: n.id(),
-                    left: Box::new(left.clone()),
-                    right: Box::new(right.clone()),
+                    left: Box::new(left),
+                    right: Box::new(right),
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![left, right],
                     is_anti_predicate: n.is_anti_predicate(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -836,8 +806,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::RollUpApply(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalRollUpApplyNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     left_input_var: n.left_input_var().map(|s| s.to_string()),
                     right_input_var: n.right_input_var().map(|s| s.to_string()),
                     compare_cols: n.compare_cols().to_vec(),
@@ -855,11 +824,10 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::CorrelatedApply(
                 crate::planning::plan::logical::logical_nodes::graph_ops::LogicalCorrelatedApplyNode {
                     id: n.id(),
-                    left: Box::new(left.clone()),
-                    right: Box::new(right.clone()),
+                    left: Box::new(left),
+                    right: Box::new(right),
                     hash_keys: vec![],
                     probe_keys: vec![],
-                    deps: vec![left, right],
                     is_anti_predicate: n.is_anti_predicate(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -984,8 +952,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::PipeDeleteVertices(
                 crate::planning::plan::logical::logical_nodes::dml::LogicalPipeDeleteVerticesNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     info: n.info().clone(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
@@ -999,8 +966,7 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             Ok(LogicalNodeEnum::PipeDeleteEdges(
                 crate::planning::plan::logical::logical_nodes::dml::LogicalPipeDeleteEdgesNode {
                     id: n.id(),
-                    input: Some(Box::new(logical_input.clone())),
-                    deps: vec![logical_input],
+                    input: Some(Box::new(logical_input)),
                     info: n.info().clone(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),

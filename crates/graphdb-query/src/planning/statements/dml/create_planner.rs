@@ -326,8 +326,7 @@ impl Planner for CreatePlanner {
         let yield_columns = self.create_yield_columns(created_count, &expr_ctx);
         let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(insert_node.clone())),
-            deps: vec![insert_node],
+            input: Some(Box::new(insert_node)),
             columns: yield_columns,
             output_var: None,
             col_names: vec![],
@@ -523,8 +522,7 @@ impl Planner for CreatePlanner {
 
         let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
-            input: Some(Box::new(insert_node.clone())),
-            deps: vec![insert_node],
+            input: Some(Box::new(insert_node)),
             columns: yield_columns,
             output_var: None,
             col_names: vec![],

@@ -24,7 +24,6 @@ pub struct LogicalFlattenNode {
     /// legacy plan) and skips the check honestly.
     pub expected_groups: Option<u32>,
     pub input: Option<Box<LogicalNodeEnum>>,
-    pub deps: Vec<LogicalNodeEnum>,
     pub output_var: Option<String>,
     pub col_names: Vec<String>,
     pub column_types: Vec<graphdb_core::DataType>,
@@ -38,7 +37,6 @@ impl LogicalFlattenNode {
             group_columns: Vec::new(),
             expected_groups: None,
             input: Some(Box::new(input)),
-            deps: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: Vec::new(),
@@ -52,7 +50,6 @@ impl LogicalFlattenNode {
             group_columns: Vec::new(),
             expected_groups: None,
             input: Some(Box::new(input)),
-            deps: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: Vec::new(),
@@ -145,6 +142,5 @@ impl LogicalSingleInputNode for LogicalFlattenNode {
 
     fn set_input(&mut self, input: LogicalNodeEnum) {
         self.input = Some(Box::new(input));
-        self.deps.clear();
     }
 }

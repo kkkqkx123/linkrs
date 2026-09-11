@@ -141,7 +141,6 @@ impl SetOperationPlanner {
                     crate::binder::bound::SetOperationKind::Union => {
                         LogicalNodeEnum::Union(LogicalUnionNode {
                             id: next_node_id(),
-                            input: Some(Box::new(left.clone())),
                             deps: vec![left, right],
                             distinct: true,
                             output_var: None,
@@ -152,7 +151,6 @@ impl SetOperationPlanner {
                     crate::binder::bound::SetOperationKind::UnionAll => {
                         LogicalNodeEnum::Union(LogicalUnionNode {
                             id: next_node_id(),
-                            input: Some(Box::new(left.clone())),
                             deps: vec![left, right],
                             distinct: false,
                             output_var: None,
@@ -163,7 +161,6 @@ impl SetOperationPlanner {
                     crate::binder::bound::SetOperationKind::Intersect => {
                         LogicalNodeEnum::Intersect(LogicalIntersectNode {
                             id: next_node_id(),
-                            input: Some(Box::new(left.clone())),
                             deps: vec![left, right],
                             output_var: None,
                             col_names,
@@ -173,7 +170,6 @@ impl SetOperationPlanner {
                     crate::binder::bound::SetOperationKind::Minus => {
                         LogicalNodeEnum::Minus(LogicalMinusNode {
                             id: next_node_id(),
-                            input: Some(Box::new(left.clone())),
                             deps: vec![left, right],
                             output_var: None,
                             col_names,

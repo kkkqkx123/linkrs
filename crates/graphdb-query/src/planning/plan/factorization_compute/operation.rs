@@ -287,7 +287,6 @@ mod tests {
         let node = LogicalSortNode {
             id: next_node_id(),
             input: None,
-            deps: vec![],
             sort_items: vec![SortItem::column_asc("b".to_string())],
             limit: None,
             output_var: None,
@@ -320,7 +319,6 @@ mod tests {
         let node = LogicalSortNode {
             id: next_node_id(),
             input: None,
-            deps: vec![],
             sort_items: vec![],
             limit: None,
             output_var: None,

@@ -259,7 +259,6 @@ impl LookupPlanner {
             let logical_filter = LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 condition: condition.clone(),
                 output_var: None,
                 col_names: vec![],
@@ -273,7 +272,6 @@ impl LookupPlanner {
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 columns: yield_columns.clone(),
                 output_var: None,
                 col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
@@ -382,7 +380,6 @@ impl LookupPlanner {
             let logical_filter = LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 condition: condition.clone(),
                 output_var: None,
                 col_names: vec![],
@@ -397,7 +394,6 @@ impl LookupPlanner {
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                deps: vec![],
                 columns: yield_columns.clone(),
                 output_var: None,
                 col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),

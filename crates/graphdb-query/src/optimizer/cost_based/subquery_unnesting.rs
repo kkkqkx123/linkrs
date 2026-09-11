@@ -518,11 +518,10 @@ pub fn build_semi_join_from_pattern_apply_logical(
     let col_names = left.col_names().to_vec();
     LogicalNodeEnum::SemiJoin(LogicalSemiJoinNode {
         id: next_node_id(),
-        left: Box::new(left.clone()),
-        right: Box::new(right.clone()),
+        left: Box::new(left),
+        right: Box::new(right),
         hash_keys: pattern_apply.hash_keys.clone(),
         probe_keys: pattern_apply.probe_keys.clone(),
-        deps: vec![left, right],
         join_condition: None,
         anti: pattern_apply.is_anti_predicate,
         output_var: pattern_apply.output_var.clone(),
