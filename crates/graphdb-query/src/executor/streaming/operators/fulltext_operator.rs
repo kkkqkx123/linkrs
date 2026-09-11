@@ -63,9 +63,10 @@ pub enum FulltextOperatorKind {
         space_name: String,
         space_id: u64,
         index_name: String,
-        search_query: String,
+        structured_query: graphdb_fulltext::query::FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
         #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
@@ -74,19 +75,24 @@ pub enum FulltextOperatorKind {
         space_name: String,
         space_id: u64,
         index_name: String,
-        search_query: String,
+        structured_query: graphdb_fulltext::query::FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
         #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     MatchFulltext {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        space_id: u64,
         match_expr: Expression,
         match_field: Option<String>,
+        /// Structured query built from the fulltext match condition.
+        structured_query: graphdb_fulltext::query::FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
         #[cfg(feature = "fulltext")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
@@ -128,17 +134,19 @@ impl FulltextOperator {
                 space_name,
                 space_id,
                 index_name,
-                search_query,
+                structured_query,
                 tag_name,
                 field_name,
+                limit,
             } => FulltextOperatorKind::FulltextSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 space_id: *space_id,
                 index_name: index_name.clone(),
-                search_query: search_query.clone(),
+                structured_query: structured_query.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
+                limit: *limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
@@ -146,33 +154,41 @@ impl FulltextOperator {
                 space_name,
                 space_id,
                 index_name,
-                search_query,
+                structured_query,
                 tag_name,
                 field_name,
+                limit,
             } => FulltextOperatorKind::FulltextLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 space_id: *space_id,
                 index_name: index_name.clone(),
-                search_query: search_query.clone(),
+                structured_query: structured_query.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
+                limit: *limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
             super::spec::FulltextSpec::MatchFulltext {
                 space_name,
+                space_id,
                 match_expr,
                 match_field,
+                structured_query,
                 tag_name,
                 field_name,
+                limit,
             } => FulltextOperatorKind::MatchFulltext {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                space_id: *space_id,
                 match_expr: match_expr.clone(),
                 match_field: match_field.clone(),
+                structured_query: structured_query.clone(),
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
+                limit: *limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager: fulltext_manager.clone(),
             },
@@ -403,11 +419,67 @@ impl FulltextOperator {
                                 ));
                             }
                         }
-                        Alter { .. } => {
-                            return Err(QueryError::execution(
-                                "Fulltext ALTER is not supported by FulltextIndexManager"
-                                    .to_string(),
-                            ))
+                        Alter {
+                            index_name,
+                            actions,
+                        } => {
+                            use crate::parser::ast::fulltext::AlterIndexAction;
+                            if let Some(manager) = fulltext_manager {
+                                let matching: Vec<_> = manager
+                                    .list_indexes()
+                                    .into_iter()
+                                    .filter(|metadata| metadata.index_name == *index_name)
+                                    .collect();
+                                if matching.is_empty() {
+                                    return Err(QueryError::execution(format!(
+                                        "Fulltext index not found: {}",
+                                        index_name
+                                    )));
+                                }
+                                for metadata in matching {
+                                    for action in actions.iter() {
+                                        match action {
+                                            AlterIndexAction::Rebuild => {
+                                                crate::executor::streaming::helpers::runtime_bridge::wait(
+                                                    "Fulltext rebuild",
+                                                    manager.rebuild_index(
+                                                        metadata.space_id,
+                                                        &metadata.tag_name,
+                                                        &metadata.field_name,
+                                                    ),
+                                                )?;
+                                            }
+                                            AlterIndexAction::Optimize => {
+                                                crate::executor::streaming::helpers::runtime_bridge::wait(
+                                                    "Fulltext optimize",
+                                                    manager.optimize_index(
+                                                        metadata.space_id,
+                                                        &metadata.tag_name,
+                                                        &metadata.field_name,
+                                                    ),
+                                                )?;
+                                            }
+                                            AlterIndexAction::AddField(_)
+                                            | AlterIndexAction::DropField(_)
+                                            | AlterIndexAction::SetOption(_, _) => {
+                                                return Err(QueryError::execution(
+                                                    "ALTER FULLTEXT INDEX only supports REBUILD and OPTIMIZE; use CREATE/DROP for field or option changes",
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(make_manage_result(
+                                    Arc::clone(&self.output_layout),
+                                    "alter_fulltext_index",
+                                    Some(index_name.as_str()),
+                                    "altered",
+                                ))
+                            } else {
+                                return Err(QueryError::execution(
+                                    "ALTER FULLTEXT INDEX cannot execute: no fulltext manager is configured",
+                                ));
+                            }
                         }
                     };
                     Ok(result)
@@ -424,10 +496,11 @@ impl FulltextOperator {
             }
 
             FulltextOperatorKind::FulltextSearch {
-                search_query,
+                structured_query,
                 space_id,
                 tag_name,
                 field_name,
+                limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
@@ -435,10 +508,17 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
+                        let search_limit = limit.unwrap_or(100);
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext search",
-                                manager.search(*space_id, tag_name, field_name, search_query, 100),
+                                manager.search_structured(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                ),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {
@@ -461,16 +541,24 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext"))]
                 {
-                    let _ = (&search_query, &space_id, &tag_name, &field_name, input);
+                    let _ = (
+                        &structured_query,
+                        &space_id,
+                        &tag_name,
+                        &field_name,
+                        limit,
+                        input,
+                    );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT SEARCH"))
                 }
             }
 
             FulltextOperatorKind::FulltextLookup {
-                search_query,
+                structured_query,
                 space_id,
                 tag_name,
                 field_name,
+                limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
@@ -478,10 +566,17 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
+                        let search_limit = limit.unwrap_or(100);
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext lookup",
-                                manager.search(*space_id, tag_name, field_name, search_query, 100),
+                                manager.search_structured(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                ),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {
@@ -505,15 +600,25 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext"))]
                 {
-                    let _ = (&search_query, &space_id, &tag_name, &field_name, input);
+                    let _ = (
+                        &structured_query,
+                        &space_id,
+                        &tag_name,
+                        &field_name,
+                        limit,
+                        input,
+                    );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT LOOKUP"))
                 }
             }
 
             FulltextOperatorKind::MatchFulltext {
-                match_expr,
+                match_expr: _match_expr,
+                space_id,
+                structured_query,
                 tag_name,
                 field_name,
+                limit,
                 #[cfg(feature = "fulltext")]
                 fulltext_manager,
                 ..
@@ -521,12 +626,17 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext")]
                 {
                     if let Some(manager) = fulltext_manager {
-                        let expr_str = format!("{:?}", match_expr);
-                        let space_id = 0;
+                        let search_limit = limit.unwrap_or(100);
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext match",
-                                manager.search(space_id, tag_name, field_name, &expr_str, 100),
+                                manager.search_structured(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                ),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {
@@ -550,7 +660,15 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext"))]
                 {
-                    let _ = (&match_expr, &tag_name, &field_name, input);
+                    let _ = (
+                        &_match_expr,
+                        &space_id,
+                        &structured_query,
+                        &tag_name,
+                        &field_name,
+                        limit,
+                        input,
+                    );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT MATCH"))
                 }
             }

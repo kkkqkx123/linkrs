@@ -672,6 +672,7 @@ fn fulltext_manage_to_command(
         },
         Alter(n) => FulltextManageCommand::Alter {
             index_name: n.index_name.clone(),
+            actions: n.actions.clone(),
         },
         Show(n) => FulltextManageCommand::Show {
             pattern: n.pattern.clone(),
@@ -701,9 +702,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_search
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: exec_ctx.current_space_id().unwrap_or(0),
         index_name: node.index_name.clone(),
-        search_query: fulltext_query_to_string(&node.query),
+        structured_query: fulltext_query_to_structured(&node.query, &node.field_name)?,
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
+        limit: node.limit,
     })
 }
 
@@ -715,9 +717,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_lookup
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: exec_ctx.current_space_id().unwrap_or(0),
         index_name: node.index_name.clone(),
-        search_query: node.query.clone(),
+        structured_query: graphdb_fulltext::query::FulltextQuery::Simple(node.query.clone()),
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
+        limit: node.limit,
     })
 }
 
@@ -727,13 +730,18 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_match_fulltext_
 ) -> Result<FulltextSpec, PlanBuildError> {
     Ok(FulltextSpec::MatchFulltext {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        space_id: node.space_id,
         match_expr: Expression::Literal(graphdb_core::Value::string(format!(
             "{}:{}",
             node.fulltext_condition.field, node.fulltext_condition.query
         ))),
         match_field: Some(node.field_name.clone()),
+        structured_query: graphdb_fulltext::query::FulltextQuery::Simple(
+            node.fulltext_condition.query.clone(),
+        ),
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
+        limit: None,
     })
 }
 
@@ -917,56 +925,91 @@ fn resolve_param_to_vector(
         )),
     }
 }
-fn fulltext_query_to_string(expr: &crate::parser::ast::fulltext::FulltextQueryExpr) -> String {
+fn fulltext_query_to_structured(
+    expr: &crate::parser::ast::fulltext::FulltextQueryExpr,
+    expected_field: &str,
+) -> Result<graphdb_fulltext::query::FulltextQuery, PlanBuildError> {
+    use crate::parser::ast::fulltext::FulltextQueryExpr;
+    use graphdb_fulltext::query::FulltextQuery;
     match expr {
-        crate::parser::ast::fulltext::FulltextQueryExpr::Simple(text)
-        | crate::parser::ast::fulltext::FulltextQueryExpr::Phrase(text)
-        | crate::parser::ast::fulltext::FulltextQueryExpr::Prefix(text)
-        | crate::parser::ast::fulltext::FulltextQueryExpr::Wildcard(text) => text.clone(),
-        crate::parser::ast::fulltext::FulltextQueryExpr::Field(field, text) => {
-            format!("{field}:{text}")
+        FulltextQueryExpr::Simple(text) => Ok(FulltextQuery::Simple(text.clone())),
+        FulltextQueryExpr::Phrase(text) => Ok(FulltextQuery::Phrase(text.clone())),
+        FulltextQueryExpr::Prefix(text) => Ok(FulltextQuery::Prefix(text.clone())),
+        FulltextQueryExpr::Fuzzy(text, distance) => {
+            Ok(FulltextQuery::Fuzzy(text.clone(), *distance))
         }
-        crate::parser::ast::fulltext::FulltextQueryExpr::Fuzzy(text, distance) => distance
-            .map_or_else(
-                || format!("{text}~"),
-                |distance| format!("{text}~{distance}"),
-            ),
-        crate::parser::ast::fulltext::FulltextQueryExpr::Boolean {
+        FulltextQueryExpr::Wildcard(text) => Ok(FulltextQuery::Wildcard(text.clone())),
+        FulltextQueryExpr::Boolean {
             must,
             should,
             must_not,
-        } => must
-            .iter()
-            .map(|item| format!("+({})", fulltext_query_to_string(item)))
-            .chain(
-                should
+        } => {
+            let convert = |items: &[FulltextQueryExpr]| {
+                items
                     .iter()
-                    .map(|item| format!("({})", fulltext_query_to_string(item))),
-            )
-            .chain(
-                must_not
-                    .iter()
-                    .map(|item| format!("-({})", fulltext_query_to_string(item))),
-            )
-            .collect::<Vec<_>>()
-            .join(" "),
-        crate::parser::ast::fulltext::FulltextQueryExpr::MultiField(fields) => fields
-            .iter()
-            .map(|(field, text)| format!("{field}:{text}"))
-            .collect::<Vec<_>>()
-            .join(" OR "),
-        crate::parser::ast::fulltext::FulltextQueryExpr::Range {
+                    .map(|q| fulltext_query_to_structured(q, expected_field))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            Ok(FulltextQuery::Boolean {
+                must: convert(must)?,
+                should: convert(should)?,
+                must_not: convert(must_not)?,
+            })
+        }
+        FulltextQueryExpr::Range {
             field,
             lower,
             upper,
             include_lower,
             include_upper,
-        } => format!(
-            "{field}:{}{} TO {}{}",
-            if *include_lower { "[" } else { "{" },
-            lower.as_deref().unwrap_or("*"),
-            upper.as_deref().unwrap_or("*"),
-            if *include_upper { "]" } else { "}" },
-        ),
+        } => {
+            if !field.is_empty() && field != expected_field {
+                return Err(PlanBuildError::capability(
+                    "fulltext-field-mismatch",
+                    format!(
+                        "Range query targets field '{}' but index serves field '{}'",
+                        field, expected_field
+                    ),
+                ));
+            }
+            Ok(FulltextQuery::Range {
+                lower: lower.clone(),
+                upper: upper.clone(),
+                include_lower: *include_lower,
+                include_upper: *include_upper,
+            })
+        }
+        FulltextQueryExpr::Field(field, text) => {
+            if field != expected_field {
+                return Err(PlanBuildError::capability(
+                    "fulltext-field-mismatch",
+                    format!(
+                        "Query targets field '{}' but index serves field '{}'",
+                        field, expected_field
+                    ),
+                ));
+            }
+            Ok(FulltextQuery::Simple(text.clone()))
+        }
+        FulltextQueryExpr::MultiField(fields) => {
+            let mut matched = Vec::with_capacity(fields.len());
+            for (field, text) in fields {
+                if field != expected_field {
+                    return Err(PlanBuildError::capability(
+                        "fulltext-field-mismatch",
+                        format!(
+                            "Multi-field query targets field '{}' but index serves field '{}'",
+                            field, expected_field
+                        ),
+                    ));
+                }
+                matched.push(FulltextQuery::Simple(text.clone()));
+            }
+            Ok(FulltextQuery::Boolean {
+                must: vec![],
+                should: matched,
+                must_not: vec![],
+            })
+        }
     }
 }

@@ -1,6 +1,9 @@
 //! Immutable configuration for fulltext search operators.
 
 use graphdb_core::types::expr::Expression;
+use graphdb_fulltext::query::FulltextQuery;
+
+use crate::parser::ast::fulltext::AlterIndexAction;
 
 /// Fulltext index DDL command payload.
 #[derive(Debug, Clone)]
@@ -17,6 +20,7 @@ pub enum FulltextManageCommand {
     },
     Alter {
         index_name: String,
+        actions: Vec<AlterIndexAction>,
     },
     Show {
         pattern: Option<String>,
@@ -48,23 +52,29 @@ pub enum FulltextSpec {
         space_name: String,
         space_id: u64,
         index_name: String,
-        search_query: String,
+        structured_query: FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
     },
     FulltextLookup {
         space_name: String,
         space_id: u64,
         index_name: String,
-        search_query: String,
+        structured_query: FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
     },
     MatchFulltext {
         space_name: String,
+        space_id: u64,
         match_expr: Expression,
         match_field: Option<String>,
+        /// Structured query built from the fulltext match condition.
+        structured_query: FulltextQuery,
         tag_name: String,
         field_name: String,
+        limit: Option<usize>,
     },
 }

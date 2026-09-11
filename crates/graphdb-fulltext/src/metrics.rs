@@ -125,6 +125,35 @@ impl MetricsSearchEngine {
         result
     }
 
+    pub async fn search_structured(
+        &self,
+        query: &crate::query::FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        let start = Instant::now();
+        let result = self.inner.search_structured(query, limit).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        match &result {
+            Ok(results) => {
+                self.stats_manager
+                    .record_search(self.space_id, &self.index_name, latency_ms, true);
+                self.stats_manager
+                    .record_search_result_count(self.space_id, results.len() as u64);
+            }
+            Err(_e) => {
+                self.stats_manager.record_search(
+                    self.space_id,
+                    &self.index_name,
+                    latency_ms,
+                    false,
+                );
+            }
+        }
+
+        result
+    }
+
     pub async fn delete(&self, doc_id: &str) -> Result<(), SearchError> {
         let start = Instant::now();
         let result = self.inner.delete(doc_id).await;

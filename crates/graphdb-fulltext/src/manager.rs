@@ -17,6 +17,7 @@ use graphdb_core::metadata::SchemaManager;
 use graphdb_metrics::StatsManager;
 
 const METADATA_FILE_NAME: &str = "fulltext_metadata.json";
+const INDEX_KEY_FILE_NAME: &str = "fulltext_key.json";
 
 pub struct FulltextIndexManager {
     engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>,
@@ -158,6 +159,30 @@ impl FulltextIndexManager {
         &self,
         path: &std::path::Path,
     ) -> Option<(IndexKey, Arc<dyn FulltextSearchEngine>, IndexMetadata)> {
+        if let Some((space_id, tag_name, field_name)) = Self::read_key_sidecar(path) {
+            let engine =
+                TantivySearchEngine::open_or_create(path, self.config.tantivy.clone()).ok()?;
+
+            let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
+            let key = IndexKey::new(space_id, &tag_name, &field_name);
+            let metadata = IndexMetadata {
+                index_id: key.to_index_id(),
+                index_name: format!("idx_{}_{}_{}", space_id, tag_name, field_name),
+                space_id,
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                engine_type: EngineType::Bm25,
+                storage_path: path.to_string_lossy().to_string(),
+                created_at: chrono::Utc::now(),
+                last_updated: chrono::Utc::now(),
+                doc_count: 0,
+                status: IndexStatus::Active,
+                engine_config: None,
+            };
+
+            return Some((key, engine, metadata));
+        }
+
         let dir_name = path.file_name()?.to_string_lossy();
         let (space_id, tag_name, field_name) = self.parse_index_id(&dir_name)?;
 
@@ -187,28 +212,60 @@ impl FulltextIndexManager {
         Some((key, engine, metadata))
     }
 
+    /// Legacy directory-name fallback. The `space_ft_{space}_{tag}_{field}`
+    /// form is ambiguous when tag/field names contain `_`, so new indexes
+    /// write a `fulltext_key.json` sidecar (authoritative) and this parser
+    /// only accepts the unambiguous five-segment form.
     #[cfg(feature = "fulltext")]
     fn parse_index_id(&self, index_id: &str) -> Option<(u64, String, String)> {
         let parts: Vec<&str> = index_id.split('_').collect();
-        if parts.len() < 4 || parts[0] != "space" || parts[1] != "ft" {
+        if parts.len() != 5 || parts[0] != "space" || parts[1] != "ft" {
             return None;
         }
 
         let space_id: u64 = parts[2].parse().ok()?;
-        let tag_name = parts.get(3)?.to_string();
-        let field_name = parts.get(4)?.to_string();
+        let tag_name = parts[3].to_string();
+        let field_name = parts[4].to_string();
 
         Some((space_id, tag_name, field_name))
+    }
+
+    #[cfg(feature = "fulltext")]
+    fn read_key_sidecar(path: &std::path::Path) -> Option<(u64, String, String)> {
+        let content = std::fs::read_to_string(path.join(INDEX_KEY_FILE_NAME)).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+        Some((
+            value.get("space_id")?.as_u64()?,
+            value.get("tag_name")?.as_str()?.to_string(),
+            value.get("field_name")?.as_str()?.to_string(),
+        ))
+    }
+
+    #[cfg(feature = "fulltext")]
+    fn write_key_sidecar(path: &std::path::Path, space_id: u64, tag: &str, field: &str) {
+        let value = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag,
+            "field_name": field,
+        });
+        if let Ok(content) = serde_json::to_string_pretty(&value) {
+            if let Err(e) = std::fs::write(path.join(INDEX_KEY_FILE_NAME), content) {
+                tracing::warn!("Failed to write fulltext key sidecar: {}", e);
+            }
+        }
     }
 
     #[cfg(feature = "fulltext")]
     fn restore_index_from_metadata(&self, metadata: &IndexMetadata) -> Result<(), SearchError> {
         let key = IndexKey::new(metadata.space_id, &metadata.tag_name, &metadata.field_name);
 
-        let engine = TantivySearchEngine::open_or_create(
-            &self.base_path.join(&metadata.index_id),
-            self.config.tantivy.clone(),
-        )?;
+        let stored = std::path::PathBuf::from(&metadata.storage_path);
+        let index_path = if stored.is_absolute() || stored.exists() {
+            stored
+        } else {
+            self.base_path.join(&metadata.index_id)
+        };
+        let engine = TantivySearchEngine::open_or_create(&index_path, self.config.tantivy.clone())?;
 
         self.engines.insert(
             key.clone(),
@@ -245,7 +302,12 @@ impl FulltextIndexManager {
 
         let content = serde_json::to_string_pretty(&metadata_list)
             .map_err(|e| SearchError::SerializationError(e.to_string()))?;
-        std::fs::write(&metadata_path, content)?;
+
+        // Atomic write: write to a temp file then rename, so a crash mid-write
+        // never leaves a corrupt metadata file.
+        let tmp_path = metadata_path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &content)?;
+        std::fs::rename(&tmp_path, &metadata_path)?;
 
         Ok(())
     }
@@ -318,15 +380,6 @@ impl FulltextIndexManager {
 
                 use graphdb_core::types::space::IsolationLevel;
                 match space_info.isolation_level {
-                    IsolationLevel::Device => {
-                        if let Some(ref custom_path) = space_info.storage_path {
-                            let fulltext_path = custom_path.join("fulltext");
-                            if !fulltext_path.exists() {
-                                std::fs::create_dir_all(&fulltext_path)?;
-                            }
-                            return Ok(fulltext_path);
-                        }
-                    }
                     IsolationLevel::Directory => {
                         let space_path = self.base_path.join(format!("space_{}", space_id));
                         if !space_path.exists() {
@@ -334,7 +387,7 @@ impl FulltextIndexManager {
                         }
                         return Ok(space_path);
                     }
-                    IsolationLevel::Shared => {}
+                    IsolationLevel::Shared | IsolationLevel::Device => {}
                 }
             }
         }
@@ -394,6 +447,12 @@ impl FulltextIndexManager {
                 &storage_path.join(&index_id),
                 self.config.tantivy.clone(),
             )?;
+            Self::write_key_sidecar(
+                &storage_path.join(&index_id),
+                space_id,
+                tag_name,
+                field_name,
+            );
             let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
 
             let metadata = IndexMetadata {
@@ -496,6 +555,10 @@ impl FulltextIndexManager {
             engine.close().await?;
         }
 
+        let stored_path = self
+            .metadata
+            .get(&key)
+            .map(|m| std::path::PathBuf::from(&m.storage_path));
         self.metadata.remove(&key);
 
         if let Err(e) = self.save_metadata_to_file() {
@@ -503,9 +566,14 @@ impl FulltextIndexManager {
         }
 
         let index_id = key.to_index_id();
-        let index_path = self.base_path.join(&index_id);
-        if index_path.exists() {
-            tokio::fs::remove_dir_all(&index_path).await?;
+        let candidates = stored_path
+            .into_iter()
+            .chain(std::iter::once(self.base_path.join(&index_id)))
+            .collect::<Vec<_>>();
+        for index_path in candidates {
+            if index_path.exists() {
+                tokio::fs::remove_dir_all(&index_path).await?;
+            }
         }
 
         self.emit_index_event(IndexEvent::FulltextDropped {
@@ -552,6 +620,23 @@ impl FulltextIndexManager {
             })?;
 
         engine.search(query, limit).await
+    }
+
+    pub async fn search_structured(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query: &crate::query::FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        let engine = self
+            .get_engine(space_id, tag_name, field_name)
+            .ok_or_else(|| {
+                SearchError::IndexNotFound(format!("{}.{}.{}", space_id, tag_name, field_name))
+            })?;
+
+        engine.search_structured(query, limit).await
     }
 
     pub async fn get_stats(
@@ -684,6 +769,33 @@ impl FulltextIndexManager {
             tag_name,
             field_name
         );
+        Ok(())
+    }
+
+    /// Flush pending writes so Tantivy can merge segments.
+    /// Tantivy merges in the background without an explicit blocking
+    /// optimize call, so optimize is a commit plus metadata refresh.
+    pub async fn optimize_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<(), SearchError> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        let engine = self.engines.get(&key).ok_or_else(|| {
+            SearchError::IndexNotFound(format!("{}.{}.{}", space_id, tag_name, field_name))
+        })?;
+
+        engine.commit().await?;
+        if let Some(mut metadata) = self.metadata.get_mut(&key) {
+            metadata.last_updated = chrono::Utc::now();
+            metadata.status = IndexStatus::Active;
+        }
+
+        if let Err(e) = self.save_metadata_to_file() {
+            tracing::warn!("Failed to save metadata after optimizing index: {}", e);
+        }
+
         Ok(())
     }
 

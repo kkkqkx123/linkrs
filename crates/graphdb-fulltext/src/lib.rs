@@ -8,6 +8,7 @@ pub mod manager;
 pub mod metadata;
 #[cfg(feature = "fulltext")]
 pub mod metrics;
+pub mod query;
 pub mod result;
 #[cfg(feature = "fulltext")]
 pub mod tantivy_index;

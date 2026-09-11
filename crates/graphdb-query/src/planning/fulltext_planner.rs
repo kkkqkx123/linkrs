@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use crate::metadata::MetadataContext;
 use crate::parser::ast::fulltext::{
-    AlterFulltextIndex, CreateFulltextIndex, DescribeFulltextIndex, DropFulltextIndex,
-    FulltextQueryExpr, LookupFulltext, MatchFulltext, SearchStatement, ShowFulltextIndex,
+    AlterFulltextIndex, AlterIndexAction, CreateFulltextIndex, DescribeFulltextIndex,
+    DropFulltextIndex, FulltextQueryExpr, LookupFulltext, MatchFulltext, SearchStatement,
+    ShowFulltextIndex,
 };
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -267,6 +268,7 @@ impl FulltextSearchPlanner {
         &self,
         alter: &AlterFulltextIndex,
     ) -> Result<SubPlan, PlannerError> {
+        Self::validate_alter_actions(&alter.actions)?;
         let node = AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone());
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -284,6 +286,7 @@ impl FulltextSearchPlanner {
             return Err(PlannerError::IndexNotFound(alter.index_name.clone()));
         }
 
+        Self::validate_alter_actions(&alter.actions)?;
         let node = AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone());
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -361,6 +364,7 @@ impl FulltextSearchPlanner {
 
         // Validate query expression
         self.validate_query_expr(&search.query)?;
+        Self::validate_query_fields(&search.query, &index_metadata.field_name)?;
 
         // Validate and optimize WHERE clause if present
         let where_clause = search.where_clause.clone();
@@ -481,6 +485,13 @@ impl FulltextSearchPlanner {
             ));
         }
 
+        if !field_name.is_empty() && match_stmt.fulltext_condition.field != field_name {
+            return Err(PlannerError::InvalidOperation(format!(
+                "MATCH field '{}' does not match index field '{}'",
+                match_stmt.fulltext_condition.field, field_name
+            )));
+        }
+
         let node = MatchFulltextNode::new(
             match_stmt.pattern.clone(),
             match_stmt.fulltext_condition.clone(),
@@ -494,6 +505,90 @@ impl FulltextSearchPlanner {
     // ============================================================================
     // Validation Helpers
     // ============================================================================
+
+    /// Single-field-per-index engines cannot change indexed fields online.
+    /// Fail fast for schema-changing actions; Rebuild/Optimize pass through.
+    fn validate_alter_actions(actions: &[AlterIndexAction]) -> Result<(), PlannerError> {
+        if actions.is_empty() {
+            return Err(PlannerError::InvalidOperation(
+                "ALTER FULLTEXT INDEX requires at least one action".to_string(),
+            ));
+        }
+        for action in actions {
+            match action {
+                AlterIndexAction::Rebuild | AlterIndexAction::Optimize => {}
+                AlterIndexAction::AddField(f) => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "ALTER FULLTEXT INDEX ADD FIELD '{}' is not supported: one index serves one field, create a new index instead",
+                        f.field_name
+                    )));
+                }
+                AlterIndexAction::DropField(f) => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "ALTER FULLTEXT INDEX DROP FIELD '{}' is not supported: one index serves one field, drop the index instead",
+                        f
+                    )));
+                }
+                AlterIndexAction::SetOption(k, _) => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "ALTER FULLTEXT INDEX SET '{}' is not supported: BM25 options are fixed at creation time",
+                        k
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Ensure field-scoped query nodes target the index's own field.
+    fn validate_query_fields(expr: &FulltextQueryExpr, expected: &str) -> Result<(), PlannerError> {
+        match expr {
+            FulltextQueryExpr::Simple(_)
+            | FulltextQueryExpr::Phrase(_)
+            | FulltextQueryExpr::Prefix(_)
+            | FulltextQueryExpr::Fuzzy(_, _)
+            | FulltextQueryExpr::Wildcard(_) => Ok(()),
+            FulltextQueryExpr::Field(field, _) => {
+                if field != expected {
+                    return Err(PlannerError::InvalidOperation(format!(
+                        "Query targets field '{}' but index serves field '{}'",
+                        field, expected
+                    )));
+                }
+                Ok(())
+            }
+            FulltextQueryExpr::MultiField(fields) => {
+                for (field, _) in fields {
+                    if field != expected {
+                        return Err(PlannerError::InvalidOperation(format!(
+                            "Multi-field query targets field '{}' but index serves field '{}'",
+                            field, expected
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            FulltextQueryExpr::Boolean {
+                must,
+                should,
+                must_not,
+            } => {
+                for q in must.iter().chain(should.iter()).chain(must_not.iter()) {
+                    Self::validate_query_fields(q, expected)?;
+                }
+                Ok(())
+            }
+            FulltextQueryExpr::Range { field, .. } => {
+                if !field.is_empty() && field != expected {
+                    return Err(PlannerError::InvalidOperation(format!(
+                        "Range query targets field '{}' but index serves field '{}'",
+                        field, expected
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
 
     /// Validate full-text query expression
     fn validate_query_expr(&self, expr: &FulltextQueryExpr) -> Result<(), PlannerError> {

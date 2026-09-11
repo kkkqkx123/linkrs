@@ -4,16 +4,26 @@ use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use std::ops::Bound;
+
 use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::index::Bm25Params as TantivyBm25Params;
 use tantivy::index::IndexSettings;
-use tantivy::query::QueryParser;
+use tantivy::query::{
+    wildcard_query_to_regex_str, BooleanQuery, EmptyQuery, FuzzyTermQuery, Occur,
+    PhrasePrefixQuery, PhraseQuery, Query, QueryParser, RangeQuery, RegexQuery, TermQuery,
+};
 use tantivy::schema::Value as SchemaValue;
 use tantivy::schema::*;
+use tantivy::tokenizer::TokenStream as _;
 use tantivy::IndexBuilder;
 use tantivy::IndexWriter;
+use tantivy::Searcher;
 use tantivy::TantivyDocument;
+use tantivy::Term;
+
+use crate::query::FulltextQuery;
 
 #[cfg(feature = "jieba")]
 use crate::jieba_tokenizer::JiebaTokenizer;
@@ -41,6 +51,47 @@ fn build_schema(config: &TantivyConfig) -> (Schema, Field, Field) {
     let text_field = schema_builder.add_text_field("text", text_options);
     let schema = schema_builder.build();
     (schema, id_field, text_field)
+}
+
+/// Collect top-k search results with highlights from a tantivy query.
+///
+/// Shared by both the grammar-string path and the structured-query path so
+/// result formatting stays identical.
+fn collect_search_results(
+    searcher: &Searcher,
+    query: &dyn Query,
+    text_field: Field,
+    id_field: Field,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    let top_docs = searcher.search(query, &TopDocs::with_limit(limit).order_by_score())?;
+
+    let snippet_generator =
+        tantivy::snippet::SnippetGenerator::create(searcher, query, text_field)?;
+
+    let mut results = Vec::with_capacity(top_docs.len());
+    for (score, doc_address) in top_docs {
+        let doc = searcher.doc::<TantivyDocument>(doc_address)?;
+        let doc_id: String = doc
+            .get_first(id_field)
+            .and_then(|v| SchemaValue::as_str(&v))
+            .unwrap_or("")
+            .to_string();
+
+        let highlights = doc
+            .get_first(text_field)
+            .and_then(|v| SchemaValue::as_str(&v))
+            .map(|text| vec![snippet_generator.snippet(text).to_html()]);
+
+        results.push(SearchResult {
+            doc_id: Value::string(doc_id),
+            score,
+            highlights,
+            matched_fields: vec![],
+        });
+    }
+
+    Ok(results)
 }
 
 pub struct TantivySearchEngine {
@@ -204,40 +255,162 @@ impl TantivySearchEngine {
         }
 
         let searcher = self.reader.searcher();
-
         let query_parser = QueryParser::for_index(&self.index, vec![self.text_field]);
         let query = query_parser
             .parse_query(query)
             .map_err(|e| SearchError::QueryParseError(e.to_string()))?;
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
+        collect_search_results(&searcher, &*query, self.text_field, self.id_field, limit)
+    }
 
-        let snippet_generator =
-            tantivy::snippet::SnippetGenerator::create(&searcher, &*query, self.text_field)?;
-
-        let mut results = Vec::with_capacity(top_docs.len());
-        for (score, doc_address) in top_docs {
-            let doc = searcher.doc::<TantivyDocument>(doc_address)?;
-            let doc_id: String = doc
-                .get_first(self.id_field)
-                .and_then(|v| SchemaValue::as_str(&v))
-                .unwrap_or("")
-                .to_string();
-
-            let highlights = doc
-                .get_first(self.text_field)
-                .and_then(|v| SchemaValue::as_str(&v))
-                .map(|text| vec![snippet_generator.snippet(text).to_html()]);
-
-            results.push(SearchResult {
-                doc_id: Value::string(doc_id),
-                score,
-                highlights,
-                matched_fields: vec![],
-            });
+    /// Tokenize text into tantivy terms using the index's field tokenizer.
+    fn tokenize_text(&self, text: &str) -> Vec<Term> {
+        let mut analyzer = match self.index.tokenizer_for_field(self.text_field) {
+            Ok(a) => a,
+            Err(_) => return Vec::new(),
+        };
+        let mut stream = analyzer.token_stream(text);
+        let mut terms = Vec::new();
+        while stream.advance() {
+            let token_text = stream.token().text.clone();
+            terms.push(Term::from_field_text(self.text_field, &token_text));
         }
+        terms
+    }
 
-        Ok(results)
+    /// Build a tantivy native query from a structured [`FulltextQuery`].
+    fn build_structured_query(&self, query: &FulltextQuery) -> Result<Box<dyn Query>, SearchError> {
+        let field = self.text_field;
+        match query {
+            FulltextQuery::Simple(text) => {
+                let terms = self.tokenize_text(text);
+                if terms.is_empty() {
+                    return Ok(Box::new(EmptyQuery));
+                }
+                if terms.len() == 1 {
+                    return Ok(Box::new(TermQuery::new(
+                        terms.into_iter().next().unwrap(),
+                        IndexRecordOption::Basic,
+                    )));
+                }
+                let subqueries: Vec<(Occur, Box<dyn Query>)> = terms
+                    .into_iter()
+                    .map(|t| {
+                        (
+                            Occur::Should,
+                            Box::new(TermQuery::new(t, IndexRecordOption::Basic)) as Box<dyn Query>,
+                        )
+                    })
+                    .collect();
+                Ok(Box::new(BooleanQuery::new(subqueries)))
+            }
+            FulltextQuery::Phrase(text) => {
+                let terms = self.tokenize_text(text);
+                if terms.is_empty() {
+                    return Ok(Box::new(EmptyQuery));
+                }
+                if terms.len() == 1 {
+                    return Ok(Box::new(TermQuery::new(
+                        terms.into_iter().next().unwrap(),
+                        IndexRecordOption::Basic,
+                    )));
+                }
+                Ok(Box::new(PhraseQuery::new(terms)))
+            }
+            FulltextQuery::Prefix(text) => {
+                let terms = self.tokenize_text(text);
+                if terms.is_empty() {
+                    return Ok(Box::new(EmptyQuery));
+                }
+                Ok(Box::new(PhrasePrefixQuery::new(terms)))
+            }
+            FulltextQuery::Fuzzy(text, distance) => {
+                let terms = self.tokenize_text(text);
+                let term = terms
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| Term::from_field_text(field, text));
+                let dist = distance.unwrap_or(1);
+                Ok(Box::new(FuzzyTermQuery::new(term, dist, true)))
+            }
+            FulltextQuery::Wildcard(text) => {
+                let regex_str = wildcard_query_to_regex_str(text);
+                RegexQuery::from_pattern(&regex_str, field)
+                    .map(|q| Box::new(q) as Box<dyn Query>)
+                    .map_err(|e| SearchError::QueryParseError(e.to_string()))
+            }
+            FulltextQuery::Boolean {
+                must,
+                should,
+                must_not,
+            } => {
+                let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+                for q in must {
+                    subqueries.push((Occur::Must, self.build_structured_query(q)?));
+                }
+                for q in should {
+                    subqueries.push((Occur::Should, self.build_structured_query(q)?));
+                }
+                for q in must_not {
+                    subqueries.push((Occur::MustNot, self.build_structured_query(q)?));
+                }
+                if subqueries.is_empty() {
+                    return Ok(Box::new(EmptyQuery));
+                }
+                Ok(Box::new(BooleanQuery::new(subqueries)))
+            }
+            FulltextQuery::Range {
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+            } => {
+                let lower_bound = match lower {
+                    Some(text) => {
+                        let term = Term::from_field_text(field, text);
+                        if *include_lower {
+                            Bound::Included(term)
+                        } else {
+                            Bound::Excluded(term)
+                        }
+                    }
+                    None => Bound::Unbounded,
+                };
+                let upper_bound = match upper {
+                    Some(text) => {
+                        let term = Term::from_field_text(field, text);
+                        if *include_upper {
+                            Bound::Included(term)
+                        } else {
+                            Bound::Excluded(term)
+                        }
+                    }
+                    None => Bound::Unbounded,
+                };
+                Ok(Box::new(RangeQuery::new(lower_bound, upper_bound)))
+            }
+        }
+    }
+
+    /// Structured search: build a native tantivy query from [`FulltextQuery`]
+    /// without going through the query-grammar parser.
+    pub async fn search_structured(
+        &self,
+        query: &FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let searcher = self.reader.searcher();
+        let tantivy_query = self.build_structured_query(query)?;
+        collect_search_results(
+            &searcher,
+            &*tantivy_query,
+            self.text_field,
+            self.id_field,
+            limit,
+        )
     }
 
     pub async fn delete(&self, doc_id: &str) -> Result<(), SearchError> {
@@ -291,7 +464,14 @@ impl TantivySearchEngine {
     }
 
     pub async fn rollback(&self) -> Result<(), SearchError> {
-        self.with_writer(move |_writer| Ok(())).await
+        self.with_writer(move |writer| {
+            writer.rollback()?;
+            Ok(())
+        })
+        .await?;
+        self.reader.reload()?;
+        self.refresh_stats_cache();
+        Ok(())
     }
 
     pub async fn stats(&self) -> Result<IndexStats, SearchError> {
@@ -368,6 +548,14 @@ impl crate::engine::FulltextSearchEngine for TantivySearchEngine {
 
     async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, SearchError> {
         self.search(query, limit).await
+    }
+
+    async fn search_structured(
+        &self,
+        query: &crate::query::FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        self.search_structured(query, limit).await
     }
 
     async fn delete(&self, doc_id: &str) -> Result<(), SearchError> {

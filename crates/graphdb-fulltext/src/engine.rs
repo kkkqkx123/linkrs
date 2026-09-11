@@ -6,6 +6,7 @@
 //! without modifying the manager layer.
 
 use crate::error::SearchError;
+use crate::query::FulltextQuery;
 use crate::result::{IndexStats, SearchResult};
 use crate::ConsistencyState;
 
@@ -43,6 +44,19 @@ pub trait FulltextSearchEngine: Send + Sync + std::fmt::Debug + 'static {
 
     /// Full-text search with a query string, returning at most `limit` results.
     async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, SearchError>;
+
+    /// Structured full-text search: the engine builds its native query from
+    /// [`FulltextQuery`] instead of parsing a grammar string, so user text
+    /// never interacts with the backend's query syntax. Defaults to the
+    /// string path via [`FulltextQuery::to_query_string`] for engines that
+    /// have not implemented structured construction yet.
+    async fn search_structured(
+        &self,
+        query: &FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        self.search(&query.to_query_string(), limit).await
+    }
 
     /// Delete a single document by its id.
     async fn delete(&self, doc_id: &str) -> Result<(), SearchError>;
