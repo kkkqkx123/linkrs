@@ -107,10 +107,9 @@ pub(crate) fn drop_tag_index(
         .index_data_manager()
         .read()
         .index_alias(space_id, index_name);
-    let dropped = ctx
-        .index_metadata_manager()
-        .drop_tag_index(space_id, index_name)?;
-    if dropped {
+    // Clear runtime state before removing metadata: a failed clear must leave
+    // the metadata intact so the drop can be retried without orphaning state.
+    {
         let manager = ctx.index_data_manager().write();
         manager.clear_tag_index(space_id, index_name)?;
         manager.unregister_native_index(space_id, index_name);
@@ -120,7 +119,8 @@ pub(crate) fn drop_tag_index(
             manager.remove_index_checkpoint_dirs(space_id, index_name);
         }
     }
-    Ok(dropped)
+    ctx.index_metadata_manager()
+        .drop_tag_index(space_id, index_name)
 }
 
 pub(crate) fn get_tag_index(
@@ -233,11 +233,16 @@ pub(crate) fn rebuild_tag_index(
         IndexStatus::CatchingUp,
     )?;
 
-    // Capture the active generation and WAL barrier while the index manager is
-    // exclusively borrowed. The WAL is the source of truth for which changes
-    // belong to this catch-up; active records only provide their MVCC payload.
-    let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
+    // Snapshot the active generation under a read lock and release it
+    // before the WAL scan and merge below. The WAL is the source of truth
+    // for which changes belong to this catch-up; active records only
+    // provide their MVCC payload. Holding a write lock across the scan
+    // would serialize all concurrent writers for the whole rebuild.
+    let (active_forward, active_reverse) = ctx
+        .index_data_manager()
+        .read()
+        .active_index_data(space_id, index.id)?;
+    let active_had_data = !active_forward.is_empty() || !active_reverse.is_empty();
     let observed_barrier_lsn = current_wal_lsn(ctx);
     let barrier_lsn = if observed_barrier_lsn < start_lsn {
         start_lsn
@@ -258,6 +263,18 @@ pub(crate) fn rebuild_tag_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
+    // Refuse to publish an empty generation over live data: an empty
+    // snapshot with no catch-up intents means the source yielded nothing,
+    // and publishing it would silently truncate the index. A genuinely
+    // empty index (no active data either) still rebuilds as a no-op.
+    if merged_forward.is_empty() && merged_reverse.is_empty() && active_had_data {
+        return Err(StorageError::invalid_operation(format!(
+            "Rebuild of index {} would publish an empty generation over live data; \
+             the snapshot source yielded no entries and no WAL intents were replayed. \
+             Drop and recreate the index for intentional truncation",
+            index_name
+        )));
+    }
     build_state.transition_to_publishing(barrier_lsn)?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::BarrierEstablished)?;
@@ -304,12 +321,29 @@ pub(crate) fn rebuild_tag_index(
     if let Some(manifest_path) = manifest_path {
         manifest.store(&manifest_path)?;
     }
-    manager.publish_native_index(
-        manifest.clone(),
-        persisted_forward,
-        persisted_reverse,
-        barrier_lsn,
-    )?;
+    // Publish under the write lock with a generation check: another rebuild
+    // may have published while this one worked lock-free, in which case the
+    // caller retries against the newer generation.
+    {
+        let manager = ctx.index_data_manager().write();
+        let current = manager
+            .manifest_catalog(space_id, index.id)
+            .ok_or_else(|| StorageError::not_found(format!("Index {} has no manifest", index.id)))?
+            .acquire()
+            .manifest()
+            .clone();
+        if current.generation >= generation {
+            return Err(StorageError::invalid_operation(
+                "Index generation changed while rebuilding; retry the rebuild",
+            ));
+        }
+        manager.publish_native_index(
+            manifest.clone(),
+            persisted_forward,
+            persisted_reverse,
+            barrier_lsn,
+        )?;
+    }
     log::info!(
         "Published new generation {} for index {} (space {})",
         generation,
@@ -329,10 +363,8 @@ pub(crate) fn rebuild_tag_index(
 
     remove_generation_build_state(ctx, space_id, index_name)?;
 
-    if let Some(stats) = ctx.stats_manager() {
-        stats.record_generation_publish();
-    }
-
+    // The publish counter is recorded inside `publish_native_index`;
+    // recording it here as well would double count each rebuild.
     log::info!(
         "Generation rebuild for index {} (gen {}) completed successfully",
         index_name,
@@ -404,10 +436,9 @@ pub(crate) fn drop_edge_index(
         .index_data_manager()
         .read()
         .index_alias(space_id, index_name);
-    let dropped = ctx
-        .index_metadata_manager()
-        .drop_edge_index(space_id, index_name)?;
-    if dropped {
+    // Clear runtime state before removing metadata: a failed clear must leave
+    // the metadata intact so the drop can be retried without orphaning state.
+    {
         let manager = ctx.index_data_manager().write();
         manager.clear_edge_index(space_id, index_name)?;
         manager.unregister_native_index(space_id, index_name);
@@ -417,7 +448,8 @@ pub(crate) fn drop_edge_index(
             manager.remove_index_checkpoint_dirs(space_id, index_name);
         }
     }
-    Ok(dropped)
+    ctx.index_metadata_manager()
+        .drop_edge_index(space_id, index_name)
 }
 
 /// Cascade helper: drop every tag index bound to one tag, including runtime
@@ -537,8 +569,16 @@ pub(crate) fn rebuild_edge_index(
         IndexStatus::CatchingUp,
     )?;
 
-    let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
+    // Snapshot the active generation under a read lock and release it
+    // before the WAL scan and merge below. Holding a write lock across the
+    // scan would serialize all concurrent writers for the whole rebuild.
+    let (active_forward, active_reverse) = ctx
+        .index_data_manager()
+        .read()
+        .active_index_data(space_id, index.id)?;
+    let active_had_data = !active_forward.is_empty() || !active_reverse.is_empty();
+    // The WAL scan and merge run without holding the index lock so that
+    // concurrent writers are blocked only for the final publish below.
     let observed_barrier_lsn = current_wal_lsn(ctx);
     let barrier_lsn = if observed_barrier_lsn < start_lsn {
         start_lsn
@@ -559,6 +599,18 @@ pub(crate) fn rebuild_edge_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
+    // Refuse to publish an empty generation over live data: an empty
+    // snapshot with no catch-up intents means the source yielded nothing,
+    // and publishing it would silently truncate the index. A genuinely
+    // empty index (no active data either) still rebuilds as a no-op.
+    if merged_forward.is_empty() && merged_reverse.is_empty() && active_had_data {
+        return Err(StorageError::invalid_operation(format!(
+            "Rebuild of edge index {} would publish an empty generation over live data; \
+             the snapshot source yielded no entries and no WAL intents were replayed. \
+             Drop and recreate the index for intentional truncation",
+            index_name
+        )));
+    }
     build_state.transition_to_publishing(barrier_lsn)?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::BarrierEstablished)?;
@@ -605,12 +657,29 @@ pub(crate) fn rebuild_edge_index(
     if let Some(manifest_path) = manifest_path {
         manifest.store(&manifest_path)?;
     }
-    manager.publish_native_index(
-        manifest.clone(),
-        persisted_forward,
-        persisted_reverse,
-        barrier_lsn,
-    )?;
+    // Publish under the write lock with a generation check: another rebuild
+    // may have published while this one worked lock-free, in which case the
+    // caller retries against the newer generation.
+    {
+        let manager = ctx.index_data_manager().write();
+        let current = manager
+            .manifest_catalog(space_id, index.id)
+            .ok_or_else(|| StorageError::not_found(format!("Index {} has no manifest", index.id)))?
+            .acquire()
+            .manifest()
+            .clone();
+        if current.generation >= generation {
+            return Err(StorageError::invalid_operation(
+                "Index generation changed while rebuilding; retry the rebuild",
+            ));
+        }
+        manager.publish_native_index(
+            manifest.clone(),
+            persisted_forward,
+            persisted_reverse,
+            barrier_lsn,
+        )?;
+    }
     log::info!(
         "Published new generation {} for edge index {} (space {})",
         generation,
@@ -631,10 +700,8 @@ pub(crate) fn rebuild_edge_index(
 
     remove_generation_build_state(ctx, space_id, index_name)?;
 
-    if let Some(stats) = ctx.stats_manager() {
-        stats.record_generation_publish();
-    }
-
+    // The publish counter is recorded inside `publish_native_index`;
+    // recording it here as well would double count each rebuild.
     log::info!(
         "Generation rebuild for edge index {} (gen {}) completed successfully",
         index_name,

@@ -441,6 +441,21 @@ impl<S: StorageClient> SchemaApi<S> {
             }
         }
 
+        // Fall back to edge indexes, which share the same name scope.
+        if let Ok(Some(_)) = storage.get_edge_index(&space_name, index_name) {
+            let result = storage
+                .rebuild_edge_index(&space_name, index_name)
+                .map_err(|e| CoreError::StorageError(e.to_string()))?;
+            if result {
+                log::info!(
+                    "Rebuilt edge index successfully: {} in space {}",
+                    index_name,
+                    space_id
+                );
+                return Ok(());
+            }
+        }
+
         Err(CoreError::NotFound(format!(
             "Index '{}' does not exist",
             index_name

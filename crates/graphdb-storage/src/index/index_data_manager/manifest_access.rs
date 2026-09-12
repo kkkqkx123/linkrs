@@ -1352,6 +1352,10 @@ impl IndexDataManagerImpl {
     /// different: `unregister_native_index` plus `remove_checkpoint_dirs_by_id`
     /// removes runtime state and checkpoint directories because no reader can
     /// pin a dropped index anymore.
+    ///
+    /// Clearing never backfills from primary storage. It is intended for the
+    /// drop path only and is not exposed as a standalone user operation; to
+    /// truncate an index, drop it and create it again.
     pub(crate) fn clear_index(
         &self,
         index_id: u64,

@@ -939,9 +939,11 @@ impl FulltextIndexManager {
                 "Removing leftover rebuild scratch directory {} from a previous attempt",
                 temp_dir.display()
             );
-            std::fs::remove_dir_all(&temp_dir)?;
+            // Async filesystem call: this runs while operators may poll
+            // progress, so it must not block the executor.
+            tokio::fs::remove_dir_all(&temp_dir).await?;
         }
-        std::fs::create_dir_all(&temp_dir)?;
+        tokio::fs::create_dir_all(&temp_dir).await?;
 
         // No key sidecar on purpose: discovery must never adopt scratch dirs.
         let engine = TantivySearchEngine::open_or_create(&temp_dir, self.config.tantivy.clone())?;
@@ -1034,7 +1036,9 @@ impl FulltextIndexManager {
                 // failure keeps the previous directory beside the new live
                 // one: no data is lost, but reverse recovery loses its
                 // backup, so it is logged at error level for attention.
-                if std::fs::rename(&previous_path, &backup).is_err() {
+                // Async filesystem call: publish runs under the publish
+                // fence, so blocking the executor here would stall delivery.
+                if tokio::fs::rename(&previous_path, &backup).await.is_err() {
                     tracing::error!(
                         "Published rebuild for {} but failed to retain previous directory {} as backup {}: reverse recovery unavailable until the next successful rebuild",
                         index_id,
@@ -1043,13 +1047,14 @@ impl FulltextIndexManager {
                     );
                 }
             }
-            Self::prune_old_backups(
+            Self::prune_old_backups_async(
                 PathBuf::from(&previous_path)
                     .parent()
                     .unwrap_or(&self.base_path),
                 &index_id,
                 Some(&backup),
-            );
+            )
+            .await;
         }
 
         self.set_rebuild_phase(space_id, tag_name, field_name, RebuildPhase::Completed);
@@ -1087,13 +1092,19 @@ impl FulltextIndexManager {
 
     /// Prune `<index_id>.old-*` backups in `parent`, keeping only `keep`
     /// (usually the newest backup). Used after publish so exactly one backup
-    /// generation survives for reverse recovery.
-    fn prune_old_backups(parent: &std::path::Path, index_id: &str, keep: Option<&PathBuf>) {
+    /// generation survives for reverse recovery. Async filesystem calls keep
+    /// the publish fence critical section off the blocking path.
+    #[cfg(feature = "fulltext")]
+    async fn prune_old_backups_async(
+        parent: &std::path::Path,
+        index_id: &str,
+        keep: Option<&PathBuf>,
+    ) {
         for backup in Self::list_old_backups(parent, index_id) {
             if keep.is_some_and(|keep| *keep == backup) {
                 continue;
             }
-            if let Err(e) = std::fs::remove_dir_all(&backup) {
+            if let Err(e) = tokio::fs::remove_dir_all(&backup).await {
                 tracing::warn!("Failed to prune rebuild backup {}: {}", backup.display(), e);
             }
         }
@@ -1145,7 +1156,7 @@ impl FulltextIndexManager {
                     .unwrap_or_default()
                     .as_millis()
             ));
-            if std::fs::rename(&live_path, &suspect).is_err() {
+            if tokio::fs::rename(&live_path, &suspect).await.is_err() {
                 tracing::warn!(
                     "Restoring backup for {} but failed to move aside suspect directory {}",
                     index_id,
@@ -1195,7 +1206,7 @@ impl FulltextIndexManager {
                 generation,
             );
             if temp_dir.exists() && PathBuf::from(&metadata.storage_path) != temp_dir {
-                if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+                if let Err(e) = tokio::fs::remove_dir_all(&temp_dir).await {
                     tracing::warn!(
                         "Failed to remove rebuild scratch directory {}: {}",
                         temp_dir.display(),
