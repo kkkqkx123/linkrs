@@ -243,6 +243,18 @@ impl VectorApi {
             .collect()
     }
 
+    /// List vector indexes whose last rebuild failed.
+    ///
+    /// These indexes still serve live data but need operator attention: retry
+    /// [`VectorApi::rebuild_collection`]. Mirrors
+    /// [`crate::api_core::fulltext_api::FulltextApi::inconsistent_indexes`].
+    pub fn inconsistent_indexes(&self) -> Vec<graphdb_sync::RebuildProgress> {
+        let Some(coordinator) = &self.coordinator else {
+            return Vec::new();
+        };
+        coordinator.inconsistent_vector_indexes()
+    }
+
     /// Insert a vector point with explicit write mode.
     pub async fn insert_vector_with_mode(
         &self,
@@ -402,6 +414,68 @@ impl VectorApi {
         }
         let _ = (space_id, tag_name, field_name, field);
         Ok(())
+    }
+
+    /// Rebuild a vector index from primary storage without dropping it.
+    ///
+    /// Backfill and catch-up replay converge a temp collection while the
+    /// live slice keeps serving; a fenced publish then swaps the temp in.
+    /// Requires a configured `SyncManager` (durable outbox + vector
+    /// coordinator). Returns the number of applied point operations.
+    pub async fn rebuild_collection(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        source: &mut dyn graphdb_sync::VectorDocSource,
+        options: graphdb_sync::VectorRebuildOptions,
+    ) -> CoreResult<u64> {
+        let Some(manager) = self.sync_manager.as_ref() else {
+            return Err(CoreError::VectorError(
+                "Vector rebuild requires a configured SyncManager".to_string(),
+            ));
+        };
+        manager
+            .rebuild_vector_index(space_id, tag_name, field_name, source, options)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+
+    /// Clear a vector index: drop all indexed points without backfill.
+    ///
+    /// This is an explicit destructive operation, not a rebuild. The caller
+    /// must pass `force = true` to confirm the data loss; the call is audit
+    /// logged. To repair a damaged index without data loss, use
+    /// [`VectorApi::rebuild_collection`] (or drop and recreate the index).
+    pub async fn clear_collection(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        force: bool,
+    ) -> CoreResult<()> {
+        if !force {
+            return Err(CoreError::VectorError(
+                "Refusing to clear vector index without explicit confirmation: retry with force = true"
+                    .to_string(),
+            ));
+        }
+        log::warn!(
+            "Clearing vector index explicitly confirmed: space {} tag {} field {}",
+            space_id,
+            tag_name,
+            field_name
+        );
+        let Some(coordinator) = &self.coordinator else {
+            return Err(CoreError::VectorError(
+                "Vector clear requires a configured sync coordinator".to_string(),
+            ));
+        };
+        coordinator
+            .index_manager()
+            .purge_index_data(space_id, tag_name, field_name)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
     /// Search vectors with options

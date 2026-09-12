@@ -64,6 +64,22 @@ impl SyncCoordinator {
         &self.fulltext_manager
     }
 
+    /// Repoint a cached batch processor at a rebuilt engine after publish.
+    /// Must be called while holding the index publish fence write guard so
+    /// no flush can straddle the engine swap.
+    pub async fn repoint_fulltext_processor(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        engine: Arc<dyn graphdb_fulltext::engine::FulltextSearchEngine>,
+    ) {
+        let key = (space_id, tag_name.to_string(), field_name.to_string());
+        if let Some(processor) = self.fulltext_processors.get(&key) {
+            processor.set_engine(engine).await;
+        }
+    }
+
     fn get_or_create_fulltext_processor(
         &self,
         space_id: u64,
@@ -83,6 +99,9 @@ impl SyncCoordinator {
                 let engine = self
                     .fulltext_manager
                     .get_engine(space_id, tag_name, field_name)?;
+                let fence = self
+                    .fulltext_manager
+                    .publish_fence_for(space_id, tag_name, field_name);
 
                 let processor = Arc::new(FulltextBatchProcessor::new(
                     space_id,
@@ -90,6 +109,7 @@ impl SyncCoordinator {
                     field_name.to_string(),
                     engine,
                     self.config.clone(),
+                    fence,
                 ));
 
                 entry.insert(processor.clone());
@@ -368,7 +388,8 @@ impl SyncCoordinator {
                         ));
                     }
                     SyncFailurePolicy::FailOpen => {
-                        // Mark failed engines as inconsistent so they can be rebuilt
+                        // Mark failed engines as inconsistent so they can be repaired
+                        // (online rebuild driver, or drop and recreate)
                         for key in &failed_keys {
                             if let Some(engine) = self.fulltext_manager.get_engine(
                                 key.space_id,
@@ -386,7 +407,7 @@ impl SyncCoordinator {
                         self.commit_all().await.ok();
                         return Err(SyncCoordinatorError::BatchError(
                             crate::batch::BatchError::InvalidOperation(format!(
-                                "Fulltext commit failed for {} indexes, marked as Inconsistent. Repair with rebuild_index.",
+                                "Fulltext commit failed for {} indexes, marked as Inconsistent. Repair with the online rebuild driver, or by dropping and recreating the affected indexes.",
                                 failed_keys.len()
                             )),
                         ));

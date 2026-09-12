@@ -10,6 +10,8 @@ pub mod dead_letter_queue;
 pub mod manager;
 mod outbox;
 pub mod outbox_recovery;
+#[cfg(feature = "fulltext")]
+pub mod rebuild;
 pub mod receiver;
 pub mod retry;
 pub mod runtime;
@@ -18,6 +20,8 @@ pub mod types;
 pub mod vector_error;
 #[cfg(feature = "vector")]
 pub mod vector_index_manager;
+#[cfg(feature = "vector")]
+pub mod vector_rebuild;
 #[cfg(feature = "vector")]
 pub mod vector_sync;
 
@@ -50,6 +54,11 @@ pub use outbox_recovery::{
     restore_latest_snapshot, restore_snapshot_sync, verify_live_database,
 };
 #[cfg(feature = "fulltext")]
+pub use rebuild::{
+    fulltext_edge_doc_basis, fulltext_field_index_id, fulltext_tag_index_id,
+    fulltext_vertex_doc_id, FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity,
+};
+#[cfg(feature = "fulltext")]
 pub use receiver::FulltextReceiver;
 #[cfg(feature = "vector")]
 pub use receiver::VectorReceiver;
@@ -57,15 +66,21 @@ pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
 pub use sqlite_outbox::{
     ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
-    SqliteOutbox, SyncDiagnostics, TargetSyncDiagnostics,
+    RebuildEvent, SqliteOutbox, SyncDiagnostics, TargetSyncDiagnostics,
 };
 pub use types::{IndexOpKey, IndexOperation};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]
 pub use graphdb_fulltext::{IndexEvent, IndexEventCallback};
+#[cfg(any(feature = "fulltext", feature = "vector"))]
+pub use graphdb_fulltext::{RebuildPhase, RebuildProgress};
 #[cfg(feature = "vector")]
-pub use vector_index_manager::VectorIndexManager;
+pub use vector_index_manager::{PublishOutcome, TempCollection, TempKey, VectorIndexManager};
+#[cfg(feature = "vector")]
+pub use vector_rebuild::{
+    vector_tag_index_id, VectorDocSource, VectorRebuildDoc, VectorRebuildOptions,
+};
 #[cfg(feature = "vector")]
 pub use vector_sync::{
     VectorChangeContext, VectorChangeType, VectorEngineState, VectorIndexLocation, VectorPointData,

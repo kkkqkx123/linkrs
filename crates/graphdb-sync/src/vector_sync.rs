@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dashmap::DashMap;
+use graphdb_fulltext::{RebuildPhase, RebuildProgress};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -261,6 +263,8 @@ pub struct VectorSyncCoordinator {
     runtime: tokio::runtime::Handle,
     /// Optional outbox handle for `ReadYourWrites` consistency waiting.
     outbox: parking_lot::RwLock<Option<std::sync::Arc<crate::SqliteOutbox>>>,
+    /// Live rebuild progress by index; present only while a rebuild runs.
+    rebuild_progress: DashMap<(u64, String, String), RebuildProgress>,
 }
 
 impl std::fmt::Debug for VectorSyncCoordinator {
@@ -307,6 +311,7 @@ impl VectorSyncCoordinator {
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
             outbox: parking_lot::RwLock::new(None),
+            rebuild_progress: DashMap::new(),
         }
     }
 
@@ -339,6 +344,73 @@ impl VectorSyncCoordinator {
 
     pub fn set_outbox(&self, outbox: std::sync::Arc<crate::SqliteOutbox>) {
         *self.outbox.write() = Some(outbox);
+    }
+
+    /// Publish fence for one vector index. Delivery applies hold the read
+    /// guard; rebuild holds the write guard across its critical windows.
+    /// Delegates to the index manager so explicit purges share the same lock.
+    pub fn publish_fence_for(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Arc<tokio::sync::RwLock<()>> {
+        self.index_manager
+            .publish_fence_for(space_id, tag_name, field_name)
+    }
+
+    /// Latest rebuild progress snapshot for one vector index, if any.
+    pub fn rebuild_progress(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<RebuildProgress> {
+        self.rebuild_progress
+            .get(&(space_id, tag_name.to_string(), field_name.to_string()))
+            .map(|entry| entry.clone())
+    }
+
+    /// Replace the stored rebuild progress snapshot.
+    pub fn update_rebuild_progress(&self, progress: RebuildProgress) {
+        let key = (
+            progress.space_id,
+            progress.tag_name.clone(),
+            progress.field_name.clone(),
+        );
+        self.rebuild_progress.insert(key, progress);
+    }
+
+    /// Advance the stored rebuild phase, if a snapshot is present.
+    pub fn set_rebuild_phase(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        phase: RebuildPhase,
+    ) {
+        let key = (space_id, tag_name.to_string(), field_name.to_string());
+        if let Some(mut entry) = self.rebuild_progress.get_mut(&key) {
+            entry.phase = phase;
+        }
+    }
+
+    /// Drop the stored rebuild progress snapshot.
+    pub fn remove_rebuild_progress(&self, space_id: u64, tag_name: &str, field_name: &str) {
+        self.rebuild_progress
+            .remove(&(space_id, tag_name.to_string(), field_name.to_string()));
+    }
+
+    /// Vector indexes needing operator attention: rebuilds stuck in the
+    /// `Failed` phase (live data still serves; retry the rebuild). Mirrors
+    /// the fulltext `inconsistent` listing so both engines share one
+    /// alerting shape.
+    pub fn inconsistent_vector_indexes(&self) -> Vec<RebuildProgress> {
+        self.rebuild_progress
+            .iter()
+            .filter(|entry| entry.value().phase == RebuildPhase::Failed)
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     pub fn granularity(&self) -> CollectionGranularity {
@@ -467,6 +539,28 @@ impl VectorSyncCoordinator {
         &self,
         contexts: Vec<crate::VectorChangeContext>,
     ) -> VectorCoordinatorResult<()> {
+        self.deliver_change_batch(None, contexts).await
+    }
+
+    /// Deliver a batch into one physical collection (rebuild temp). Shares
+    /// the live grouping/`group_id` logic via
+    /// `prepare_change_batch_for_collection`; temp writes need no publish
+    /// fence (temps have no concurrent readers), bypass the disabled-engine
+    /// skip accounting of live delivery, and still fail when the engine is
+    /// disabled so rebuilds abort instead of silently diverging.
+    pub async fn on_vector_change_batch_to(
+        &self,
+        collection: &str,
+        contexts: Vec<crate::VectorChangeContext>,
+    ) -> VectorCoordinatorResult<()> {
+        self.deliver_change_batch(Some(collection), contexts).await
+    }
+
+    async fn deliver_change_batch(
+        &self,
+        collection_override: Option<&str>,
+        contexts: Vec<crate::VectorChangeContext>,
+    ) -> VectorCoordinatorResult<()> {
         if self.is_disabled_engine() {
             self.disabled_skips
                 .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -491,7 +585,9 @@ impl VectorSyncCoordinator {
                 };
                 let mut ops: Vec<vector_search::engine::TxnOp> = Vec::with_capacity(contexts.len());
                 for ctx in contexts {
-                    let collection = self.collection_name_for(&ctx.location);
+                    let collection = collection_override
+                        .map(str::to_string)
+                        .unwrap_or_else(|| self.collection_name_for(&ctx.location));
                     let point_id = ctx.data.id;
                     match ctx.change_type {
                         VectorChangeType::Insert => {
@@ -531,8 +627,9 @@ impl VectorSyncCoordinator {
             }
         }
 
-        let (upsert_by_collection, delete_by_collection) =
-            self.index_manager.prepare_change_batch(contexts);
+        let (upsert_by_collection, delete_by_collection) = self
+            .index_manager
+            .prepare_change_batch_for_collection(collection_override, contexts);
 
         use std::future::Future;
         use std::pin::Pin;

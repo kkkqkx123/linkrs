@@ -45,6 +45,9 @@ pub enum SearchError {
     #[error("Invalid doc ID format: {0}")]
     InvalidDocId(String),
 
+    #[error("Rebuild busy: {0}")]
+    RebuildBusy(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

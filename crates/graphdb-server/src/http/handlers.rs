@@ -7,6 +7,7 @@ pub mod health;
 pub mod import;
 pub mod migration_progress;
 pub mod query;
+pub mod rebuild;
 pub mod schema;
 pub mod session;
 pub mod snapshot;

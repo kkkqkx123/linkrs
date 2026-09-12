@@ -26,7 +26,11 @@ pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
     fn get_tag_index(&self, space_id: u64, index_name: &str)
         -> Result<Option<Index>, StorageError>;
     fn list_tag_indexes(&self, space_id: u64) -> Result<Vec<Index>, StorageError>;
-    fn drop_tag_indexes_by_tag(&self, space_id: u64, tag_name: &str) -> Result<(), StorageError>;
+    fn drop_tag_indexes_by_tag(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+    ) -> Result<Vec<String>, StorageError>;
 
     fn create_edge_index(&self, space_id: u64, index: &Index) -> Result<bool, StorageError>;
     fn drop_edge_index(&self, space_id: u64, index_name: &str) -> Result<bool, StorageError>;
@@ -36,8 +40,11 @@ pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
         index_name: &str,
     ) -> Result<Option<Index>, StorageError>;
     fn list_edge_indexes(&self, space_id: u64) -> Result<Vec<Index>, StorageError>;
-    fn drop_edge_indexes_by_type(&self, space_id: u64, edge_type: &str)
-        -> Result<(), StorageError>;
+    fn drop_edge_indexes_by_type(
+        &self,
+        space_id: u64,
+        edge_type: &str,
+    ) -> Result<Vec<String>, StorageError>;
 
     /// Set the status of a tag index (used for generation rebuild lifecycle).
     fn set_tag_index_status(
@@ -286,7 +293,11 @@ impl IndexMetadataManager for IndexManager {
             .collect())
     }
 
-    fn drop_tag_indexes_by_tag(&self, space_id: u64, tag_name: &str) -> Result<(), StorageError> {
+    fn drop_tag_indexes_by_tag(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+    ) -> Result<Vec<String>, StorageError> {
         let removed: Vec<String> = {
             let mut indexes = self.tag_indexes.write();
             let mut removed = Vec::new();
@@ -299,13 +310,13 @@ impl IndexMetadataManager for IndexManager {
             });
             removed
         };
-        for index_name in removed {
+        for index_name in &removed {
             self.emit_schema_event(SchemaChangeEvent::TagIndexDropped {
                 space_id,
-                index_name,
+                index_name: index_name.clone(),
             });
         }
-        Ok(())
+        Ok(removed)
     }
 
     fn create_edge_index(&self, space_id: u64, index: &Index) -> Result<bool, StorageError> {
@@ -369,7 +380,7 @@ impl IndexMetadataManager for IndexManager {
         &self,
         space_id: u64,
         edge_type: &str,
-    ) -> Result<(), StorageError> {
+    ) -> Result<Vec<String>, StorageError> {
         let removed: Vec<String> = {
             let mut indexes = self.edge_indexes.write();
             let mut removed = Vec::new();
@@ -382,13 +393,13 @@ impl IndexMetadataManager for IndexManager {
             });
             removed
         };
-        for index_name in removed {
+        for index_name in &removed {
             self.emit_schema_event(SchemaChangeEvent::EdgeIndexDropped {
                 space_id,
-                index_name,
+                index_name: index_name.clone(),
             });
         }
-        Ok(())
+        Ok(removed)
     }
 
     fn set_tag_index_status(
@@ -466,6 +477,8 @@ mod tests {
         manager.drop_tag_indexes_by_tag(1, "Person").unwrap();
         assert_eq!(hits.load(Ordering::SeqCst), 2);
         assert!(manager.list_tag_indexes(1).unwrap().is_empty());
+        let removed = manager.drop_tag_indexes_by_tag(1, "Person").unwrap();
+        assert!(removed.is_empty());
     }
 
     #[test]

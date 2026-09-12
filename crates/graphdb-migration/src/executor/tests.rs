@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::plan::{MigrationTarget, VersionRange};
 use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};

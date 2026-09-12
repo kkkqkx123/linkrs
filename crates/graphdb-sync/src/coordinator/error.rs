@@ -134,6 +134,9 @@ impl From<SearchError> for FulltextError {
             SearchError::ConfigError(msg) => FulltextError::ConfigError(msg),
             SearchError::QueryParseError(msg) => FulltextError::QueryParseError(msg),
             SearchError::InvalidDocId(msg) => FulltextError::InvalidDocId(msg),
+            SearchError::RebuildBusy(msg) => {
+                FulltextError::Internal(format!("Rebuild busy: {}", msg))
+            }
             SearchError::Internal(msg) => FulltextError::Internal(msg),
         }
     }

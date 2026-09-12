@@ -123,6 +123,8 @@ pub enum MetricType {
     GenerationBuildCount,
     GenerationPublishCount,
     GenerationRebuildFailures,
+    InconsistentIndexCount,
+    RebuildPhaseLatencyMs,
     SplitCount,
     SplitFailures,
     ReclaimedIndexFiles,
@@ -1141,6 +1143,19 @@ impl StatsManager {
 
     pub fn record_generation_rebuild_failure(&self) {
         self.add_value(MetricType::GenerationRebuildFailures);
+    }
+
+    pub fn record_inconsistent_index_count(&self, count: u64) {
+        self.set_value(MetricType::InconsistentIndexCount, count);
+    }
+
+    pub fn record_rebuild_phase_latency(&self, target: &str, phase: &str, latency_ms: u64) {
+        self.add_value_with_amount(MetricType::RebuildPhaseLatencyMs, latency_ms);
+        self.add_space_metric_with_amount(
+            &format!("{target}:{phase}"),
+            MetricType::RebuildPhaseLatencyMs,
+            latency_ms,
+        );
     }
 
     pub fn record_split(&self, success: bool) {

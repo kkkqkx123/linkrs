@@ -8,6 +8,8 @@ pub mod error;
 #[cfg(feature = "fulltext")]
 pub mod fulltext_api;
 pub mod query_api;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
+pub mod rebuild_source;
 pub mod schema_api;
 pub mod sync_api;
 pub mod transaction_api;

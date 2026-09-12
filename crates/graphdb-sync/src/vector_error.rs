@@ -83,6 +83,9 @@ pub enum VectorCoordinatorError {
     #[error("Vector index rebuild failed: {0}")]
     IndexRebuildFailed(String),
 
+    #[error("Vector rebuild busy: {0}")]
+    RebuildBusy(String),
+
     #[error("Vertex change processing failed: {0}")]
     VertexChangeFailed(String),
 
@@ -242,6 +245,7 @@ impl VectorCoordinatorError {
             VectorCoordinatorError::IndexCreationFailed { .. }
             | VectorCoordinatorError::IndexDropFailed { .. }
             | VectorCoordinatorError::IndexRebuildFailed(_)
+            | VectorCoordinatorError::RebuildBusy(_)
             | VectorCoordinatorError::VertexChangeFailed(_)
             | VectorCoordinatorError::SpaceNotFound(_)
             | VectorCoordinatorError::TagNotFound(_)

@@ -38,6 +38,13 @@ pub enum OutboxPayload {
         index_type: String,
         fields: Vec<String>,
     },
+    DropSpace {
+        space_id: u64,
+    },
+    DropTag {
+        space_id: u64,
+        tag_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

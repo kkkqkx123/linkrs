@@ -347,6 +347,12 @@ impl GraphDatabase<GraphStorage> {
                 .configure_outbox(path.join("outbox/outbox.sqlite"))
                 .map_err(|error| CoreError::StorageError(error.to_string()))?;
             let _ = manager.retry_outbox_sync();
+            // Fail stranded rebuild generations and collect rebuild scratch
+            // state left by a previous process. Idempotent; best-effort here
+            // (recovery is re-runnable on demand).
+            if let Err(error) = manager.recover_stale_rebuilds_sync() {
+                log::warn!("Rebuild startup recovery reported an error: {}", error);
+            }
         }
 
         let txn_manager_config = TransactionManagerConfig::default();

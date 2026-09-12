@@ -142,9 +142,10 @@ async fn test_special_query_characters() {
     }
 }
 
-/// TC-FT-EDGE-007: Index Rebuilding
+/// TC-FT-EDGE-007: Index drop plus recreate (not an online rebuild: the old
+/// `rebuild_index` only cleared, so this test documents recreate semantics).
 #[tokio::test]
-async fn test_rebuild_index() {
+async fn test_drop_recreate_index() {
     let ctx = FulltextTestContext::new();
 
     ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))

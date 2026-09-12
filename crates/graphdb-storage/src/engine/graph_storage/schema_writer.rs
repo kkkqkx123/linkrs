@@ -140,6 +140,7 @@ pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResul
         ctx.drop_vertex_type(&storage_name)?;
     }
 
+    super::index_manager::drop_space_indexes_cascade(ctx, space)?;
     ctx.schema_manager().drop_space(space)?;
     ctx.serial_allocator().clear_space(space_id);
     Ok(true)
@@ -170,6 +171,7 @@ pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResu
         ctx.drop_vertex_type(&storage_name)?;
     }
 
+    super::index_manager::drop_space_indexes_cascade(ctx, space)?;
     ctx.schema_manager().clear_space(space)?;
     ctx.serial_allocator().clear_space(space_id);
     Ok(true)
@@ -384,6 +386,7 @@ pub(crate) fn drop_tag(
     let storage_name = vertex_type_storage_name(space_id, tag_name);
     ctx.drop_vertex_type(&storage_name)?;
 
+    let _ = super::index_manager::drop_tag_indexes_by_tag_cascade(ctx, space, tag_name);
     ctx.schema_manager().drop_tag(space, tag_name)?;
     ctx.serial_allocator()
         .remove(&super::serial::SerialKey::new(
@@ -552,6 +555,7 @@ pub(crate) fn drop_edge_type(
     let storage_name = edge_type_storage_name(space_id, edge_type_name);
     ctx.drop_edge_type(&storage_name)?;
 
+    let _ = super::index_manager::drop_edge_indexes_by_type_cascade(ctx, space, edge_type_name);
     ctx.schema_manager().drop_edge_type(space, edge_type_name)?;
     ctx.serial_allocator()
         .remove(&super::serial::SerialKey::new(

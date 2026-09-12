@@ -1,6 +1,7 @@
 use crate::edge::EdgeStrategy;
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::params::CreateEdgeTypeParams;
+use crate::index::{EdgeIndexOps, VertexIndexOps};
 use crate::types::StoragePropertyDef;
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::{
@@ -46,6 +47,7 @@ pub(crate) fn replay_drop_space(
         let _ = ctx.drop_vertex_type(&storage_name);
     }
 
+    cascade_drop_space_indexes(ctx, space_id, &redo.space_name);
     let _ = ctx.schema_manager().drop_space(&redo.space_name)?;
     Ok(())
 }
@@ -72,6 +74,7 @@ pub(crate) fn replay_clear_space(
         let _ = ctx.drop_vertex_type(&storage_name);
     }
 
+    cascade_drop_space_indexes(ctx, space_id, &redo.space_name);
     let _ = ctx.schema_manager().clear_space(&redo.space_name)?;
     Ok(())
 }
@@ -262,6 +265,7 @@ pub(crate) fn replay_delete_vertex_type(
         if let Ok(Some(space_info)) = ctx.schema_manager().get_space(space_name) {
             let storage_name = format!("space_{}:tag:{}", space_info.space_id, redo.label_name);
             ctx.drop_vertex_type(&storage_name)?;
+            cascade_drop_tag_indexes(ctx, space_info.space_id, space_name, &redo.label_name);
         }
     }
     if let Some(space_name) = &redo.space_name {
@@ -280,6 +284,7 @@ pub(crate) fn replay_delete_edge_type(
         if let Ok(Some(space_info)) = ctx.schema_manager().get_space(space_name) {
             let storage_name = format!("space_{}:edge:{}", space_info.space_id, redo.edge_label);
             ctx.drop_edge_type(&storage_name)?;
+            cascade_drop_edge_indexes(ctx, space_info.space_id, space_name, &redo.edge_label);
         }
     }
     if let Some(space_name) = &redo.space_name {
@@ -288,6 +293,115 @@ pub(crate) fn replay_delete_edge_type(
             .drop_edge_type(space_name, &redo.edge_label);
     }
     Ok(())
+}
+
+fn cascade_drop_tag_indexes(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    space_name: &str,
+    tag_name: &str,
+) {
+    use graphdb_core::metadata::IndexMetadataManager;
+    let names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_id)
+        .map(|indexes| {
+            indexes
+                .into_iter()
+                .filter(|idx| idx.schema_name == tag_name)
+                .map(|idx| idx.name)
+                .collect()
+        })
+        .unwrap_or_default();
+    for name in names {
+        let _ = ctx.index_metadata_manager().drop_tag_index(space_id, &name);
+        let data_mgr = ctx.index_data_manager().write();
+        let _ = data_mgr.clear_tag_index(space_id, &name);
+        if let Some(index_id) = data_mgr.index_alias(space_id, &name) {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_index_checkpoint_dirs(space_id, &name);
+        }
+        let _ = space_name;
+    }
+}
+
+fn cascade_drop_edge_indexes(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    space_name: &str,
+    edge_type: &str,
+) {
+    use graphdb_core::metadata::IndexMetadataManager;
+    let names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_edge_indexes(space_id)
+        .map(|indexes| {
+            indexes
+                .into_iter()
+                .filter(|idx| idx.schema_name == edge_type)
+                .map(|idx| idx.name)
+                .collect()
+        })
+        .unwrap_or_default();
+    for name in names {
+        let _ = ctx
+            .index_metadata_manager()
+            .drop_edge_index(space_id, &name);
+        let data_mgr = ctx.index_data_manager().write();
+        let _ = data_mgr.clear_edge_index(space_id, &name);
+        if let Some(index_id) = data_mgr.index_alias(space_id, &name) {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_index_checkpoint_dirs(space_id, &name);
+        }
+        let _ = space_name;
+    }
+}
+
+fn cascade_drop_space_indexes(ctx: &GraphStorageContext, space_id: u64, space_name: &str) {
+    use graphdb_core::metadata::IndexMetadataManager;
+    let tag_names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_id)
+        .map(|indexes| indexes.into_iter().map(|idx| idx.name).collect())
+        .unwrap_or_default();
+    for name in tag_names {
+        let _ = ctx.index_metadata_manager().drop_tag_index(space_id, &name);
+        let data_mgr = ctx.index_data_manager().write();
+        let _ = data_mgr.clear_tag_index(space_id, &name);
+        if let Some(index_id) = data_mgr.index_alias(space_id, &name) {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_index_checkpoint_dirs(space_id, &name);
+        }
+    }
+    let edge_names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_edge_indexes(space_id)
+        .map(|indexes| indexes.into_iter().map(|idx| idx.name).collect())
+        .unwrap_or_default();
+    for name in edge_names {
+        let _ = ctx
+            .index_metadata_manager()
+            .drop_edge_index(space_id, &name);
+        let data_mgr = ctx.index_data_manager().write();
+        let _ = data_mgr.clear_edge_index(space_id, &name);
+        if let Some(index_id) = data_mgr.index_alias(space_id, &name) {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            data_mgr.unregister_native_index(space_id, &name);
+            data_mgr.remove_index_checkpoint_dirs(space_id, &name);
+        }
+    }
+    let _ = space_name;
 }
 
 pub(crate) fn replay_add_vertex_prop(

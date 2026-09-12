@@ -277,6 +277,20 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         manager.start().await.map_err(|error| {
             graphdb_core::DBError::storage(format!("Failed to start sync manager: {}", error))
         })?;
+        // Fail stranded rebuild generations and collect rebuild scratch
+        // state left by a previous process. Idempotent; a failure is logged
+        // without blocking startup (recovery is re-runnable on demand).
+        match manager.recover_stale_rebuilds().await {
+            Ok(0) => {}
+            Ok(failed) => info!(
+                "Rebuild startup recovery failed {} stranded generation(s)",
+                failed
+            ),
+            Err(error) => log::warn!(
+                "Rebuild startup recovery reported an error: {}; continuing startup",
+                error
+            ),
+        }
         // Retention loop (hourly by default, driven by OutboxRetentionConfig).
         #[cfg(feature = "vector")]
         {

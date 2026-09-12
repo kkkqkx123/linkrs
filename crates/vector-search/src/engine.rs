@@ -115,6 +115,11 @@ impl LocalVectorEngine {
     /// Open (or create) the engine root directory, loading every existing
     /// collection. Returns [`VectorSearchError::InvalidConfig`] if a
     /// collection directory is corrupt.
+    ///
+    /// Rebuild scratch (`*.rebuild-*`), publish backups (`*.old-*`), and
+    /// quarantined (`.suspect-*`) directories are never loaded: they are
+    /// invisible to search and only touched by publish, reverse recovery,
+    /// and startup reconciliation.
     pub fn open(root_dir: impl AsRef<Path>) -> Result<Self> {
         let root_dir = root_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&root_dir)?;
@@ -135,6 +140,9 @@ impl LocalVectorEngine {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".rebuild-") || name.contains(".old-") || name.contains(".suspect-") {
+                continue;
+            }
             let store = Arc::new(CollectionStore::open(&path)?);
             collections.insert(name, store);
         }
@@ -174,9 +182,22 @@ impl LocalVectorEngine {
         &self.root_dir
     }
 
-    /// Names of all loaded collections.
+    /// Names of all loaded live collections. Rebuild scratch
+    /// (`*.rebuild-*`), publish backups (`*.old-*`), and quarantined
+    /// (`.suspect-*`) handles are tracked separately and never appear here,
+    /// so metrics and maintenance sweeps only see serving data.
     pub fn collection_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.collections.read().keys().cloned().collect();
+        let mut names: Vec<String> = self
+            .collections
+            .read()
+            .keys()
+            .filter(|name| {
+                !name.contains(".rebuild-")
+                    && !name.contains(".old-")
+                    && !name.contains(".suspect-")
+            })
+            .cloned()
+            .collect();
         names.sort_unstable();
         names
     }
@@ -246,6 +267,25 @@ impl LocalVectorEngine {
         }
     }
 
+    /// Current default HNSW configuration injected into HNSW collections
+    /// created without one. `None` means the store-level `HnswConfig::default`
+    /// applies.
+    pub fn default_hnsw_config(&self) -> Option<crate::types::HnswConfig> {
+        self.default_hnsw.read().clone()
+    }
+
+    /// Current default IVF configuration injected into IVF collections
+    /// created without one.
+    pub fn default_ivf_config(&self) -> Option<crate::types::IvfConfig> {
+        self.default_ivf.read().clone()
+    }
+
+    /// Current default quantization configuration injected into collections
+    /// created without one.
+    pub fn default_quantization_config(&self) -> Option<crate::types::QuantizationConfig> {
+        self.default_quantization.read().clone()
+    }
+
     /// Build and publish the IVF index of a collection synchronously.
     /// Returns whether a usable index is now published. This is also the
     /// entry point used by the maintenance worker.
@@ -270,10 +310,17 @@ impl LocalVectorEngine {
         self.store(collection).is_ok_and(|s| s.has_quantization())
     }
 
-    /// Drop the published IVF index; the collection falls back to
-    /// exact scan.
+    /// Drop the published IVF/HNSW index structures only; the collection data
+    /// remains and queries fall back to exact scan. This is not a data clear.
+    /// To delete points use collection-level deletion; to delete the whole
+    /// collection and its directory use [`Engine::delete_collection`].
     pub fn drop_index(&self, collection: &str) -> Result<()> {
         self.store(collection)?.drop_index()
+    }
+
+    /// Alias making the non-destructive semantics explicit.
+    pub fn drop_published_index(&self, collection: &str) -> Result<()> {
+        self.drop_index(collection)
     }
 
     /// Whether an IVF index is published for the collection.
@@ -294,17 +341,199 @@ impl LocalVectorEngine {
         Ok(())
     }
 
-    /// Drop a collection and delete its directory.
+    /// Drop a collection and delete its directory. Destructive: all points and
+    /// index files are removed. Contrast with [`Engine::drop_index`], which
+    /// only discards the published graph and keeps the data for exact scan.
+    ///
+    /// Unloaded directories (rebuild temps, publish backups skipped at open)
+    /// are removed from the filesystem directly, so recovery can delete
+    /// scratch state without opening it first.
     pub fn delete_collection(&self, name: &str) -> Result<()> {
         let dir = {
             let mut collections = self.collections.write();
-            let store = collections
+            collections
                 .remove(name)
-                .ok_or_else(|| VectorSearchError::CollectionNotFound(name.to_string()))?;
-            store.dir().to_path_buf()
+                .map(|store| store.dir().to_path_buf())
+                .unwrap_or_else(|| self.root_dir.join(name))
         };
+        if !dir.exists() {
+            return Err(VectorSearchError::CollectionNotFound(name.to_string()));
+        }
         std::fs::remove_dir_all(&dir)?;
         Ok(())
+    }
+
+    /// Names of all physical collections on disk, including loaded ones plus
+    /// unloaded rebuild scratch (`*.rebuild-*`), publish backups (`*.old-*`),
+    /// and quarantined (`.suspect-*`) directories. Startup recovery uses this
+    /// to find orphaned temps without adopting them as logical indexes.
+    pub fn list_collections(&self) -> Vec<String> {
+        let mut names: std::collections::HashSet<String> =
+            self.collections.read().keys().cloned().collect();
+        if let Ok(entries) = std::fs::read_dir(&self.root_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() || !path.join("meta.bin").exists() {
+                    continue;
+                }
+                names.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// Atomically promote a temp rebuild collection over its live collection.
+    ///
+    /// Rename dance inside the engine root directory (same filesystem):
+    /// unload both handles, rename `live -> live+backup_suffix` (best
+    /// effort when live is missing, e.g. interrupted publish healing),
+    /// rename `temp -> live`, then reopen the live handle. The previous live
+    /// directory is retained as one backup generation; older `.old-*`
+    /// backups for the same live name are pruned. On any failure the live
+    /// handle is restored when its directory still exists, so live stays
+    /// servable and the temp residue is left for startup recovery.
+    pub fn promote_temp_collection(
+        &self,
+        live: &str,
+        temp: &str,
+        backup_suffix: &str,
+    ) -> Result<()> {
+        let live_dir = self.root_dir.join(live);
+        let temp_dir = self.root_dir.join(temp);
+        if !temp_dir.is_dir() {
+            return Err(VectorSearchError::CollectionNotFound(temp.to_string()));
+        }
+        let backup_name = format!("{live}{backup_suffix}");
+        let backup_dir = self.root_dir.join(&backup_name);
+        let live_store = self.collections.write().remove(live);
+        let temp_store = self.collections.write().remove(temp);
+        let _ = temp_store;
+        let rename_result: Result<()> = (|| {
+            if live_dir.exists() {
+                if backup_dir.exists() {
+                    std::fs::remove_dir_all(&backup_dir)?;
+                }
+                std::fs::rename(&live_dir, &backup_dir)?;
+            }
+            std::fs::rename(&temp_dir, &live_dir)?;
+            Ok(())
+        })();
+        if let Err(error) = rename_result {
+            if live_dir.exists() {
+                if let Ok(store) = CollectionStore::open(&live_dir) {
+                    self.collections
+                        .write()
+                        .insert(live.to_string(), Arc::new(store));
+                } else if let Some(store) = live_store {
+                    self.collections.write().insert(live.to_string(), store);
+                }
+            } else if backup_dir.exists() {
+                let _ = std::fs::rename(&backup_dir, &live_dir);
+                if let Ok(store) = CollectionStore::open(&live_dir) {
+                    self.collections
+                        .write()
+                        .insert(live.to_string(), Arc::new(store));
+                } else if let Some(store) = live_store {
+                    self.collections.write().insert(live.to_string(), store);
+                }
+            } else if let Some(store) = live_store {
+                self.collections.write().insert(live.to_string(), store);
+            }
+            return Err(error);
+        }
+        let store = CollectionStore::open(&live_dir)?;
+        self.collections
+            .write()
+            .insert(live.to_string(), Arc::new(store));
+        // Keep the backup handle loaded for inspection (`count`, reverse
+        // recovery) without exposing it to search: nothing routes to
+        // `.old-*` names and `collection_names` hides them.
+        if backup_dir.exists() {
+            if let Ok(backup_store) = CollectionStore::open(&backup_dir) {
+                self.collections
+                    .write()
+                    .insert(backup_name.clone(), Arc::new(backup_store));
+            }
+        }
+        self.prune_old_backups(live, Some(&backup_name));
+        Ok(())
+    }
+
+    /// Reverse recovery after a bad publish: repoint `live` at its newest
+    /// `.old-*` backup. The suspect live directory is renamed aside as
+    /// `.suspect-<millis>` for inspection. Returns the backup name restored.
+    pub fn restore_promote_backup(&self, live: &str) -> Result<String> {
+        let backups = Self::list_old_backups(&self.root_dir, live);
+        let Some(backup_name) = backups.into_iter().next() else {
+            return Err(VectorSearchError::CollectionNotFound(format!(
+                "no promote backup for collection {live}"
+            )));
+        };
+        let live_dir = self.root_dir.join(live);
+        let backup_dir = self.root_dir.join(&backup_name);
+        self.collections.write().remove(live);
+        self.collections.write().remove(&backup_name);
+        if live_dir.exists() {
+            let suspect = format!(
+                "{live}.suspect-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            );
+            let _ = std::fs::rename(&live_dir, self.root_dir.join(suspect));
+        }
+        std::fs::rename(&backup_dir, &live_dir)?;
+        let store = CollectionStore::open(&live_dir)?;
+        self.collections
+            .write()
+            .insert(live.to_string(), Arc::new(store));
+        Ok(backup_name)
+    }
+
+    /// Temp rebuild collections (`*.rebuild-*`) currently present.
+    pub fn list_temp_collections(&self) -> Vec<String> {
+        self.list_collections()
+            .into_iter()
+            .filter(|name| name.contains(".rebuild-"))
+            .collect()
+    }
+
+    /// Backup generations `<live>.old-*` for one live collection, newest
+    /// generation first (unparseable suffixes sort last).
+    pub fn list_old_backups_for(&self, live: &str) -> Vec<String> {
+        Self::list_old_backups(&self.root_dir, live)
+    }
+
+    fn list_old_backups(root: &Path, live: &str) -> Vec<String> {
+        let prefix = format!("{live}.old-");
+        let mut backups: Vec<(u64, String)> = Vec::new();
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return Vec::new();
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(suffix) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            backups.push((suffix.parse::<u64>().unwrap_or(0), name));
+        }
+        backups.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        backups.into_iter().map(|(_, name)| name).collect()
+    }
+
+    fn prune_old_backups(&self, live: &str, keep: Option<&str>) {
+        for backup in Self::list_old_backups(&self.root_dir, live) {
+            if keep.is_some_and(|keep| keep == backup) {
+                continue;
+            }
+            self.collections.write().remove(&backup);
+            if let Err(error) = std::fs::remove_dir_all(self.root_dir.join(&backup)) {
+                tracing::warn!("failed to prune vector promote backup {backup}: {error}");
+            }
+        }
     }
 
     /// Whether a collection exists.
@@ -744,6 +973,11 @@ fn maintenance_sweep(
 ) {
     let stores = collections.read().clone();
     for (name, store) in stores {
+        // Scratch, backup, and quarantine handles are never maintained:
+        // only serving collections get builds and compactions.
+        if name.contains(".rebuild-") || name.contains(".old-") || name.contains(".suspect-") {
+            continue;
+        }
         // Compaction invalidated a previously published index: restore it
         // regardless of promotion switches.
         if store.take_needs_rebuild() {
@@ -1402,6 +1636,130 @@ mod tests {
         let engine = engine();
         let err = engine.delete_collection("nope").unwrap_err();
         assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
+    }
+
+    #[test]
+    fn test_promote_temp_collection_swaps_live_and_keeps_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        let engine = LocalVectorEngine::open(&root).unwrap();
+        engine.create_collection("live", &config(4)).unwrap();
+        engine.upsert("live", point(1, 4)).unwrap();
+        engine
+            .create_collection("live.rebuild-2", &config(4))
+            .unwrap();
+        engine.upsert("live.rebuild-2", point(2, 4)).unwrap();
+
+        engine
+            .promote_temp_collection("live", "live.rebuild-2", ".old-2")
+            .unwrap();
+
+        assert_eq!(engine.count("live").unwrap(), 1);
+        let got = engine.get("live", "2").unwrap().unwrap();
+        assert_eq!(got.vector, point(2, 4).vector);
+        assert!(engine.get("live", "1").unwrap().is_none());
+        assert_eq!(engine.count("live.old-2").unwrap(), 1);
+        // Scratch and backups serve no reads through discovery names.
+        assert!(!engine
+            .collection_names()
+            .contains(&"live.old-2".to_string()));
+        assert!(engine
+            .list_collections()
+            .contains(&"live.old-2".to_string()));
+        assert!(!engine
+            .list_temp_collections()
+            .contains(&"live.rebuild-2".to_string()));
+
+        // Second publish prunes the older backup, keeping exactly one.
+        engine
+            .create_collection("live.rebuild-3", &config(4))
+            .unwrap();
+        engine.upsert("live.rebuild-3", point(3, 4)).unwrap();
+        engine
+            .promote_temp_collection("live", "live.rebuild-3", ".old-3")
+            .unwrap();
+        assert_eq!(engine.count("live").unwrap(), 1);
+        assert!(engine
+            .list_collections()
+            .contains(&"live.old-3".to_string()));
+        assert!(!engine
+            .list_collections()
+            .contains(&"live.old-2".to_string()));
+
+        // Restarted engines never adopt scratch or backups as serving data.
+        drop(engine);
+        let reopened = LocalVectorEngine::open(&root).unwrap();
+        assert_eq!(reopened.count("live").unwrap(), 1);
+        assert!(!reopened
+            .collection_names()
+            .contains(&"live.old-3".to_string()));
+        assert!(reopened
+            .list_collections()
+            .contains(&"live.old-3".to_string()));
+    }
+
+    #[test]
+    fn test_promote_temp_collection_missing_temp_fails_without_touching_live() {
+        let engine = engine();
+        engine.create_collection("live", &config(4)).unwrap();
+        engine.upsert("live", point(1, 4)).unwrap();
+        let err = engine
+            .promote_temp_collection("live", "live.rebuild-9", ".old-9")
+            .unwrap_err();
+        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
+        assert_eq!(engine.count("live").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_restore_promote_backup_reverses_bad_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        let engine = LocalVectorEngine::open(&root).unwrap();
+        engine.create_collection("live", &config(4)).unwrap();
+        engine.upsert("live", point(1, 4)).unwrap();
+        engine
+            .create_collection("live.rebuild-2", &config(4))
+            .unwrap();
+        engine.upsert("live.rebuild-2", point(2, 4)).unwrap();
+        engine
+            .promote_temp_collection("live", "live.rebuild-2", ".old-2")
+            .unwrap();
+
+        let restored = engine.restore_promote_backup("live").unwrap();
+        assert_eq!(restored, "live.old-2");
+        assert_eq!(engine.count("live").unwrap(), 1);
+        let got = engine.get("live", "1").unwrap().unwrap();
+        assert_eq!(got.vector, point(1, 4).vector);
+
+        let err = engine.restore_promote_backup("live").unwrap_err();
+        assert!(matches!(err, VectorSearchError::CollectionNotFound(_)));
+    }
+
+    #[test]
+    fn test_open_skips_scratch_and_backup_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        {
+            let engine = LocalVectorEngine::open(&root).unwrap();
+            engine.create_collection("live", &config(4)).unwrap();
+            engine.upsert("live", point(1, 4)).unwrap();
+            engine
+                .create_collection("live.rebuild-2", &config(4))
+                .unwrap();
+            engine
+                .promote_temp_collection("live", "live.rebuild-2", ".old-2")
+                .unwrap();
+        }
+        let reopened = LocalVectorEngine::open(&root).unwrap();
+        assert!(reopened.collection_exists("live"));
+        assert!(!reopened
+            .collection_names()
+            .contains(&"live.old-2".to_string()));
+        // Scratch residue is deletable without being opened first.
+        reopened.delete_collection("live.old-2").unwrap();
+        assert!(!reopened
+            .list_collections()
+            .contains(&"live.old-2".to_string()));
     }
 
     #[test]

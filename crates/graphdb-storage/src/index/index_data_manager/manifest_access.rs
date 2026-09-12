@@ -155,6 +155,84 @@ impl IndexDataManagerImpl {
         }
     }
 
+    /// Physically remove checkpoint directories of a dropped index.
+    ///
+    /// Tombstone `clear_index` alone leaves generation files behind for MVCC
+    /// readers; once the index is unregistered no reader can pin them, so the
+    /// directories under `{index_root}/{space_id}/{index_id}` plus the crash
+    /// recovery marker `generation_build_state/{space_id}/{name}_*` are safe
+    /// to delete. Best effort: missing root or already removed paths are ignored.
+    pub fn remove_index_checkpoint_dirs(&self, space_id: u64, index_name: &str) {
+        let index_id = self.index_alias(space_id, index_name);
+        if let Some(index_id) = index_id {
+            self.remove_checkpoint_dirs_by_id(space_id, index_id);
+            return;
+        }
+        let candidates: Vec<u64> = self
+            .index_definitions
+            .read()
+            .keys()
+            .filter(|identity| identity.space_id == space_id)
+            .map(|identity| identity.index_id)
+            .collect();
+        for candidate in candidates {
+            self.remove_checkpoint_dirs_by_id(space_id, candidate);
+        }
+        if let Some(root) = self.index_root.as_ref() {
+            let space_dir = root.join(format!("{space_id}"));
+            remove_dir_if_empty(&space_dir);
+        }
+        self.remove_generation_build_markers(space_id, Some(index_name));
+    }
+
+    /// Remove checkpoint directories by resolved numeric index id.
+    pub fn remove_checkpoint_dirs_by_id(&self, space_id: u64, index_id: u64) {
+        if let Some(root) = self.index_root.as_ref() {
+            let index_dir = root.join(format!("{space_id}/{index_id}"));
+            if index_dir.exists() {
+                if let Err(error) = std::fs::remove_dir_all(&index_dir) {
+                    log::warn!(
+                        "Failed to remove checkpoint dir {} for dropped index: {error}",
+                        index_dir.display()
+                    );
+                }
+            }
+            remove_dir_if_empty(&root.join(format!("{space_id}")));
+        }
+        self.remove_generation_build_markers(space_id, None);
+    }
+
+    fn remove_generation_build_markers(&self, space_id: u64, index_name: Option<&str>) {
+        if let Some(root) = self.index_root.as_ref() {
+            let state_dir = root
+                .join("generation_build_state")
+                .join(format!("{space_id}"));
+            if !state_dir.exists() {
+                return;
+            }
+            let entries = std::fs::read_dir(&state_dir);
+            let Ok(entries) = entries else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let matched = match index_name {
+                    Some(wanted) => name.starts_with(&format!("{wanted}_generation_build")),
+                    None => name.ends_with("_generation_build.json"),
+                };
+                if matched {
+                    if let Err(error) = std::fs::remove_file(entry.path()) {
+                        log::warn!(
+                            "Failed to remove generation build marker {}: {error}",
+                            entry.path().display()
+                        );
+                    }
+                }
+            }
+            remove_dir_if_empty(&state_dir);
+        }
+    }
+
     pub fn manifest_catalog(&self, space_id: u64, index_id: u64) -> Option<Arc<ManifestCatalog>> {
         self.manifest_catalogs
             .read()
@@ -1264,6 +1342,16 @@ impl IndexDataManagerImpl {
         Ok(())
     }
 
+    /// Tombstone all visible entries of one index without removing files.
+    ///
+    /// This is MVCC-safe logical clear: every visible forward and reverse key
+    /// gets a deletion tombstone at `write_ts`, so readers at newer timestamps
+    /// observe an empty index while older snapshots still converge. Physical
+    /// checkpoint files are retained for those readers and reclaimed later by
+    /// `retire_generations` once `safe_ts` passes. Dropping an index is
+    /// different: `unregister_native_index` plus `remove_checkpoint_dirs_by_id`
+    /// removes runtime state and checkpoint directories because no reader can
+    /// pin a dropped index anymore.
     pub(crate) fn clear_index(
         &self,
         index_id: u64,

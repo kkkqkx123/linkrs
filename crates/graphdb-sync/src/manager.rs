@@ -12,6 +12,8 @@ use dashmap::DashMap;
 use graphdb_core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use graphdb_core::Value;
 #[cfg(feature = "fulltext")]
+use graphdb_fulltext::engine::FulltextSearchEngine;
+#[cfg(feature = "fulltext")]
 use graphdb_fulltext::SyncConfig;
 use graphdb_metrics::{OutboxState, StatsManager};
 #[cfg(feature = "vector")]
@@ -26,7 +28,7 @@ type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
 use crate::vector_sync::VectorSyncCoordinator;
 
 #[cfg(feature = "fulltext")]
-struct FulltextFieldApply<'a> {
+pub(crate) struct FulltextFieldApply<'a> {
     manager: Arc<graphdb_fulltext::manager::FulltextIndexManager>,
     mutation: &'a graphdb_core::wal::IndexMutation,
     commit_lsn: CommitLsn,
@@ -35,6 +37,9 @@ struct FulltextFieldApply<'a> {
     entity_id: String,
     properties: Vec<(String, Value)>,
     deleted: bool,
+    /// Rebuild catch-up replay targets the scratch engine instead of the
+    /// live map lookup. `None` = resolve via the manager (live delivery).
+    engine_override: Option<Arc<dyn FulltextSearchEngine>>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +74,11 @@ pub struct SyncManager {
     auth_paused_until_ms: Arc<std::sync::atomic::AtomicU64>,
     stats_manager: Option<Arc<StatsManager>>,
     handle: JoinHandleGuard,
+    /// Per-index rebuild admission locks. A rebuild holds its key across
+    /// generation registration, backfill, catch-up, and publish, so two
+    /// concurrent rebuilds of the same index serialize: the loser gets
+    /// `SyncError::RebuildBusy` instead of interleaving generations.
+    rebuild_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
 /// Delivery policy shared by one or more sync manager workers.
@@ -135,6 +145,7 @@ impl Clone for SyncManager {
             auth_paused_until_ms: self.auth_paused_until_ms.clone(),
             stats_manager: self.stats_manager.clone(),
             handle: Mutex::new(None),
+            rebuild_locks: self.rebuild_locks.clone(),
         }
     }
 }
@@ -222,6 +233,13 @@ impl SyncManager {
                         .iter()
                         .any(|field| coord.index_exists(*space_id, schema_name, field))
                 }
+                OutboxPayload::DropSpace { space_id } => {
+                    coord.list_indexes().iter().any(|m| m.space_id == *space_id)
+                }
+                OutboxPayload::DropTag { space_id, tag_name } => coord
+                    .list_indexes()
+                    .iter()
+                    .any(|m| m.space_id == *space_id && m.tag_name == *tag_name),
                 OutboxPayload::EdgeInsert { .. } | OutboxPayload::EdgeDelete { .. } => false,
             }
         }
@@ -275,6 +293,13 @@ impl SyncManager {
                         .iter()
                         .any(|meta| meta.tag_name == *schema_name && meta.field_name == *field)
                 }),
+                OutboxPayload::DropSpace { space_id } => {
+                    !manager.get_space_indexes(*space_id).is_empty()
+                }
+                OutboxPayload::DropTag { space_id, tag_name } => manager
+                    .get_space_indexes(*space_id)
+                    .into_iter()
+                    .any(|meta| meta.tag_name == *tag_name),
                 OutboxPayload::EdgeInsert { space_id, edge } => {
                     edge.props.iter().any(|(field, value)| {
                         let is_text = matches!(value, Value::String(_) | Value::FixedString(_));
@@ -404,6 +429,24 @@ impl SyncManager {
         self.pending_intents.remove(&txn_id);
     }
 
+    /// Admission lock for one index rebuild. The winner holds the guard for
+    /// the whole rebuild; concurrent attempts fail fast with
+    /// `SyncError::RebuildBusy` instead of interleaving generations on the
+    /// same outbox `tag_index_id`.
+    pub(crate) fn rebuild_lock_for(
+        &self,
+        target: &str,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Arc<tokio::sync::Mutex<()>> {
+        let key = format!("{target}:{space_id}:{tag_name}:{field_name}");
+        self.rebuild_locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
     pub fn attach_transaction_context(&self, txn_id: TransactionId) -> TransactionContextInfo {
         TransactionContextInfo::new(txn_id, 0, false, 0)
     }
@@ -439,6 +482,7 @@ impl SyncManager {
             auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stats_manager: None,
             handle: Mutex::new(None),
+            rebuild_locks: DashMap::new(),
         }
     }
 
@@ -1054,7 +1098,7 @@ impl SyncManager {
         match mutation.target.as_str() {
             #[cfg(feature = "fulltext")]
             "fulltext" => {
-                self.apply_fulltext_mutation(mutation, commit_lsn, &payload)
+                self.apply_fulltext_mutation(mutation, commit_lsn, &payload, None)
                     .await
             }
             #[cfg(feature = "vector")]
@@ -1068,7 +1112,10 @@ impl SyncManager {
 
     fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), String> {
         match payload {
-            OutboxPayload::CreateIndex { .. } | OutboxPayload::DropIndex { .. } => Ok(()),
+            OutboxPayload::CreateIndex { .. }
+            | OutboxPayload::DropIndex { .. }
+            | OutboxPayload::DropSpace { .. }
+            | OutboxPayload::DropTag { .. } => Ok(()),
             OutboxPayload::Vertex { .. }
             | OutboxPayload::EdgeInsert { .. }
             | OutboxPayload::EdgeDelete { .. } => Err(
@@ -1079,11 +1126,12 @@ impl SyncManager {
     }
 
     #[cfg(feature = "fulltext")]
-    async fn apply_fulltext_mutation(
+    pub(crate) async fn apply_fulltext_mutation(
         &self,
         mutation: &graphdb_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
         payload: &OutboxPayload,
+        engine_override: Option<Arc<dyn FulltextSearchEngine>>,
     ) -> Result<(), String> {
         let manager = self
             .sync_coordinator
@@ -1117,9 +1165,10 @@ impl SyncManager {
                     commit_lsn,
                     space_id: *space_id,
                     index_name: tag_name,
-                    entity_id: format!("{}", vertex_id),
+                    entity_id: crate::rebuild::fulltext_vertex_doc_id(vertex_id),
                     properties,
                     deleted: matches!(change_type, ChangeType::Delete),
+                    engine_override: engine_override.clone(),
                 })
                 .await
             }
@@ -1138,6 +1187,7 @@ impl SyncManager {
                     entity_id: edge_entity_id(edge.src, edge.dst, edge.ranking),
                     properties,
                     deleted: false,
+                    engine_override: engine_override.clone(),
                 })
                 .await
             }
@@ -1163,6 +1213,7 @@ impl SyncManager {
                     entity_id: edge_entity_id(src, dst, *ranking),
                     properties,
                     deleted: true,
+                    engine_override: engine_override.clone(),
                 })
                 .await
             }
@@ -1211,17 +1262,54 @@ impl SyncManager {
                 }
                 Ok(())
             }
+            OutboxPayload::DropSpace { space_id } => {
+                manager
+                    .drop_space_indexes(*space_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(())
+            }
+            OutboxPayload::DropTag { space_id, tag_name } => {
+                let indexes = manager
+                    .get_space_indexes(*space_id)
+                    .into_iter()
+                    .filter(|metadata| metadata.tag_name == *tag_name)
+                    .map(|metadata| metadata.field_name)
+                    .collect::<Vec<_>>();
+                for field_name in indexes {
+                    manager
+                        .drop_index(*space_id, tag_name, &field_name)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            }
         }
     }
 
     #[cfg(feature = "fulltext")]
-    async fn apply_fulltext_fields(request: FulltextFieldApply<'_>) -> Result<(), String> {
+    pub(crate) async fn apply_fulltext_fields(
+        request: FulltextFieldApply<'_>,
+    ) -> Result<(), String> {
         for (field_name, value) in request.properties {
-            let Some(engine) =
-                request
-                    .manager
-                    .get_engine(request.space_id, request.index_name, &field_name)
-            else {
+            // Serialize against rebuild publish: the fence write guard held
+            // by publish covers final replay and engine swap, so an apply is
+            // either fully before or fully after the swap.
+            let fence = request.manager.publish_fence_for(
+                request.space_id,
+                request.index_name,
+                &field_name,
+            );
+            let _fence = fence.read().await;
+            let engine = match request.engine_override.clone() {
+                Some(engine) => Some(engine),
+                None => {
+                    request
+                        .manager
+                        .get_engine(request.space_id, request.index_name, &field_name)
+                }
+            };
+            let Some(engine) = engine else {
                 continue;
             };
             let document = if request.deleted {
@@ -1283,6 +1371,108 @@ impl SyncManager {
             return Ok(());
         }
 
+        let mut contexts = Vec::new();
+        match payload {
+            OutboxPayload::Vertex { .. }
+            | OutboxPayload::EdgeInsert { .. }
+            | OutboxPayload::EdgeDelete { .. } => {
+                // Vertex/edge data-plane mapping is shared with rebuild
+                // catch-up replay (`vector_contexts_for_payload`).
+                contexts = Self::vector_contexts_for_payload(coordinator, payload)?;
+            }
+            OutboxPayload::CreateIndex {
+                space_id,
+                index_name: _index_name,
+                schema_name,
+                fields,
+                ..
+            } => {
+                for (field_name, value_type) in fields {
+                    let Some(vector_size) = value_type.as_vector().map(|vector| vector.len())
+                    else {
+                        continue;
+                    };
+                    coordinator
+                        .create_vector_index(
+                            *space_id,
+                            schema_name,
+                            field_name,
+                            vector_size,
+                            vector_search::DistanceMetric::default(),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            OutboxPayload::DropIndex {
+                space_id,
+                index_name: _index_name,
+                schema_name,
+                fields,
+                ..
+            } => {
+                for field_name in fields {
+                    coordinator
+                        .drop_vector_index(*space_id, schema_name, field_name)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            OutboxPayload::DropSpace { space_id } => {
+                coordinator
+                    .index_manager()
+                    .drop_space_indexes(*space_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            OutboxPayload::DropTag { space_id, tag_name } => {
+                coordinator
+                    .index_manager()
+                    .drop_tag_indexes(*space_id, tag_name)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        // Serialize data-plane delivery against rebuild purge/snapshot and
+        // the final catch-up drain: an apply is either fully before or
+        // fully after each fenced window.
+        let mut fence_keys: Vec<(u64, String, String)> = Vec::new();
+        for ctx in &contexts {
+            let key = (
+                ctx.location.space_id,
+                ctx.location.tag_name.clone(),
+                ctx.location.field_name.clone(),
+            );
+            if !fence_keys.contains(&key) {
+                fence_keys.push(key);
+            }
+        }
+        fence_keys.sort();
+        let mut _fence_guards = Vec::with_capacity(fence_keys.len());
+        for (space_id, tag_name, field_name) in &fence_keys {
+            let fence = coordinator.publish_fence_for(*space_id, tag_name, field_name);
+            _fence_guards.push(fence.clone().read_owned().await);
+        }
+        if !contexts.is_empty() {
+            coordinator
+                .on_vector_change_batch(contexts)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        receiver
+            .record_application(commit_lsn, mutation.idempotency_key.as_str())
+            .await
+    }
+
+    /// Map one vertex/edge outbox payload to vector change contexts without
+    /// any receiver gating. Shared by live delivery (`apply_vector_mutation`,
+    /// which gates + batches + records) and rebuild catch-up replay (which
+    /// must accept LSNs below the receiver water-level and never records).
+    #[cfg(feature = "vector")]
+    pub(crate) fn vector_contexts_for_payload(
+        coordinator: &VectorSyncCoordinator,
+        payload: &OutboxPayload,
+    ) -> Result<Vec<crate::vector_sync::VectorChangeContext>, String> {
         let mut contexts = Vec::new();
         match payload {
             OutboxPayload::Vertex {
@@ -1348,62 +1538,17 @@ impl SyncManager {
                     }
                 }
             }
-            OutboxPayload::CreateIndex {
-                space_id,
-                index_name: _index_name,
-                schema_name,
-                fields,
-                ..
-            } => {
-                for (field_name, value_type) in fields {
-                    let Some(vector_size) = value_type.as_vector().map(|vector| vector.len())
-                    else {
-                        continue;
-                    };
-                    coordinator
-                        .create_vector_index(
-                            *space_id,
-                            schema_name,
-                            field_name,
-                            vector_size,
-                            vector_search::DistanceMetric::default(),
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-            }
-            OutboxPayload::DropIndex {
-                space_id,
-                index_name: _index_name,
-                schema_name,
-                fields,
-                ..
-            } => {
-                for field_name in fields {
-                    coordinator
-                        .drop_vector_index(*space_id, schema_name, field_name)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-            }
-            OutboxPayload::EdgeInsert { .. } => {
-                // Edge mutations do not trigger vector index updates.
-                // Vector indexes are maintained per-vertex; edge-only changes
-                // do not carry vector fields and are not indexed.
-            }
-            OutboxPayload::EdgeDelete { .. } => {
-                // Same as EdgeInsert — edge deletions do not affect vector indexes.
+            // Edge mutations do not trigger vector index updates. Vector
+            // indexes are maintained per-vertex; edge-only changes do not
+            // carry vector fields and are not indexed.
+            OutboxPayload::EdgeInsert { .. } | OutboxPayload::EdgeDelete { .. } => {}
+            _ => {
+                return Err(
+                    "vector_contexts_for_payload only maps vertex/edge payloads".to_string()
+                );
             }
         }
-        if !contexts.is_empty() {
-            coordinator
-                .on_vector_change_batch(contexts)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        receiver
-            .record_application(commit_lsn, mutation.idempotency_key.as_str())
-            .await
+        Ok(contexts)
     }
 
     pub async fn start(&self) -> Result<(), SyncError> {
@@ -1500,6 +1645,27 @@ impl SyncManager {
                 schema_name: schema_name.to_string(),
                 index_type: index_type.to_string(),
                 fields: fields.to_vec(),
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn on_space_drop(&self, txn_id: TransactionId, space_id: u64) -> Result<(), SyncError> {
+        self.stage_intent(txn_id, OutboxPayload::DropSpace { space_id })?;
+        Ok(())
+    }
+
+    pub fn on_tag_drop(
+        &self,
+        txn_id: TransactionId,
+        space_id: u64,
+        tag_name: &str,
+    ) -> Result<(), SyncError> {
+        self.stage_intent(
+            txn_id,
+            OutboxPayload::DropTag {
+                space_id,
+                tag_name: tag_name.to_string(),
             },
         )?;
         Ok(())
@@ -1998,6 +2164,16 @@ impl SyncManager {
             .expect("SyncCoordinator not available without fulltext feature")
     }
 
+    #[cfg(feature = "fulltext")]
+    pub(crate) fn sync_coordinator_opt(&self) -> Option<&Arc<SyncCoordinator>> {
+        self.sync_coordinator.as_ref()
+    }
+
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
+    pub(crate) fn sqlite_outbox_opt(&self) -> Option<&SqliteOutbox> {
+        self.sqlite_outbox.as_ref().map(|v| &**v)
+    }
+
     #[cfg(feature = "vector")]
     pub fn vector_coordinator(&self) -> Option<&Arc<VectorSyncCoordinator>> {
         self.vector_coordinator.as_ref()
@@ -2010,6 +2186,91 @@ impl SyncManager {
             .expect("SyncCoordinator not available without fulltext feature")
             .fulltext_manager()
             .clone()
+    }
+
+    /// Non-panicking fulltext manager access for read-only diagnostics and
+    /// maintenance endpoints. `None` when the fulltext target is not
+    /// configured.
+    #[cfg(feature = "fulltext")]
+    pub fn fulltext_manager_opt(
+        &self,
+    ) -> Option<Arc<graphdb_fulltext::manager::FulltextIndexManager>> {
+        self.sync_coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.fulltext_manager().clone())
+    }
+
+    pub(crate) fn stats_manager_opt(&self) -> Option<Arc<StatsManager>> {
+        self.stats_manager.clone()
+    }
+
+    /// Fulltext indexes whose engine is in the `Inconsistent` state. These
+    /// reject writes and need operator attention (online rebuild or drop and
+    /// recreate). Empty when fulltext is not configured.
+    #[cfg(feature = "fulltext")]
+    pub fn inconsistent_fulltext_indexes(&self) -> Vec<graphdb_fulltext::IndexMetadata> {
+        self.fulltext_manager_opt()
+            .map(|manager| manager.get_inconsistent_indexes())
+            .unwrap_or_default()
+    }
+
+    /// Unified rebuild progress for one logical index.
+    ///
+    /// Fulltext and vector rebuilds share the same `RebuildProgress` shape but
+    /// store it in different managers. This helper checks the fulltext manager
+    /// first and then the vector coordinator, so operators poll a single
+    /// endpoint instead of knowing which engine backs `(space, tag, field)`.
+    /// Returns `None` when neither target has ever run a rebuild for the key.
+    pub fn rebuild_progress(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<graphdb_fulltext::RebuildProgress> {
+        #[cfg(feature = "fulltext")]
+        if let Some(manager) = self.fulltext_manager_opt() {
+            if let Some(progress) = manager.rebuild_progress(space_id, tag_name, field_name) {
+                return Some(progress);
+            }
+        }
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = self.vector_coordinator.as_ref() {
+            if let Some(progress) = coordinator.rebuild_progress(space_id, tag_name, field_name) {
+                return Some(progress);
+            }
+        }
+        None
+    }
+
+    /// Fail non-terminal rebuild generations stranded by crashed attempts for
+    /// every configured target, and collect fulltext rebuild scratch state.
+    /// Idempotent; safe to run at startup before serving traffic. Missing
+    /// targets count as zero instead of failing startup.
+    pub async fn recover_stale_rebuilds(&self) -> Result<usize, SyncError> {
+        let mut failed = 0usize;
+        #[cfg(feature = "fulltext")]
+        {
+            match self.recover_stale_fulltext_rebuilds().await {
+                Ok(count) => failed += count,
+                Err(SyncError::PersistenceError(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        #[cfg(feature = "vector")]
+        {
+            match self.recover_stale_vector_rebuilds().await {
+                Ok(count) => failed += count,
+                Err(SyncError::PersistenceError(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(failed)
+    }
+
+    /// Sync wrapper around [`SyncManager::recover_stale_rebuilds`] for
+    /// startup paths without an async context.
+    pub fn recover_stale_rebuilds_sync(&self) -> Result<usize, SyncError> {
+        self.execute_sync(|| async { self.recover_stale_rebuilds().await })
     }
 
     pub fn is_running(&self) -> bool {
@@ -2231,6 +2492,18 @@ fn payload_to_intent(
             EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Delete,
         ),
+        OutboxPayload::DropSpace { space_id } => (
+            *space_id,
+            "__space__",
+            EntityRef::Vertex(VertexId::from_int64(0)),
+            IndexOperation::Delete,
+        ),
+        OutboxPayload::DropTag { space_id, tag_name } => (
+            *space_id,
+            tag_name.as_str(),
+            EntityRef::Vertex(VertexId::from_int64(0)),
+            IndexOperation::Delete,
+        ),
     };
     let sequence = u64::from(intent_sequence).saturating_add(1);
     let id = format!("{}:{}:{}", txn_id.0, target_name, sequence);
@@ -2253,6 +2526,10 @@ fn payload_to_intent(
             | OutboxPayload::DropIndex { index_name, .. } => {
                 // DDL is per-index; serialize all DDL for the same index.
                 format!("ddl:{}", index_name)
+            }
+            OutboxPayload::DropSpace { .. } => "ddl:__space__".to_string(),
+            OutboxPayload::DropTag { tag_name, .. } => {
+                format!("ddl:tag:{}", tag_name)
             }
         };
         let key = format!("{}:{}:{}:{}", target_name, space_id, index_name, entity_str);
@@ -2285,7 +2562,7 @@ fn payload_to_intent(
 }
 
 #[cfg(feature = "fulltext")]
-fn edge_entity_id(
+pub(crate) fn edge_entity_id(
     src: impl std::fmt::Display,
     dst: impl std::fmt::Display,
     ranking: i64,
@@ -2293,7 +2570,7 @@ fn edge_entity_id(
     format!("{}->{}#{}", src, dst, ranking)
 }
 
-fn stable_hash(bytes: &[u8]) -> u64 {
+pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
@@ -2305,7 +2582,11 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(feature = "vector")]
-fn format_vector_point_id(vertex_id: &graphdb_core::Value, tag: &str, field: &str) -> String {
+pub(crate) fn format_vector_point_id(
+    vertex_id: &graphdb_core::Value,
+    tag: &str,
+    field: &str,
+) -> String {
     let raw = format!("{}", vertex_id);
     // Escape the delimiter '#' and the escape char '%' inside the vertex id
     // so that decoding remains unambiguous across Local and Qdrant backends.
@@ -2410,6 +2691,9 @@ pub enum SyncError {
 
     #[error("Outbox backpressure: {0}")]
     OutboxBackpressure(String),
+
+    #[error("Rebuild busy: {0}")]
+    RebuildBusy(String),
 
     #[error("Internal error: {0}")]
     Internal(String),

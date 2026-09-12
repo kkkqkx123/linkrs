@@ -242,6 +242,63 @@ impl VectorBackend {
 
     // ---- collection management ----
 
+    /// Normalize a requested collection config to the effective config the
+    /// backend will actually store, so idempotency checks compare stored
+    /// against stored-equivalent instead of false-conflicting.
+    ///
+    /// The local engine fills tier defaults (`index_type` defaults to HNSW,
+    /// HNSW tier gets `HnswConfig::default()` when unspecified) and drops
+    /// disabled quantization at creation time; without normalization a
+    /// second `create_vector_index` for a sibling logical index compares the
+    /// raw request against the normalized stored config and reports a
+    /// spurious `CollectionConfigConflict`. Remote backends store the
+    /// request as given, so the config passes through unchanged.
+    pub fn effective_collection_config(&self, config: &CollectionConfig) -> CollectionConfig {
+        let VectorBackend::Local(engine) = self else {
+            return config.clone();
+        };
+        let mut effective = config.clone();
+        match effective
+            .index_type
+            .unwrap_or(vector_search::types::IndexType::HNSW)
+        {
+            vector_search::types::IndexType::HNSW => {
+                if effective.hnsw_config.is_none() {
+                    effective.hnsw_config = engine
+                        .default_hnsw_config()
+                        .or(Some(vector_search::types::HnswConfig::default()));
+                }
+                effective.ivf_config = None;
+            }
+            vector_search::types::IndexType::IVF => {
+                if effective.ivf_config.is_none() {
+                    effective.ivf_config = engine.default_ivf_config();
+                }
+                effective.hnsw_config = None;
+            }
+            vector_search::types::IndexType::FLAT => {
+                effective.hnsw_config = None;
+                effective.ivf_config = None;
+            }
+        }
+        if effective.quantization_config.is_none() {
+            effective.quantization_config = engine.default_quantization_config();
+        }
+        effective.index_type = Some(
+            effective
+                .index_type
+                .unwrap_or(vector_search::types::IndexType::HNSW),
+        );
+        let drop_quantization = effective
+            .quantization_config
+            .as_ref()
+            .is_some_and(|quantization| !quantization.enabled);
+        if drop_quantization {
+            effective.quantization_config = None;
+        }
+        effective
+    }
+
     /// Create a collection. Fails if it already exists.
     pub async fn create_index(
         &self,
@@ -295,6 +352,140 @@ impl VectorBackend {
             #[cfg(feature = "vector-qdrant")]
             VectorBackend::Qdrant(manager) => manager.index_exists(name),
         }
+    }
+
+    /// Temp rebuild collection name for one live collection and generation.
+    ///
+    /// Field granularity temps are `{live}.rebuild-{generation}`; Space
+    /// granularity appends the logical owner (`{live}.rebuild-{gen}__{tag}_{field}`)
+    /// so sibling slices never share a temp. Temps never reuse the live name
+    /// plus the live `group_id`: that scheme cannot be told apart from live
+    /// data during startup recovery.
+    pub fn temp_collection_name(live: &str, generation: u64, owner_suffix: Option<&str>) -> String {
+        match owner_suffix {
+            Some(owner) => format!("{live}.rebuild-{generation}__{owner}"),
+            None => format!("{live}.rebuild-{generation}"),
+        }
+    }
+
+    /// Whether a physical collection name is a rebuild temp.
+    pub fn is_temp_collection(name: &str) -> bool {
+        name.contains(".rebuild-")
+    }
+
+    /// Split a temp name into `(live_name, generation)`. Returns `None` for
+    /// non-temp names or unparseable generations.
+    pub fn parse_temp_collection(name: &str) -> Option<(String, u64)> {
+        let (live, rest) = name.split_once(".rebuild-")?;
+        let gen_text = rest.split("__").next().unwrap_or(rest);
+        Some((live.to_string(), gen_text.parse::<u64>().ok()?))
+    }
+
+    /// Backup suffix for the retained pre-publish live collection.
+    pub fn promote_backup_suffix(generation: u64) -> String {
+        format!(".old-{generation}")
+    }
+
+    /// Split a backup name into `(live_name, generation)`.
+    pub fn parse_backup_collection(name: &str) -> Option<(String, u64)> {
+        let (live, rest) = name.split_once(".old-")?;
+        Some((live.to_string(), rest.parse::<u64>().ok()?))
+    }
+
+    /// Create an empty temp collection with the given effective config.
+    /// Fails when a collection of that name already exists; callers drop
+    /// leftovers from the same generation first for idempotent retry.
+    pub async fn create_temp_collection(
+        &self,
+        temp: &str,
+        config: &CollectionConfig,
+    ) -> VectorCoordinatorResult<()> {
+        self.create_index(temp, config).await
+    }
+
+    /// Drop a temp collection. Succeeds when it is already gone so failed
+    /// rebuilds and startup recovery stay idempotent.
+    pub async fn drop_temp_collection(&self, temp: &str) -> VectorCoordinatorResult<()> {
+        if !self.index_exists(temp) {
+            return Ok(());
+        }
+        self.delete_collection(temp).await
+    }
+
+    /// Atomically promote a temp collection over its live collection,
+    /// retaining the previous live directory as `live + backup_suffix`
+    /// (one backup generation; older ones are pruned).
+    ///
+    /// Local backend only: the engine renames directories. The remote
+    /// backend has no atomic rename, so Qdrant publishes use a
+    /// manager-level logical remap instead (see `VectorIndexManager`);
+    /// calling this on a Qdrant backend fails explicitly rather than
+    /// emulating a non-atomic copy here.
+    pub async fn promote_temp_collection(
+        &self,
+        live: &str,
+        temp: &str,
+        backup_suffix: &str,
+    ) -> VectorCoordinatorResult<()> {
+        match self {
+            VectorBackend::Local(engine) => {
+                engine
+                    .promote_temp_collection(live, temp, backup_suffix)
+                    .map_err(VectorError::from)?;
+                Ok(())
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(_) => {
+                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                    "qdrant promote uses manager-level logical remap, not physical rename"
+                        .to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Reverse recovery after a bad Field-granularity publish: restore the
+    /// newest `.old-*` backup over the live collection. Local backend only;
+    /// Space granularity converges by rebuilding instead.
+    pub async fn restore_promote_backup(&self, live: &str) -> VectorCoordinatorResult<String> {
+        match self {
+            VectorBackend::Local(engine) => engine
+                .restore_promote_backup(live)
+                .map_err(VectorError::from)
+                .map_err(VectorCoordinatorError::Vector),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(_) => {
+                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                    "qdrant backup restore is a manager-level logical remap".to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Names of all physical collections, including rebuild temps and
+    /// publish backups. Used by startup recovery to find orphaned temps
+    /// without adopting them as logical indexes.
+    pub async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
+        match self {
+            VectorBackend::Local(engine) => Ok(engine.list_collections()),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => manager
+                .engine()
+                .list_collections()
+                .await
+                .map_err(VectorError::from)
+                .map_err(VectorCoordinatorError::Vector),
+        }
+    }
+
+    /// Temp rebuild collections (`*.rebuild-*`) currently present.
+    pub async fn list_temp_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
+        Ok(self
+            .list_collections()
+            .await?
+            .into_iter()
+            .filter(|name| Self::is_temp_collection(name))
+            .collect())
     }
 
     /// Collection metadata, or `None` when the collection does not exist.

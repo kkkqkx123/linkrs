@@ -507,7 +507,12 @@ impl FulltextSearchPlanner {
     // ============================================================================
 
     /// Single-field-per-index engines cannot change indexed fields online.
-    /// Fail fast for schema-changing actions; Rebuild/Optimize pass through.
+    /// Fail fast for schema-changing actions; Optimize passes through.
+    /// REBUILD is rejected in SQL: the executor carries the index manager
+    /// but not the sync driver plus primary-storage scan needed for online
+    /// rebuild. Use the async HTTP rebuild instead; the old clear-only
+    /// behavior destroyed indexed data, so it must not run silently.
+    pub(crate) const FULLTEXT_REBUILD_UNAVAILABLE: &str = "ALTER FULLTEXT INDEX REBUILD is not executed inline: trigger the async online rebuild via POST /v1/fulltext/indexes/rebuild and poll GET /v1/fulltext/rebuilds/{id}";
     fn validate_alter_actions(actions: &[AlterIndexAction]) -> Result<(), PlannerError> {
         if actions.is_empty() {
             return Err(PlannerError::InvalidOperation(
@@ -516,7 +521,12 @@ impl FulltextSearchPlanner {
         }
         for action in actions {
             match action {
-                AlterIndexAction::Rebuild | AlterIndexAction::Optimize => {}
+                AlterIndexAction::Optimize => {}
+                AlterIndexAction::Rebuild => {
+                    return Err(PlannerError::UnsupportedOperation(
+                        Self::FULLTEXT_REBUILD_UNAVAILABLE.to_string(),
+                    ));
+                }
                 AlterIndexAction::AddField(f) => {
                     return Err(PlannerError::UnsupportedOperation(format!(
                         "ALTER FULLTEXT INDEX ADD FIELD '{}' is not supported: one index serves one field, create a new index instead",

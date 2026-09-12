@@ -440,14 +440,9 @@ impl FulltextOperator {
                                     for action in actions.iter() {
                                         match action {
                                             AlterIndexAction::Rebuild => {
-                                                crate::executor::streaming::helpers::runtime_bridge::wait(
-                                                    "Fulltext rebuild",
-                                                    manager.rebuild_index(
-                                                        metadata.space_id,
-                                                        &metadata.tag_name,
-                                                        &metadata.field_name,
-                                                    ),
-                                                )?;
+                                                return Err(QueryError::execution(
+                                                    crate::planning::fulltext_planner::FulltextSearchPlanner::FULLTEXT_REBUILD_UNAVAILABLE,
+                                                ));
                                             }
                                             AlterIndexAction::Optimize => {
                                                 crate::executor::streaming::helpers::runtime_bridge::wait(

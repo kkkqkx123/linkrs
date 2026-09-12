@@ -21,6 +21,9 @@ use crate::storage::{
 #[cfg(feature = "vector")]
 use super::handlers::vector;
 
+#[cfg(feature = "fulltext")]
+use super::handlers::rebuild as rebuild_handlers;
+
 use super::{
     handlers::{
         auth::{login, logout},
@@ -229,6 +232,7 @@ pub fn create_router<
         ));
 
     let protected_routes = add_vector_routes(protected_routes);
+    let protected_routes = add_fulltext_routes(protected_routes);
 
     let router = Router::new()
         .nest("/v1", public_routes.merge(protected_routes))
@@ -249,6 +253,55 @@ pub fn create_router<
     } else {
         router
     }
+}
+
+/// Conditionally add fulltext rebuild/clear routes
+#[cfg(feature = "fulltext")]
+fn add_fulltext_routes<
+    S: crate::storage::StorageClient
+        + crate::storage::StorageSchemaContextOps
+        + crate::storage::StorageSyncContextOps
+        + crate::storage::StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    router: Router<super::state::AppState<S>>,
+) -> Router<super::state::AppState<S>> {
+    router
+        .route(
+            "/fulltext/indexes/rebuild",
+            post(rebuild_handlers::rebuild_fulltext),
+        )
+        .route(
+            "/fulltext/rebuilds/{id}",
+            get(rebuild_handlers::fulltext_rebuild_status),
+        )
+        .route(
+            "/fulltext/indexes/clear",
+            post(rebuild_handlers::clear_fulltext),
+        )
+        .route(
+            "/fulltext/indexes/inconsistent",
+            get(rebuild_handlers::inconsistent_fulltext),
+        )
+}
+
+#[cfg(not(feature = "fulltext"))]
+fn add_fulltext_routes<
+    S: crate::storage::StorageClient
+        + crate::storage::StorageSchemaContextOps
+        + crate::storage::StorageSyncContextOps
+        + crate::storage::StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    router: Router<super::state::AppState<S>>,
+) -> Router<super::state::AppState<S>> {
+    router
 }
 
 /// Conditionally add vector search routes
@@ -290,6 +343,18 @@ fn add_vector_routes<
         )
         .route("/vector/payload/delete", post(vector::delete_payload))
         .route("/vector/scroll", post(vector::scroll))
+        .route(
+            "/vector/indexes/rebuild",
+            post(super::handlers::rebuild::rebuild_vector),
+        )
+        .route(
+            "/vector/rebuilds/{id}",
+            get(super::handlers::rebuild::vector_rebuild_status),
+        )
+        .route(
+            "/vector/indexes/clear",
+            post(super::handlers::rebuild::clear_vector),
+        )
 }
 
 #[cfg(not(feature = "vector"))]

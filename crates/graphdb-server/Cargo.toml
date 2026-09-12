@@ -81,6 +81,7 @@ fulltext = [
     "graphdb-fulltext/fulltext",
     "graphdb-sync/fulltext",
     "graphdb-query/fulltext",
+    "graphdb-api/fulltext",
 ]
 
 [dev-dependencies]

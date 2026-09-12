@@ -25,7 +25,7 @@ pub use graphdb_config::fulltext::{
     TantivyConfig, TokenizerKind,
 };
 pub use graphdb_core::ConsistencyState;
-pub use index_events::{IndexEvent, IndexEventCallback};
+pub use index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 #[cfg(feature = "fulltext")]
 pub use manager::FulltextIndexManager;
 pub use metadata::{IndexKey, IndexMetadata, IndexStatus};

@@ -19,8 +19,6 @@ macro_rules! forward_auto_commit_methods {
 impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
     forward_auto_commit_methods!(inner;
         fn create_space(&mut self, space: &mut graphdb_core::types::SpaceInfo) -> Result<bool, StorageError>;
-        fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
-        fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
         fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
         fn create_tag(&mut self, space: &str, tag: &graphdb_core::types::TagInfo) -> Result<u32, StorageError>;
         fn alter_tag(
@@ -49,7 +47,6 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             old_name: &str,
             new_name: &str,
         ) -> Result<bool, StorageError>;
-        fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError>;
         fn create_edge_type(
             &mut self,
             space: &str,
@@ -75,10 +72,70 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             src_tag: &str,
             dst_tag: &str,
         ) -> Result<bool, StorageError>;
-        fn drop_edge_type(&mut self, space: &str, edge: &str) -> Result<bool, StorageError>;
         fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
         fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
     );
+
+    fn drop_space(&mut self, space: &str) -> Result<bool, StorageError> {
+        self.drop_or_clear_space(space, false)
+    }
+
+    fn clear_space(&mut self, space: &str) -> Result<bool, StorageError> {
+        self.drop_or_clear_space(space, true)
+    }
+
+    fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError> {
+        // Snapshot affected index definitions before the inner drop removes
+        // them: each becomes a replay-visible DropIndex intent plus a generic
+        // DropTag safety net for directly created external indexes.
+        let snapshot = self.snapshot_tag_indexes(space, Some(tag));
+        let space_id = snapshot.space_id;
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_tag(space, tag)?;
+        if result {
+            if let Err(error) = self.stage_snapshot_drops(&snapshot) {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+            if let Some(sid) = space_id {
+                if let Err(error) = self.stage_tag_drop(sid, tag) {
+                    if let Some(transaction_id) = self.get_current_txn_id() {
+                        let _ = self.abort_transaction_fact(transaction_id);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        let snapshot = self.snapshot_tag_indexes(space, Some(edge_type));
+        let space_id = snapshot.space_id;
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_edge_type(space, edge_type)?;
+        if result {
+            if let Err(error) = self.stage_snapshot_drops(&snapshot) {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+            if let Some(sid) = space_id {
+                if let Err(error) = self.stage_tag_drop(sid, edge_type) {
+                    if let Some(transaction_id) = self.get_current_txn_id() {
+                        let _ = self.abort_transaction_fact(transaction_id);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
 
     fn create_tag_index(
         &mut self,

@@ -121,13 +121,18 @@ impl VectorManager {
     }
 
     pub async fn drop_index(&self, name: &str) -> Result<()> {
-        if let Some((_, metadata)) = self.indexes.remove(name) {
-            debug!("Dropping vector collection: {}", metadata.name);
-            self.engine.delete_collection(name).await?;
+        // Always attempt the server-side delete: collections created by an
+        // earlier process (or rebuild temps/backups never registered here)
+        // are known but absent from `indexes`, and skipping the delete
+        // would leak them on the server.
+        self.indexes.remove(name);
+        debug!("Dropping vector collection: {}", name);
+        let result = self.engine.delete_collection(name).await;
+        self.known_collections.remove(name);
+        if result.is_ok() {
             info!("Vector index dropped: {}", name);
         }
-        self.known_collections.remove(name);
-        Ok(())
+        result
     }
 
     pub fn unregister_index(&self, name: &str) {

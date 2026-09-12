@@ -38,6 +38,7 @@ pub struct HttpServer<
     storage: Arc<RwLock<S>>,
     config: Config,
     function_registry: Arc<RwLock<FunctionRegistry>>,
+    rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry,
 }
 
 impl<
@@ -69,6 +70,7 @@ impl<
             storage: storage.clone(),
             config: config.clone(),
             function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
+            rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry::default(),
         }
     }
 
@@ -135,5 +137,10 @@ impl<
     /// Get function registry
     pub fn get_function_registry(&self) -> Arc<RwLock<FunctionRegistry>> {
         self.function_registry.clone()
+    }
+
+    /// Async index rebuild task registry.
+    pub fn rebuild_tasks(&self) -> super::handlers::rebuild::RebuildTaskRegistry {
+        self.rebuild_tasks.clone()
     }
 }

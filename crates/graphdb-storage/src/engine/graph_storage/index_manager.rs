@@ -103,6 +103,10 @@ pub(crate) fn drop_tag_index(
     index_name: &str,
 ) -> StorageResult<bool> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
+    let index_id = ctx
+        .index_data_manager()
+        .read()
+        .index_alias(space_id, index_name);
     let dropped = ctx
         .index_metadata_manager()
         .drop_tag_index(space_id, index_name)?;
@@ -110,6 +114,11 @@ pub(crate) fn drop_tag_index(
         let manager = ctx.index_data_manager().write();
         manager.clear_tag_index(space_id, index_name)?;
         manager.unregister_native_index(space_id, index_name);
+        if let Some(index_id) = index_id {
+            manager.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            manager.remove_index_checkpoint_dirs(space_id, index_name);
+        }
     }
     Ok(dropped)
 }
@@ -391,6 +400,10 @@ pub(crate) fn drop_edge_index(
     index_name: &str,
 ) -> StorageResult<bool> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
+    let index_id = ctx
+        .index_data_manager()
+        .read()
+        .index_alias(space_id, index_name);
     let dropped = ctx
         .index_metadata_manager()
         .drop_edge_index(space_id, index_name)?;
@@ -398,8 +411,80 @@ pub(crate) fn drop_edge_index(
         let manager = ctx.index_data_manager().write();
         manager.clear_edge_index(space_id, index_name)?;
         manager.unregister_native_index(space_id, index_name);
+        if let Some(index_id) = index_id {
+            manager.remove_checkpoint_dirs_by_id(space_id, index_id);
+        } else {
+            manager.remove_index_checkpoint_dirs(space_id, index_name);
+        }
     }
     Ok(dropped)
+}
+
+/// Cascade helper: drop every tag index bound to one tag, including runtime
+/// state and checkpoint directories. Previously only metadata was removed.
+pub(crate) fn drop_tag_indexes_by_tag_cascade(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+) -> StorageResult<usize> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_id)?
+        .into_iter()
+        .filter(|idx| idx.schema_name == tag_name)
+        .map(|idx| idx.name)
+        .collect();
+    let mut removed = 0;
+    for name in names {
+        if drop_tag_index(ctx, space, &name)? {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Cascade helper: drop every edge index bound to one edge type.
+pub(crate) fn drop_edge_indexes_by_type_cascade(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<usize> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let names: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_edge_indexes(space_id)?
+        .into_iter()
+        .filter(|idx| idx.schema_name == edge_type)
+        .map(|idx| idx.name)
+        .collect();
+    let mut removed = 0;
+    for name in names {
+        if drop_edge_index(ctx, space, &name)? {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Cascade helper: drop all tag and edge indexes of one space.
+pub(crate) fn drop_space_indexes_cascade(
+    ctx: &GraphStorageContext,
+    space: &str,
+) -> StorageResult<usize> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let mut removed = 0;
+    for idx in ctx.index_metadata_manager().list_tag_indexes(space_id)? {
+        if drop_tag_index(ctx, space, &idx.name)? {
+            removed += 1;
+        }
+    }
+    for idx in ctx.index_metadata_manager().list_edge_indexes(space_id)? {
+        if drop_edge_index(ctx, space, &idx.name)? {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 pub(crate) fn rebuild_edge_index(

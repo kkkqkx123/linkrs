@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use super::buffer::OpBatchBuffer;
 use super::config::BatchConfig;
@@ -16,7 +16,10 @@ pub struct FulltextBatchProcessor {
     space_id: u64,
     tag_name: String,
     field_name: String,
-    engine: Arc<dyn FulltextSearchEngine>,
+    engine: RwLock<Arc<dyn FulltextSearchEngine>>,
+    /// Publish fence shared with the fulltext manager: flushes hold the
+    /// read guard so rebuild publish (write guard) serializes engine swaps.
+    publish_fence: Arc<RwLock<()>>,
     config: BatchConfig,
     buffer: Arc<OpBatchBuffer>,
     background_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -43,12 +46,14 @@ impl FulltextBatchProcessor {
         field_name: String,
         engine: Arc<dyn FulltextSearchEngine>,
         config: BatchConfig,
+        publish_fence: Arc<RwLock<()>>,
     ) -> Self {
         Self {
             space_id,
             tag_name,
             field_name,
-            engine,
+            engine: RwLock::new(engine),
+            publish_fence,
             config,
             buffer: Arc::new(OpBatchBuffer::new()),
             background_task: Mutex::new(None),
@@ -61,12 +66,14 @@ impl FulltextBatchProcessor {
         tag_name: String,
         field_name: String,
         engine: Arc<dyn FulltextSearchEngine>,
+        publish_fence: Arc<RwLock<()>>,
     ) -> Self {
         Self {
             space_id,
             tag_name,
             field_name,
-            engine,
+            engine: RwLock::new(engine),
+            publish_fence,
             config: BatchConfig::default(),
             buffer: Arc::new(OpBatchBuffer::new()),
             background_task: Mutex::new(None),
@@ -83,29 +90,37 @@ impl FulltextBatchProcessor {
     }
 
     async fn execute_immediate(&self, operation: IndexOperation) -> BatchResult<()> {
+        let _fence = self.publish_fence.read().await;
+        let engine = self.engine.read().await;
         match operation.change_type {
             ChangeType::Insert | ChangeType::Update => {
                 if let Some(text) = operation.text() {
-                    self.engine
+                    engine
                         .index_batch(vec![(operation.id.clone(), text.to_string())])
                         .await
                         .map_err(BatchError::from)?;
                 }
             }
             ChangeType::Delete => {
-                self.engine
+                engine
                     .delete_batch(vec![operation.id.as_str()])
                     .await
                     .map_err(BatchError::from)?;
             }
         }
-        self.engine.commit().await.map_err(BatchError::from)?;
+        engine.commit().await.map_err(BatchError::from)?;
         Ok(())
     }
 
     pub async fn execute_now(&self, operations: Vec<IndexOperation>) -> BatchResult<()> {
         self.execute_now_without_commit(operations).await?;
-        self.engine.commit().await.map_err(BatchError::from)?;
+        let _fence = self.publish_fence.read().await;
+        self.engine
+            .read()
+            .await
+            .commit()
+            .await
+            .map_err(BatchError::from)?;
         Ok(())
     }
 
@@ -127,26 +142,28 @@ impl FulltextBatchProcessor {
             }
         }
 
+        let _fence = self.publish_fence.read().await;
+        let engine = self.engine.read().await;
         if !deletes.is_empty() {
             let ids: Vec<&str> = deletes.iter().map(|s| s.as_str()).collect();
-            self.engine
-                .delete_batch(ids)
-                .await
-                .map_err(BatchError::from)?;
+            engine.delete_batch(ids).await.map_err(BatchError::from)?;
         }
 
         if !items.is_empty() {
-            self.engine
-                .index_batch(items)
-                .await
-                .map_err(BatchError::from)?;
+            engine.index_batch(items).await.map_err(BatchError::from)?;
         }
 
         Ok(())
     }
 
-    pub fn engine(&self) -> &Arc<dyn FulltextSearchEngine> {
-        &self.engine
+    pub async fn engine(&self) -> Arc<dyn FulltextSearchEngine> {
+        self.engine.read().await.clone()
+    }
+
+    /// Repoint the processor at a rebuilt engine. Must be called while
+    /// holding the publish fence write guard (rebuild publish does this).
+    pub async fn set_engine(&self, engine: Arc<dyn FulltextSearchEngine>) {
+        *self.engine.write().await = engine;
     }
 
     pub fn buffer(&self) -> &Arc<OpBatchBuffer> {
@@ -168,9 +185,11 @@ impl FulltextBatchProcessor {
             return Ok(());
         }
 
+        let _fence = self.publish_fence.read().await;
+        let engine = self.engine.read().await;
         if !entry.deletes.is_empty() {
             let ids: Vec<&str> = entry.deletes.iter().map(|s| s.as_str()).collect();
-            self.engine.delete_batch(ids).await.map_err(|e| {
+            engine.delete_batch(ids).await.map_err(|e| {
                 self.buffer.re_enqueue(key, entry.clone());
                 BatchError::from(e)
             })?;
@@ -189,14 +208,14 @@ impl FulltextBatchProcessor {
                 .collect();
 
             if !items.is_empty() {
-                self.engine.index_batch(items).await.map_err(|e| {
+                engine.index_batch(items).await.map_err(|e| {
                     self.buffer.re_enqueue(key, entry.clone());
                     BatchError::from(e)
                 })?;
             }
         }
 
-        self.engine.commit().await.map_err(|e| {
+        engine.commit().await.map_err(|e| {
             self.buffer.re_enqueue(key, entry.clone());
             BatchError::from(e)
         })?;
@@ -277,7 +296,13 @@ impl BatchProcessor for FulltextBatchProcessor {
             self.execute_batch(key).await?;
         }
         if keys.is_empty() {
-            self.engine.commit().await.map_err(BatchError::from)?;
+            let _fence = self.publish_fence.read().await;
+            self.engine
+                .read()
+                .await
+                .commit()
+                .await
+                .map_err(BatchError::from)?;
         }
         Ok(())
     }

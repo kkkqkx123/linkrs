@@ -17,6 +17,21 @@ pub struct SyncWrapper<S: StorageClient + Debug> {
     auto_commit_owner: bool,
 }
 
+/// One internal index definition snapshotted before a destructive schema op,
+/// staged afterwards as a replay-visible `DropIndex` intent.
+struct IndexDropSnapshotEntry {
+    space_id: u64,
+    index_name: String,
+    schema_name: String,
+    index_type: String,
+    fields: Vec<String>,
+}
+
+struct IndexDropSnapshot {
+    space_id: Option<u64>,
+    drops: Vec<IndexDropSnapshotEntry>,
+}
+
 impl<S: StorageClient> SyncWrapper<S> {
     /// Create a new wrapper without synchronization.
     pub fn new(storage: S) -> Self {
@@ -288,6 +303,128 @@ impl<S: StorageClient> SyncWrapper<S> {
             .map_err(|error| {
                 StorageError::db_error(format!("Failed to stage index drop intent: {error}"))
             })
+    }
+
+    /// One internal index definition snapshotted before a destructive op.
+    fn stage_snapshot_drops(&self, snapshot: &IndexDropSnapshot) -> Result<(), StorageError> {
+        for drop in &snapshot.drops {
+            self.stage_index_drop(
+                drop.space_id,
+                &drop.index_name,
+                &drop.schema_name,
+                &drop.index_type,
+                &drop.fields,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn stage_space_drop(&self, space_id: u64) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        sync_manager
+            .on_space_drop(transaction_id, space_id)
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage space drop intent: {error}"))
+            })
+    }
+
+    fn stage_tag_drop(&self, space_id: u64, tag_name: &str) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        sync_manager
+            .on_tag_drop(transaction_id, space_id, tag_name)
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage tag drop intent: {error}"))
+            })
+    }
+
+    /// Shared `drop_space` / `clear_space` path: snapshot index definitions
+    /// first (the inner op removes them), then stage one replay-visible
+    /// `DropIndex` per index plus a generic `DropSpace` safety net covering
+    /// directly created external indexes.
+    fn drop_or_clear_space(&mut self, space: &str, is_clear: bool) -> Result<bool, StorageError> {
+        let snapshot = self.snapshot_tag_indexes(space, None);
+        let space_id = snapshot.space_id;
+        self.validate_schema_sync_context()?;
+        let result = if is_clear {
+            self.inner.clear_space(space)?
+        } else {
+            self.inner.drop_space(space)?
+        };
+        if result {
+            if let Err(error) = self.stage_snapshot_drops(&snapshot) {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+            if let Some(sid) = space_id {
+                if let Err(error) = self.stage_space_drop(sid) {
+                    if let Some(transaction_id) = self.get_current_txn_id() {
+                        let _ = self.abort_transaction_fact(transaction_id);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    /// Snapshot tag+edge index definitions of one space, optionally filtered
+    /// to a single schema (tag/edge type). Best effort: unreadable scopes
+    /// yield an empty snapshot rather than failing the schema op.
+    fn snapshot_tag_indexes(&self, space: &str, schema_filter: Option<&str>) -> IndexDropSnapshot {
+        let space_id = self.inner.get_space_id(space).ok();
+        let mut drops = Vec::new();
+        if let Some(sid) = space_id {
+            let mut push_index = |index: &graphdb_core::types::Index, index_type: &str| {
+                if schema_filter.is_some_and(|f| f != index.schema_name) {
+                    return;
+                }
+                drops.push(IndexDropSnapshotEntry {
+                    space_id: sid,
+                    index_name: index.name.clone(),
+                    schema_name: index.schema_name.clone(),
+                    index_type: index_type.to_string(),
+                    fields: index
+                        .fields
+                        .iter()
+                        .map(|field| field.name.clone())
+                        .collect(),
+                });
+            };
+            if let Ok(indexes) = self.inner.list_tag_indexes(space) {
+                for index in &indexes {
+                    push_index(index, "tag");
+                }
+            }
+            if let Ok(indexes) = self.inner.list_edge_indexes(space) {
+                for index in &indexes {
+                    push_index(index, "edge");
+                }
+            }
+        }
+        IndexDropSnapshot { space_id, drops }
     }
 }
 

@@ -66,6 +66,22 @@ impl SyncApi {
             .map_err(|e| e.to_string())
     }
 
+    /// Fulltext indexes whose engine is in the `Inconsistent` state. These
+    /// reject writes and need operator attention (online rebuild or drop and
+    /// recreate). Empty when fulltext is not configured.
+    #[cfg(feature = "fulltext")]
+    pub fn inconsistent_fulltext_indexes(&self) -> Vec<graphdb_fulltext::IndexMetadata> {
+        self.sync_manager.inconsistent_fulltext_indexes()
+    }
+
+    /// Fail stranded rebuild generations and collect rebuild scratch state.
+    /// Idempotent; safe to run at startup before serving traffic.
+    pub fn recover_stale_rebuilds(&self) -> Result<usize, String> {
+        self.sync_manager
+            .recover_stale_rebuilds_sync()
+            .map_err(|e| e.to_string())
+    }
+
     pub fn list_dead_letters(
         &self,
         target: Option<&graphdb_core::types::TargetId>,

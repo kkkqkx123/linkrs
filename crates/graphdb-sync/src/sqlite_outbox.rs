@@ -20,6 +20,13 @@ pub struct ClaimedEvent {
     pub lease_epoch: LeaseEpoch,
 }
 
+/// One materialized outbox event for rebuild catch-up replay.
+#[derive(Debug, Clone)]
+pub struct RebuildEvent {
+    pub commit_lsn: CommitLsn,
+    pub mutation: IndexMutation,
+}
+
 #[derive(Debug, Clone)]
 pub struct SqliteOutbox {
     pool: SqlitePool,
@@ -298,6 +305,13 @@ impl SqliteOutbox {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS events_ordering_idx \
              ON events(target, ordering_key, commit_lsn, intent_sequence)",
+        )
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS events_rebuild_idx \
+             ON events(target, index_id, commit_lsn, intent_sequence)",
         )
         .execute(&mut *connection)
         .await
@@ -730,6 +744,70 @@ impl SqliteOutbox {
             from_sql_i64(generation, "index generation")
         })
         .transpose()
+    }
+
+    /// List all known generations (with states) for one index. Used by the
+    /// rebuild driver to detect and fail generations left behind by crashes.
+    pub async fn list_index_generations(
+        &self,
+        target: &TargetId,
+        index_id: u64,
+    ) -> Result<Vec<(u64, String)>, String> {
+        let rows = sqlx::query(
+            "SELECT generation, state FROM generation_state \
+             WHERE target = ? AND index_id = ? ORDER BY generation",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let generation: i64 = row.get("generation");
+                let state: String = row.get("state");
+                Ok((from_sql_i64(generation, "index generation")?, state))
+            })
+            .collect()
+    }
+
+    /// Fetch materialized events for catch-up replay in a commit-LSN range.
+    /// Status-agnostic on purpose: retried, dead-lettered, or skipped events
+    /// in the range are replayed idempotently so the rebuilt index converges
+    /// even when the live delivery plane degraded mid-rebuild.
+    pub async fn fetch_rebuild_events(
+        &self,
+        target: &TargetId,
+        index_id: u64,
+        after_lsn: CommitLsn,
+        upto_lsn: CommitLsn,
+        limit: u64,
+    ) -> Result<Vec<RebuildEvent>, String> {
+        let rows = sqlx::query(
+            "SELECT commit_lsn, intent_sequence, mutation FROM events \
+             WHERE target = ? AND index_id = ? AND commit_lsn > ? AND commit_lsn <= ? \
+             ORDER BY commit_lsn, intent_sequence LIMIT ?",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .bind(to_sql_i64(after_lsn.get(), "after LSN")?)
+        .bind(to_sql_i64(upto_lsn.get(), "upto LSN")?)
+        .bind(to_sql_i64(limit, "fetch limit")?)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let commit_lsn: i64 = row.get("commit_lsn");
+                let mutation_bytes: Vec<u8> = row.get("mutation");
+                let mutation: IndexMutation =
+                    postcard::from_bytes(&mutation_bytes).map_err(|error| error.to_string())?;
+                Ok(RebuildEvent {
+                    commit_lsn: CommitLsn::new(from_sql_i64(commit_lsn, "commit LSN")?),
+                    mutation,
+                })
+            })
+            .collect()
     }
 
     pub async fn materialize_commit(

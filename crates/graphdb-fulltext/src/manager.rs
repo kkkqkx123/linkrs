@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
 use crate::index_events::{IndexEvent, IndexEventCallback};
+pub use crate::index_events::{RebuildPhase, RebuildProgress};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
@@ -30,6 +31,14 @@ pub struct FulltextIndexManager {
     schema_manager: Option<Arc<SchemaManager>>,
     stats_manager: Mutex<Option<Arc<StatsManager>>>,
     index_callbacks: Arc<EventSubscriptions<IndexEvent>>,
+    /// Per-index publish fence for online rebuild. Delivery paths hold the
+    /// read guard while applying a batch; the rebuild publish phase holds
+    /// the write guard across final catch-up replay and engine swap, so a
+    /// commit is either fully before or fully after the swap.
+    publish_fences: DashMap<IndexKey, Arc<tokio::sync::RwLock<()>>>,
+    /// Live rebuild progress by index; present only while a rebuild runs
+    /// (FAILED/COMPLETED retained until cleared by the next rebuild or startup).
+    rebuild_progress: DashMap<IndexKey, RebuildProgress>,
 }
 
 impl std::fmt::Debug for FulltextIndexManager {
@@ -60,6 +69,8 @@ impl FulltextIndexManager {
             schema_manager: None,
             stats_manager: Mutex::new(None),
             index_callbacks: Arc::new(EventSubscriptions::new()),
+            publish_fences: DashMap::new(),
+            rebuild_progress: DashMap::new(),
         };
 
         manager.discover_existing_indexes()?;
@@ -136,6 +147,13 @@ impl FulltextIndexManager {
 
         for entry in entries.flatten() {
             let path = entry.path();
+
+            // Rebuild scratch and backup directories are never live indexes.
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.contains(".rebuild-") || name.contains(".old-") {
+                    continue;
+                }
+            }
 
             if path.is_dir() && path.join("meta.json").exists() {
                 if let Some((key, engine, metadata)) = self.try_restore_bm25_index(&path) {
@@ -727,24 +745,70 @@ impl FulltextIndexManager {
         Ok(())
     }
 
+    /// Indexes needing operator attention: engines in the `Inconsistent`
+    /// state plus metadata stuck in `Error` (failed/discarded rebuilds whose
+    /// previous data still serves). Both must be empty for a healthy index.
     pub fn get_inconsistent_indexes(&self) -> Vec<IndexMetadata> {
         self.metadata
             .iter()
             .filter(|entry| {
-                self.engines
-                    .get(entry.key())
-                    .is_some_and(|e| e.consistency_state() == ConsistencyState::Inconsistent)
+                entry.value().status == IndexStatus::Error
+                    || self
+                        .engines
+                        .get(entry.key())
+                        .is_some_and(|e| e.consistency_state() == ConsistencyState::Inconsistent)
             })
             .map(|entry| entry.value().clone())
             .collect()
     }
 
-    pub async fn rebuild_index(
+    /// Destructively clear a fulltext index: drop all documents and reset counters.
+    ///
+    /// This is an explicit destructive operation, not a rebuild: nothing is
+    /// read back from primary storage, so indexed data is lost. The cleared
+    /// index is empty and consistent, and subsequent writes proceed normally.
+    /// To repair an inconsistent index without data loss, use the sync-side
+    /// online rebuild driver (`SyncManager::rebuild_fulltext_index`) or drop
+    /// and recreate the index. The `force` flag mirrors the vector
+    /// `purge_index_data` guard and prevents accidental calls.
+    pub async fn clear_index(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
+        force: bool,
     ) -> Result<(), SearchError> {
+        if !force {
+            return Err(SearchError::Internal(
+                "Refusing to clear fulltext index without explicit confirmation: retry with force = true".to_string(),
+            ));
+        }
+        tracing::warn!(
+            "Clearing fulltext index explicitly confirmed: space {} tag {} field {}",
+            space_id,
+            tag_name,
+            field_name
+        );
+        // Mutual exclusion with online rebuild and live delivery: refuse
+        // while a rebuild holds the index, otherwise serialize the clear
+        // under the publish fence write guard so no delivery apply straddles
+        // the truncation.
+        if let Some(progress) = self.rebuild_progress(space_id, tag_name, field_name) {
+            if matches!(
+                progress.phase,
+                RebuildPhase::Preparing
+                    | RebuildPhase::Backfilling
+                    | RebuildPhase::CatchingUp
+                    | RebuildPhase::Publishing
+            ) {
+                return Err(SearchError::RebuildBusy(format!(
+                    "Refusing to clear fulltext index {space_id}.{tag_name}.{field_name} while a rebuild is {}",
+                    progress.phase.as_str(),
+                )));
+            }
+        }
+        let fence = self.publish_fence_for(space_id, tag_name, field_name);
+        let _fence_guard = fence.write().await;
         let key = IndexKey::new(space_id, tag_name, field_name);
         let engine = self.engines.get(&key).ok_or_else(|| {
             SearchError::IndexNotFound(format!("{}.{}.{}", space_id, tag_name, field_name))
@@ -759,17 +823,539 @@ impl FulltextIndexManager {
             metadata.status = IndexStatus::Active;
         }
 
-        if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after rebuilding index: {}", e);
-        }
+        self.save_metadata_to_file().map_err(|e| {
+            tracing::warn!("Failed to save metadata after clearing index: {}", e);
+            e
+        })?;
 
         tracing::info!(
-            "Rebuilt index {}.{}.{} - cleared and marked consistent",
+            "Cleared index {}.{}.{} - emptied and marked consistent",
             space_id,
             tag_name,
             field_name
         );
         Ok(())
+    }
+
+    /// Publish fence for an index. Delivery paths hold the read guard while
+    /// applying; rebuild publish holds the write guard across final replay
+    /// and engine swap.
+    pub fn publish_fence_for(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Arc<tokio::sync::RwLock<()>> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        self.publish_fences
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
+            .value()
+            .clone()
+    }
+
+    /// Current rebuild progress for an index, if a rebuild ran.
+    pub fn rebuild_progress(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<RebuildProgress> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        self.rebuild_progress.get(&key).map(|p| p.clone())
+    }
+
+    /// Overwrite rebuild progress (used by the rebuild driver).
+    pub fn update_rebuild_progress(&self, progress: RebuildProgress) {
+        let key = IndexKey::new(progress.space_id, &progress.tag_name, &progress.field_name);
+        self.rebuild_progress.insert(key, progress);
+    }
+
+    /// Advance the rebuild phase and emit a phase-transition progress event.
+    pub fn set_rebuild_phase(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        phase: RebuildPhase,
+    ) {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        if let Some(mut entry) = self.rebuild_progress.get_mut(&key) {
+            entry.phase = phase;
+            let progress = entry.clone();
+            drop(entry);
+            self.emit_index_event(IndexEvent::FulltextRebuildProgress {
+                index_name: key.to_index_id(),
+                generation: progress.generation,
+                phase: phase.as_str().to_string(),
+                docs_applied: progress.docs_applied,
+            });
+        }
+    }
+
+    /// Scratch directory for a rebuild generation, next to the live directory
+    /// so renames stay on one filesystem.
+    fn rebuild_temp_dir(
+        &self,
+        live_path: &std::path::Path,
+        index_id: &str,
+        generation: u64,
+    ) -> PathBuf {
+        let parent = live_path.parent().unwrap_or(&self.base_path);
+        parent.join(format!("{}.rebuild-{}", index_id, generation))
+    }
+
+    /// Create an empty rebuild engine for a new generation. The live engine
+    /// keeps serving reads and writes. Any leftover scratch directory from a
+    /// crashed rebuild of the same generation is removed for idempotent retry.
+    /// Marks metadata `Rebuilding` and initializes progress tracking.
+    #[cfg(feature = "fulltext")]
+    pub async fn create_rebuild_engine(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        generation: u64,
+    ) -> Result<Arc<dyn FulltextSearchEngine>, SearchError> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        let live_path = self
+            .metadata
+            .get(&key)
+            .map(|m| PathBuf::from(&m.storage_path))
+            .ok_or_else(|| {
+                SearchError::IndexNotFound(format!("{}.{}.{}", space_id, tag_name, field_name))
+            })?;
+        if !self.engines.contains_key(&key) {
+            return Err(SearchError::IndexNotFound(format!(
+                "{}.{}.{}",
+                space_id, tag_name, field_name
+            )));
+        }
+
+        let index_id = key.to_index_id();
+        let temp_dir = self.rebuild_temp_dir(&live_path, &index_id, generation);
+        if temp_dir.exists() {
+            tracing::warn!(
+                "Removing leftover rebuild scratch directory {} from a previous attempt",
+                temp_dir.display()
+            );
+            std::fs::remove_dir_all(&temp_dir)?;
+        }
+        std::fs::create_dir_all(&temp_dir)?;
+
+        // No key sidecar on purpose: discovery must never adopt scratch dirs.
+        let engine = TantivySearchEngine::open_or_create(&temp_dir, self.config.tantivy.clone())?;
+        let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
+
+        if let Some(mut metadata) = self.metadata.get_mut(&key) {
+            metadata.status = IndexStatus::Rebuilding;
+            metadata.last_updated = chrono::Utc::now();
+        }
+        self.save_metadata_to_file().map_err(|e| {
+            tracing::warn!("Failed to save metadata after starting rebuild: {}", e);
+            e
+        })?;
+
+        self.update_rebuild_progress(RebuildProgress {
+            space_id,
+            tag_name: tag_name.to_string(),
+            field_name: field_name.to_string(),
+            generation,
+            phase: RebuildPhase::Preparing,
+            docs_scanned: 0,
+            docs_applied: 0,
+            docs_skipped: 0,
+            started_at: chrono::Utc::now(),
+        });
+        self.emit_index_event(IndexEvent::FulltextRebuildStarted {
+            index_name: index_id,
+            generation,
+        });
+        Ok(engine)
+    }
+
+    /// Publish a rebuilt engine: swap it into the live map, point metadata at
+    /// the scratch directory (which becomes the live directory), and rename
+    /// the previous directory aside as `<id>.old-<generation>`. The newest
+    /// backup is retained for reverse recovery after a bad publish; older
+    /// backups are pruned. Must be called under the publish fence write
+    /// guard after final catch-up replay.
+    #[cfg(feature = "fulltext")]
+    pub async fn publish_rebuilt_engine(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        generation: u64,
+        engine: Arc<dyn FulltextSearchEngine>,
+    ) -> Result<u64, SearchError> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        let index_id = key.to_index_id();
+        let live_dir = engine.stats().await.map(|s| s.doc_count).unwrap_or(0);
+
+        let previous_path = self
+            .metadata
+            .get(&key)
+            .map(|m| m.storage_path.clone())
+            .unwrap_or_default();
+        let live_path = self
+            .rebuild_temp_dir(&PathBuf::from(&previous_path), &index_id, generation)
+            .to_string_lossy()
+            .to_string();
+
+        let old = self.engines.insert(key.clone(), Arc::clone(&engine));
+
+        if let Some(mut metadata) = self.metadata.get_mut(&key) {
+            metadata.storage_path = live_path;
+            metadata.doc_count = live_dir;
+            metadata.status = IndexStatus::Active;
+            metadata.last_updated = chrono::Utc::now();
+        }
+        self.save_metadata_to_file().map_err(|e| {
+            tracing::warn!("Failed to save metadata after publishing rebuild: {}", e);
+            e
+        })?;
+
+        if let Some(old_engine) = old {
+            old_engine.close().await.ok();
+        }
+        if !previous_path.is_empty()
+            && previous_path
+                != self
+                    .rebuild_temp_dir(&PathBuf::from(&previous_path), &index_id, generation)
+                    .to_string_lossy()
+                    .to_string()
+        {
+            let backup = PathBuf::from(format!("{}.old-{}", previous_path, generation));
+            if PathBuf::from(&previous_path).exists() {
+                // Rename-then-retain keeps a crash window recoverable and
+                // preserves one backup generation for reverse recovery after
+                // a bad publish. Older backups are pruned below. A rename
+                // failure keeps the previous directory beside the new live
+                // one: no data is lost, but reverse recovery loses its
+                // backup, so it is logged at error level for attention.
+                if std::fs::rename(&previous_path, &backup).is_err() {
+                    tracing::error!(
+                        "Published rebuild for {} but failed to retain previous directory {} as backup {}: reverse recovery unavailable until the next successful rebuild",
+                        index_id,
+                        previous_path,
+                        backup.display()
+                    );
+                }
+            }
+            Self::prune_old_backups(
+                PathBuf::from(&previous_path)
+                    .parent()
+                    .unwrap_or(&self.base_path),
+                &index_id,
+                Some(&backup),
+            );
+        }
+
+        self.set_rebuild_phase(space_id, tag_name, field_name, RebuildPhase::Completed);
+        self.emit_index_event(IndexEvent::FulltextRebuildCompleted {
+            index_name: index_id,
+            generation,
+            docs_count: live_dir as u64,
+        });
+        Ok(live_dir as u64)
+    }
+
+    /// List backup directories `<index_id>.old-<generation>` for one index,
+    /// newest generation first (unparseable suffixes sort last).
+    fn list_old_backups(parent: &std::path::Path, index_id: &str) -> Vec<PathBuf> {
+        let prefix = format!("{}.old-", index_id);
+        let mut backups: Vec<(u64, PathBuf)> = Vec::new();
+        let entries = match std::fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(_) => return Vec::new(),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(suffix) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let generation = suffix.parse::<u64>().unwrap_or(0);
+            backups.push((generation, path));
+        }
+        backups.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        backups.into_iter().map(|(_, path)| path).collect()
+    }
+
+    /// Prune `<index_id>.old-*` backups in `parent`, keeping only `keep`
+    /// (usually the newest backup). Used after publish so exactly one backup
+    /// generation survives for reverse recovery.
+    fn prune_old_backups(parent: &std::path::Path, index_id: &str, keep: Option<&PathBuf>) {
+        for backup in Self::list_old_backups(parent, index_id) {
+            if keep.is_some_and(|keep| *keep == backup) {
+                continue;
+            }
+            if let Err(e) = std::fs::remove_dir_all(&backup) {
+                tracing::warn!("Failed to prune rebuild backup {}: {}", backup.display(), e);
+            }
+        }
+    }
+
+    /// Reverse recovery after a bad publish: repoint the index at its newest
+    /// `.old-<generation>` backup and reopen the engine from it. The suspect
+    /// live directory is renamed aside as `.suspect-<millis>` for inspection.
+    /// Metadata is marked `Error` so the operator runs a fresh rebuild.
+    #[cfg(feature = "fulltext")]
+    pub async fn restore_rebuild_backup(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<PathBuf, SearchError> {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        let index_id = key.to_index_id();
+        let live_path = self
+            .metadata
+            .get(&key)
+            .map(|m| PathBuf::from(&m.storage_path))
+            .ok_or_else(|| {
+                SearchError::IndexNotFound(format!("{}.{}.{}", space_id, tag_name, field_name))
+            })?;
+        let parent = live_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.base_path.clone());
+        let backup = Self::list_old_backups(&parent, &index_id)
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                SearchError::IndexNotFound(format!(
+                    "No rebuild backup available for {}.{}.{}",
+                    space_id, tag_name, field_name
+                ))
+            })?;
+
+        if let Some((_, live_engine)) = self.engines.remove(&key) {
+            live_engine.close().await.ok();
+        }
+        if live_path.exists() {
+            let suspect = parent.join(format!(
+                "{}.suspect-{}",
+                index_id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ));
+            if std::fs::rename(&live_path, &suspect).is_err() {
+                tracing::warn!(
+                    "Restoring backup for {} but failed to move aside suspect directory {}",
+                    index_id,
+                    live_path.display()
+                );
+            }
+        }
+
+        let engine = TantivySearchEngine::open_or_create(&backup, self.config.tantivy.clone())?;
+        self.engines.insert(
+            key.clone(),
+            Arc::new(engine) as Arc<dyn FulltextSearchEngine>,
+        );
+        if let Some(mut metadata) = self.metadata.get_mut(&key) {
+            metadata.storage_path = backup.to_string_lossy().to_string();
+            metadata.status = IndexStatus::Error;
+            metadata.last_updated = chrono::Utc::now();
+        }
+        if let Err(e) = self.save_metadata_to_file() {
+            tracing::warn!("Failed to save metadata after restoring backup: {}", e);
+        }
+        tracing::warn!(
+            "Restored index {} from rebuild backup {}; marked Error pending a fresh rebuild",
+            index_id,
+            backup.display()
+        );
+        Ok(backup)
+    }
+
+    /// Discard a failed rebuild: remove the scratch directory, mark metadata
+    /// `Error` (the previous engine keeps serving), record failure progress.
+    #[cfg(feature = "fulltext")]
+    pub async fn discard_rebuild_engine(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        generation: u64,
+        reason: &str,
+    ) {
+        let key = IndexKey::new(space_id, tag_name, field_name);
+        let index_id = key.to_index_id();
+        if let Some(metadata) = self.metadata.get(&key) {
+            let temp_dir = self.rebuild_temp_dir(
+                &PathBuf::from(&metadata.storage_path),
+                &index_id,
+                generation,
+            );
+            if temp_dir.exists() && PathBuf::from(&metadata.storage_path) != temp_dir {
+                if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+                    tracing::warn!(
+                        "Failed to remove rebuild scratch directory {}: {}",
+                        temp_dir.display(),
+                        e
+                    );
+                }
+            }
+        }
+        if let Some(mut metadata) = self.metadata.get_mut(&key) {
+            metadata.status = IndexStatus::Error;
+            metadata.last_updated = chrono::Utc::now();
+        }
+        if let Err(e) = self.save_metadata_to_file() {
+            tracing::warn!("Failed to save metadata after discarding rebuild: {}", e);
+        }
+        self.set_rebuild_phase(space_id, tag_name, field_name, RebuildPhase::Failed);
+        self.emit_index_event(IndexEvent::FulltextRebuildFailed {
+            index_name: index_id,
+            generation,
+            reason: reason.to_string(),
+        });
+    }
+
+    /// Crash recovery for rebuild scratch state. Deletes unreferenced
+    /// `*.rebuild-*` directories, heals interrupted publishes from `*.old-*`
+    /// backups (keeping the newest backup per index for reverse recovery),
+    /// and moves metadata stuck in `Rebuilding` to `Error` (previous data
+    /// still served). Idempotent.
+    pub fn cleanup_stale_rebuild_state(&self) {
+        use std::collections::HashSet;
+
+        let referenced: HashSet<String> = self
+            .metadata
+            .iter()
+            .map(|entry| entry.value().storage_path.clone())
+            .collect();
+
+        let mut scan_dirs: Vec<PathBuf> = vec![self.base_path.clone()];
+        for path in referenced.iter() {
+            let parent = PathBuf::from(path);
+            if let Some(dir) = parent.parent() {
+                let dir = dir.to_path_buf();
+                if !scan_dirs.contains(&dir) {
+                    scan_dirs.push(dir);
+                }
+            }
+        }
+
+        for dir in scan_dirs {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            // Backups superseded by a surviving live directory are pruned
+            // after the scan, keeping the newest generation per index for
+            // reverse recovery.
+            let mut superseded: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let path_string = path.to_string_lossy().to_string();
+                if name.contains(".rebuild-") {
+                    if !referenced.contains(&path_string) {
+                        tracing::warn!(
+                            "Removing stale rebuild scratch directory {}",
+                            path.display()
+                        );
+                        if let Err(e) = std::fs::remove_dir_all(&path) {
+                            tracing::warn!(
+                                "Failed to remove stale rebuild directory {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    }
+                } else if let Some(pos) = name.find(".old-") {
+                    let candidate = dir.join(&name[..pos]);
+                    let candidate_string = candidate.to_string_lossy().to_string();
+                    if candidate.exists() || referenced.contains(&candidate_string) {
+                        // Live directory survived: only the newest backup is
+                        // kept (pruned below).
+                        superseded.push(path);
+                    } else if referenced.iter().any(|r| {
+                        PathBuf::from(r).file_name().and_then(|n| n.to_str()) == Some(&name[..pos])
+                    }) {
+                        // Metadata points at a missing live directory whose
+                        // backup survived: heal the interrupted rename.
+                        tracing::warn!(
+                            "Healing interrupted rebuild publish: restoring {} from backup",
+                            candidate.display()
+                        );
+                        if let Err(e) = std::fs::rename(&path, &candidate) {
+                            tracing::warn!(
+                                "Failed to restore rebuild backup {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    } else if let Err(e) = std::fs::remove_dir_all(&path) {
+                        tracing::warn!(
+                            "Failed to remove orphaned rebuild backup {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+            // Group superseded backups by index prefix; keep newest per group.
+            {
+                use std::collections::HashMap;
+                let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                for backup in superseded {
+                    if let Some(name) = backup.file_name().and_then(|n| n.to_str()) {
+                        if let Some(pos) = name.find(".old-") {
+                            groups
+                                .entry(name[..pos].to_string())
+                                .or_default()
+                                .push(backup);
+                        }
+                    }
+                }
+                for (_, mut backups) in groups {
+                    backups.sort_by(|a, b| {
+                        let generation = |p: &PathBuf| {
+                            p.file_name()
+                                .and_then(|n| n.to_str())
+                                .and_then(|n| n.rsplit(".old-").next())
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(0)
+                        };
+                        generation(b).cmp(&generation(a)).then_with(|| b.cmp(a))
+                    });
+                    for old in backups.into_iter().skip(1) {
+                        if let Err(e) = std::fs::remove_dir_all(&old) {
+                            tracing::warn!(
+                                "Failed to prune superseded rebuild backup {}: {}",
+                                old.display(),
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        for mut entry in self.metadata.iter_mut() {
+            if entry.value().status == IndexStatus::Rebuilding {
+                tracing::warn!(
+                    "Index {} was interrupted mid-rebuild; marking Error (previous data still served)",
+                    entry.value().index_id
+                );
+                entry.value_mut().status = IndexStatus::Error;
+                entry.value_mut().last_updated = chrono::Utc::now();
+            }
+        }
+        if let Err(e) = self.save_metadata_to_file() {
+            tracing::warn!("Failed to save metadata after rebuild cleanup: {}", e);
+        }
     }
 
     /// Flush pending writes so Tantivy can merge segments.

@@ -217,7 +217,11 @@ impl StorageSchemaOps for GraphStorage {
 
     fn create_edge_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
-        schema_writer::create_edge_index(&self.ctx, space, index)
+        let created = schema_writer::create_edge_index(&self.ctx, space, index)?;
+        if created {
+            self.rebuild_edge_index(space, &index.name)?;
+        }
+        Ok(created)
     }
 
     fn drop_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
