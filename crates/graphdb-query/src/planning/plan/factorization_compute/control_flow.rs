@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::optimizer::factorization::flatten_resolver::FlattenAllButOne;
-use crate::planning::plan::factorization::FactorizedSchema;
+use crate::planning::plan::factorization::{FactorizationError, FactorizedSchema};
 
 use crate::planning::plan::logical::logical_nodes::control_flow::{
     LogicalLoopNode, LogicalSelectNode,
@@ -10,7 +10,7 @@ use crate::planning::plan::logical::logical_nodes::control_flow::{
 pub(super) fn select(
     n: &LogicalSelectNode,
     child_schemas: &[FactorizedSchema],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let mut schema = child_schemas.first().cloned().unwrap_or_default();
     let cond_id = n.condition.id().clone();
     let mut store = HashMap::new();
@@ -20,16 +20,16 @@ pub(super) fn select(
     let to_flatten =
         FlattenAllButOne::get_groups_pos_to_flatten_for_expr(&cond_id, &schema, &store);
     for pos in to_flatten {
-        schema.flatten_group(pos);
+        schema.flatten_group(pos)?;
     }
-    schema.validate_at_most_one_unflat();
-    schema
+    schema.validate_at_most_one_unflat()?;
+    Ok(schema)
 }
 
 pub(super) fn loop_node(
     n: &LogicalLoopNode,
     child_schemas: &[FactorizedSchema],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let mut schema = child_schemas.first().cloned().unwrap_or_default();
     let cond_id = n.condition.id().clone();
     let mut store = HashMap::new();
@@ -39,18 +39,20 @@ pub(super) fn loop_node(
     let to_flatten =
         FlattenAllButOne::get_groups_pos_to_flatten_for_expr(&cond_id, &schema, &store);
     for pos in to_flatten {
-        schema.flatten_group(pos);
+        schema.flatten_group(pos)?;
     }
-    schema.validate_at_most_one_unflat();
-    schema
+    schema.validate_at_most_one_unflat()?;
+    Ok(schema)
 }
 
 /// Transaction and argument nodes carry no factorized state across their
 /// boundary, hence they start a fresh empty flat schema instead of forwarding
 /// child scope.
-pub(super) fn passthrough(_child_schemas: &[FactorizedSchema]) -> FactorizedSchema {
+pub(super) fn passthrough(
+    _child_schemas: &[FactorizedSchema],
+) -> Result<FactorizedSchema, FactorizationError> {
     let mut schema = FactorizedSchema::new();
     schema.create_flat_group(false);
-    schema.validate_at_most_one_unflat();
-    schema
+    schema.validate_at_most_one_unflat()?;
+    Ok(schema)
 }

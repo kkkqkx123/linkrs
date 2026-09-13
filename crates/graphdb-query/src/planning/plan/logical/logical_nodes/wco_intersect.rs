@@ -240,12 +240,16 @@ mod tests {
         let probe_schema = {
             let mut schema = crate::planning::plan::factorization::FactorizedSchema::new();
             let g = schema.create_flat_group(false);
-            schema.insert_to_group_and_scope(bound_a.id().clone(), g);
+            schema
+                .insert_to_group_and_scope(bound_a.id().clone(), g)
+                .unwrap();
             schema
         };
         let build_schema = crate::planning::plan::factorization::FactorizedSchema::new();
-        let out = node.compute_factorized_schema(&[probe_schema, build_schema]);
-        out.validate_at_most_one_unflat();
+        let out = node
+            .compute_factorized_schema(&[probe_schema, build_schema])
+            .unwrap();
+        out.validate_at_most_one_unflat().unwrap();
         assert!(out.is_expression_in_scope(&intersect_id));
     }
 
@@ -268,9 +272,13 @@ mod tests {
         );
         let mut probe_schema = crate::planning::plan::factorization::FactorizedSchema::new();
         let flat_pos = probe_schema.create_flat_group(false);
-        probe_schema.insert_to_group_and_scope(bound_a.id().clone(), flat_pos);
+        probe_schema
+            .insert_to_group_and_scope(bound_a.id().clone(), flat_pos)
+            .unwrap();
         let unflat_pos = probe_schema.create_group();
-        probe_schema.insert_to_group_and_scope(other, unflat_pos);
+        probe_schema
+            .insert_to_group_and_scope(other, unflat_pos)
+            .unwrap();
         let to_flatten = node.get_groups_to_flatten_on_probe_side(&probe_schema);
         assert_eq!(to_flatten, HashSet::from([flat_pos]));
         assert!(!to_flatten.contains(&unflat_pos));
@@ -292,9 +300,13 @@ mod tests {
         );
         let mut build_schema = crate::planning::plan::factorization::FactorizedSchema::new();
         let flat_pos = build_schema.create_flat_group(false);
-        build_schema.insert_to_group_and_scope(bound_b.id().clone(), flat_pos);
+        build_schema
+            .insert_to_group_and_scope(bound_b.id().clone(), flat_pos)
+            .unwrap();
         let unflat_pos = build_schema.create_group();
-        build_schema.insert_to_group_and_scope(other, unflat_pos);
+        build_schema
+            .insert_to_group_and_scope(other, unflat_pos)
+            .unwrap();
         let to_flatten = node.get_groups_to_flatten_on_build_side(0, &build_schema);
         assert_eq!(to_flatten, HashSet::from([flat_pos]));
         assert!(!to_flatten.contains(&unflat_pos));

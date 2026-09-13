@@ -34,13 +34,19 @@ pub(crate) fn aggregate_arg_field_name(
 }
 
 /// Reject spill for operators that do not support disk-based overflow.
+///
+/// Unified partition spill for these operators waits for the columnar
+/// materialization state (R4 design); until then the memory-budget breach
+/// surfaces as an explicit error instead of silent OOM or partial spill.
 pub(crate) fn spill_not_supported(
+    operator: &'static str,
     _buffer: &mut Vec<Vec<Value>>,
     _sm: &SpillManager,
     _memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
     Err(QueryError::execution(
-        "Spill is not implemented for this blocking operator; query memory budget exceeded"
-            .to_string(),
+        format!(
+            "Spill is not implemented for blocking operator {operator}; query memory budget exceeded (unified spill deferred to columnar materialization state)"
+        ),
     ))
 }

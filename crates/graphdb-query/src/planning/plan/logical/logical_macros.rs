@@ -254,6 +254,10 @@ macro_rules! define_logical_plan_node_with_deps {
             fn set_input(&mut self, input: $crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum) {
                 self.input = Some(Box::new(input));
             }
+
+            fn take_input(&mut self) -> Option<$crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum> {
+                self.input.take().map(|b| *b)
+            }
         }
     };
 }

@@ -39,6 +39,14 @@ impl LogicalSingleInputNode for LogicalUnionNode {
             self.deps[0] = input;
         }
     }
+
+    fn take_input(&mut self) -> Option<LogicalNodeEnum> {
+        if self.deps.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.deps[0]))
+        }
+    }
 }
 
 define_logical_plan_node_with_deps! {
@@ -134,6 +142,14 @@ impl LogicalSingleInputNode for LogicalMinusNode {
             self.deps[0] = input;
         }
     }
+
+    fn take_input(&mut self) -> Option<LogicalNodeEnum> {
+        if self.deps.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.deps[0]))
+        }
+    }
 }
 
 define_logical_plan_node! {
@@ -163,6 +179,14 @@ impl LogicalSingleInputNode for LogicalIntersectNode {
             self.deps.push(input);
         } else {
             self.deps[0] = input;
+        }
+    }
+
+    fn take_input(&mut self) -> Option<LogicalNodeEnum> {
+        if self.deps.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.deps[0]))
         }
     }
 }

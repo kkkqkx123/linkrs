@@ -103,8 +103,12 @@ fn e2e_match_return_no_flatten() {
     let g1 = schema.create_group();
     let id_a = expr_id(1);
     let id_b = expr_id(2);
-    schema.insert_to_group_and_scope_with_name(id_a.clone(), Some("a.name".to_string()), g0);
-    schema.insert_to_group_and_scope_with_name(id_b.clone(), Some("b.name".to_string()), g1);
+    schema
+        .insert_to_group_and_scope_with_name(id_a.clone(), Some("a.name".to_string()), g0)
+        .unwrap();
+    schema
+        .insert_to_group_and_scope_with_name(id_b.clone(), Some("b.name".to_string()), g1)
+        .unwrap();
 
     // Build store where aliases map to underlying ids via Variable fallback
     let ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -139,7 +143,7 @@ fn e2e_match_return_no_flatten() {
 
     // Also test via logical plan rewrite: Project over GetNeighbors should not insert Flatten
     let mut scan_n = scan();
-    let scan_schema = scan_n.compute_factorized_schema(&[]);
+    let scan_schema = scan_n.compute_factorized_schema(&[]).unwrap();
     // Simulate GetNeighbors: create unflat
     let mut get_nbr = LogicalNodeEnum::GetNeighbors(
         graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
@@ -162,7 +166,9 @@ fn e2e_match_return_no_flatten() {
             deps: vec![scan()],
         },
     );
-    let _gn_schema = get_nbr.compute_factorized_schema(&[scan_schema.clone()]);
+    let _gn_schema = get_nbr
+        .compute_factorized_schema(&[scan_schema.clone()])
+        .unwrap();
     // Build Project that returns a and b
     // We can't fully test without real ExpressionIds, but we verify no panic and invariant holds
     let plan_str = explain_flatten_str(&scan());
@@ -178,8 +184,10 @@ fn e2e_filter_needs_flatten() {
     let g1 = schema.create_group();
     let id_a = expr_id(100);
     let id_b_age = expr_id(200);
-    schema.insert_to_group_and_scope(id_a, g0);
-    schema.insert_to_group_and_scope(id_b_age.clone(), g1);
+    schema.insert_to_group_and_scope(id_a, g0).unwrap();
+    schema
+        .insert_to_group_and_scope(id_b_age.clone(), g1)
+        .unwrap();
 
     let ctx = Arc::new(ExpressionAnalysisContext::new());
     let pred_expr = Expression::Binary {
@@ -200,7 +208,9 @@ fn e2e_filter_needs_flatten() {
     // Variable fallback should resolve "b" to some group if name exists.
     // In this test, we inserted id_b_age but name mapping is for id, not "b".
     // To make Variable("b") resolve, insert name mapping: add a name entry for "b" in g1
-    schema.insert_to_group_and_scope_with_name(expr_id(9999), Some("b".to_string()), g1);
+    schema
+        .insert_to_group_and_scope_with_name(expr_id(9999), Some("b".to_string()), g1)
+        .unwrap();
 
     let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &store);
     analyzer.visit(&pred_id);
@@ -238,13 +248,16 @@ fn e2e_filter_needs_flatten() {
         let mut s = FactorizedSchema::new();
         let fg0 = s.create_flat_group(false);
         let fg1 = s.create_group();
-        s.insert_to_group_and_scope(expr_id(1), fg0);
-        s.insert_to_group_and_scope(expr_id(200), fg1);
-        s.insert_to_group_and_scope_with_name(expr_id(9998), Some("b".to_string()), fg1);
+        s.insert_to_group_and_scope(expr_id(1), fg0).unwrap();
+        s.insert_to_group_and_scope(expr_id(200), fg1).unwrap();
+        s.insert_to_group_and_scope_with_name(expr_id(9998), Some("b".to_string()), fg1)
+            .unwrap();
         s
     };
-    let out_schema = tmp_filter.compute_factorized_schema(&[child_schema]);
-    out_schema.validate_at_most_one_unflat();
+    let out_schema = tmp_filter
+        .compute_factorized_schema(&[child_schema])
+        .unwrap();
+    out_schema.validate_at_most_one_unflat().unwrap();
     assert!(
         !out_schema.is_flat_schema(),
         "Filter on a single unflat group keeps factorization under FlattenAllButOne"
@@ -257,16 +270,16 @@ fn e2e_union_flattens() {
     // Union should flatten_all inputs, resulting in flat schema
     let mut left = FactorizedSchema::new();
     let lg = left.create_flat_group(false);
-    left.insert_to_group_and_scope(expr_id(10), lg);
+    left.insert_to_group_and_scope(expr_id(10), lg).unwrap();
     let pos = left.create_group();
-    left.insert_to_group_and_scope(expr_id(11), pos);
+    left.insert_to_group_and_scope(expr_id(11), pos).unwrap();
     assert!(left.has_unflat_group());
 
     let mut right = FactorizedSchema::new();
     let rg = right.create_flat_group(false);
-    right.insert_to_group_and_scope(expr_id(20), rg);
+    right.insert_to_group_and_scope(expr_id(20), rg).unwrap();
     let rpos = right.create_group();
-    right.insert_to_group_and_scope(expr_id(21), rpos);
+    right.insert_to_group_and_scope(expr_id(21), rpos).unwrap();
 
     let mut union_node = LogicalNodeEnum::Union(
         graphdb_query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode {
@@ -278,14 +291,18 @@ fn e2e_union_flattens() {
             column_types: vec![],
         },
     );
-    let out = union_node.compute_factorized_schema(&[left, right]);
+    let out = union_node
+        .compute_factorized_schema(&[left, right])
+        .unwrap();
     assert!(out.is_flat_schema(), "Union should flatten all inputs");
-    out.validate_at_most_one_unflat();
+    out.validate_at_most_one_unflat().unwrap();
     // Verify that RemoveFactorizationRewriter can strip Flatten and restore flat schema.
     let with_flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(1, scan()));
     assert!(explain_contains_flatten(&with_flatten));
     let mut without = with_flatten.clone();
-    RemoveFactorizationRewriter::new().rewrite(&mut without);
+    RemoveFactorizationRewriter::new()
+        .rewrite(&mut without)
+        .unwrap();
     assert!(!explain_contains_flatten(&without));
 }
 
@@ -310,7 +327,7 @@ fn fulltext_leaf_is_flat_single_group() {
             column_types: vec![],
         },
     );
-    let schema = node.compute_factorized_schema(&[]);
+    let schema = node.compute_factorized_schema(&[]).unwrap();
     assert_eq!(schema.num_groups(), 1);
     assert!(schema.is_flat_schema());
 }
@@ -320,8 +337,12 @@ fn unwind_passthrough() {
     let mut child_schema = FactorizedSchema::new();
     let g0 = child_schema.create_flat_group(false);
     let g1 = child_schema.create_group();
-    child_schema.insert_to_group_and_scope(expr_id(1), g0);
-    child_schema.insert_to_group_and_scope(expr_id(2), g1);
+    child_schema
+        .insert_to_group_and_scope(expr_id(1), g0)
+        .unwrap();
+    child_schema
+        .insert_to_group_and_scope(expr_id(2), g1)
+        .unwrap();
     assert!(child_schema.has_unflat_group());
 
     let mut unwind = LogicalNodeEnum::Unwind(
@@ -340,8 +361,10 @@ fn unwind_passthrough() {
             column_types: vec![],
         },
     );
-    let out = unwind.compute_factorized_schema(&[child_schema.clone()]);
-    out.validate_at_most_one_unflat();
+    let out = unwind
+        .compute_factorized_schema(&[child_schema.clone()])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     // Baseline builds a fresh unflat group for the unwind output even when
     // the list is unresolved: children are flattened, the alias is unflat.
     assert!(
@@ -356,8 +379,12 @@ fn variable_name_fallback() {
     let mut schema = FactorizedSchema::new();
     let g0 = schema.create_flat_group(false);
     let g1 = schema.create_group();
-    schema.insert_to_group_and_scope_with_name(expr_id(10), Some("a".to_string()), g0);
-    schema.insert_to_group_and_scope_with_name(expr_id(20), Some("b".to_string()), g1);
+    schema
+        .insert_to_group_and_scope_with_name(expr_id(10), Some("a".to_string()), g0)
+        .unwrap();
+    schema
+        .insert_to_group_and_scope_with_name(expr_id(20), Some("b".to_string()), g1)
+        .unwrap();
 
     let expr = Expression::Binary {
         left: Box::new(Expression::Variable("a".to_string())),
@@ -380,7 +407,7 @@ fn variable_name_fallback() {
 fn get_neighbors_chain_keeps_one_unflat() {
     let mut base = FactorizedSchema::new();
     let g0 = base.create_flat_group(false);
-    base.insert_to_group_and_scope(expr_id(1), g0);
+    base.insert_to_group_and_scope(expr_id(1), g0).unwrap();
     let mut prev = base;
     for _ in 0..3 {
         let mut node = LogicalNodeEnum::GetNeighbors(
@@ -404,11 +431,11 @@ fn get_neighbors_chain_keeps_one_unflat() {
                 deps: vec![scan()],
             },
         );
-        let next = node.compute_factorized_schema(&[prev.clone()]);
-        next.validate_at_most_one_unflat();
+        let next = node.compute_factorized_schema(&[prev.clone()]).unwrap();
+        next.validate_at_most_one_unflat().unwrap();
         prev = next;
     }
-    prev.validate_at_most_one_unflat();
+    prev.validate_at_most_one_unflat().unwrap();
     assert_eq!(prev.groups().iter().filter(|g| !g.is_flat()).count(), 1);
 }
 
@@ -422,8 +449,12 @@ fn factorization_disabled_vs_enabled_semantics() {
     let mut child_schema = FactorizedSchema::new();
     let g0 = child_schema.create_flat_group(false);
     let g1 = child_schema.create_group();
-    child_schema.insert_to_group_and_scope(id_a.clone(), g0);
-    child_schema.insert_to_group_and_scope(id_b.clone(), g1);
+    child_schema
+        .insert_to_group_and_scope(id_a.clone(), g0)
+        .unwrap();
+    child_schema
+        .insert_to_group_and_scope(id_b.clone(), g1)
+        .unwrap();
 
     let mut proj_enabled = LogicalNodeEnum::Project(
         graphdb_query::planning::plan::logical::logical_nodes::operation::LogicalProjectNode {
@@ -439,20 +470,24 @@ fn factorization_disabled_vs_enabled_semantics() {
             column_types: vec![],
         },
     );
-    let enabled_schema = proj_enabled.compute_factorized_schema(&[child_schema.clone()]);
+    let enabled_schema = proj_enabled
+        .compute_factorized_schema(&[child_schema.clone()])
+        .unwrap();
     let mut flat_enabled = proj_enabled.clone();
-    let flat_schema = flat_enabled.compute_flat_schema(&[child_schema.clone()]);
+    let flat_schema = flat_enabled
+        .compute_flat_schema(&[child_schema.clone()])
+        .unwrap();
     // Both should be valid and flatten produces flat schema
     assert!(flat_schema.is_flat_schema());
-    enabled_schema.validate_at_most_one_unflat();
+    enabled_schema.validate_at_most_one_unflat().unwrap();
 
     // Disabled rewriter should not insert Flatten, enabled may or may not depending on deps
     let mut plan_enabled = scan();
     let mut rewriter = FactorizationRewriter::new();
-    rewriter.rewrite(&mut plan_enabled);
+    rewriter.rewrite(&mut plan_enabled).unwrap();
     let mut plan_disabled = scan();
     let mut disabler = FactorizationRewriter::disabled();
-    disabler.rewrite(&mut plan_disabled);
+    disabler.rewrite(&mut plan_disabled).unwrap();
     assert_eq!(plan_enabled.type_name(), plan_disabled.type_name());
 }
 
@@ -469,9 +504,11 @@ fn select_branch_keeps_factorization() {
     let mut branch = FactorizedSchema::new();
     let g0 = branch.create_flat_group(false);
     let g1 = branch.create_group();
-    branch.insert_to_group_and_scope(expr_id(1), g0);
-    branch.insert_to_group_and_scope(expr_id(2), g1);
-    branch.insert_to_group_and_scope_with_name(expr_id(3), Some("a".to_string()), g0);
+    branch.insert_to_group_and_scope(expr_id(1), g0).unwrap();
+    branch.insert_to_group_and_scope(expr_id(2), g1).unwrap();
+    branch
+        .insert_to_group_and_scope_with_name(expr_id(3), Some("a".to_string()), g0)
+        .unwrap();
     let mut node = LogicalNodeEnum::Select(LogicalSelectNode {
         id: next_node_id(),
         condition: cond,
@@ -481,8 +518,8 @@ fn select_branch_keeps_factorization() {
         col_names: vec![],
         column_types: vec![],
     });
-    let out = node.compute_factorized_schema(&[branch]);
-    out.validate_at_most_one_unflat();
+    let out = node.compute_factorized_schema(&[branch]).unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert_eq!(
         out.unflat_group_pos(),
         Some(g1),
@@ -533,7 +570,7 @@ fn assign_over_expansion_keeps_factorization() {
         col_names: vec!["c".to_string()],
         column_types: vec![],
     });
-    FactorizationRewriter::new().rewrite(&mut plan);
+    FactorizationRewriter::new().rewrite(&mut plan).unwrap();
     assert!(
         !explain_contains_flatten(&plan),
         "SET over an expansion must keep factorization, got: {}",
@@ -554,9 +591,11 @@ fn aggregate_same_group_distinct_needs_no_extra_flatten() {
     let mut child = FactorizedSchema::new();
     let g0 = child.create_flat_group(false);
     let g1 = child.create_group();
-    child.insert_to_group_and_scope(expr_id(1), g0);
-    child.insert_to_group_and_scope(key_id.clone(), g1);
-    child.insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1);
+    child.insert_to_group_and_scope(expr_id(1), g0).unwrap();
+    child.insert_to_group_and_scope(key_id.clone(), g1).unwrap();
+    child
+        .insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1)
+        .unwrap();
     let mut store = HashMap::new();
     store.insert(key_id.clone(), Expression::Variable("a".to_string()));
     let (leading, to_flatten) = aggregate_groups_to_flatten(
@@ -583,9 +622,11 @@ fn aggregate_lambda_payload_requires_flat() {
     let mut child = FactorizedSchema::new();
     let g0 = child.create_flat_group(false);
     let g1 = child.create_group();
-    child.insert_to_group_and_scope(expr_id(1), g0);
-    child.insert_to_group_and_scope(key_id.clone(), g1);
-    child.insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1);
+    child.insert_to_group_and_scope(expr_id(1), g0).unwrap();
+    child.insert_to_group_and_scope(key_id.clone(), g1).unwrap();
+    child
+        .insert_to_group_and_scope_with_name(expr_id(2), Some("b".to_string()), g1)
+        .unwrap();
     let mut store = HashMap::new();
     store.insert(key_id.clone(), Expression::Variable("a".to_string()));
     let payload = Expression::Function {
@@ -626,13 +667,17 @@ fn wco_bound_keys_flatten_probe_and_build() {
     let mut probe = FactorizedSchema::new();
     let pg0 = probe.create_flat_group(false);
     let pg1 = probe.create_group();
-    probe.insert_to_group_and_scope(expr_id(1), pg0);
-    probe.insert_to_group_and_scope(bound_id.clone(), pg1);
+    probe.insert_to_group_and_scope(expr_id(1), pg0).unwrap();
+    probe
+        .insert_to_group_and_scope(bound_id.clone(), pg1)
+        .unwrap();
     let mut build = FactorizedSchema::new();
     let bg0 = build.create_flat_group(false);
     let bg1 = build.create_group();
-    build.insert_to_group_and_scope(expr_id(2), bg0);
-    build.insert_to_group_and_scope(bound_id.clone(), bg1);
+    build.insert_to_group_and_scope(expr_id(2), bg0).unwrap();
+    build
+        .insert_to_group_and_scope(bound_id.clone(), bg1)
+        .unwrap();
     assert_eq!(
         node.get_groups_to_flatten_on_probe_side(&probe),
         std::collections::HashSet::from([pg1])
@@ -681,7 +726,7 @@ fn right_join_rewriter_flattens_build_keys() {
         col_names: vec![],
         column_types: vec![],
     });
-    FactorizationRewriter::new().rewrite(&mut plan);
+    FactorizationRewriter::new().rewrite(&mut plan).unwrap();
     assert!(
         explain_contains_flatten(&plan),
         "unflat build key on a RightJoin must be flattened, got: {}",
@@ -728,15 +773,15 @@ fn rollup_apply_barrier_inserts_flatten_and_outputs_flat() {
         col_names: vec![],
         column_types: vec![],
     });
-    FactorizationRewriter::new().rewrite(&mut plan);
+    FactorizationRewriter::new().rewrite(&mut plan).unwrap();
     assert!(
         explain_contains_flatten(&plan),
         "barrier input must carry an explicit Flatten, got: {}",
         explain_flatten_str(&plan)
     );
     let mut tmp = plan.clone();
-    let out = tmp.compute_factorized_schema(&[]);
-    out.validate_at_most_one_unflat();
+    let out = tmp.compute_factorized_schema(&[]).unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert!(
         out.is_flat_schema(),
         "barrier output must be flat, got {} groups",

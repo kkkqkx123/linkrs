@@ -143,4 +143,8 @@ impl LogicalSingleInputNode for LogicalFlattenNode {
     fn set_input(&mut self, input: LogicalNodeEnum) {
         self.input = Some(Box::new(input));
     }
+
+    fn take_input(&mut self) -> Option<LogicalNodeEnum> {
+        self.input.take().map(|b| *b)
+    }
 }

@@ -64,7 +64,7 @@ fn get_neighbors() -> LogicalNodeEnum {
 #[test]
 fn exec_match_return_keeps_one_unflat() {
     let mut scan_node = get_neighbors();
-    let schema = scan_node.compute_factorized_schema(&[]);
+    let schema = scan_node.compute_factorized_schema(&[]).unwrap();
     let gn_schema = {
         let mut child = FactorizedSchema::new();
         let g0 = child.create_flat_group(false);
@@ -74,12 +74,14 @@ fn exec_match_return_keeps_one_unflat() {
             ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
         let id_b =
             ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
-        child.insert_to_group_and_scope(id_a, g0);
-        child.insert_to_group_and_scope(id_b, g1);
+        child.insert_to_group_and_scope(id_a, g0).unwrap();
+        child.insert_to_group_and_scope(id_b, g1).unwrap();
         child
     };
-    let out = scan_node.compute_factorized_schema(&[schema, gn_schema]);
-    out.validate_at_most_one_unflat();
+    let out = scan_node
+        .compute_factorized_schema(&[schema, gn_schema])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert_eq!(
         out.groups().iter().filter(|g| !g.is_flat()).count(),
         1,
@@ -99,13 +101,13 @@ fn exec_filter_on_unflat_flattens() {
     let ctx = Arc::new(ExpressionAnalysisContext::new());
     let id_a = ctx.register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
     let id_b = ctx.register_expression(ExpressionMeta::new(Expression::Variable("b".to_string())));
-    child_schema.insert_to_group_and_scope(id_a, g0);
-    child_schema.insert_to_group_and_scope(id_b.clone(), g1);
-    child_schema.insert_to_group_and_scope_with_name(
-        ExpressionId::new(9999),
-        Some("b".to_string()),
-        g1,
-    );
+    child_schema.insert_to_group_and_scope(id_a, g0).unwrap();
+    child_schema
+        .insert_to_group_and_scope(id_b.clone(), g1)
+        .unwrap();
+    child_schema
+        .insert_to_group_and_scope_with_name(ExpressionId::new(9999), Some("b".to_string()), g1)
+        .unwrap();
 
     let pred_expr = Expression::Binary {
         left: Box::new(Expression::Property {
@@ -128,8 +130,10 @@ fn exec_filter_on_unflat_flattens() {
         column_types: vec![],
     });
 
-    let out = filter_node.compute_factorized_schema(&[child_schema]);
-    out.validate_at_most_one_unflat();
+    let out = filter_node
+        .compute_factorized_schema(&[child_schema])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert!(
         !out.is_flat_schema(),
         "filter on a single unflat group keeps factorization under FlattenAllButOne"
@@ -144,15 +148,21 @@ fn exec_union_flattens_all() {
 
     let mut left = FactorizedSchema::new();
     let lg = left.create_flat_group(false);
-    left.insert_to_group_and_scope(ExpressionId::new(10), lg);
+    left.insert_to_group_and_scope(ExpressionId::new(10), lg)
+        .unwrap();
     let pos = left.create_group();
-    left.insert_to_group_and_scope(ExpressionId::new(11), pos);
+    left.insert_to_group_and_scope(ExpressionId::new(11), pos)
+        .unwrap();
 
     let mut right = FactorizedSchema::new();
     let rg = right.create_flat_group(false);
-    right.insert_to_group_and_scope(ExpressionId::new(20), rg);
+    right
+        .insert_to_group_and_scope(ExpressionId::new(20), rg)
+        .unwrap();
     let rpos = right.create_group();
-    right.insert_to_group_and_scope(ExpressionId::new(21), rpos);
+    right
+        .insert_to_group_and_scope(ExpressionId::new(21), rpos)
+        .unwrap();
 
     let mut union_node = LogicalNodeEnum::Union(LogicalUnionNode {
         id: next_node_id(),
@@ -162,9 +172,11 @@ fn exec_union_flattens_all() {
         col_names: vec![],
         column_types: vec![],
     });
-    let out = union_node.compute_factorized_schema(&[left, right]);
+    let out = union_node
+        .compute_factorized_schema(&[left, right])
+        .unwrap();
     assert!(out.is_flat_schema(), "union should flatten all inputs");
-    out.validate_at_most_one_unflat();
+    out.validate_at_most_one_unflat().unwrap();
 }
 
 // ── Test 4: WcoIntersect schema holds intersect key in new group ────────────
@@ -193,12 +205,16 @@ fn exec_wco_intersect_schema() {
     let probe_schema = {
         let mut schema = FactorizedSchema::new();
         let g = schema.create_flat_group(false);
-        schema.insert_to_group_and_scope(bound_a.id().clone(), g);
+        schema
+            .insert_to_group_and_scope(bound_a.id().clone(), g)
+            .unwrap();
         schema
     };
     let build_schema = FactorizedSchema::new();
-    let out = node.compute_factorized_schema(&[probe_schema, build_schema]);
-    out.validate_at_most_one_unflat();
+    let out = node
+        .compute_factorized_schema(&[probe_schema, build_schema])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert!(
         out.is_expression_in_scope(&intersect_id),
         "intersect key should be in scope"
@@ -215,10 +231,14 @@ fn exec_factorization_disabled_flat() {
     let mut child_schema = FactorizedSchema::new();
     let g0 = child_schema.create_flat_group(false);
     let g1 = child_schema.create_group();
-    child_schema.insert_to_group_and_scope(id_a.clone(), g0);
-    child_schema.insert_to_group_and_scope(id_b.clone(), g1);
+    child_schema
+        .insert_to_group_and_scope(id_a.clone(), g0)
+        .unwrap();
+    child_schema
+        .insert_to_group_and_scope(id_b.clone(), g1)
+        .unwrap();
 
-    let flat = child_schema.flat_copy();
+    let flat = child_schema.flat_copy().unwrap();
     assert!(
         flat.is_flat_schema(),
         "flat_copy should produce flat schema"
@@ -228,7 +248,7 @@ fn exec_factorization_disabled_flat() {
         0,
         "flat_copy should have zero unflat groups"
     );
-    flat.validate_at_most_one_unflat();
+    flat.validate_at_most_one_unflat().unwrap();
 }
 
 // ── Test 6: GetNeighbors chain maintains <=1 unflat ─────────────────────────
@@ -238,13 +258,15 @@ fn exec_get_neighbors_chain_invariant() {
     let mut prev = {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
-        schema.insert_to_group_and_scope(ExpressionId::new(1), g0);
+        schema
+            .insert_to_group_and_scope(ExpressionId::new(1), g0)
+            .unwrap();
         schema
     };
     for _ in 0..5 {
         let mut node = get_neighbors();
-        let out = node.compute_factorized_schema(&[prev.clone()]);
-        out.validate_at_most_one_unflat();
+        let out = node.compute_factorized_schema(&[prev.clone()]).unwrap();
+        out.validate_at_most_one_unflat().unwrap();
         let unflat_count = out.groups().iter().filter(|g| !g.is_flat()).count();
         assert!(
             unflat_count <= 1,

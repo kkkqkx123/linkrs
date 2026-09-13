@@ -206,7 +206,7 @@ fn rewritten_full_outer_carries_flatten_on_both_sides_within_invariant() {
         column_types: vec![],
     });
     let mut rewriter = FactorizationRewriter::new();
-    rewriter.rewrite(&mut join);
+    rewriter.rewrite(&mut join).unwrap();
     // `Flatten(group=)` presence on both key sides.
     if let LogicalNodeEnum::FullOuterJoin(n) = &join {
         assert!(RemoveFactorizationRewriter::has_flatten_public(&n.left));
@@ -219,18 +219,26 @@ fn rewritten_full_outer_carries_flatten_on_both_sides_within_invariant() {
     let mut left_schema = FactorizedSchema::new();
     let lg0 = left_schema.create_flat_group(false);
     let lg1 = left_schema.create_group();
-    left_schema.insert_to_group_and_scope(ExpressionId::new(1), lg0);
-    left_schema.insert_to_group_and_scope(left_id, lg1);
+    left_schema
+        .insert_to_group_and_scope(ExpressionId::new(1), lg0)
+        .unwrap();
+    left_schema.insert_to_group_and_scope(left_id, lg1).unwrap();
     let mut right_schema = FactorizedSchema::new();
     let rg0 = right_schema.create_flat_group(false);
     let rg1 = right_schema.create_group();
-    right_schema.insert_to_group_and_scope(ExpressionId::new(2), rg0);
-    right_schema.insert_to_group_and_scope(right_id, rg1);
+    right_schema
+        .insert_to_group_and_scope(ExpressionId::new(2), rg0)
+        .unwrap();
+    right_schema
+        .insert_to_group_and_scope(right_id, rg1)
+        .unwrap();
     // Full-outer flattens both key sides, so the recomputed output holds
     // the invariant with no surviving unflat group.
     let mut check = join.clone();
-    let out = check.compute_factorized_schema(&[left_schema, right_schema]);
-    out.validate_at_most_one_unflat();
+    let out = check
+        .compute_factorized_schema(&[left_schema, right_schema])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
 }
 
 #[test]
@@ -241,14 +249,20 @@ fn right_join_multi_unflat_keeps_left_side_alive() {
     let mut left_schema = FactorizedSchema::new();
     let lg0 = left_schema.create_flat_group(false);
     let lg1 = left_schema.create_group();
-    left_schema.insert_to_group_and_scope(ExpressionId::new(1), lg0);
-    left_schema.insert_to_group_and_scope(ExpressionId::new(11), lg1);
+    left_schema
+        .insert_to_group_and_scope(ExpressionId::new(1), lg0)
+        .unwrap();
+    left_schema
+        .insert_to_group_and_scope(ExpressionId::new(11), lg1)
+        .unwrap();
     let mut right_schema = FactorizedSchema::new();
     let rg0 = right_schema.create_flat_group(false);
     let rg1 = right_schema.create_group();
-    right_schema.insert_to_group_and_scope(ExpressionId::new(2), rg0);
+    right_schema
+        .insert_to_group_and_scope(ExpressionId::new(2), rg0)
+        .unwrap();
     let (key_for_schema, key_id) = ctx_var("k");
-    right_schema.insert_to_group_and_scope(key_id, rg1);
+    right_schema.insert_to_group_and_scope(key_id, rg1).unwrap();
     let mut node = LogicalNodeEnum::RightJoin(LogicalRightJoinNode {
         id: next_node_id(),
         left: Box::new(scan()),
@@ -259,16 +273,20 @@ fn right_join_multi_unflat_keeps_left_side_alive() {
         col_names: vec![],
         column_types: vec![],
     });
-    let out = node.compute_factorized_schema(&[left_schema, right_schema]);
-    out.validate_at_most_one_unflat();
+    let out = node
+        .compute_factorized_schema(&[left_schema, right_schema])
+        .unwrap();
+    out.validate_at_most_one_unflat().unwrap();
     assert_eq!(out.unflat_group_pos(), Some(lg1));
 }
 
 #[test]
-#[should_panic(expected = "out of range")]
 fn flatten_group_out_of_range_is_hard_error() {
     let mut scan_node = scan();
-    let schema = scan_node.compute_factorized_schema(&[]);
+    let schema = scan_node.compute_factorized_schema(&[]).unwrap();
     let mut flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(99, scan()));
-    let _ = flatten.compute_factorized_schema(&[schema]);
+    let err = flatten
+        .compute_factorized_schema(&[schema])
+        .expect_err("out-of-range flatten group must fail");
+    assert!(err.to_string().contains("out of range"));
 }

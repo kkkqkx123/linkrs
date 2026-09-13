@@ -455,7 +455,7 @@ impl OptimizerEngine {
         // Factorization: remove factorization before heuristic passes so they
         // operate on a flat view. Mirrors `RemoveFactorizationRewriter` at
         // `optimizer.cpp:1`.
-        current_plan = self.apply_remove_factorization(current_plan);
+        current_plan = self.apply_remove_factorization(current_plan)?;
 
         // Phase 1: Logical Heuristic (operates on LogicalNodeEnum).
         if self.enable_heuristic {
@@ -472,7 +472,7 @@ impl OptimizerEngine {
 
         // Factorization: re-insert flatten operators after all optimizations.
         // Mirrors `FactorizationRewriter` at `optimizer.cpp:4`.
-        current_plan = self.apply_factorization(current_plan);
+        current_plan = self.apply_factorization(current_plan)?;
 
         // Cost-based fallback: rewrite WCO intersect to hash join when the
         // hash join is cheaper, and record the decision in `cbo_notes`.
@@ -1133,20 +1133,20 @@ impl OptimizerEngine {
         }
     }
 
-    fn apply_remove_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+    fn apply_remove_factorization(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         if let Some(logical) = plan.logical_plan.as_mut() {
             crate::optimizer::factorization::RemoveFactorizationRewriter::new()
-                .rewrite(&mut logical.root);
+                .rewrite(&mut logical.root)?;
             plan.cbo_notes
                 .push("factorization: removed LogicalFlatten".to_string());
         }
-        plan
+        Ok(plan)
     }
 
-    fn apply_factorization(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+    fn apply_factorization(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         if let Some(logical) = plan.logical_plan.as_mut() {
             let mut rewriter = crate::optimizer::factorization::FactorizationRewriter::new();
-            rewriter.rewrite(&mut logical.root);
+            rewriter.rewrite(&mut logical.root)?;
             let mut flattens = Vec::new();
             crate::planning::physical_mapper::PhysicalMapper::collect_flatten_positions(
                 &logical.root,
@@ -1199,7 +1199,7 @@ impl OptimizerEngine {
                     .push("factorization: re-inserted LogicalFlatten".to_string());
             }
         }
-        plan
+        Ok(plan)
     }
 
     /// Rewrite WCO intersect to hash join when the hash join is cheaper.
@@ -1367,20 +1367,24 @@ impl OptimizerEngine {
     /// Check the factorized `at most one unflat group` invariant over the
     /// whole logical tree by bottom-up schema computation.
     fn validate_factorized_invariant(root: &LogicalNodeEnum) -> bool {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Self::compute_schema_tree(root);
-        }))
-        .is_ok()
+        // `compute_factorized_schema` now returns `Result` instead of
+        // panicking on the at-most-one-unflat invariant, so the validity
+        // check is a plain `is_ok()` rather than a `catch_unwind`.
+        Self::compute_schema_tree(root).is_ok()
     }
 
     fn compute_schema_tree(
         node: &LogicalNodeEnum,
-    ) -> crate::planning::plan::factorization::FactorizedSchema {
+    ) -> Result<
+        crate::planning::plan::factorization::FactorizedSchema,
+        crate::planning::plan::factorization::FactorizationError,
+    > {
         use crate::planning::plan::factorization::FactorizedSchemaCompute;
         let child_schemas: Vec<_> = crate::planning::physical_mapper::logical_children(node)
             .iter()
             .map(|child| Self::compute_schema_tree(child))
-            .collect();
+            .collect::<Result<Vec<_>, crate::planning::plan::factorization::FactorizationError>>(
+            )?;
         let mut owned = node.clone();
         owned.compute_factorized_schema(&child_schemas)
     }

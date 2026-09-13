@@ -241,7 +241,12 @@ pub(super) fn next_materialize(
             for row in chunk.rows {
                 if let Err(e) = memory_tracker.try_reserve_row(&row) {
                     if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                        spill_not_supported(&mut state.materialized_rows, &sm, memory_tracker)?;
+                        spill_not_supported(
+                            "Materialize",
+                            &mut state.materialized_rows,
+                            &sm,
+                            memory_tracker,
+                        )?;
                     } else {
                         return Err(e);
                     }
@@ -290,7 +295,7 @@ pub(super) fn next_data_collect(
         for row in chunk.rows {
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                    spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
+                    spill_not_supported("DataCollect", &mut state.all_rows, &sm, memory_tracker)?;
                 } else {
                     return Err(e);
                 }
@@ -343,7 +348,7 @@ pub(super) fn next_rollup_apply(
         for row in chunk.rows {
             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                 if let Some(sm) = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager()) {
-                    spill_not_supported(&mut state.all_rows, &sm, memory_tracker)?;
+                    spill_not_supported("RollUpApply", &mut state.all_rows, &sm, memory_tracker)?;
                 } else {
                     return Err(e);
                 }
@@ -419,7 +424,12 @@ pub(super) fn spill_materialize(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(&mut state.materialized_rows, sm, memory_tracker)
+    spill_not_supported(
+        "Materialize",
+        &mut state.materialized_rows,
+        sm,
+        memory_tracker,
+    )
 }
 
 pub(super) fn spill_data_collect(
@@ -427,7 +437,7 @@ pub(super) fn spill_data_collect(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(&mut state.all_rows, sm, memory_tracker)
+    spill_not_supported("DataCollect", &mut state.all_rows, sm, memory_tracker)
 }
 
 pub(super) fn spill_rollup_apply(
@@ -435,5 +445,5 @@ pub(super) fn spill_rollup_apply(
     sm: &SpillManager,
     memory_tracker: &mut MemoryTracker,
 ) -> Result<(), QueryError> {
-    spill_not_supported(&mut state.all_rows, sm, memory_tracker)
+    spill_not_supported("RollUpApply", &mut state.all_rows, sm, memory_tracker)
 }

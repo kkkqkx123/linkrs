@@ -1,7 +1,10 @@
+use crate::planning::plan::factorization::FactorizationError;
 use crate::planning::plan::factorization::FactorizedSchema;
 use crate::planning::plan::factorization::FactorizedSchemaCompute;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
-use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::planning::plan::logical::logical_node_traits::{
+    LogicalBinaryInputNode, LogicalMultipleInputNode, LogicalSingleInputNode,
+};
 
 /// RemoveFactorizationRewriter: flatten all groups and eliminate LogicalFlatten nodes.
 ///
@@ -19,23 +22,28 @@ impl RemoveFactorizationRewriter {
     /// Rewrite the plan in place: bottom-up traversal, replace every
     /// `LogicalFlatten` with its child, and recompute flat schemas on
     /// every operator so downstream passes see a fully flat view.
-    pub fn rewrite(&self, plan: &mut LogicalNodeEnum) {
+    pub fn rewrite(&self, plan: &mut LogicalNodeEnum) -> Result<(), FactorizationError> {
         let old = std::mem::take(plan);
-        let (new_root, _schema) = Self::visit_operator(old);
+        let (new_root, _schema) = Self::visit_operator(old)?;
         *plan = new_root;
         debug_assert!(
             !Self::has_flatten(plan),
             "RemoveFactorizationRewriter: residual LogicalFlatten after rewrite"
         );
+        Ok(())
     }
 
     /// Bottom-up traversal returning a new tree without Flatten nodes and
     /// the flat schema for the rewritten subtree.
-    fn visit_operator(node: LogicalNodeEnum) -> (LogicalNodeEnum, FactorizedSchema) {
+    fn visit_operator(
+        node: LogicalNodeEnum,
+    ) -> Result<(LogicalNodeEnum, FactorizedSchema), FactorizationError> {
         Self::visit_operator_replace(node)
     }
 
-    fn visit_operator_replace(node: LogicalNodeEnum) -> (LogicalNodeEnum, FactorizedSchema) {
+    fn visit_operator_replace(
+        node: LogicalNodeEnum,
+    ) -> Result<(LogicalNodeEnum, FactorizedSchema), FactorizationError> {
         match node {
             LogicalNodeEnum::Flatten(mut flatten) => {
                 let child = flatten
@@ -45,622 +53,266 @@ impl RemoveFactorizationRewriter {
                     .expect("flatten missing input");
                 Self::visit_operator(child)
             }
-            LogicalNodeEnum::Project(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Project(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Project(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Project(n))
             }
-            LogicalNodeEnum::Filter(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Filter(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Filter(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Filter(n))
             }
-            LogicalNodeEnum::Sort(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Sort(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Sort(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Sort(n)),
+            LogicalNodeEnum::Limit(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Limit(n)),
+            LogicalNodeEnum::Skip(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Skip(n)),
+            LogicalNodeEnum::TopN(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::TopN(n)),
+            LogicalNodeEnum::Sample(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Sample(n))
             }
-            LogicalNodeEnum::Limit(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Limit(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Dedup(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Dedup(n)),
+            LogicalNodeEnum::Aggregate(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Aggregate(n))
             }
-            LogicalNodeEnum::Skip(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Skip(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Window(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Window(n))
             }
-            LogicalNodeEnum::TopN(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::TopN(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::GetVertices(n) => {
+                Self::visit_deps(n, |n| LogicalNodeEnum::GetVertices(n))
             }
-            LogicalNodeEnum::Sample(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Sample(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::GetNeighbors(n) => {
+                Self::visit_deps(n, |n| LogicalNodeEnum::GetNeighbors(n))
             }
-            LogicalNodeEnum::Dedup(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Dedup(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Assign(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Assign(n))
             }
-            LogicalNodeEnum::Aggregate(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Aggregate(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Remove(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Remove(n))
             }
-            LogicalNodeEnum::Window(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Window(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::DataCollect(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::DataCollect(n))
             }
-            LogicalNodeEnum::GetVertices(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::GetVertices(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Materialize(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Materialize(n))
             }
-            LogicalNodeEnum::GetNeighbors(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::GetNeighbors(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::RollUpApply(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::RollUpApply(n))
             }
-            LogicalNodeEnum::Assign(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Assign(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Union(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Union(n)),
+            LogicalNodeEnum::Minus(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Minus(n)),
+            LogicalNodeEnum::Intersect(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Intersect(n)),
+            LogicalNodeEnum::WcoIntersect(n) => {
+                Self::visit_deps(n, |n| LogicalNodeEnum::WcoIntersect(n))
             }
-            LogicalNodeEnum::Remove(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Remove(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::InnerJoin(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::InnerJoin(n))
             }
-            LogicalNodeEnum::DataCollect(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::DataCollect(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::LeftJoin(n) => Self::visit_binary(n, |n| LogicalNodeEnum::LeftJoin(n)),
+            LogicalNodeEnum::RightJoin(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::RightJoin(n))
             }
-            LogicalNodeEnum::Materialize(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Materialize(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::CrossJoin(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::CrossJoin(n))
             }
-            LogicalNodeEnum::RollUpApply(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::RollUpApply(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::FullOuterJoin(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::FullOuterJoin(n))
             }
-            LogicalNodeEnum::Union(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::Union(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::SemiJoin(n) => Self::visit_binary(n, |n| LogicalNodeEnum::SemiJoin(n)),
+            LogicalNodeEnum::PatternApply(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::PatternApply(n))
             }
-            LogicalNodeEnum::Minus(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::Minus(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
-            }
-            LogicalNodeEnum::Intersect(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::Intersect(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
-            }
-            LogicalNodeEnum::WcoIntersect(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::WcoIntersect(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
-            }
-            LogicalNodeEnum::InnerJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::InnerJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::LeftJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::LeftJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::RightJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::RightJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::CrossJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::CrossJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::FullOuterJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::FullOuterJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::SemiJoin(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::SemiJoin(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::PatternApply(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::PatternApply(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::CorrelatedApply(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::CorrelatedApply(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
+            LogicalNodeEnum::CorrelatedApply(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::CorrelatedApply(n))
             }
             LogicalNodeEnum::Apply(mut n) => {
-                let (left, left_schema) = Self::visit_operator(n.left_input().clone());
-                let (right, right_schema) = Self::visit_operator(n.right_input().clone());
+                let (left, left_schema) = Self::visit_operator(n.left_input().clone())?;
+                let (right, right_schema) = Self::visit_operator(n.right_input().clone())?;
                 n.set_left_input(left);
                 n.set_right_input(right);
                 let mut node = LogicalNodeEnum::Apply(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[left_schema, right_schema])?;
+                Ok((node, schema))
             }
-            LogicalNodeEnum::Traverse(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Traverse(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Traverse(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Traverse(n))
             }
-            LogicalNodeEnum::Expand(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::Expand(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Expand(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Expand(n)),
+            LogicalNodeEnum::ExpandAll(n) => Self::visit_deps(n, |n| LogicalNodeEnum::ExpandAll(n)),
+            LogicalNodeEnum::AppendVertices(n) => {
+                Self::visit_deps(n, |n| LogicalNodeEnum::AppendVertices(n))
             }
-            LogicalNodeEnum::ExpandAll(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::ExpandAll(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::BiExpand(n) => Self::visit_binary(n, |n| LogicalNodeEnum::BiExpand(n)),
+            LogicalNodeEnum::BiTraverse(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::BiTraverse(n))
             }
-            LogicalNodeEnum::AppendVertices(mut n) => {
-                let child_schemas: Vec<FactorizedSchema> = n
-                    .deps
-                    .iter_mut()
-                    .map(|dep| {
-                        let old = std::mem::take(dep);
-                        let (new_dep, schema) = Self::visit_operator(old);
-                        *dep = new_dep;
-                        schema
-                    })
-                    .collect();
-                let mut node = LogicalNodeEnum::AppendVertices(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::MultiShortestPath(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::MultiShortestPath(n))
             }
-            LogicalNodeEnum::BiExpand(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::BiExpand(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
+            LogicalNodeEnum::BFSShortest(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::BFSShortest(n))
             }
-            LogicalNodeEnum::BiTraverse(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::BiTraverse(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
+            LogicalNodeEnum::AllPaths(n) => Self::visit_binary(n, |n| LogicalNodeEnum::AllPaths(n)),
+            LogicalNodeEnum::ShortestPath(n) => {
+                Self::visit_binary(n, |n| LogicalNodeEnum::ShortestPath(n))
             }
-            LogicalNodeEnum::MultiShortestPath(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::MultiShortestPath(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::BFSShortest(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::BFSShortest(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::AllPaths(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::AllPaths(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::ShortestPath(mut n) => {
-                let (left, left_schema) = Self::visit_operator(*n.left);
-                let (right, right_schema) = Self::visit_operator(*n.right);
-                n.left = Box::new(left);
-                n.right = Box::new(right);
-                let mut node = LogicalNodeEnum::ShortestPath(n);
-                let schema = node.compute_flat_schema(&[left_schema, right_schema]);
-                (node, schema)
-            }
-            LogicalNodeEnum::Unwind(mut n) => {
-                let mut child_schemas = Vec::new();
-                if let Some(input) = n.input.take() {
-                    let (new_input, schema) = Self::visit_operator(*input);
-                    n.set_input(new_input);
-                    child_schemas.push(schema);
-                }
-                let mut node = LogicalNodeEnum::Unwind(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+            LogicalNodeEnum::Unwind(n) => {
+                Self::visit_single_input(n, |n| LogicalNodeEnum::Unwind(n))
             }
             LogicalNodeEnum::Select(mut n) => {
                 let mut child_schemas = Vec::new();
                 if let Some(branch) = n.take_if_branch() {
-                    let (new_branch, schema) = Self::visit_operator(*branch);
+                    let (new_branch, schema) = Self::visit_operator(*branch)?;
                     n.set_if_branch(new_branch);
                     child_schemas.push(schema);
                 }
                 if let Some(branch) = n.take_else_branch() {
-                    let (new_branch, schema) = Self::visit_operator(*branch);
+                    let (new_branch, schema) = Self::visit_operator(*branch)?;
                     n.set_else_branch(new_branch);
                     child_schemas.push(schema);
                 }
                 let mut node = LogicalNodeEnum::Select(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+                let schema = node.compute_flat_schema(&child_schemas)?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Loop(mut n) => {
                 let mut child_schemas = Vec::new();
                 if let Some(body) = n.take_body() {
-                    let (new_body, schema) = Self::visit_operator(*body);
+                    let (new_body, schema) = Self::visit_operator(*body)?;
                     n.set_body(new_body);
                     child_schemas.push(schema);
                 }
                 let mut node = LogicalNodeEnum::Loop(n);
-                let schema = node.compute_flat_schema(&child_schemas);
-                (node, schema)
+                let schema = node.compute_flat_schema(&child_schemas)?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::PassThrough(n) => {
                 let mut node = LogicalNodeEnum::PassThrough(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Argument(n) => {
                 let mut node = LogicalNodeEnum::Argument(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Start(n) => {
                 let mut node = LogicalNodeEnum::Start(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::GetEdges(n) => {
                 let mut node = LogicalNodeEnum::GetEdges(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::ScanVertices(n) => {
                 let mut node = LogicalNodeEnum::ScanVertices(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::ScanEdges(n) => {
                 let mut node = LogicalNodeEnum::ScanEdges(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::BeginTransaction(n) => {
                 let mut node = LogicalNodeEnum::BeginTransaction(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Commit(n) => {
                 let mut node = LogicalNodeEnum::Commit(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Rollback(n) => {
                 let mut node = LogicalNodeEnum::Rollback(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::InsertVertices(n) => {
                 let mut node = LogicalNodeEnum::InsertVertices(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::InsertEdges(n) => {
                 let mut node = LogicalNodeEnum::InsertEdges(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::Update(n) => {
                 let mut node = LogicalNodeEnum::Update(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::DeleteVertices(n) => {
                 let mut node = LogicalNodeEnum::DeleteVertices(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::DeleteEdges(n) => {
                 let mut node = LogicalNodeEnum::DeleteEdges(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::DeleteTags(n) => {
                 let mut node = LogicalNodeEnum::DeleteTags(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::DeleteIndex(n) => {
                 let mut node = LogicalNodeEnum::DeleteIndex(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::PipeDeleteVertices(n) => {
                 let mut node = LogicalNodeEnum::PipeDeleteVertices(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::PipeDeleteEdges(n) => {
                 let mut node = LogicalNodeEnum::PipeDeleteEdges(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::CopyFrom(n) => {
                 let mut node = LogicalNodeEnum::CopyFrom(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::CopyTo(n) => {
                 let mut node = LogicalNodeEnum::CopyTo(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::FulltextSearch(n) => {
                 let mut node = LogicalNodeEnum::FulltextSearch(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::FulltextLookup(n) => {
                 let mut node = LogicalNodeEnum::FulltextLookup(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             LogicalNodeEnum::MatchFulltext(n) => {
                 let mut node = LogicalNodeEnum::MatchFulltext(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             #[cfg(feature = "vector")]
             LogicalNodeEnum::VectorSearch(n) => {
                 let mut node = LogicalNodeEnum::VectorSearch(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             #[cfg(feature = "vector")]
             LogicalNodeEnum::VectorLookup(n) => {
                 let mut node = LogicalNodeEnum::VectorLookup(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
             #[cfg(feature = "vector")]
             LogicalNodeEnum::VectorMatch(n) => {
                 let mut node = LogicalNodeEnum::VectorMatch(n);
-                let schema = node.compute_flat_schema(&[]);
-                (node, schema)
+                let schema = node.compute_flat_schema(&[])?;
+                Ok((node, schema))
             }
         }
     }
@@ -753,6 +405,80 @@ impl RemoveFactorizationRewriter {
             _ => false,
         }
     }
+
+    /// Visit a node with exactly one optional `input` child.
+    ///
+    /// `#[inline(never)]` on purpose: [`Self::visit_operator_replace`] is a
+    /// giant `match` whose arms each keep a large concrete node temporary
+    /// alive across the recursive call, so the compiler reserves stack for
+    /// the union of every arm in a single frame. Routing the uniform arms
+    /// through thin helpers keeps the recursion frames small enough for the
+    /// default 2 MiB test-thread stack.
+    #[inline(never)]
+    fn visit_single_input<N, F>(
+        mut n: N,
+        wrap: F,
+    ) -> Result<(LogicalNodeEnum, FactorizedSchema), FactorizationError>
+    where
+        N: LogicalSingleInputNode,
+        F: FnOnce(N) -> LogicalNodeEnum,
+    {
+        let mut child_schemas = Vec::new();
+        if let Some(input) = n.take_input() {
+            let (new_input, schema) = Self::visit_operator(input)?;
+            n.set_input(new_input);
+            child_schemas.push(schema);
+        }
+        let mut node = wrap(n);
+        let schema = node.compute_flat_schema(&child_schemas)?;
+        Ok((node, schema))
+    }
+
+    /// Visit a node whose children live in the macro-generated `deps` vector.
+    #[inline(never)]
+    fn visit_deps<N, F>(
+        mut n: N,
+        wrap: F,
+    ) -> Result<(LogicalNodeEnum, FactorizedSchema), FactorizationError>
+    where
+        N: LogicalMultipleInputNode,
+        F: FnOnce(N) -> LogicalNodeEnum,
+    {
+        let child_schemas: Vec<FactorizedSchema> = n
+            .inputs_mut()
+            .iter_mut()
+            .map(|dep| {
+                let old = std::mem::take(dep);
+                let (new_dep, schema) = Self::visit_operator(old)?;
+                *dep = new_dep;
+                Ok(schema)
+            })
+            .collect::<Result<Vec<FactorizedSchema>, FactorizationError>>()?;
+        let mut node = wrap(n);
+        let schema = node.compute_flat_schema(&child_schemas)?;
+        Ok((node, schema))
+    }
+
+    /// Visit a node with a boxed `left`/`right` child pair.
+    #[inline(never)]
+    fn visit_binary<N, F>(
+        mut n: N,
+        wrap: F,
+    ) -> Result<(LogicalNodeEnum, FactorizedSchema), FactorizationError>
+    where
+        N: LogicalBinaryInputNode,
+        F: FnOnce(N) -> LogicalNodeEnum,
+    {
+        let left_old = std::mem::replace(n.left_input_mut(), LogicalNodeEnum::default());
+        let right_old = std::mem::replace(n.right_input_mut(), LogicalNodeEnum::default());
+        let (left, left_schema) = Self::visit_operator(left_old)?;
+        let (right, right_schema) = Self::visit_operator(right_old)?;
+        n.set_left_input(left);
+        n.set_right_input(right);
+        let mut node = wrap(n);
+        let schema = node.compute_flat_schema(&[left_schema, right_schema])?;
+        Ok((node, schema))
+    }
 }
 
 impl Default for RemoveFactorizationRewriter {
@@ -792,7 +518,7 @@ mod tests {
         let flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(0, scan));
         let mut root = flatten;
         let rewriter = RemoveFactorizationRewriter::new();
-        rewriter.rewrite(&mut root);
+        rewriter.rewrite(&mut root).unwrap();
         assert!(!matches!(root, LogicalNodeEnum::Flatten(_)));
         assert_eq!(root.type_name(), "ScanVertices");
     }
@@ -803,7 +529,9 @@ mod tests {
         let f1 = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(0, scan));
         let f2 = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(1, f1));
         let mut root = f2;
-        RemoveFactorizationRewriter::new().rewrite(&mut root);
+        RemoveFactorizationRewriter::new()
+            .rewrite(&mut root)
+            .unwrap();
         assert_eq!(root.type_name(), "ScanVertices");
     }
 
@@ -821,7 +549,9 @@ mod tests {
                 column_types: vec![],
             },
         );
-        RemoveFactorizationRewriter::new().rewrite(&mut assign);
+        RemoveFactorizationRewriter::new()
+            .rewrite(&mut assign)
+            .unwrap();
         assert!(!RemoveFactorizationRewriter::has_flatten(&assign));
     }
 
@@ -851,7 +581,7 @@ mod tests {
                 column_types: vec![],
             },
         );
-        RemoveFactorizationRewriter::new().rewrite(&mut bi);
+        RemoveFactorizationRewriter::new().rewrite(&mut bi).unwrap();
         assert!(!RemoveFactorizationRewriter::has_flatten(&bi));
     }
 

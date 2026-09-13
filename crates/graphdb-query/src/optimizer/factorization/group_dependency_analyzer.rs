@@ -116,11 +116,17 @@ impl<'a> GroupDependencyAnalyzer<'a> {
 
     /// Analyze a single expression id: if it is in scope, record its group.
     /// Otherwise attempt to walk its inner expression tree if available.
+    ///
+    /// Resolution goes through the canonical `resolve_group_pos` order
+    /// (id, then id-linked name, then bare name) so the three alias paths
+    /// stay ordered in one place instead of drifting across call sites.
     pub fn visit(&mut self, expr_id: &ExpressionId) {
-        if self.schema.is_expression_in_scope(expr_id) {
-            if let Some(pos) = self.schema.get_group_pos(expr_id) {
-                self.dependent_groups.insert(pos);
-            }
+        let owned_name = self.schema.expression_name(expr_id).map(str::to_string);
+        if let Some(pos) = self
+            .schema
+            .resolve_group_pos(Some(expr_id), owned_name.as_deref())
+        {
+            self.dependent_groups.insert(pos);
             if self.collect_dependent_expr {
                 self.dependent_exprs.insert(expr_id.clone());
             }
@@ -139,10 +145,9 @@ impl<'a> GroupDependencyAnalyzer<'a> {
         use graphdb_core::Expression;
         match expr {
             Expression::Variable(name) => {
-                // Variables carry no expression id, so the scope
-                // name mapping (populated for aliases and output names)
-                // is their primary resolution path.
-                if let Some(pos) = self.schema.get_group_pos_by_name_opt(name) {
+                // Variables carry no expression id, so resolution uses the
+                // canonical alias order with no id (bare-name fallback last).
+                if let Some(pos) = self.schema.resolve_group_pos(None, Some(name)) {
                     self.dependent_groups.insert(pos);
                 } else {
                     self.mark_unresolved(format!("variable `{name}` not bound in scope"));
@@ -308,8 +313,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
 
         let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
         analyzer.visit(&expr(2));
@@ -324,8 +329,8 @@ mod tests {
         let g1 = schema.create_group();
         let id_a = expr(10);
         let id_b = expr(20);
-        schema.insert_to_group_and_scope(id_a.clone(), g0);
-        schema.insert_to_group_and_scope(id_b.clone(), g1);
+        schema.insert_to_group_and_scope(id_a.clone(), g0).unwrap();
+        schema.insert_to_group_and_scope(id_b.clone(), g1).unwrap();
 
         // Build store where combined expr 30 = a + b
         let store = HashMap::new();
@@ -352,8 +357,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(10), g0);
-        schema.insert_to_group_and_scope(expr(20), g1);
+        schema.insert_to_group_and_scope(expr(10), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(20), g1).unwrap();
 
         let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
         analyzer.visit(&expr(20));
@@ -366,8 +371,12 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
-        schema.insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1);
+        schema
+            .insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1)
+            .unwrap();
 
         let the_expr = graphdb_core::Expression::Binary {
             left: Box::new(graphdb_core::Expression::Variable("a".to_string())),
@@ -389,8 +398,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
 
         let empty_store = HashMap::new();
         let mut analyzer = GroupDependencyAnalyzer::with_expr_store(&schema, false, &empty_store);
@@ -406,8 +415,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
 
         let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
         analyzer.visit_expression(&graphdb_core::Expression::Variable("ghost".to_string()));
@@ -420,8 +429,12 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
-        schema.insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1);
+        schema
+            .insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1)
+            .unwrap();
 
         // list_filter(a, items.age > 30): the lambda body over the unflat
         // group must be flattened.
@@ -456,8 +469,12 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
-        schema.insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1);
+        schema
+            .insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1)
+            .unwrap();
 
         let the_expr = graphdb_core::Expression::Path(vec![graphdb_core::Expression::Variable(
             "b".to_string(),
@@ -474,8 +491,12 @@ mod tests {
             let mut schema = FactorizedSchema::new();
             let g0 = schema.create_flat_group(false);
             let g1 = schema.create_group();
-            schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
-            schema.insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1);
+            schema
+                .insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0)
+                .unwrap();
+            schema
+                .insert_to_group_and_scope_with_name(expr(20), Some("items".to_string()), g1)
+                .unwrap();
 
             let body = graphdb_core::Expression::Binary {
                 left: Box::new(graphdb_core::Expression::Property {

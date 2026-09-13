@@ -2,24 +2,26 @@ use std::collections::HashMap;
 
 use graphdb_core::types::expr::ExpressionId;
 
-use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema, SchemaUtils};
+use crate::planning::plan::factorization::{
+    FGroupPos, FactorizationError, FactorizedSchema, SchemaUtils,
+};
 
 use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
 
 pub(super) fn assign(
     n: &LogicalAssignNode,
     child_schemas: &[FactorizedSchema],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let schema = child_schemas.first().cloned().unwrap_or_default();
     if schema.num_groups() == 0 {
         let mut out = FactorizedSchema::new();
         let g = out.create_flat_group(false);
         for (alias, expr) in &n.assignments {
             let eid = expr.id().clone();
-            out.insert_to_group_and_scope_with_name(eid, Some(alias.clone()), g);
+            out.insert_to_group_and_scope_with_name(eid, Some(alias.clone()), g)?;
         }
-        out.validate_at_most_one_unflat();
-        return out;
+        out.validate_at_most_one_unflat()?;
+        return Ok(out);
     }
     let mut expr_store: HashMap<ExpressionId, graphdb_core::Expression> = HashMap::new();
     for (_, expr) in &n.assignments {
@@ -45,7 +47,7 @@ pub(super) fn assign(
         for pos in required_flat.iter() {
             if let Some(g) = out.get_group(*pos) {
                 if !g.is_flat() {
-                    out.flatten_group(*pos);
+                    out.flatten_group(*pos)?;
                 }
             }
         }
@@ -70,18 +72,18 @@ pub(super) fn assign(
                 .collect();
             candidates.sort_unstable();
             if candidates.is_empty() {
-                SchemaUtils::get_leading_group_pos(&dependent, &out)
+                SchemaUtils::get_leading_group_pos(&dependent, &out)?
             } else {
                 candidates[0]
             }
         };
-        out.insert_to_scope_with_name(alias_id.clone(), alias.clone(), target);
+        out.insert_to_scope_with_name(alias_id.clone(), alias.clone(), target)?;
         if let Some(g) = out.get_group_mut(target) {
             if !g.contains(&alias_id) {
-                g.insert_expression_with_name(alias_id.clone(), Some(alias.clone()));
+                g.insert_expression_with_name(alias_id.clone(), Some(alias.clone()))?;
             }
         }
     }
-    out.validate_at_most_one_unflat();
-    out
+    out.validate_at_most_one_unflat()?;
+    Ok(out)
 }

@@ -524,7 +524,7 @@ mod factorization_fallback_tests {
         flatten_plan.set_logical_plan(LogicalPlan::new(LogicalNodeEnum::Flatten(
             LogicalFlattenNode::new(0, scan_logical("a")),
         )));
-        let out = engine.apply_factorization(flatten_plan);
+        let out = engine.apply_factorization(flatten_plan).unwrap();
         assert!(
             out.cbo_notes
                 .iter()

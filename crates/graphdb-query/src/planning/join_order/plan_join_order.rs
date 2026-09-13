@@ -253,7 +253,19 @@ impl JoinOrderEnumerator {
         query_graph: &Arc<QueryGraph>,
     ) -> u64 {
         let mut owned = plan.clone();
-        let schema = Self::compute_schema_for_plan(&mut owned);
+        // `compute_schema_for_plan` returns `Result` (the factorized
+        // at-most-one-unflat invariant is now a recoverable error, not a
+        // panic). A failed schema means this candidate cannot be factorized;
+        // degrade to an all-unflat encoding instead of crashing. The fallback
+        // only merges DP candidates (never changes row semantics); the warn
+        // keeps the degrade visible instead of silent.
+        let schema = match Self::compute_schema_for_plan(&mut owned) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("encode_plan: schema error {e}; degrade to all-unflat encoding");
+                crate::planning::plan::factorization::FactorizedSchema::new()
+            }
+        };
         let mut encoding = 0u64;
         for (i, node) in query_graph.query_nodes.iter().enumerate() {
             if !Self::variable_is_flat(&schema, &mut self.context, &node.variable) {
@@ -313,21 +325,24 @@ impl JoinOrderEnumerator {
     /// never appear inside DP candidates and are planned outside join order.
     fn compute_schema_for_plan(
         plan: &mut LogicalNodeEnum,
-    ) -> crate::planning::plan::factorization::FactorizedSchema {
+    ) -> Result<
+        crate::planning::plan::factorization::FactorizedSchema,
+        crate::planning::plan::factorization::FactorizationError,
+    > {
         use crate::planning::plan::factorization::FactorizedSchemaCompute;
         match plan {
             LogicalNodeEnum::InnerJoin(n) => {
                 let mut left = (*n.left).clone();
                 let mut right = (*n.right).clone();
-                let left_schema = Self::compute_schema_for_plan(&mut left);
-                let right_schema = Self::compute_schema_for_plan(&mut right);
+                let left_schema = Self::compute_schema_for_plan(&mut left)?;
+                let right_schema = Self::compute_schema_for_plan(&mut right)?;
                 plan.compute_factorized_schema(&[left_schema, right_schema])
             }
             LogicalNodeEnum::WcoIntersect(n) => {
                 let mut child_schemas = Vec::with_capacity(n.deps.len());
                 for dep in n.deps.iter().cloned() {
                     let mut owned = dep;
-                    child_schemas.push(Self::compute_schema_for_plan(&mut owned));
+                    child_schemas.push(Self::compute_schema_for_plan(&mut owned)?);
                 }
                 plan.compute_factorized_schema(&child_schemas)
             }

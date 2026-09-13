@@ -1,12 +1,74 @@
+//! Factorized-plan schema description for the query optimizer.
+//!
+//! **Naming note (R1).** The types here (`FactorizedSchema`,
+//! `FactorizationGroup`, `FactorizationRewriter`) reuse Kuzu/Ladybug
+//! terminology. In linkrs they describe a *planning-side* grouping of
+//! expressions into nested levels and drive a *minimal-flatten* rewrite —
+//! they are **not** a "factorized-table execution engine" (no compressed
+//! factor tables, `SEMI_MASKER`, or multiplicity reduction). The benefit is
+//! fewer materialization points and smaller fan-out, not skipping the
+//! cross-product. Keep this distinction in mind when reading the code or the
+//! EXPLAIN output: a `LogicalFlatten` is a cross-product materialization
+//! point, not a factorization step.
+
 use std::collections::{HashMap, HashSet};
 
 use graphdb_core::types::expr::ExpressionId;
+use thiserror::Error;
 
 /// Factorization group position identifier.
 pub type FGroupPos = u32;
 
 /// Invalid group position sentinel.
 pub const INVALID_F_GROUP_POS: FGroupPos = u32::MAX;
+
+/// Errors raised while building or validating a [`FactorizedSchema`].
+///
+/// These replace the previous `assert!`-based invariant checks so a malformed
+/// plan surfaces as a query error instead of aborting the server process.
+/// See `AGENTS.md`: "Never use unwrap".
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum FactorizationError {
+    /// More than one group is left unflat at the same nesting level.
+    #[error("at most one unflat group allowed, found {0}")]
+    TooManyUnflatGroups(usize),
+    /// A group that was expected to be flat is still unflat.
+    #[error("group {0} expected flat but is unflat")]
+    GroupExpectedFlat(FGroupPos),
+    /// A group position passed to a flatten/set operation is out of range.
+    #[error("group_pos {0} out of range")]
+    GroupPosOutOfRange(FGroupPos),
+    /// An expression was inserted into scope more than once.
+    #[error("expression {0:?} already in scope")]
+    ExpressionAlreadyInScope(ExpressionId),
+    /// An expression was mapped to a group more than once.
+    #[error("expression {0:?} already mapped to group")]
+    ExpressionAlreadyMapped(ExpressionId),
+    /// A duplicate expression id was registered inside a group.
+    #[error("duplicate expression id {0:?} in group")]
+    DuplicateExpressionId(ExpressionId),
+    /// A duplicate expression name was registered inside a group.
+    #[error("duplicate expression name {0} in group")]
+    DuplicateExpressionName(String),
+    /// `flatten_group` was given an invalid group position.
+    #[error("flatten_group: invalid pos {0}")]
+    InvalidFlattenPos(FGroupPos),
+    /// `set_group_as_single_state` was given an invalid group position.
+    #[error("set_group_as_single_state: invalid pos {0}")]
+    InvalidSingleStatePos(FGroupPos),
+    /// `set_flat` was called on a group that is already flat.
+    #[error("group already flat")]
+    GroupAlreadyFlat,
+    /// `set_single_state` was called on a group that is already single-state.
+    #[error("group already single state")]
+    GroupAlreadySingleState,
+    /// A group position set passed to a leader/validator was empty.
+    #[error("groupPositions empty")]
+    EmptyGroupPositions,
+    /// A non-empty group position set was required but found empty.
+    #[error("expected non-empty group positions")]
+    NonEmptyGroupPositions,
+}
 
 /// A group of expressions sharing the same nesting level.
 ///
@@ -58,13 +120,18 @@ impl FactorizationGroup {
         self.single_state
     }
 
-    pub fn set_flat(&mut self) {
-        assert!(!self.flat, "group already flat");
+    pub fn set_flat(&mut self) -> Result<(), FactorizationError> {
+        if self.flat {
+            return Err(FactorizationError::GroupAlreadyFlat);
+        }
         self.flat = true;
+        Ok(())
     }
 
-    pub fn set_single_state(&mut self) {
-        assert!(!self.single_state, "group already single state");
+    pub fn set_single_state(&mut self) -> Result<(), FactorizationError> {
+        if self.single_state {
+            return Err(FactorizationError::GroupAlreadySingleState);
+        }
         self.single_state = true;
         // A single-state group holds one row by construction and is treated
         // as flat here. This is stricter than engines that keep an unflat
@@ -73,6 +140,7 @@ impl FactorizationGroup {
         if !self.flat {
             self.flat = true;
         }
+        Ok(())
     }
 
     pub fn cardinality_multiplier(&self) -> f64 {
@@ -95,28 +163,29 @@ impl FactorizationGroup {
         self.expressions.is_empty()
     }
 
-    pub fn insert_expression(&mut self, expr_id: ExpressionId) {
-        self.insert_expression_with_name(expr_id, None);
+    pub fn insert_expression(&mut self, expr_id: ExpressionId) -> Result<(), FactorizationError> {
+        self.insert_expression_with_name(expr_id, None)
     }
 
-    pub fn insert_expression_with_name(&mut self, expr_id: ExpressionId, name: Option<String>) {
-        assert!(
-            !self.expression_id_to_pos.contains_key(&expr_id),
-            "duplicate expression id {:?} in group",
-            expr_id
-        );
-        if let Some(n) = name.clone() {
-            assert!(
-                !self.expression_name_to_pos.contains_key(&n),
-                "duplicate expression name {} in group",
-                n
-            );
+    pub fn insert_expression_with_name(
+        &mut self,
+        expr_id: ExpressionId,
+        name: Option<String>,
+    ) -> Result<(), FactorizationError> {
+        if self.expression_id_to_pos.contains_key(&expr_id) {
+            return Err(FactorizationError::DuplicateExpressionId(expr_id));
+        }
+        if let Some(n) = name {
+            if self.expression_name_to_pos.contains_key(&n) {
+                return Err(FactorizationError::DuplicateExpressionName(n));
+            }
             self.expression_name_to_pos
                 .insert(n, self.expressions.len());
         }
         self.expression_id_to_pos
             .insert(expr_id.clone(), self.expressions.len());
         self.expressions.push(expr_id);
+        Ok(())
     }
 
     pub fn get_expression_pos(&self, expr_id: &ExpressionId) -> Option<usize> {
@@ -204,19 +273,23 @@ impl FactorizedSchema {
         pos
     }
 
-    pub fn insert_to_scope(&mut self, expr_id: ExpressionId, group_pos: FGroupPos) {
-        assert!(
-            (group_pos as usize) < self.groups.len(),
-            "group_pos {} out of range",
-            group_pos
-        );
-        assert!(
-            !self.expression_to_group.contains_key(&expr_id),
-            "expression {:?} already in scope",
-            expr_id
-        );
+    pub fn insert_to_scope(
+        &mut self,
+        expr_id: ExpressionId,
+        group_pos: FGroupPos,
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
+        if self.expression_to_group.contains_key(&expr_id) {
+            return Err(FactorizationError::ExpressionAlreadyMapped(expr_id));
+        }
+        if self.expressions_in_scope.contains(&expr_id) {
+            return Err(FactorizationError::ExpressionAlreadyInScope(expr_id));
+        }
         self.expression_to_group.insert(expr_id.clone(), group_pos);
         self.expressions_in_scope.insert(expr_id);
+        Ok(())
     }
 
     pub fn insert_to_scope_with_name(
@@ -224,20 +297,23 @@ impl FactorizedSchema {
         expr_id: ExpressionId,
         name: String,
         group_pos: FGroupPos,
-    ) {
-        assert!(
-            (group_pos as usize) < self.groups.len(),
-            "group_pos {} out of range",
-            group_pos
-        );
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
         self.expression_name_to_group
             .insert(name.clone(), group_pos);
         self.expression_id_to_name.insert(expr_id.clone(), name);
-        self.insert_to_scope(expr_id, group_pos);
+        self.insert_to_scope(expr_id, group_pos)?;
+        Ok(())
     }
 
-    pub fn insert_to_group_and_scope(&mut self, expr_id: ExpressionId, group_pos: FGroupPos) {
-        self.insert_to_group_and_scope_with_name(expr_id, None, group_pos);
+    pub fn insert_to_group_and_scope(
+        &mut self,
+        expr_id: ExpressionId,
+        group_pos: FGroupPos,
+    ) -> Result<(), FactorizationError> {
+        self.insert_to_group_and_scope_with_name(expr_id, None, group_pos)
     }
 
     pub fn insert_to_group_and_scope_with_name(
@@ -245,54 +321,66 @@ impl FactorizedSchema {
         expr_id: ExpressionId,
         name: Option<String>,
         group_pos: FGroupPos,
-    ) {
-        assert!(
-            (group_pos as usize) < self.groups.len(),
-            "group_pos {} out of range",
-            group_pos
-        );
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
+        if self.expression_to_group.contains_key(&expr_id) {
+            return Err(FactorizationError::ExpressionAlreadyMapped(expr_id));
+        }
+        if self.expressions_in_scope.contains(&expr_id) {
+            return Err(FactorizationError::ExpressionAlreadyInScope(expr_id));
+        }
         let group = &mut self.groups[group_pos as usize];
-        group.insert_expression_with_name(expr_id.clone(), name.clone());
+        group.insert_expression_with_name(expr_id.clone(), name.clone())?;
         if let Some(n) = name {
             self.expression_name_to_group.insert(n.clone(), group_pos);
             self.expression_id_to_name.insert(expr_id.clone(), n);
         }
-        assert!(
-            !self.expression_to_group.contains_key(&expr_id),
-            "expression {:?} already mapped to group",
-            expr_id
-        );
         self.expression_to_group.insert(expr_id.clone(), group_pos);
         self.expressions_in_scope.insert(expr_id);
+        Ok(())
     }
 
     pub fn insert_to_group_and_scope_batch(
         &mut self,
         exprs: Vec<ExpressionId>,
         group_pos: FGroupPos,
-    ) {
+    ) -> Result<(), FactorizationError> {
         for e in exprs {
-            self.insert_to_group_and_scope(e, group_pos);
+            self.insert_to_group_and_scope(e, group_pos)?;
         }
+        Ok(())
     }
 
-    pub fn insert_to_scope_may_repeat(&mut self, expr_id: ExpressionId, group_pos: FGroupPos) {
-        assert!((group_pos as usize) < self.groups.len());
+    pub fn insert_to_scope_may_repeat(
+        &mut self,
+        expr_id: ExpressionId,
+        group_pos: FGroupPos,
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
         self.expression_to_group.insert(expr_id.clone(), group_pos);
         self.expressions_in_scope.insert(expr_id);
+        Ok(())
     }
 
     pub fn insert_to_group_and_scope_may_repeat(
         &mut self,
         expr_id: ExpressionId,
         group_pos: FGroupPos,
-    ) {
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
         let group = &mut self.groups[group_pos as usize];
         if !group.contains(&expr_id) {
-            group.insert_expression(expr_id.clone());
+            group.insert_expression(expr_id.clone())?;
         }
         self.expression_to_group.insert(expr_id.clone(), group_pos);
         self.expressions_in_scope.insert(expr_id);
+        Ok(())
     }
 
     pub fn get_group_pos(&self, expr_id: &ExpressionId) -> Option<FGroupPos> {
@@ -327,13 +415,46 @@ impl FactorizedSchema {
     /// identity of their own; downstream variable references resolve them
     /// by name, so the name mapping must point at the producing group
     /// explicitly.
-    pub fn insert_name_for_group(&mut self, name: String, group_pos: FGroupPos) {
-        assert!(
-            (group_pos as usize) < self.groups.len(),
-            "group_pos {} out of range",
-            group_pos
-        );
+    pub fn insert_name_for_group(
+        &mut self,
+        name: String,
+        group_pos: FGroupPos,
+    ) -> Result<(), FactorizationError> {
+        if (group_pos as usize) >= self.groups.len() {
+            return Err(FactorizationError::GroupPosOutOfRange(group_pos));
+        }
         self.expression_name_to_group.insert(name, group_pos);
+        Ok(())
+    }
+
+    /// Canonical alias resolution order for the three registration paths.
+    ///
+    /// Lookup order is expression id first, then id-linked output name, then
+    /// bare group name. This is the single convergence point for the alias
+    /// paths described as R6; callers must use this instead of probing the
+    /// individual maps so id shadowing and bare-name fallback stay ordered.
+    pub fn resolve_group_pos(
+        &self,
+        expr_id: Option<&ExpressionId>,
+        name: Option<&str>,
+    ) -> Option<FGroupPos> {
+        if let Some(id) = expr_id {
+            if let Some(pos) = self.get_group_pos(id) {
+                return Some(pos);
+            }
+            if let Some(owned) = self.expression_name(id) {
+                let owned = owned.to_string();
+                if let Some(pos) = self.get_group_pos_by_name_opt(&owned) {
+                    return Some(pos);
+                }
+            }
+        }
+        if let Some(n) = name {
+            if let Some(pos) = self.get_group_pos_by_name_opt(n) {
+                return Some(pos);
+            }
+        }
+        None
     }
 
     /// Alias names currently mapped to a group, in sorted order.
@@ -361,32 +482,36 @@ impl FactorizedSchema {
         Some((gpos, pos))
     }
 
-    pub fn flatten_group(&mut self, pos: FGroupPos) {
-        let group = self.get_group_mut(pos).expect("flatten_group: invalid pos");
+    pub fn flatten_group(&mut self, pos: FGroupPos) -> Result<(), FactorizationError> {
+        let group = self
+            .get_group_mut(pos)
+            .ok_or(FactorizationError::InvalidFlattenPos(pos))?;
         if !group.is_flat() {
-            group.set_flat();
+            group.set_flat()?;
         }
-        self.validate_at_most_one_unflat();
+        self.validate_at_most_one_unflat()
     }
 
-    pub fn flatten_all(&mut self) {
+    pub fn flatten_all(&mut self) -> Result<(), FactorizationError> {
         for i in 0..self.groups.len() {
             let pos = i as FGroupPos;
             if let Some(g) = self.get_group(pos) {
                 if !g.is_flat() {
-                    self.flatten_group(pos);
+                    self.flatten_group(pos)?;
                 }
             }
         }
+        Ok(())
     }
 
-    pub fn set_group_as_single_state(&mut self, pos: FGroupPos) {
+    pub fn set_group_as_single_state(&mut self, pos: FGroupPos) -> Result<(), FactorizationError> {
         let group = self
             .get_group_mut(pos)
-            .expect("set_group_as_single_state: invalid pos");
+            .ok_or(FactorizationError::InvalidSingleStatePos(pos))?;
         if !group.is_single_state() {
-            group.set_single_state();
+            group.set_single_state()?;
         }
+        Ok(())
     }
 
     pub fn is_expression_in_scope(&self, expr_id: &ExpressionId) -> bool {
@@ -451,13 +576,12 @@ impl FactorizedSchema {
             .map(|(i, _)| i as FGroupPos)
     }
 
-    pub fn validate_at_most_one_unflat(&self) {
+    pub fn validate_at_most_one_unflat(&self) -> Result<(), FactorizationError> {
         let unflat = self.groups.iter().filter(|g| !g.is_flat()).count();
-        assert!(
-            unflat <= 1,
-            "at most one unflat group allowed, found {}",
-            unflat
-        );
+        if unflat > 1 {
+            return Err(FactorizationError::TooManyUnflatGroups(unflat));
+        }
+        Ok(())
     }
 
     /// Boolean check variant of `validate_at_most_one_unflat` for use in
@@ -471,10 +595,10 @@ impl FactorizedSchema {
     }
 
     /// Flat copy where all groups are flattened.
-    pub fn flat_copy(&self) -> Self {
+    pub fn flat_copy(&self) -> Result<Self, FactorizationError> {
         let mut copy = self.clone();
-        copy.flatten_all();
-        copy
+        copy.flatten_all()?;
+        Ok(copy)
     }
 
     /// Merge another schema's groups into this one (for joins etc.).
@@ -525,23 +649,29 @@ impl SchemaUtils {
     pub fn get_leading_group_pos(
         group_positions: &HashSet<FGroupPos>,
         schema: &FactorizedSchema,
-    ) -> FGroupPos {
-        assert!(!group_positions.is_empty(), "groupPositions empty");
-        Self::validate_at_most_one_unflat(group_positions, schema);
+    ) -> Result<FGroupPos, FactorizationError> {
+        if group_positions.is_empty() {
+            return Err(FactorizationError::EmptyGroupPositions);
+        }
+        Self::validate_at_most_one_unflat(group_positions, schema)?;
         for &pos in group_positions {
             if let Some(g) = schema.get_group(pos) {
                 if !g.is_flat() {
-                    return pos;
+                    return Ok(pos);
                 }
             }
         }
-        *group_positions.iter().next().expect("non-empty")
+        group_positions
+            .iter()
+            .next()
+            .copied()
+            .ok_or(FactorizationError::NonEmptyGroupPositions)
     }
 
     pub fn validate_at_most_one_unflat(
         group_positions: &HashSet<FGroupPos>,
         schema: &FactorizedSchema,
-    ) {
+    ) -> Result<(), FactorizationError> {
         let mut unflat = 0;
         for &pos in group_positions {
             if let Some(g) = schema.get_group(pos) {
@@ -550,19 +680,24 @@ impl SchemaUtils {
                 }
             }
         }
-        assert!(
-            unflat <= 1,
-            "at most one unflat group allowed in set, found {}",
-            unflat
-        );
+        if unflat > 1 {
+            return Err(FactorizationError::TooManyUnflatGroups(unflat));
+        }
+        Ok(())
     }
 
-    pub fn validate_no_unflat(group_positions: &HashSet<FGroupPos>, schema: &FactorizedSchema) {
+    pub fn validate_no_unflat(
+        group_positions: &HashSet<FGroupPos>,
+        schema: &FactorizedSchema,
+    ) -> Result<(), FactorizationError> {
         for &pos in group_positions {
             if let Some(g) = schema.get_group(pos) {
-                assert!(g.is_flat(), "group {} expected flat but is unflat", pos);
+                if !g.is_flat() {
+                    return Err(FactorizationError::GroupExpectedFlat(pos));
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -587,7 +722,7 @@ impl SinkOperatorUtil {
         input_schema: &FactorizedSchema,
         expressions_to_merge: &[ExpressionId],
         result_schema: &mut FactorizedSchema,
-    ) {
+    ) -> Result<(), FactorizationError> {
         let mut flat_payloads = Vec::new();
         let mut unflat_per_group: HashMap<FGroupPos, Vec<ExpressionId>> = HashMap::new();
         for expr_id in expressions_to_merge {
@@ -616,7 +751,7 @@ impl SinkOperatorUtil {
             if !flat_payloads.is_empty() {
                 let new_pos = result_schema.create_group();
                 for expr_id in &flat_payloads {
-                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos)?;
                 }
                 flat_new_pos = Some(new_pos);
             }
@@ -624,15 +759,15 @@ impl SinkOperatorUtil {
             if !flat_payloads.is_empty() {
                 let new_pos = result_schema.create_group();
                 for expr_id in &flat_payloads {
-                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos)?;
                 }
-                result_schema.set_group_as_single_state(new_pos);
+                result_schema.set_group_as_single_state(new_pos)?;
                 flat_new_pos = Some(new_pos);
             }
             for old_pos in unflat_groups {
                 let new_pos = result_schema.create_group();
                 for expr_id in &unflat_per_group[&old_pos] {
-                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos);
+                    result_schema.insert_to_group_and_scope(expr_id.clone(), new_pos)?;
                 }
                 if let Some(input_group) = input_schema.get_group(old_pos) {
                     let multiplier = input_group.cardinality_multiplier();
@@ -660,8 +795,9 @@ impl SinkOperatorUtil {
             expressions_to_merge,
             &old_to_new,
             result_schema,
-        );
-        result_schema.validate_at_most_one_unflat();
+        )?;
+        result_schema.validate_at_most_one_unflat()?;
+        Ok(())
     }
 
     /// Clear the result schema, then merge.
@@ -669,9 +805,9 @@ impl SinkOperatorUtil {
         input_schema: &FactorizedSchema,
         expressions_to_merge: &[ExpressionId],
         result_schema: &mut FactorizedSchema,
-    ) {
+    ) -> Result<(), FactorizationError> {
         result_schema.clear();
-        Self::merge_schema(input_schema, expressions_to_merge, result_schema);
+        Self::merge_schema(input_schema, expressions_to_merge, result_schema)
     }
 
     /// Carry alias names of merged expressions (plus bare group names of
@@ -683,7 +819,7 @@ impl SinkOperatorUtil {
         expressions_to_merge: &[ExpressionId],
         old_to_new: &HashMap<FGroupPos, FGroupPos>,
         result_schema: &mut FactorizedSchema,
-    ) {
+    ) -> Result<(), FactorizationError> {
         let mut owned_names: HashSet<&str> = HashSet::new();
         for expr_id in expressions_to_merge {
             if let Some(name) = input_schema.expression_name(expr_id) {
@@ -708,9 +844,10 @@ impl SinkOperatorUtil {
                 continue;
             }
             if result_schema.get_group_pos_by_name_opt(name).is_none() {
-                result_schema.insert_name_for_group(name.clone(), new_pos);
+                result_schema.insert_name_for_group(name.clone(), new_pos)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -719,9 +856,14 @@ impl SinkOperatorUtil {
 /// `child_schemas` must be the bottom-up computed results for the direct children;
 /// passing an empty slice forces recomputation and violates the factorization invariant.
 pub trait FactorizedSchemaCompute {
-    fn compute_factorized_schema(&mut self, child_schemas: &[FactorizedSchema])
-        -> FactorizedSchema;
-    fn compute_flat_schema(&mut self, child_schemas: &[FactorizedSchema]) -> FactorizedSchema;
+    fn compute_factorized_schema(
+        &mut self,
+        child_schemas: &[FactorizedSchema],
+    ) -> Result<FactorizedSchema, FactorizationError>;
+    fn compute_flat_schema(
+        &mut self,
+        child_schemas: &[FactorizedSchema],
+    ) -> Result<FactorizedSchema, FactorizationError>;
 }
 
 #[cfg(test)]
@@ -736,14 +878,14 @@ mod tests {
     fn group_basic() {
         let mut g = FactorizationGroup::new();
         assert!(!g.is_flat());
-        g.set_flat();
+        g.set_flat().unwrap();
         assert!(g.is_flat());
     }
 
     #[test]
     fn group_single_state_forces_flat() {
         let mut g = FactorizationGroup::new();
-        g.set_single_state();
+        g.set_single_state().unwrap();
         assert!(g.is_flat());
         assert!(g.is_single_state());
     }
@@ -753,8 +895,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let pos = schema.create_flat_group(false);
         assert_eq!(pos, 0);
-        schema.insert_to_group_and_scope(expr(1), pos);
-        schema.insert_to_group_and_scope(expr(2), pos);
+        schema.insert_to_group_and_scope(expr(1), pos).unwrap();
+        schema.insert_to_group_and_scope(expr(2), pos).unwrap();
         assert_eq!(schema.num_groups(), 1);
         assert!(schema.get_group(pos).expect("group").is_flat());
         assert_eq!(schema.get_group_pos(&expr(1)), Some(0));
@@ -765,13 +907,17 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let flat_pos = schema.create_flat_group(false);
         let unflat_pos = schema.create_group();
-        schema.insert_to_group_and_scope(expr(10), flat_pos);
-        schema.insert_to_group_and_scope(expr(20), unflat_pos);
+        schema
+            .insert_to_group_and_scope(expr(10), flat_pos)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope(expr(20), unflat_pos)
+            .unwrap();
         assert!(!schema.get_group(unflat_pos).expect("unflat").is_flat());
         assert!(schema.has_unflat_group());
         assert_eq!(schema.unflat_group_pos(), Some(unflat_pos));
-        schema.validate_at_most_one_unflat();
-        schema.flatten_group(unflat_pos);
+        schema.validate_at_most_one_unflat().unwrap();
+        schema.flatten_group(unflat_pos).unwrap();
         assert!(schema.is_flat_schema());
         assert!(!schema.has_unflat_group());
     }
@@ -781,26 +927,24 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_group();
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
-        // Two unflat groups should panic on validate.
-        let result = std::panic::catch_unwind(|| schema.validate_at_most_one_unflat());
-        assert!(result.is_err());
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
+        // Two unflat groups must be rejected by validate (it returns Result, no panic).
+        assert!(schema.validate_at_most_one_unflat().is_err());
     }
 
     #[test]
-    #[should_panic(expected = "at most one unflat group")]
     fn flatten_group_validates_invariant_at_runtime() {
         let mut schema = FactorizedSchema::new();
         let flat_pos = schema.create_flat_group(false);
         let g0 = schema.create_group();
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), flat_pos);
-        schema.insert_to_group_and_scope(expr(2), g0);
-        schema.insert_to_group_and_scope(expr(3), g1);
+        schema.insert_to_group_and_scope(expr(1), flat_pos).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(3), g1).unwrap();
         // Flattening an already-flat group leaves two unflat groups behind,
-        // so the runtime check inside `flatten_group` must fire.
-        schema.flatten_group(flat_pos);
+        // so the runtime check inside `flatten_group` must return Err.
+        assert!(schema.flatten_group(flat_pos).is_err());
     }
 
     #[test]
@@ -808,9 +952,9 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
-        let flat = schema.flat_copy();
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
+        let flat = schema.flat_copy().unwrap();
         assert!(flat.is_flat_schema());
         assert!(!schema.is_flat_schema());
         let copied = schema.copy();
@@ -822,16 +966,16 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let flat = schema.create_flat_group(false);
         let unflat = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), flat);
-        schema.insert_to_group_and_scope(expr(2), unflat);
+        schema.insert_to_group_and_scope(expr(1), flat).unwrap();
+        schema.insert_to_group_and_scope(expr(2), unflat).unwrap();
         let mut set = HashSet::new();
         set.insert(flat);
         set.insert(unflat);
-        let leading = SchemaUtils::get_leading_group_pos(&set, &schema);
+        let leading = SchemaUtils::get_leading_group_pos(&set, &schema).unwrap();
         assert_eq!(leading, unflat);
         let mut flat_only = HashSet::new();
         flat_only.insert(flat);
-        let leading2 = SchemaUtils::get_leading_group_pos(&flat_only, &schema);
+        let leading2 = SchemaUtils::get_leading_group_pos(&flat_only, &schema).unwrap();
         assert_eq!(leading2, flat);
     }
 
@@ -840,20 +984,28 @@ mod tests {
         // Simulate Scan -> Extend pattern described in docs.
         let mut scan_schema = FactorizedSchema::new();
         let g0 = scan_schema.create_flat_group(false);
-        scan_schema.insert_to_group_and_scope(expr(100), g0);
-        scan_schema.insert_to_group_and_scope(expr(101), g0);
+        scan_schema
+            .insert_to_group_and_scope(expr(100), g0)
+            .unwrap();
+        scan_schema
+            .insert_to_group_and_scope(expr(101), g0)
+            .unwrap();
 
         // Extend: copy scan schema, flatten bound node group, create new unflat group.
         let mut extend_schema = scan_schema.copy();
         // Suppose bound node 100 is in g0 which is already flat; no op.
         // Create new unflat group for neighbors.
         let g1 = extend_schema.create_group();
-        extend_schema.insert_to_group_and_scope(expr(200), g1);
-        extend_schema.insert_to_group_and_scope(expr(201), g1);
+        extend_schema
+            .insert_to_group_and_scope(expr(200), g1)
+            .unwrap();
+        extend_schema
+            .insert_to_group_and_scope(expr(201), g1)
+            .unwrap();
         assert_eq!(extend_schema.num_groups(), 2);
         assert!(extend_schema.get_group(g0).expect("g0").is_flat());
         assert!(!extend_schema.get_group(g1).expect("g1").is_flat());
-        extend_schema.validate_at_most_one_unflat();
+        extend_schema.validate_at_most_one_unflat().unwrap();
     }
 
     #[test]
@@ -861,9 +1013,13 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1);
-        schema.insert_to_group_and_scope_with_name(expr(3), Some("a".to_string()), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(3), Some("a".to_string()), g1)
+            .unwrap();
         assert_eq!(
             schema.member_names(g1),
             vec!["a".to_string(), "b".to_string()]
@@ -876,11 +1032,11 @@ mod tests {
     fn hash_join_merge_schema() {
         let mut left = FactorizedSchema::new();
         let lg = left.create_flat_group(false);
-        left.insert_to_group_and_scope(expr(1), lg);
+        left.insert_to_group_and_scope(expr(1), lg).unwrap();
 
         let mut right = FactorizedSchema::new();
         let rg = right.create_group();
-        right.insert_to_group_and_scope(expr(2), rg);
+        right.insert_to_group_and_scope(expr(2), rg).unwrap();
 
         let mut merged = left.copy();
         let mapping = merged.merge_groups_from(&right);
@@ -893,11 +1049,13 @@ mod tests {
     fn merge_groups_from_keeps_expression_id_lookup() {
         let mut left = FactorizedSchema::new();
         let lg = left.create_flat_group(false);
-        left.insert_to_group_and_scope(expr(1), lg);
+        left.insert_to_group_and_scope(expr(1), lg).unwrap();
 
         let mut right = FactorizedSchema::new();
         let rg = right.create_group();
-        right.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), rg);
+        right
+            .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), rg)
+            .unwrap();
 
         let mut merged = left.copy();
         merged.merge_groups_from(&right);
@@ -916,12 +1074,12 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
         // Aggregate flattens all groups, creates single output group
         let mut agg_schema = FactorizedSchema::new();
         let out = agg_schema.create_flat_group(false);
-        agg_schema.insert_to_group_and_scope(expr(10), out);
+        agg_schema.insert_to_group_and_scope(expr(10), out).unwrap();
         assert!(agg_schema.is_flat_schema());
     }
 
@@ -929,13 +1087,15 @@ mod tests {
     fn expression_id_to_name_roundtrip() {
         let mut schema = FactorizedSchema::new();
         let g = schema.create_flat_group(false);
-        schema.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g);
+        schema
+            .insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g)
+            .unwrap();
         assert_eq!(schema.expression_name(&expr(1)), Some("a"));
         assert_eq!(schema.expression_name(&expr(2)), None);
         // Merge carries the reverse map alongside the forward one.
         let mut other = FactorizedSchema::new();
         other.merge_groups_from(&schema);
-        other.insert_to_scope_may_repeat(expr(1), 0);
+        other.insert_to_scope_may_repeat(expr(1), 0).unwrap();
         assert_eq!(other.expression_name(&expr(1)), Some("a"));
         // Clearing scope drops both directions.
         other.clear_expressions_in_scope();
@@ -946,16 +1106,20 @@ mod tests {
     fn sink_merge_preserves_multiplier_and_single_state() {
         let mut input = FactorizedSchema::new();
         let flat_pos = input.create_flat_group(false);
-        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos);
+        input
+            .insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos)
+            .unwrap();
         let unflat_pos = input.create_group();
-        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos);
+        input
+            .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos)
+            .unwrap();
         input
             .get_group_mut(unflat_pos)
             .expect("unflat group")
             .set_multiplier(2.5);
         let mut out = FactorizedSchema::new();
-        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out);
-        out.validate_at_most_one_unflat();
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out).unwrap();
+        out.validate_at_most_one_unflat().unwrap();
         assert_eq!(out.num_groups(), 2);
         // Flat payload "a" lands in a single-state group.
         let a_pos = out.get_group_pos(&expr(1)).expect("a placed");
@@ -977,35 +1141,103 @@ mod tests {
     fn sink_recompute_all_flat_input() {
         let mut input = FactorizedSchema::new();
         let g0 = input.create_flat_group(false);
-        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g0);
+        input
+            .insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), g0)
+            .unwrap();
         let g1 = input.create_flat_group(false);
-        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1);
+        input
+            .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), g1)
+            .unwrap();
         let mut out = FactorizedSchema::new();
-        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out);
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1), expr(2)], &mut out).unwrap();
         // All payloads gather into one new group; names follow.
         assert_eq!(out.num_groups(), 1);
         assert!(out.is_expression_in_scope(&expr(1)));
         assert!(out.is_expression_in_scope(&expr(2)));
         assert!(out.get_group_pos_by_name_opt("a").is_some());
         assert!(out.get_group_pos_by_name_opt("b").is_some());
-        out.validate_at_most_one_unflat();
+        out.validate_at_most_one_unflat().unwrap();
     }
 
     #[test]
     fn sink_merge_partial_scope_leaves_unmerged_names() {
         let mut input = FactorizedSchema::new();
         let flat_pos = input.create_flat_group(false);
-        input.insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos);
+        input
+            .insert_to_group_and_scope_with_name(expr(1), Some("a".to_string()), flat_pos)
+            .unwrap();
         let unflat_pos = input.create_group();
-        input.insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos);
-        input.insert_name_for_group("bare".to_string(), unflat_pos);
+        input
+            .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos)
+            .unwrap();
+        input
+            .insert_name_for_group("bare".to_string(), unflat_pos)
+            .unwrap();
         let mut out = FactorizedSchema::new();
-        SinkOperatorUtil::recompute_schema(&input, &[expr(1)], &mut out);
+        SinkOperatorUtil::recompute_schema(&input, &[expr(1)], &mut out).unwrap();
         // Only the merged payload and its name cross the sink boundary.
         assert!(out.is_expression_in_scope(&expr(1)));
         assert!(!out.is_expression_in_scope(&expr(2)));
         assert!(out.get_group_pos_by_name_opt("a").is_some());
         assert!(out.get_group_pos_by_name_opt("b").is_none());
         assert!(out.get_group_pos_by_name_opt("bare").is_none());
+    }
+
+    #[test]
+    fn scope_and_bare_name_registration_reject_out_of_range() {
+        let mut schema = FactorizedSchema::new();
+        let err = schema
+            .insert_to_scope(expr(1), 99)
+            .expect_err("scope OOR must fail");
+        assert_eq!(err, FactorizationError::GroupPosOutOfRange(99));
+        let err = schema
+            .insert_to_scope_with_name(expr(1), "a".to_string(), 99)
+            .expect_err("named scope OOR must fail");
+        assert_eq!(err, FactorizationError::GroupPosOutOfRange(99));
+        let err = schema
+            .insert_name_for_group("bare".to_string(), 99)
+            .expect_err("bare name OOR must fail");
+        assert_eq!(err, FactorizationError::GroupPosOutOfRange(99));
+    }
+
+    #[test]
+    fn duplicate_scope_registration_distinguishes_mapping_from_scope() {
+        let mut schema = FactorizedSchema::new();
+        let g = schema.create_flat_group(false);
+        schema.insert_to_scope(expr(1), g).unwrap();
+        let err = schema
+            .insert_to_scope(expr(1), g)
+            .expect_err("repeat must fail");
+        assert_eq!(err, FactorizationError::ExpressionAlreadyMapped(expr(1)));
+        // Scope-only membership without a group mapping is the precise
+        // AlreadyInScope case.
+        let mut other = FactorizedSchema::new();
+        let h = other.create_flat_group(false);
+        other.expressions_in_scope.insert(expr(2));
+        let err = other
+            .insert_to_scope(expr(2), h)
+            .expect_err("scope repeat must fail");
+        assert_eq!(err, FactorizationError::ExpressionAlreadyInScope(expr(2)));
+    }
+
+    #[test]
+    fn resolve_group_pos_prefers_id_over_bare_name() {
+        let mut schema = FactorizedSchema::new();
+        let g0 = schema.create_flat_group(false);
+        let g1 = schema.create_group();
+        schema
+            .insert_to_group_and_scope_with_name(expr(1), Some("shared".to_string()), g0)
+            .unwrap();
+        schema
+            .insert_name_for_group("shared".to_string(), g1)
+            .unwrap();
+        // Id path wins even when the bare name now points elsewhere.
+        assert_eq!(
+            schema.resolve_group_pos(Some(&expr(1)), Some("shared")),
+            Some(g0)
+        );
+        // No id falls back to the bare name.
+        assert_eq!(schema.resolve_group_pos(None, Some("shared")), Some(g1));
+        assert_eq!(schema.resolve_group_pos(None, Some("ghost")), None);
     }
 }

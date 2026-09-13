@@ -24,6 +24,12 @@ pub trait LogicalSingleInputNode: LogicalNode {
     fn input(&self) -> &LogicalNodeEnum;
     fn input_mut(&mut self) -> &mut LogicalNodeEnum;
     fn set_input(&mut self, input: LogicalNodeEnum);
+    /// Move the child out without panicking when the input is absent.
+    ///
+    /// Unlike [`Self::input_mut`] this never panics, so rewriters can take a
+    /// child, recurse, and put the rewritten child back through
+    /// [`Self::set_input`] without an extra "does the input exist" branch.
+    fn take_input(&mut self) -> Option<LogicalNodeEnum>;
 }
 
 /// Trait for nodes with two inputs (joins, binary operations).

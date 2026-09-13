@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 
 use crate::optimizer::factorization::flatten_resolver::{FlattenAll, FlattenAllButOne};
-use crate::planning::plan::factorization::{FGroupPos, FactorizedSchema};
+use crate::planning::plan::factorization::{FGroupPos, FactorizationError, FactorizedSchema};
 
 /// Key-aware join schema shared with the rewriter.
 ///
@@ -24,7 +24,11 @@ fn key_groups(keys: &[ContextualExpression], schema: &FactorizedSchema) -> HashS
     set
 }
 
-fn flatten_keys(schema: &mut FactorizedSchema, keys: &[ContextualExpression], keep_one: bool) {
+fn flatten_keys(
+    schema: &mut FactorizedSchema,
+    keys: &[ContextualExpression],
+    keep_one: bool,
+) -> Result<(), FactorizationError> {
     let groups = key_groups(keys, schema);
     let to_flatten = if keep_one {
         FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, schema)
@@ -32,8 +36,9 @@ fn flatten_keys(schema: &mut FactorizedSchema, keys: &[ContextualExpression], ke
         FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, schema)
     };
     for pos in to_flatten {
-        schema.flatten_group(pos);
+        schema.flatten_group(pos)?;
     }
+    Ok(())
 }
 
 fn merge_flattened(
@@ -41,12 +46,12 @@ fn merge_flattened(
     right: &FactorizedSchema,
     left_key_groups: &HashSet<FGroupPos>,
     right_key_groups: &HashSet<FGroupPos>,
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let mut merged = left.clone();
     let mapping = merged.merge_groups_from(right);
     for (expr_id, gpos) in right.expression_to_group_iter() {
         let new_pos = mapping.get(gpos).copied().unwrap_or(*gpos);
-        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos);
+        merged.insert_to_scope_may_repeat(expr_id.clone(), new_pos)?;
     }
     // Key groups must already be flat here: every binary policy above
     // flattens its join-key groups before the merge, so any surviving
@@ -84,15 +89,15 @@ fn merge_flattened(
                         if first {
                             first = false;
                         } else {
-                            merged.flatten_group(pos);
+                            merged.flatten_group(pos)?;
                         }
                     }
                 }
             }
         }
     }
-    merged.validate_at_most_one_unflat();
-    merged
+    merged.validate_at_most_one_unflat()?;
+    Ok(merged)
 }
 
 /// Inner/Left/Semi policy: left keys flatten fully, right keeps one.
@@ -101,13 +106,13 @@ pub(super) fn binary_join_inner(
     right: &FactorizedSchema,
     hash_keys: &[ContextualExpression],
     probe_keys: &[ContextualExpression],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let left_keys = key_groups(hash_keys, left);
     let right_keys = key_groups(probe_keys, right);
     let mut left = left.clone();
     let mut right = right.clone();
-    flatten_keys(&mut left, hash_keys, false);
-    flatten_keys(&mut right, probe_keys, true);
+    flatten_keys(&mut left, hash_keys, false)?;
+    flatten_keys(&mut right, probe_keys, true)?;
     merge_flattened(&left, &right, &left_keys, &right_keys)
 }
 
@@ -117,13 +122,13 @@ pub(super) fn binary_join_right(
     right: &FactorizedSchema,
     hash_keys: &[ContextualExpression],
     probe_keys: &[ContextualExpression],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let left_keys = key_groups(hash_keys, left);
     let right_keys = key_groups(probe_keys, right);
     let mut left = left.clone();
     let mut right = right.clone();
-    flatten_keys(&mut left, hash_keys, true);
-    flatten_keys(&mut right, probe_keys, false);
+    flatten_keys(&mut left, hash_keys, true)?;
+    flatten_keys(&mut right, probe_keys, false)?;
     merge_flattened(&left, &right, &left_keys, &right_keys)
 }
 
@@ -137,13 +142,13 @@ pub(super) fn binary_join_full_outer(
     right: &FactorizedSchema,
     hash_keys: &[ContextualExpression],
     probe_keys: &[ContextualExpression],
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let left_keys = key_groups(hash_keys, left);
     let right_keys = key_groups(probe_keys, right);
     let mut left = left.clone();
     let mut right = right.clone();
-    flatten_keys(&mut left, hash_keys, false);
-    flatten_keys(&mut right, probe_keys, false);
+    flatten_keys(&mut left, hash_keys, false)?;
+    flatten_keys(&mut right, probe_keys, false)?;
     merge_flattened(&left, &right, &left_keys, &right_keys)
 }
 
@@ -151,7 +156,7 @@ pub(super) fn binary_join_full_outer(
 pub(super) fn cross_join_no_keys(
     left: &FactorizedSchema,
     right: &FactorizedSchema,
-) -> FactorizedSchema {
+) -> Result<FactorizedSchema, FactorizationError> {
     let empty = HashSet::new();
     merge_flattened(left, right, &empty, &empty)
 }

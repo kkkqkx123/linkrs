@@ -287,8 +287,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
 
         let mut set = HashSet::new();
         set.insert(g1);
@@ -307,8 +307,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_group();
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(1), g0);
-        schema.insert_to_group_and_scope(expr(2), g1);
+        schema.insert_to_group_and_scope(expr(1), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(2), g1).unwrap();
         let mut set = HashSet::new();
         set.insert(g0);
         set.insert(g1);
@@ -324,8 +324,8 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_group();
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope(expr(10), g0);
-        schema.insert_to_group_and_scope(expr(20), g1);
+        schema.insert_to_group_and_scope(expr(10), g0).unwrap();
+        schema.insert_to_group_and_scope(expr(20), g1).unwrap();
         let (leading, to_flatten) = FlattenResolver::flatten_all_but_one(&[g0, g1], &schema);
         assert_ne!(leading, INVALID_F_GROUP_POS);
         assert_eq!(to_flatten.len(), 1);
@@ -339,8 +339,12 @@ mod tests {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_flat_group(false);
         let g1 = schema.create_group();
-        schema.insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0);
-        schema.insert_to_group_and_scope_with_name(expr(20), Some("x".to_string()), g1);
+        schema
+            .insert_to_group_and_scope_with_name(expr(10), Some("a".to_string()), g0)
+            .unwrap();
+        schema
+            .insert_to_group_and_scope_with_name(expr(20), Some("x".to_string()), g1)
+            .unwrap();
         // Simulate list_extract(lambda) where lambda body depends on x (unflat).
         // Baseline `FlattenAll(expr)` flattens only dependent groups and
         // ignores `required_flat`; `AllButOne` merges `required_flat`.
