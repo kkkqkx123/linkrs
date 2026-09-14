@@ -31,7 +31,7 @@ USE social_network
 
 ### 语法结构
 ```cypher
-EXPLAIN [FORMAT = {TABLE | DOT}] <statement>
+EXPLAIN [FORMAT = {TABLE | DOT}] [ANALYZE] <statement>
 ```
 
 ### 关键特性
@@ -40,12 +40,14 @@ EXPLAIN [FORMAT = {TABLE | DOT}] <statement>
 - 显示使用的索引
 - 不实际执行查询
 - 支持 TABLE 和 DOT 两种输出格式
+- `EXPLAIN ANALYZE` 变体：执行查询并收集各算子的实际执行统计
 
 ### 示例
 ```cypher
 EXPLAIN MATCH (p:Person {name: 'Alice'}) RETURN p
 EXPLAIN FORMAT = TABLE MATCH (p:Person) RETURN p
-EXPLAIN FORMAT = DOT GO 2 STEPS FROM "101" OVER follow
+EXPLAIN FORMAT = DOT GO 2 STEP FROM "101" OVER follow
+EXPLAIN ANALYZE MATCH (p:Person) RETURN p
 ```
 
 ---
@@ -84,12 +86,18 @@ PROFILE FORMAT = DOT GO 3 STEPS FROM "player100" OVER follow
 GROUP BY <expression> [, <expression> ...]
 [YIELD <item> [, <item> ...]]
 [HAVING <condition>]
+
+-- 分组扩展
+GROUP BY ROLLUP (<expression> [, ...])       [YIELD ...] [HAVING ...]
+GROUP BY CUBE (<expression> [, ...])         [YIELD ...] [HAVING ...]
+GROUP BY GROUPING SETS ((<expr>, ...), ...)  [YIELD ...] [HAVING ...]
 ```
 
 ### 关键特性
 - 支持多字段分组
-- 支持 YIELD 子句指定输出
+- 支持 YIELD 子句指定输出（缺省时按分组列输出，别名为 `group_0`、`group_1`...）
 - 支持 HAVING 子句过滤分组
+- 支持 ROLLUP / CUBE / GROUPING SETS 分组扩展
 - 可与管道操作符结合使用
 
 ### 示例
@@ -100,8 +108,32 @@ GROUP BY category YIELD category, count(*) AS cnt
 -- 带 HAVING 过滤
 GROUP BY age YIELD age, count(*) AS cnt HAVING cnt > 5
 
+-- ROLLUP 小计
+GROUP BY ROLLUP (country, city) YIELD country, city, count(*) AS cnt
+
+-- GROUPING SETS
+GROUP BY GROUPING SETS ((country, city), (country)) YIELD country, city, count(*) AS cnt
+
 -- 与管道结合
 GO FROM "player100" OVER follow | GROUP BY $-.dst YIELD $-.dst, count(*) AS cnt
+```
+
+---
+
+## 4.1 ANALYZE - 统计信息收集
+
+### 功能
+收集图空间的统计信息，用于优化器选择执行计划。
+
+### 语法结构
+```cypher
+ANALYZE [SPACE <space_name>]
+```
+
+### 示例
+```cypher
+ANALYZE
+ANALYZE SPACE test_space
 ```
 
 ---
@@ -235,8 +267,31 @@ $<variable_name> = <statement>
 
 ### 示例
 ```cypher
+-- 变量赋值（结果集赋给变量，供后续语句使用）
 $result = GO FROM "player100" OVER follow
 $result = MATCH (n:Person) RETURN n
+```
+
+---
+
+## 8.2 LET - 会话变量赋值
+
+### 功能
+将表达式求值结果赋给会话变量，作用域为当前会话。
+
+### 语法结构
+```cypher
+LET [$]<name> = <expression>
+```
+
+### 关键特性
+- 变量名必须是合法标识符（`[A-Za-z_][A-Za-z0-9_]*`），`$` 前缀可省略
+- 右侧是表达式（非语句），可引用其他会话变量 `$name` 与参数 `@name`
+
+### 示例
+```cypher
+LET threshold = 25
+LET $limit = 10
 ```
 
 ---

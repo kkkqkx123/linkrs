@@ -2,7 +2,7 @@
 
 ## 概述
 
-GraphDB 提供完整的事务管理功能，确保数据的一致性和可靠性。事务管理模块支持 ACID 特性，提供保存点、两阶段提交等高级功能。
+GraphDB 提供事务管理功能，确保数据的一致性和可靠性。当前单节点版本支持显式事务的开始、提交、回滚以及保存点部分回滚。
 
 ---
 
@@ -21,10 +21,7 @@ GraphDB 事务遵循标准的事务生命周期：
 | 状态 | 说明 |
 |------|------|
 | Active | 活跃状态，可执行读写操作 |
-| Prepared | 已准备（2PC阶段1完成） |
-| Committing | 提交中 |
 | Committed | 已提交 |
-| Aborting | 中止中 |
 | Aborted | 已中止 |
 
 ---
@@ -36,36 +33,27 @@ GraphDB 事务遵循标准的事务生命周期：
 
 ### 语法结构
 ```cypher
-BEGIN TRANSACTION [READ ONLY]
-[WITH TIMEOUT <duration>]
-[WITH DURABILITY {NONE | IMMEDIATE}]
-[WITH TWO_PHASE_COMMIT]
+BEGIN [TRANSACTION] [READ ONLY | READ WRITE]
 ```
 
 ### 参数说明
+- `TRANSACTION` 关键字可省略（`BEGIN` 与 `BEGIN TRANSACTION` 等价）
 - `READ ONLY`: 指定为只读事务
-- `TIMEOUT`: 事务超时时间（默认30秒）
-- `DURABILITY`: 持久性级别
-  - `NONE`: 不保证立即持久化（高性能）
-  - `IMMEDIATE`: 立即持久化（默认）
-- `TWO_PHASE_COMMIT`: 启用两阶段提交
+- `READ WRITE`: 指定为读写事务（默认）
+- 不指定读写模式时默认为读写事务
+
+> **注意：** 当前版本不支持 `WITH TIMEOUT`、`WITH DURABILITY`、`WITH TWO_PHASE_COMMIT` 等选项；超时时间等行为由服务端配置控制（见第 7 节）。
 
 ### 示例
 ```cypher
 -- 基础事务
 BEGIN TRANSACTION
 
+-- 省略 TRANSACTION 关键字
+BEGIN
+
 -- 只读事务
 BEGIN TRANSACTION READ ONLY
-
--- 带超时的事务
-BEGIN TRANSACTION WITH TIMEOUT 60s
-
--- 高性能写事务
-BEGIN TRANSACTION WITH DURABILITY NONE
-
--- 安全写事务（两阶段提交）
-BEGIN TRANSACTION WITH DURABILITY IMMEDIATE WITH TWO_PHASE_COMMIT
 ```
 
 ---
@@ -83,8 +71,6 @@ COMMIT [TRANSACTION]
 ### 关键特性
 - 原子性提交：所有更改要么全部成功，要么全部失败
 - 自动释放事务资源
-- 支持持久性级别配置
-- 支持两阶段提交协议
 
 ### 示例
 ```cypher
@@ -101,17 +87,19 @@ COMMIT
 ## 4. ROLLBACK - 回滚事务
 
 ### 功能
-中止当前事务，撤销所有未提交的更改。
+中止当前事务，撤销所有未提交的更改；或回滚到指定保存点。
 
 ### 语法结构
 ```cypher
-ROLLBACK [TRANSACTION]
+ROLLBACK [TRANSACTION] [TO <savepoint_name>]
 ```
 
 ### 关键特性
-- 原子性回滚：撤销事务中的所有更改
-- 自动释放事务资源
-- 支持回滚到保存点
+- 完整回滚：撤销事务中的所有更改，释放事务资源
+- 部分回滚：`ROLLBACK TO <savepoint_name>` 回滚到指定保存点，事务保持活跃
+- 回滚到保存点后，该保存点之后的保存点失效
+
+> **注意：** 语法为 `ROLLBACK TO <name>`，不需要 `SAVEPOINT` 关键字。
 
 ### 示例
 ```cypher
@@ -152,13 +140,13 @@ INSERT VERTEX Person(name) VALUES "p2":("Bob")
 
 #### 语法结构
 ```cypher
-ROLLBACK TO SAVEPOINT <savepoint_name>
+ROLLBACK [TRANSACTION] TO <savepoint_name>
 ```
 
 #### 关键特性
 - 支持嵌套保存点
 - 回滚后保存点之后的保存点失效
-- 事务保持活跃状态
+- 事务保持活跃状态，可继续操作并最终提交
 
 #### 示例
 ```cypher
@@ -168,7 +156,7 @@ INSERT VERTEX Person(name) VALUES "p1":("Alice")
 SAVEPOINT sp2
 INSERT VERTEX Person(name) VALUES "p2":("Bob")
 -- 回滚到 sp1，撤销 p2 的插入
-ROLLBACK TO SAVEPOINT sp1
+ROLLBACK TO sp1
 -- 此时只有 p1 存在
 COMMIT
 ```
@@ -195,111 +183,9 @@ COMMIT
 
 ---
 
-## 6. 两阶段提交（2PC）
+## 6. 事务隔离级别
 
-### 6.1 概述
-
-两阶段提交（Two-Phase Commit）是一种分布式事务协议，确保跨多个资源的事务一致性。
-
-### 6.2 2PC 事务状态
-
-| 状态 | 说明 |
-|------|------|
-| Preparing | 准备阶段1：正在收集参与者投票 |
-| AllPrepared | 所有参与者已投票准备 |
-| VoteAbort | 至少一个参与者投票中止 |
-| Committing | 提交阶段2：正在提交 |
-| Committed | 已提交 |
-| Aborting | 正在中止 |
-| Aborted | 已中止 |
-| Timeout | 超时 |
-
-### 6.3 启用两阶段提交
-
-#### 语法结构
-```cypher
-BEGIN TRANSACTION WITH TWO_PHASE_COMMIT
-```
-
-#### 示例
-```cypher
-BEGIN TRANSACTION WITH TWO_PHASE_COMMIT
--- 执行跨资源操作
-INSERT VERTEX Person(name) VALUES "p1":("Alice")
--- 2PC协调器自动管理提交过程
-COMMIT
-```
-
----
-
-## 7. 事务监控
-
-### 7.1 SHOW TRANSACTIONS - 显示事务列表
-
-#### 功能
-显示当前所有活跃事务的信息。
-
-#### 语法结构
-```cypher
-SHOW TRANSACTIONS
-```
-
-#### 返回信息
-- 事务ID
-- 事务状态
-- 开始时间
-- 运行时长
-- 是否只读
-- 修改的表
-- 保存点数量
-
-#### 示例
-```cypher
-SHOW TRANSACTIONS
-```
-
-### 7.2 事务统计信息
-
-GraphDB 自动收集以下事务统计信息：
-
-| 统计项 | 说明 |
-|--------|------|
-| total_transactions | 总事务数 |
-| active_transactions | 活跃事务数 |
-| committed_transactions | 已提交事务数 |
-| aborted_transactions | 已中止事务数 |
-| timeout_transactions | 超时事务数 |
-
----
-
-## 8. 事务配置
-
-### 8.1 配置参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| default_timeout | 30秒 | 默认事务超时时间 |
-| max_concurrent_transactions | 1000 | 最大并发事务数 |
-| enable_2pc | false | 是否启用2PC |
-| auto_cleanup | true | 是否自动清理过期事务 |
-| cleanup_interval | 10秒 | 清理任务执行间隔 |
-
-### 8.2 配置示例
-
-```toml
-[transaction]
-default_timeout = 30
-max_concurrent_transactions = 1000
-enable_2pc = true
-auto_cleanup = true
-cleanup_interval = 10
-```
-
----
-
-## 9. 事务隔离级别
-
-GraphDB 基于 redb 的存储引擎，采用单写者多读者模型：
+GraphDB 存储引擎采用单写者多读者模型：
 
 - **读操作**：支持并发读取，不阻塞其他读操作
 - **写操作**：同一时间只允许一个写事务
@@ -307,36 +193,58 @@ GraphDB 基于 redb 的存储引擎，采用单写者多读者模型：
 
 ---
 
-## 10. 最佳实践
+## 7. 事务配置
 
-### 10.1 事务使用建议
+### 7.1 配置参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| default_timeout | 30秒 | 默认事务超时时间 |
+| max_concurrent_transactions | 1000 | 最大并发事务数 |
+| auto_commit | false | 每条成功语句是否自动提交 |
+
+### 7.2 配置示例
+
+```toml
+[transaction]
+default_timeout = 30
+max_concurrent_transactions = 1000
+auto_commit = false
+```
+
+> **注意：** 当前版本没有 `enable_2pc`、`auto_cleanup`、`cleanup_interval` 等配置项。
+
+---
+
+## 8. 最佳实践
+
+### 8.1 事务使用建议
 
 1. **保持事务简短**：长时间运行的事务会占用资源，增加冲突概率
 2. **及时提交或回滚**：避免事务长时间处于活跃状态
 3. **使用保存点**：对于复杂操作，使用保存点实现部分回滚
-4. **设置合理的超时**：根据操作复杂度设置超时时间
+4. **注意并发限制**：并发事务数受 `max_concurrent_transactions` 约束
 
-### 10.2 错误处理
+### 8.2 错误处理
 
 ```cypher
 BEGIN TRANSACTION
 SAVEPOINT sp1
 -- 执行操作
 -- 如果发生错误
-ROLLBACK TO SAVEPOINT sp1
+ROLLBACK TO sp1
 -- 或者完全回滚
 ROLLBACK
 ```
 
-### 10.3 性能优化
+### 8.3 性能优化
 
 1. **批量操作**：将多个操作放在一个事务中，减少事务开销
-2. **选择合适的持久性级别**：对于非关键数据，可使用 `DURABILITY NONE` 提高性能
-3. **使用只读事务**：对于查询操作，使用 `READ ONLY` 选项
+2. **使用只读事务**：对于查询操作，使用 `READ ONLY` 选项
 
 ---
 
-## 11. 错误代码
+## 9. 错误代码
 
 | 错误代码 | 说明 |
 |----------|------|

@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档详细说明 GraphDB 的所有配置项，包括默认值、实际效果和配置建议。
+本文档详细说明 GraphDB 的所有配置项，包括默认值、实际效果和配置建议。配置项与 `graphdb-config` crate 中的定义一一对应。
 
 ---
 
@@ -15,10 +15,18 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - `[log]` - 日志配置
 - `[auth]` - 认证授权配置
 - `[bootstrap]` - 初始化配置
-- `[optimizer]` - 查询优化器配置
-- `[optimizer.rules]` - 优化器规则配置
-- `[vector]` - 向量检索配置（启用 `qdrant` feature 时可用）
-- `[monitoring]` - 监控配置
+- `[grpc]` - gRPC 服务配置
+- `[optimizer]` / `[optimizer.rules]` - 查询优化器配置
+- `[parallel]` - 查询内并行执行配置
+- `[storage]` - 存储引擎配置
+- `[query_resource]` - 查询资源限制配置
+- `[columnar]` - 列式快速路径配置
+- `[monitoring]` - 监控与慢查询日志配置
+- `[vector]` - 向量检索配置（含 local / qdrant 两种引擎）
+- `[fulltext]` - 全文检索配置
+- `[embedded.runtime]` - 嵌入式运行时配置
+
+> **注意：** 旧版本中的 `[vector.connection]`、`[vector.timeout]`、`[vector.retry]`、`[vector.embedding]` 已迁移至 `[vector.qdrant.*]` 子节；事务配置中的 `enable_2pc`、`auto_cleanup`、`cleanup_interval` 已移除。
 
 ---
 
@@ -37,8 +45,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 ### 1.2 port
 - **类型**: u16
 - **默认值**: `9758`
-- **说明**: 数据库服务监听的端口号
-- **实际效果**: 客户端通过此端口连接到 GraphDB 服务
+- **说明**: HTTP 服务监听的端口号（HTTP 服务默认启用并绑定 `0.0.0.0`，可用 `[http]` 节覆盖）
 - **配置建议**: 确保端口未被其他服务占用
 
 ### 1.3 storage_path
@@ -46,9 +53,8 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **默认值**: `"data/graphdb"`
 - **说明**: 数据存储路径
 - **实际效果**: 
-  - 相对路径: 相对于可执行文件所在目录
+  - 相对路径: 相对于配置文件所在目录解析
   - 绝对路径: 直接使用指定路径
-  - 支持 `~` 展开为用户主目录
 - **配置建议**: 
   - 确保目录有足够的磁盘空间
   - 生产环境建议使用独立的数据盘
@@ -70,9 +76,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **类型**: u64
 - **默认值**: `30`（秒）
 - **说明**: 默认事务超时时间
-- **实际效果**: 
-  - 事务超过此时间未提交将自动中止
-  - 会话空闲超时时间为该值的 10 倍
+- **实际效果**: 事务超过此时间未提交将自动中止
 - **配置建议**: 
   - 短事务场景: 10-30 秒
   - 复杂查询场景: 60-300 秒
@@ -81,39 +85,21 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **类型**: usize
 - **默认值**: `1000`
 - **说明**: 最大并发事务数
-- **实际效果**: 限制同时执行的事务数量，超出限制将返回错误
+- **实际效果**: 限制同时执行的事务数量，超出限制将返回错误（不允许为 0）
 - **配置建议**: 
   - 根据服务器内存和 CPU 资源调整
   - 建议值: 100-5000
 
-### 2.3 enable_2pc
+### 2.3 auto_commit
 - **类型**: bool
 - **默认值**: `false`
-- **说明**: 是否启用两阶段提交（2PC）
+- **说明**: 每条成功语句是否自动提交
 - **实际效果**: 
-  - `true`: 启用分布式事务支持
-  - `false`: 使用本地事务
-- **配置建议**: 
-  - 单节点部署: `false`
-  - 分布式部署: `true`
+  - `true`: 单语句自动提交，无需显式 BEGIN/COMMIT
+  - `false`: 需要显式事务控制
+- **配置建议**: 交互式/嵌入式场景可开启，批量导入场景保持 `false`
 
-### 2.4 auto_cleanup
-- **类型**: bool
-- **默认值**: `true`
-- **说明**: 是否自动清理过期事务
-- **实际效果**: 
-  - `true`: 后台线程定期清理超时事务
-  - `false`: 需要手动清理
-- **配置建议**: 生产环境建议启用
-
-### 2.5 cleanup_interval
-- **类型**: u64
-- **默认值**: `10`（秒）
-- **说明**: 清理任务执行间隔
-- **实际效果**: 控制后台清理线程的检查频率
-- **配置建议**: 
-  - 高频事务场景: 5-10 秒
-  - 低频事务场景: 30-60 秒
+> **注意：** 当前版本没有 `enable_2pc`、`auto_cleanup`、`cleanup_interval` 配置项。
 
 ---
 
@@ -261,89 +247,66 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ---
 
-## 6. 优化器配置 [optimizer]
+## 6. gRPC 服务配置 [grpc]
 
-### 6.1 max_iteration_rounds
-- **类型**: usize
-- **默认值**: `5`
-- **说明**: 查询优化最大迭代轮数
-- **实际效果**: 控制查询计划的优化深度
-- **配置建议**: 
-  - 复杂查询: 5-10
-  - 简单查询: 3-5
-
-### 6.2 max_exploration_rounds
-- **类型**: usize
-- **默认值**: `128`
-- **说明**: 查询计划最大探索轮数
-- **实际效果**: 限制优化器探索的候选计划数量
-- **配置建议**: 
-  - 高性能要求: 256-512
-  - 快速响应: 64-128
-
-### 6.3 enable_cost_model
+### 6.1 enabled
 - **类型**: bool
 - **默认值**: `true`
-- **说明**: 是否启用代价模型
-- **实际效果**: 
-  - `true`: 基于代价选择最优计划
-  - `false`: 使用启发式规则
-- **配置建议**: 建议启用以获得更好的查询性能
+- **说明**: 是否启用 gRPC 服务
 
-### 6.4 enable_multi_plan
-- **类型**: bool
-- **默认值**: `true`
-- **说明**: 是否启用多计划候选
-- **实际效果**: 
-  - `true`: 生成多个候选计划进行比较
-  - `false`: 只生成一个计划
-- **配置建议**: 建议启用
+### 6.2 port
+- **类型**: u16
+- **默认值**: `9669`
+- **说明**: gRPC 服务端口（不允许为 0）
 
-### 6.5 enable_property_pruning
-- **类型**: bool
-- **默认值**: `true`
-- **说明**: 是否启用属性剪枝
-- **实际效果**: 自动移除查询中不需要的属性访问
-- **配置建议**: 建议启用以减少 IO
-
-### 6.6 enable_adaptive_iteration
-- **类型**: bool
-- **默认值**: `true`
-- **说明**: 是否启用自适应迭代
-- **实际效果**: 根据查询复杂度动态调整迭代次数
-- **配置建议**: 建议启用
-
-### 6.7 stable_threshold
+### 6.3 max_connections
 - **类型**: usize
-- **默认值**: `2`
-- **说明**: 稳定阈值
-- **实际效果**: 连续多轮优化没有改进时停止优化
-- **配置建议**: 默认值即可
+- **默认值**: `100`
+- **说明**: gRPC 最大并发连接数
 
-### 6.8 min_iteration_rounds
+### 6.4 max_request_size / max_response_size
 - **类型**: usize
-- **默认值**: `1`
-- **说明**: 最小迭代轮数
-- **实际效果**: 至少执行这么多轮优化
-- **配置建议**: 默认值即可
+- **默认值**: `10485760`（10MB）
+- **说明**: 最大请求/响应消息大小（字节）
+
+### 6.5 keepalive_interval_secs / keepalive_timeout_secs
+- **类型**: u64
+- **默认值**: `30` / `10`
+- **说明**: Keepalive 间隔与超时（秒，0 表示禁用）
+
+### 6.6 connection_timeout_secs
+- **类型**: u64
+- **默认值**: `10`
+- **说明**: 连接超时时间（秒）
+
+### 6.7 request_timeout_secs
+- **类型**: u64
+- **默认值**: `60`
+- **说明**: 请求超时时间（秒，0 表示禁用）
 
 ---
 
-## 7. 优化器规则配置 [optimizer.rules]
+## 7. 优化器配置 [optimizer]
 
-### 7.1 disabled_rules
-- **类型**: Vec<String>
-- **默认值**: `[]`
-- **说明**: 禁用的优化规则列表
-- **实际效果**: 列出的规则将不会被执行
-- **配置建议**: 仅在规则导致问题时禁用
+### 7.1 参数列表
 
-### 7.2 enabled_rules
-- **类型**: Vec<String>
-- **默认值**: `[]`
-- **说明**: 显式启用的优化规则列表
-- **实际效果**: 优先级高于默认规则集
-- **配置建议**: 高级调优时使用
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| max_iteration_rounds | usize | 5 | 查询优化最大迭代轮数（>0） |
+| max_exploration_rounds | usize | 128 | 查询计划最大探索轮数（>0） |
+| enable_cost_model | bool | true | 是否启用代价模型 |
+| enable_multi_plan | bool | true | 是否启用多计划候选 |
+| enable_property_pruning | bool | true | 是否启用属性剪枝 |
+| enable_adaptive_iteration | bool | true | 是否启用自适应迭代 |
+| stable_threshold | usize | 2 | 连续多轮无改进时停止优化 |
+| min_iteration_rounds | usize | 1 | 最小迭代轮数（不得大于 max_iteration_rounds） |
+
+### 7.2 优化器规则配置 [optimizer.rules]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| disabled_rules | Vec\<String\> | `[]` | 禁用的优化规则列表 |
+| enabled_rules | Vec\<String\> | `[]` | 显式启用的规则列表（优先级高于默认规则集） |
 
 **可用规则列表**:
 - `FilterPushDownRule` - 谓词下推
@@ -354,166 +317,203 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ---
 
-## 8. 向量检索配置 [vector]
+## 8. 并行执行配置 [parallel]
 
-> 仅在启用 `qdrant` feature 时可用。当前引擎类型为 `Qdrant`，配置会传递给 `vector-client::VectorClientConfig`。
+查询内并行分区开关，默认关闭（行为与关闭时完全一致）。
 
-### 8.1 enabled
-- **类型**: bool
-- **默认值**: `false`
-- **说明**: 是否启用向量检索
-- **实际效果**: 
-  - `true`: GraphDB 启动时创建向量客户端并加载向量索引协调器
-  - `false`: 跳过向量相关初始化
-- **配置建议**: 只有需要向量索引时才启用
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | false | 是否启用查询内并行分区 |
+| workers | usize | 1 | 共享调度器的工作线程数（>0） |
+| min_rows_per_partition | u64 | 100000 | 每个分区的最小行数（低于阈值拒绝分区） |
+| max_partitions | usize | 1 | 单个扫描的最大分区数 |
+| max_buffered_chunks | usize | 10 | 每个分区 worker 的最大缓冲块数（背压） |
+| vertex_id_start | Option\<i64\> | null | 可选顶点 ID 范围下界（与 end 同时设置才生效） |
+| vertex_id_end | Option\<i64\> | null | 可选顶点 ID 范围上界（开区间） |
 
-### 8.2 engine
-- **类型**: String
-- **默认值**: `"Qdrant"`
-- **说明**: 向量引擎类型
-- **实际效果**: 当前仅支持 `Qdrant`
-- **配置建议**: 保持默认值
+---
 
-### 8.3 connection.host
-- **类型**: String
-- **默认值**: `"localhost"`
-- **说明**: Qdrant 服务主机名或 IP
-- **实际效果**: 用于构建 gRPC / HTTP 连接地址
-- **配置建议**: 本地开发使用 `localhost`，生产环境使用实际服务地址
+## 9. 存储引擎配置 [storage]
 
-### 8.4 connection.port
-- **类型**: u16
-- **默认值**: `6333`
-- **说明**: Qdrant gRPC 端口
-- **实际效果**: GraphDB 通过该端口连接 Qdrant 的 gRPC 接口
-- **配置建议**: 确保端口与 Qdrant 实际配置一致
+### 9.1 基础参数
 
-### 8.5 connection.http_port
-- **类型**: Option\<u16\>
-- **默认值**: `null`
-- **说明**: Qdrant HTTP 端口（可选）
-- **实际效果**: 某些调试或兼容场景下用于构造 HTTP 地址
-- **配置建议**: 如果部署同时开放 HTTP 与 gRPC，建议显式指定
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| engine | String | propertygraph | 存储引擎类型 |
+| compression | String | none | 压缩算法（none/lz4/zstd/snappy） |
+| compression_level | u32 | 3 | 压缩级别（0-9） |
+| checkpoint_interval_secs | u64 | 300 | Checkpoint 间隔（秒，0 禁用） |
+| max_db_size | u64 | 0 | 最大数据库大小（字节，0 不限制） |
+| auto_statistics | bool | true | 是否自动收集统计信息 |
+| statistics_interval_secs | u64 | 60 | 统计信息收集间隔（秒） |
 
-### 8.6 connection.use_tls
-- **类型**: bool
-- **默认值**: `false`
-- **说明**: 是否使用 TLS
-- **实际效果**: `true` 时请求使用 HTTPS / TLS 连接
-- **配置建议**: 仅在远程部署且网关或服务端启用 TLS 时打开
+### 9.2 内存预算
 
-### 8.7 connection.api_key
-- **类型**: Option\<String\>
-- **默认值**: `null`
-- **说明**: Qdrant API Key
-- **实际效果**: 若服务端启用认证，则请求会附带 API Key
-- **配置建议**: 生产环境按需配置
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| max_memory_bytes | u64 | 536870912（512MB） | 存储总内存预算（字节） |
+| index_memory_bytes | u64 | 134217728（128MB） | 原生索引独立内存预算（不得超过总预算） |
+| memory_soft_ratio | f64 | 0.80 | 软内存压力水位（0 < soft < hard <= 1） |
+| memory_hard_ratio | f64 | 0.95 | 硬内存准入水位 |
 
-### 8.8 connection.connect_timeout_secs
-- **类型**: u64
-- **默认值**: `5`
-- **说明**: 连接超时时间（秒）
-- **实际效果**: 超过该时间仍未建立连接则返回错误
-- **配置建议**: 本地部署可保持默认，跨机房部署可适当增大
+### 9.3 快照与墓碑
 
-### 8.9 timeout.request_timeout_secs
-- **类型**: u64
-- **默认值**: `30`
-- **说明**: 通用请求超时时间（秒）
-- **实际效果**: 影响客户端大多数请求
-- **配置建议**: 一般场景保持默认即可
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| max_active_snapshots | usize | 1000 | 最大活跃快照数 |
+| max_snapshot_age_secs | u64 | 300 | 快照最大存活时间（秒） |
+| max_tombstones | usize | 1000000 | 保留墓碑数量上限 |
+| max_tombstone_bytes | u64 | 268435456（256MB） | 墓碑估算内存上限（字节） |
+| index_gc_batch | usize | 10000 | 每次 GC 处理的索引条目数 |
+| operation_timeout_secs | u64 | 30 | 维护操作最大时长（秒） |
+| dirty_flush_operations | u64 | 50000 | 触发 flush 的脏操作数阈值 |
+| dirty_flush_bytes | u64 | 67108864（64MB） | 触发 flush 的脏数据量阈值（字节） |
 
-### 8.10 timeout.search_timeout_secs
-- **类型**: u64
-- **默认值**: `60`
-- **说明**: 搜索请求超时时间（秒）
-- **实际效果**: 影响搜索类请求的等待上限
-- **配置建议**: 大集合或慢磁盘场景可适当提高
+### 9.4 缓存与编码
 
-### 8.11 timeout.upsert_timeout_secs
-- **类型**: u64
-- **默认值**: `30`
-- **说明**: 写入请求超时时间（秒）
-- **实际效果**: 影响 upsert / 批量写入请求的等待上限
-- **配置建议**: 批量导入场景可适当提高
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| cache_ttl_secs | u64 | 60 | 记录缓存 TTL（秒，0 禁用） |
+| cache_tti_secs | u64 | 300 | 记录缓存 TTI（秒，0 禁用） |
+| string_min_rows | usize | 50 | 字符串编码分析所需最小行数 |
+| avg_length_threshold | usize | 16 | 考虑 FSST 编码的最小平均字符串长度 |
+| cardinality_ratio_threshold | f64 | 0.5 | 低于该基数比（distinct/total）优先字典编码 |
+| fsst_rebuild_threshold | f64 | 0.2 | 触发 FSST 重建的新旧数据比 |
+| index_pool_capacity_bytes | u64 | 134217728（128MB） | 每 shard 索引缓冲池容量（字节） |
+| index_eviction_enabled | bool | true | 内存压力下是否启用 chunk 级驱逐 |
+| index_eviction_high_ratio | f64 | 0.85 | 驱逐触发高水位（usage/capacity） |
+| index_eviction_low_ratio | f64 | 0.65 | 驱逐目标低水位（须小于高水位） |
 
-### 8.12 retry.max_retries
-- **类型**: usize
-- **默认值**: `3`
-- **说明**: 最大重试次数
-- **实际效果**: 请求失败时自动重试的上限
-- **配置建议**: 网络不稳定场景可适当提高，但不宜过大
+---
 
-### 8.13 retry.initial_delay_ms
-- **类型**: u64
-- **默认值**: `100`
-- **说明**: 首次重试等待时间（毫秒）
-- **实际效果**: 控制重试退避起点
-- **配置建议**: 保持默认值通常足够
+## 10. 查询资源限制 [query_resource]
 
-### 8.14 retry.max_delay_ms
-- **类型**: u64
-- **默认值**: `5000`
-- **说明**: 重试最大等待时间（毫秒）
-- **实际效果**: 退避不会超过该值
-- **配置建议**: 保持默认值即可
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| max_memory_per_query | u64 | 0 | 单查询内存上限（字节，0 不限制） |
+| max_concurrent_queries | usize | 100 | 最大并发查询数（0 不允许，必须 >0） |
+| query_timeout_secs | u64 | 0 | 查询超时（秒，0 不限制） |
+| max_result_size | u64 | 0 | 最大结果集大小（字节，0 不限制） |
+| max_vertex_scan | usize | 1000000 | 单查询最大顶点扫描数 |
+| max_edge_scan | usize | 10000000 | 单查询最大边扫描数 |
 
-### 8.15 retry.multiplier
-- **类型**: f64
-- **默认值**: `2.0`
-- **说明**: 重试退避倍率
-- **实际效果**: 每次重试等待时间按该倍率增长
-- **配置建议**: 一般保持默认值
+---
 
-### 8.16 embedding（嵌入模型配置）
+## 11. 列式快速路径配置 [columnar]
 
-> 可选配置。若未配置，向量检索使用原始向量；若配置，GraphDB 会自动调用嵌入服务将文本转为向量后写入 Qdrant。
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| column_block_enabled | bool | false | 是否启用存储列块扫描路径（输出与行式路径逐位一致；开启后 PROFILE/EXPLAIN ANALYZE 中可观察 `column_block_hits`） |
 
-#### 8.16.1 embedding.base_url
-- **类型**: String
-- **默认值**: `"http://localhost:11434/api/embeddings"`
-- **说明**: 嵌入 API 端点 URL
-- **实际效果**: GraphDB 通过该 URL 调用嵌入服务生成向量
-- **配置建议**: 
-  - Ollama 本地: `http://localhost:11434/api/embeddings`
-  - OpenAI: `https://api.openai.com/v1/embeddings`
-  - 其他兼容端点: 按服务商提供地址配置
+---
 
-#### 8.16.2 embedding.api_key
-- **类型**: Option\<String\>
-- **默认值**: `null`
-- **说明**: 嵌入 API 密钥（可选，部分服务需要）
-- **实际效果**: 若有值，每次请求会附带 Authorization header
-- **配置建议**: OpenAI、Azure 等服务需要配置，Ollama 本地可省略
+## 12. 监控配置 [monitoring]
 
-#### 8.16.3 embedding.model
-- **类型**: String
-- **默认值**: `"all-minilm"`
-- **说明**: 嵌入模型名称
-- **实际效果**: 传递给嵌入 API 的 model 参数
-- **配置建议**:
-  - Ollama: `all-minilm`、`nomic-embed-text`、`llama3` 等
-  - OpenAI: `text-embedding-3-small`、`text-embedding-3-large`、`text-embedding-ada-002`
+### 12.1 顶层参数
 
-#### 8.16.4 embedding.timeout_secs
-- **类型**: u64
-- **默认值**: `30`
-- **说明**: 嵌入请求超时时间（秒）
-- **实际效果**: 超过该时间未返回响应则请求失败
-- **配置建议**: 大模型或网络延迟高时可适当提高到 60-120
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用监控 |
+| memory_cache_size | usize | 1000 | 内存缓存大小（保留最近N条查询，>0） |
+| slow_query_threshold_ms | u64 | 1000 | 慢查询阈值（毫秒） |
+| progress_report_rows_interval | u64 | 0 | 查询进度通知的行间隔（0 禁用进度上报） |
 
-#### 8.16.5 embedding.dimension
-- **类型**: Option\<usize\>
-- **默认值**: `null`
-- **说明**: 期望的向量维度（可选，不设置则自动检测）
-- **实际效果**: 
-  - `Some(768)`: 强制返回的向量维度必须匹配，不匹配则报错
-  - `null`: 自动检测并适配
-- **配置建议**: 推荐显式设置以提高健壮性（例如 OpenAI `text-embedding-3-small` 为 1536）
+### 12.2 慢查询日志 [monitoring.slow_query_log]
 
-#### 8.16.6 embedding.preprocessor（文本预处理器）
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用慢查询日志 |
+| threshold_ms | u64 | 1000 | 慢查询阈值（毫秒，>0） |
+| log_file_path | String | `"logs/slow_query.log"` | 慢查询日志文件路径 |
+| max_file_size_mb | u64 | 100 | 单文件轮转大小（MB） |
+| max_files | u32 | 5 | 保留的日志文件数 |
+| verbose_format | bool | false | 是否使用详细格式 |
+| buffer_size | usize | 100 | 异步写缓冲大小（>0） |
+| json_format | bool | false | 是否使用 JSON 格式 |
 
-> 可选配置。用于在生成嵌入前对文本进行预处理（如添加前缀、模板等）。不配置则不做处理。
+> **注意：** 旧版文档中的 `slow_query_log_dir`、`slow_query_log_retention_days` 已被 `[monitoring.slow_query_log]` 子节取代。
+
+---
+
+## 13. 向量检索配置 [vector]
+
+向量检索支持两种引擎：`local`（内置，默认）与 `qdrant`（外部服务，需启用 `vector-qdrant` feature）。
+
+### 13.1 顶层参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用向量检索 |
+| engine | String | `"local"` | 引擎类型：`local` 或 `qdrant` |
+| mvcc.ssi_read_set | bool | false | 向量搜索的 MVCC SSI 读集（默认关闭） |
+| collection.granularity | String | `"space"` | 向量集合粒度：`space` 或 `field` |
+| retention.* | - | 见下 | Outbox 保留策略 |
+
+### 13.2 本地引擎 [vector.local]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| data_dir | Option\<PathBuf\> | null | 数据目录（缺省为 `<storage_path>/vector`） |
+| hnsw.m | usize | 16 | HNSW 每层最大连接数 |
+| hnsw.ef_construct | usize | 100 | HNSW 构建动态列表大小 |
+| hnsw.full_scan_threshold | usize | 0 | 全量扫描阈值（0 禁用） |
+| hnsw.ef_search | usize | 0 | 搜索动态列表大小（0 用引擎默认） |
+| hnsw.iterative_max_rounds | usize | 0 | 迭代搜索最大轮数 |
+| hnsw.max_scan_tuples | u64 | 0 | 最大扫描元组数 |
+| ivf.lists | u32 | 0 | IVF 聚类中心数（0 自动） |
+| ivf.auto_promotion | bool | false | 是否自动从全量扫描晋升为 IVF |
+| ivf.min_build_points | u64 | 100000 | 构建 IVF 所需最小点数 |
+| ivf.sample_limit | usize | 65536 | 训练采样上限 |
+| ivf.kmeans_max_iter | u32 | 10 | K-means 最大迭代次数 |
+| ivf.drift_threshold | f64 | 0.10 | 质心漂移阈值 |
+| ivf.drift_check_interval | u64 | 25000 | 漂移检查间隔（点数） |
+| ivf.default_nprobe | usize | 8 | 默认探测中心数 |
+| ivf.max_probes | usize | 0 | 最大探测中心数（0 不限制） |
+| quantization.quantization_type | Option\<String\> | null | 量化类型（scalar/binary/product） |
+| quantization.quantile | Option\<f32\> | null | 量化分位数 |
+| quantization.compression | Option\<String\> | null | 压缩比（x4/x8/x16/x32/x64） |
+| quantization.always_ram | Option\<bool\> | null | 量化数据是否常驻内存 |
+
+### 13.3 Qdrant 引擎 [vector.qdrant]
+
+> 仅当 `engine = "qdrant"` 时生效。旧版 `[vector.connection]` / `[vector.timeout]` / `[vector.embedding]` 均已迁移至此；`retry` 重试配置已移除。
+
+#### [vector.qdrant] 顶层
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用 qdrant 客户端 |
+
+#### [vector.qdrant.connection]
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| host | String | `"localhost"` | Qdrant 服务地址 |
+| port | u16 | 6334 | gRPC 端口（默认传输） |
+| http_port | Option\<u16\> | null | HTTP 端口（HTTP 传输或健康检查用） |
+| transport | String | `"grpc"` | 传输方式：`grpc` 或 `http` |
+| use_tls | bool | false | 是否使用 TLS |
+| api_key | Option\<String\> | null | API Key |
+| connect_timeout_secs | u64 | 5 | 连接超时（秒） |
+
+#### [vector.qdrant.timeout]
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| request_timeout_secs | u64 | 30 | 通用请求超时（秒） |
+| search_timeout_secs | u64 | 60 | 搜索超时（秒） |
+| upsert_timeout_secs | u64 | 30 | 写入超时（秒） |
+
+#### [vector.qdrant.embedding]（可选）
+
+若未配置，向量检索使用原始向量；若配置，GraphDB 会自动调用嵌入服务将文本转为向量。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| base_url | String | `"http://localhost:11434/api/embeddings"` | 嵌入 API 端点 |
+| api_key | Option\<String\> | null | 嵌入 API 密钥（OpenAI 等需要） |
+| model | String | `"all-minilm"` | 嵌入模型名称 |
+| timeout_secs | u64 | 30 | 嵌入请求超时（秒） |
+| dimension | Option\<usize\> | null | 期望向量维度（不设则自动检测） |
+
+文本预处理器 `[vector.qdrant.embedding.preprocessor]`（可选）：
 
 | 类型 | 说明 | 额外字段 |
 |------|------|---------|
@@ -523,74 +523,86 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | `nomic` | Nomic-Embed 任务类型前缀 | `task_type` (String) |
 | `stella` | Stella 任务类型前缀 | `task_type` (String) |
 
-**Nomic task_type 可选值**:
-- `search_query` — 搜索查询
-- `search_document` — 搜索文档
-- `classification` — 分类
-- `clustering` — 聚类
+**Nomic task_type**: `search_query` / `search_document` / `classification` / `clustering`
+**Stella task_type**: `s2p_query` / `s2s_document` / `p2p_query` / `p2p_document`
 
-**Stella task_type 可选值**:
-- `s2p_query` — 句子到段落查询
-- `s2s_document` — 句子到句子文档
-- `p2p_query` — 段落到段落查询
-- `p2p_document` — 段落到段落文档
+### 13.4 Outbox 保留策略 [vector.retention]
 
-**预处理效果示例**:
-
-| 配置 | 输入 | 输出 |
-|------|------|------|
-| `type = "none"` | `"hello"` | `"hello"` |
-| `type = "prefix", prefix = "query: "` | `"rust"` | `"query: rust"` |
-| `type = "template", template = "classify: {{text}}"` | `"hello"` | `"classify: hello"` |
-| `type = "nomic", task_type = "search_query"` | `"rust"` | `"search_query: rust"` |
-| `type = "stella", task_type = "s2p_query"` | `"query"` | `"Instruct: Given a web search query, retrieve relevant passages. Query: query"` |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用保留清理 |
+| prune_interval_secs | u64 | 3600 | 清理执行间隔（秒） |
+| grace_lsn_distance | u64 | 10000 | LSN 滞后宽限距离 |
+| max_applied_age_ms | u64 | 86400000 | 已应用记录最大保留时间（毫秒） |
+| max_archive_rows | u64 | 100000 | 归档行数上限 |
 
 ---
 
-## 9. 监控配置 [monitoring]
+## 14. 全文检索配置 [fulltext]
 
-### 9.1 enabled
-- **类型**: bool
-- **默认值**: `true`
-- **说明**: 是否启用监控
-- **实际效果**: 
-  - `true`: 收集查询统计信息
-  - `false`: 关闭监控功能
-- **配置建议**: 生产环境建议启用
+全文索引基于 BM25（tantivy 引擎）。
 
-### 9.2 memory_cache_size
-- **类型**: usize
-- **默认值**: `1000`
-- **说明**: 内存缓存大小（保留最近N条查询）
-- **实际效果**: 控制内存中保留的查询历史数量
-- **配置建议**: 
-  - 内存充足: 5000-10000
-  - 内存紧张: 100-500
+### 14.1 顶层参数
 
-### 9.3 slow_query_threshold_ms
-- **类型**: u64
-- **默认值**: `1000`（1秒）
-- **说明**: 慢查询阈值（毫秒）
-- **实际效果**: 超过此时间的查询将被记录为慢查询
-- **配置建议**: 
-  - 高性能要求: 100-500ms
-  - 一般场景: 1000-3000ms
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | false | 是否启用全文检索 |
+| default_engine | String | `"bm25"` | 默认引擎（当前仅 bm25） |
+| index_path | PathBuf | `"data/fulltext"` | 全文索引存储目录 |
+| cache_size | usize | 100 | 索引缓存大小 |
+| max_result_cache | usize | 1000 | 结果缓存条数上限 |
+| result_cache_ttl_secs | u64 | 60 | 结果缓存 TTL（秒） |
 
-### 9.4 slow_query_log_dir
-- **类型**: String
-- **默认值**: `"logs/slow_queries"`
-- **说明**: 慢查询日志目录
-- **实际效果**: 慢查询日志文件存储位置
-- **配置建议**: 确保目录有写入权限
+### 14.2 同步配置 [fulltext.sync]
 
-### 9.5 slow_query_log_retention_days
-- **类型**: u32
-- **默认值**: `7`
-- **说明**: 慢查询日志保留天数
-- **实际效果**: 超过此天数的慢查询日志将被删除
-- **配置建议**: 
-  - 长期分析: 30-90 天
-  - 短期分析: 3-7 天
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| queue_size | usize | 10000 | 同步队列大小 |
+| commit_interval_ms | u64 | 1000 | 提交间隔（毫秒） |
+| batch_size | usize | 100 | 批量大小 |
+| failure_policy | String | `"fail_open"` | 同步失败策略：`fail_open` / `fail_closed` |
+
+### 14.3 Tantivy 引擎配置 [fulltext.tantivy]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| writer_memory_budget | usize | 50000000 | 写入器内存预算（字节） |
+| tokenizer | String | `"default"` | 分词器：`default` / `jieba` / `raw` / `whitespace` |
+| doc_store_cache_num_blocks | usize | 100 | 文档存储缓存块数 |
+| bm25_params.k1 | f32 | 1.2 | BM25 词频调节参数 |
+| bm25_params.b | f32 | 0.75 | BM25 文档长度调节参数 |
+
+---
+
+## 15. 嵌入式运行时配置 [embedded.runtime]
+
+用于嵌入式场景（`#[cfg(feature = "embedded")]`）的数据库实例运行参数。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| path | Option\<PathBuf\> | null | 数据库路径；`null` 表示纯内存模式 |
+| cache_size_mb | usize | 64 | 页缓存大小（MB） |
+| default_timeout_secs | u64 | 30 | 默认操作超时（秒） |
+| enable_wal | bool | true | 是否启用 WAL（写前日志） |
+| sync_mode | String | `"normal"` | 同步模式 |
+| read_only | bool | false | 是否以只读方式打开 |
+| create_if_missing | bool | true | 数据库不存在时是否自动创建 |
+| max_open_files | usize | 100 | 最大打开文件数 |
+| worker_threads | usize | 0 | 后台工作线程数（0 = 自动检测） |
+
+### 示例
+
+```toml
+[embedded.runtime]
+path = "data/embedded"      # 省略则为纯内存模式
+cache_size_mb = 128
+enable_wal = true
+sync_mode = "normal"
+read_only = false
+create_if_missing = true
+max_open_files = 200
+worker_threads = 4
+```
 
 ---
 
@@ -608,9 +620,7 @@ max_connections = 10
 [transaction]
 default_timeout = 60
 max_concurrent_transactions = 100
-enable_2pc = false
-auto_cleanup = true
-cleanup_interval = 10
+auto_commit = false
 
 [log]
 level = "debug"
@@ -633,38 +643,19 @@ auto_create_default_space = true
 default_space_name = "default"
 single_user_mode = true
 
+[grpc]
+enabled = true
+port = 9669
+
+[parallel]
+enabled = false
+
 [vector]
 enabled = true
-engine = "Qdrant"
+engine = "local"
 
-[vector.connection]
-host = "localhost"
-port = 6333
-http_port = 6334
-use_tls = false
-
-[vector.timeout]
-request_timeout_secs = 30
-search_timeout_secs = 60
-upsert_timeout_secs = 30
-
-[vector.retry]
-max_retries = 3
-initial_delay_ms = 100
-max_delay_ms = 5000
-multiplier = 2.0
-
-# 嵌入服务配置（可选）
-# 使用 Ollama 本地嵌入模型
-[vector.embedding]
-base_url = "http://localhost:11434/api/embeddings"
-model = "all-minilm"
-timeout_secs = 30
-
-# 文本预处理器（可选，不配置则无预处理）
-# [vector.embedding.preprocessor]
-# type = "prefix"
-# prefix = "query: "
+[fulltext]
+enabled = false
 
 [optimizer]
 max_iteration_rounds = 3
@@ -680,11 +671,9 @@ min_iteration_rounds = 1
 enabled = true
 memory_cache_size = 500
 slow_query_threshold_ms = 500
-slow_query_log_dir = "logs/slow_queries"
-slow_query_log_retention_days = 3
 ```
 
-### 生产环境配置
+### 生产环境配置（Qdrant 向量后端）
 
 ```toml
 [database]
@@ -696,9 +685,7 @@ max_connections = 100
 [transaction]
 default_timeout = 30
 max_concurrent_transactions = 2000
-enable_2pc = false
-auto_cleanup = true
-cleanup_interval = 10
+auto_commit = false
 
 [log]
 level = "info"
@@ -721,39 +708,46 @@ auto_create_default_space = true
 default_space_name = "production"
 single_user_mode = false
 
+[query_resource]
+max_concurrent_queries = 100
+query_timeout_secs = 60
+
+[storage]
+max_memory_bytes = 1073741824   # 1GB
+index_memory_bytes = 268435456  # 256MB
+
 [vector]
 enabled = true
-engine = "Qdrant"
+engine = "qdrant"
 
-[vector.connection]
+[vector.qdrant.connection]
 host = "qdrant.example.com"
-port = 6333
-http_port = 6334
+port = 6334
+http_port = 6333
 use_tls = true
+# api_key = "your-api-key"
 
-[vector.timeout]
+[vector.qdrant.timeout]
 request_timeout_secs = 30
 search_timeout_secs = 60
 upsert_timeout_secs = 30
 
-[vector.retry]
-max_retries = 3
-initial_delay_ms = 100
-max_delay_ms = 5000
-multiplier = 2.0
-
 # 嵌入服务配置（可选）
 # 使用 OpenAI 嵌入模型
-[vector.embedding]
+[vector.qdrant.embedding]
 base_url = "https://api.openai.com/v1/embeddings"
 api_key = "sk-xxx"
 model = "text-embedding-3-small"
 dimension = 1536
 timeout_secs = 60
 
-# 文本预处理器（可选）
-# [vector.embedding.preprocessor]
-# type = "none"
+[fulltext]
+enabled = true
+index_path = "/var/lib/graphdb/fulltext"
+
+[fulltext.tantivy]
+writer_memory_budget = 100000000
+tokenizer = "jieba"
 
 [optimizer]
 max_iteration_rounds = 10
@@ -769,8 +763,13 @@ min_iteration_rounds = 1
 enabled = true
 memory_cache_size = 5000
 slow_query_threshold_ms = 1000
-slow_query_log_dir = "/var/log/graphdb/slow_queries"
-slow_query_log_retention_days = 30
+
+[monitoring.slow_query_log]
+enabled = true
+threshold_ms = 1000
+log_file_path = "/var/log/graphdb/slow_query.log"
+max_file_size_mb = 500
+max_files = 10
 ```
 
 ---
@@ -779,7 +778,8 @@ slow_query_log_retention_days = 30
 
 1. 配置文件中的显式配置
 2. 配置文件中省略的字段使用默认值
-3. 运行时可通过环境变量覆盖（未来支持）
+3. 路径类配置相对于配置文件所在目录解析
+4. 运行时可通过 HTTP 管理接口查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`）
 
 ---
 
@@ -787,8 +787,7 @@ slow_query_log_retention_days = 30
 
 启动时会自动验证配置：
 - 检查必需的配置项
-- 验证配置值的合法性
-- 检查路径的读写权限
-- 验证端口是否可用
+- 验证配置值的合法性（端口非 0、并发数大于 0、内存比率满足 0 < soft < hard <= 1 等）
+- HTTPS 启用时必须提供证书与私钥路径
 
 配置错误将导致启动失败并输出错误信息。

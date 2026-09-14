@@ -2,7 +2,7 @@
 
 ## 概述
 
-数据定义语言 (DDL) 用于定义和管理图数据库的Schema，包括标签、边类型、索引等的创建、修改和删除。
+数据定义语言 (DDL) 用于定义和管理图数据库的Schema，包括图空间、标签、边类型、索引、序列、宏、类型别名等的创建、修改和删除。
 
 ---
 
@@ -14,20 +14,26 @@
 ### 语法结构
 ```cypher
 CREATE TAG [IF NOT EXISTS] <tag_name> (
-    <prop_name>: <prop_type> [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
+    <prop_name>[: <prop_type>] [SERIAL] [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
     [, <prop_name>: <prop_type> [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>'] ...]
     [, ttl_duration=<seconds>]
     [, ttl_col=<prop_name>]
 )
+
+-- 从查询结果定义标签
+CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 ```
 
 ### 关键特性
 - 支持多种数据类型
 - 支持IF NOT EXISTS
 - 支持NOT NULL约束
-- 支持DEFAULT默认值
+- 支持DEFAULT默认值（支持字面量与常量函数调用，创建时即求值）
 - 支持COMMENT属性注释
 - 支持TTL自动过期
+- 支持 `SERIAL` 类型修饰（自增整数，隐含 NOT NULL）
+- 支持属性名后省略 `:` 与类型（省略时类型由绑定阶段处理）
+- 支持 `AS (<query>)` 从子查询定义标签
 
 ### 支持的数据类型
 | 类型 | 说明 |
@@ -39,6 +45,8 @@ CREATE TAG [IF NOT EXISTS] <tag_name> (
 | DATE | 日期类型 |
 | TIMESTAMP | 时间戳类型 |
 | DATETIME | 日期时间类型 |
+| ARRAY\<T\> / STRUCT\<...\> | 复合类型（最大嵌套深度 16） |
+| 用户定义类型别名 | 通过 CREATE TYPE 定义后可直接使用 |
 
 ### 约束说明
 | 约束 | 语法 | 默认值 | 说明 |
@@ -58,6 +66,7 @@ CREATE TAG [IF NOT EXISTS] <tag_name> (
 - 当不指定 `DEFAULT` 时，属性**没有默认值**
 - 插入数据时如未提供值且属性可为空，则填充 `NULL`
 - 如属性有 `NOT NULL` 约束且无默认值，插入时必须提供值，否则会报错
+- DEFAULT 值可以是字面量（含负数）或常量函数调用（如 `datetime()`），在创建 Schema 时即求值
 
 **COMMENT 约束（默认无注释）**
 - 当不指定 `COMMENT` 时，属性**没有注释**
@@ -72,6 +81,7 @@ CREATE TAG [IF NOT EXISTS] <tag_name> (
 | NOT NULL + DEFAULT | `age: INT NOT NULL DEFAULT 0` | 非空，有默认值，不提供值时使用默认值 0 |
 | DEFAULT | `age: INT DEFAULT 0` | 可空，有默认值，不提供值时使用默认值 0 |
 | NULL + DEFAULT | `age: INT NULL DEFAULT 0` | 可空，有默认值，不提供值时使用默认值 0 |
+| SERIAL | `id: SERIAL` | 自增整数，隐含 NOT NULL |
 
 ### TTL说明
 TTL（Time To Live）用于自动清理过期数据。
@@ -110,6 +120,9 @@ CREATE TAG Person(
     email: STRING NULL COMMENT '邮箱'
 )
 
+-- SERIAL自增列
+CREATE TAG Counter(id: SERIAL, name: STRING)
+
 -- 带TTL创建（数据1年后自动过期）
 CREATE TAG Session(
     token: STRING NOT NULL,
@@ -118,6 +131,9 @@ CREATE TAG Session(
     ttl_duration=31536000,
     ttl_col=created_at
 )
+
+-- 从查询定义标签
+CREATE TAG adult AS (MATCH (p:Person) WHERE p.age >= 18 RETURN p)
 ```
 
 ---
@@ -125,25 +141,26 @@ CREATE TAG Session(
 ## 2. CREATE EDGE - 创建边类型
 
 ### 功能
-定义边类型及其属性。
+定义边类型及其属性，可同时声明端点约束。
 
 ### 语法结构
 ```cypher
 CREATE EDGE [IF NOT EXISTS] <edge_type> (
-    <prop_name>: <prop_type> [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
-    [, <prop_name>: <prop_type> [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>'] ...]
+    <prop_name>: <prop_type> [SERIAL] [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
+    [, <prop_name>: <prop_type> ...]
     [, ttl_duration=<seconds>]
     [, ttl_col=<prop_name>]
-)
+) [FROM <src_tag> TO <dst_tag>]
+
+-- 从查询结果定义边类型
+CREATE EDGE [IF NOT EXISTS] <edge_type> AS (<query>)
 ```
 
 ### 关键特性
-- 支持多种数据类型
-- 支持IF NOT EXISTS
-- 支持NOT NULL约束
-- 支持DEFAULT默认值
-- 支持COMMENT属性注释
+- 支持多种数据类型与属性约束（与 CREATE TAG 相同）
 - 支持TTL自动过期
+- 支持 `FROM <src_tag> TO <dst_tag>` 端点约束（可选）
+- 支持 `AS (<query>)` 从子查询定义边类型
 
 > **注意：** 约束默认值与 CREATE TAG 相同：属性默认可空，无默认值时插入 NULL，TTL 默认禁用。
 
@@ -152,12 +169,12 @@ CREATE EDGE [IF NOT EXISTS] <edge_type> (
 -- 基础创建
 CREATE EDGE IF NOT EXISTS follow(degree: FLOAT, since: TIMESTAMP)
 
--- 带约束创建
+-- 带约束与端点约束创建
 CREATE EDGE WORKS_AT(
     since: DATE NOT NULL COMMENT '入职日期',
     department: STRING DEFAULT 'unknown' COMMENT '部门',
     active: BOOL DEFAULT true COMMENT '是否在职'
-)
+) FROM person TO company
 
 -- 带TTL创建（数据30天后自动过期）
 CREATE EDGE TempRelation(
@@ -275,7 +292,6 @@ CREATE (n:Person:Employee {name: 'Bob', department: 'Engineering'})
 2. **测试阶段**：建议使用显式 DDL 确保 Schema 稳定性
 3. **生产阶段**：
    - 使用显式 DDL 预先定义所有 Schema
-   - 禁用 Schema 自动创建（如支持该配置）
    - 使用版本控制管理 Schema 变更
 
 ---
@@ -283,19 +299,20 @@ CREATE (n:Person:Employee {name: 'Bob', department: 'Engineering'})
 ## 4. CREATE SPACE - 创建图空间
 
 ### 功能
-创建图空间（数据库实例）。
+创建图空间（数据库实例）。`CREATE GRAPH` 为同义写法。
 
 ### 语法结构
 ```cypher
-CREATE SPACE [IF NOT EXISTS] <space_name> [(vid_type=<type>, partition_num=<n>, replica_factor=<n>, comment="<text>")]
+CREATE [SPACE | GRAPH] [IF NOT EXISTS] <space_name> [(vid_type=<type>, comment='<text>')] [WITH <key>=<value> ...]
 ```
 
 ### 关键特性
 - 支持IF NOT EXISTS
-- 可配置VID类型（INT64, FIXEDSTRING32等）
-- 可配置分区数
-- 可配置副本因子
-- 可添加注释
+- 可配置VID类型（默认 `INT64`，支持 `FIXEDSTRING(N)` 等）
+- 可添加注释（`comment`，括号内或 `WITH comment='...'` 均可）
+- `WITH key=value` 形式的扩展参数（当前仅 `comment` 被语义化处理）
+
+> **注意：** 当前单节点版本不支持 `partition_num`、`replica_factor` 参数。
 
 ### 示例
 ```cypher
@@ -303,7 +320,10 @@ CREATE SPACE [IF NOT EXISTS] <space_name> [(vid_type=<type>, partition_num=<n>, 
 CREATE SPACE IF NOT EXISTS test_space
 
 -- 带参数创建
-CREATE SPACE test_space(vid_type=FIXEDSTRING32, partition_num=10, replica_factor=3, comment="测试空间")
+CREATE SPACE test_space(vid_type=FIXEDSTRING(32), comment="测试空间")
+
+-- GRAPH同义写法
+CREATE GRAPH basketball
 ```
 
 ---
@@ -311,17 +331,20 @@ CREATE SPACE test_space(vid_type=FIXEDSTRING32, partition_num=10, replica_factor
 ## 5. CREATE INDEX - 创建索引
 
 ### 功能
-在标签或边类型上创建索引。
+在标签或边类型上创建属性索引。
 
 ### 语法结构
 ```cypher
-CREATE INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<prop_list>)
+CREATE TAG INDEX [IF NOT EXISTS] <index_name> ON <tag_name> (<prop_list>)
+CREATE EDGE INDEX [IF NOT EXISTS] <index_name> ON <edge_name> (<prop_list>)
+CREATE INDEX [IF NOT EXISTS] <index_name> ON <tag_name> (<prop_list>)   -- 默认为TAG索引
 ```
 
 ### 示例
 ```cypher
-CREATE INDEX IF NOT EXISTS idx_person_name ON person(name)
-CREATE INDEX idx_follow_degree ON follow(degree)
+CREATE TAG INDEX IF NOT EXISTS idx_person_name ON person(name)
+CREATE EDGE INDEX idx_follow_degree ON follow(degree)
+CREATE INDEX IF NOT EXISTS idx_person_age ON person(age)
 ```
 
 ---
@@ -329,21 +352,17 @@ CREATE INDEX idx_follow_degree ON follow(degree)
 ## 6. CREATE FULLTEXT INDEX - 创建全文索引
 
 ### 功能
-在标签或边类型的文本属性上创建全文索引，支持高效的文本搜索功能。
+在标签或边类型的文本属性上创建全文索引（BM25 引擎），支持高效的文本搜索功能。
 
 ### 语法结构
 ```cypher
-CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<field_list>)
-[ENGINE = {BM25 | INVERSEARCH}]
-[OPTIONS (key=value, ...)]
+CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name>
+    (<field> [ANALYZER '<analyzer>'] [BOOST <weight>] [, <field> ...])
+    ENGINE = BM25
+    [OPTIONS (key=value, ...)]
 ```
 
-### 全文检索引擎类型
-
-| 引擎 | 说明 | 适用场景 |
-|------|------|----------|
-| `BM25` | 基于概率相关性的文本排名算法 | 通用文本搜索，文档检索 |
-| `INVERSEARCH` | 倒排索引引擎 | 快速关键词匹配，高频查询 |
+> **注意：** `ENGINE = BM25` 当前为必填子句，且仅支持 BM25 引擎；字段可逐个指定分词器与权重。
 
 ### 全文索引选项
 
@@ -352,11 +371,11 @@ CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<field
 | `k1` | FLOAT | 1.5 | BM25 词频调节参数 |
 | `b` | FLOAT | 0.75 | BM25 文档长度调节参数 |
 | `analyzer` | STRING | default | 分词器名称 |
-| `store_original` | BOOL | true | 是否存储原文 |
+| 其他键值 | - | - | 存入通用选项（common_options） |
 
 ### 关键特性
 - 支持多种文本搜索查询类型
-- 支持布尔查询（MUST, SHOULD, MUST_NOT）
+- 支持字段级分词器（`ANALYZER`）与权重（`BOOST`）设置
 - 支持短语搜索
 - 支持前缀和通配符搜索
 - 支持模糊搜索
@@ -365,15 +384,32 @@ CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<field
 
 ### 示例
 ```cypher
--- 创建基础全文索引（默认使用BM25引擎）
-CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON Article(content)
+-- 创建基础全文索引
+CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON Article(content) ENGINE = BM25
 
--- 创建指定引擎的全文索引
+-- 多字段，字段级分词器
 CREATE FULLTEXT INDEX idx_news_title ON News(title, summary) ENGINE = BM25
 
--- 创建带选项的全文索引
-CREATE FULLTEXT INDEX idx_product_desc ON Product(description)
+-- 带选项的全文索引
+CREATE FULLTEXT INDEX idx_product_desc ON Product(description) ENGINE = BM25
 OPTIONS (k1=1.2, b=0.8, analyzer=standard)
+```
+
+### 维护全文索引（ALTER FULLTEXT INDEX）
+
+```cypher
+ALTER FULLTEXT INDEX <index_name> ADD FIELD <field> [ANALYZER '<analyzer>']
+ALTER FULLTEXT INDEX <index_name> DROP FIELD <field>
+ALTER FULLTEXT INDEX <index_name> SET <key> = <value>
+ALTER FULLTEXT INDEX <index_name> REBUILD
+ALTER FULLTEXT INDEX <index_name> OPTIMIZE
+```
+
+多个动作可用逗号连接。示例：
+
+```cypher
+ALTER FULLTEXT INDEX idx_article_content ADD FIELD tags ANALYZER 'standard'
+ALTER FULLTEXT INDEX idx_article_content DROP FIELD tags, REBUILD
 ```
 
 ---
@@ -386,46 +422,42 @@ OPTIONS (k1=1.2, b=0.8, analyzer=standard)
 ### 语法结构
 ```cypher
 CREATE VECTOR INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<field>)
-WITH (vector_size=<dimension>, distance={COSINE | EUCLID | DOT})
-[HNSW (m=<value>, ef_construction=<value>)]
-[QUANTIZATION (type={SQ8 | PQ16}, ratio=<value>)]
+WITH (vector_size=<dimension>, distance={COSINE | EUCLIDEAN | DOT | MANHATTAN}
+      [, hnsw_m=<value>] [, hnsw_ef_construct=<value>]
+      [, quantization={SCALAR | BINARY | PRODUCT}] [, quantile=<0..1>]
+      [, compression={x4|x8|x16|x32|x64}] [, always_ram=<bool>])
 ```
+
+> **注意：** `WITH (...)` 子句为必需；`vector_size` 必填，其余可选。
 
 ### 向量索引参数
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `vector_size` | INT | 是 | 向量维度大小 |
-| `distance` | STRING | 是 | 距离度量方式 |
+| `distance` | STRING | 否（默认 COSINE） | 距离度量方式 |
+| `hnsw_m` | INT | 否 | HNSW 每层最大连接数 |
+| `hnsw_ef_construct` | INT | 否 | HNSW 构建时动态列表大小 |
+| `quantization` | STRING | 否 | 量化类型：`scalar` / `binary` / `product` / `none` |
+| `quantile` | FLOAT | 否 | 量化分位数，取值 (0,1]，需配合 quantization |
+| `compression` | STRING | 否 | 压缩比 x4/x8/x16/x32/x64，需配合 quantization |
+| `always_ram` | BOOL | 否 | 量化数据是否常驻内存，需配合 quantization |
 
 ### 距离度量方式
 
 | 方式 | 说明 | 适用场景 |
 |------|------|----------|
 | `COSINE` | 余弦相似度 | 文本嵌入、图像特征 |
-| `EUCLID` | 欧氏距离 | 坐标数据、推荐系统 |
+| `EUCLIDEAN` | 欧氏距离 | 坐标数据、推荐系统 |
 | `DOT` | 点积相似度 | 归一化向量 |
-
-### HNSW 参数（可选）
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `m` | INT | 16 | 每层最大连接数 |
-| `ef_construction` | INT | 200 | 构建时动态列表大小 |
-
-### 量化参数（可选）
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `type` | STRING | 量化类型（SQ8, PQ16） |
-| `ratio` | FLOAT | 压缩比 |
+| `MANHATTAN` | 曼哈顿距离 | 稀疏特征 |
 
 ### 关键特性
 - 支持多种距离度量
 - 支持向量相似度搜索
 - 支持阈值过滤
 - 支持属性过滤
-- 支持批量操作
+- 支持量化压缩（标量/二进制/乘积量化）
 - 支持与 Qdrant 集成
 
 ### 示例
@@ -436,215 +468,168 @@ WITH (vector_size=768, distance=COSINE)
 
 -- 创建带 HNSW 参数的向量索引
 CREATE VECTOR INDEX idx_article_vector ON Article(content_vector)
-WITH (vector_size=1024, distance=COSINE)
-HNSW (m=32, ef_construction=300)
+WITH (vector_size=1024, distance=COSINE, hnsw_m=32, hnsw_ef_construct=300)
 
 -- 创建带量化参数的向量索引
 CREATE VECTOR INDEX idx_product_vector ON Product(feature_vector)
-WITH (vector_size=512, distance=EUCLID)
-QUANTIZATION (type=PQ16, ratio=0.5)
+WITH (vector_size=512, distance=EUCLIDEAN,
+      quantization=PRODUCT, compression=x16, always_ram=false)
 ```
 
 ---
 
-## 8. ALTER TAG - 修改标签
+## 8. CREATE SEQUENCE - 创建序列
 
 ### 功能
-修改标签定义。
+创建自增序列，用于生成唯一ID。
 
 ### 语法结构
 ```cypher
-ALTER TAG <tag_name> ADD (<prop_name>: <prop_type> [, <prop_name>: <prop_type> ...])
+CREATE SEQUENCE [IF NOT EXISTS] <seq_name>
+    [START=<n>] [INCREMENT=<n>] [MINVALUE=<n>] [MAXVALUE=<n>] [CYCLE | NOCYCLE]
+```
+
+### 示例
+```cypher
+CREATE SEQUENCE IF NOT EXISTS user_id_seq START=1 INCREMENT=1 NOCYCLE
+```
+
+---
+
+## 9. CREATE MACRO / CREATE TYPE - 宏与类型别名
+
+### 功能
+创建可复用的表达式宏和类型别名。
+
+### 语法结构
+```cypher
+CREATE MACRO [IF NOT EXISTS] <macro_name>(<param> [= <default_expr>] [, ...]) AS <expression>
+CREATE TYPE [IF NOT EXISTS] <alias_name> AS <underlying_type | 别名>
+```
+
+### 示例
+```cypher
+-- 宏：带默认参数的表达式
+CREATE MACRO full_name(first, last, sep = '-') AS first + sep + last
+
+-- 类型别名（支持别名引用别名，环检测在计划期执行）
+CREATE TYPE user_id AS INT64
+CREATE TYPE account_id AS user_id
+```
+
+---
+
+## 10. ALTER TAG / ALTER EDGE - 修改标签与边类型
+
+### 功能
+修改标签或边类型的属性定义、名称和端点约束。
+
+### 语法结构
+```cypher
+ALTER TAG <tag_name> ADD (<prop_name>: <prop_type> [, ...])
 ALTER TAG <tag_name> DROP (<prop_name> [, <prop_name> ...])
-ALTER TAG <tag_name> CHANGE (<old_prop> <new_prop>: <prop_type>)
+ALTER TAG <tag_name> CHANGE (<old_prop> <new_prop>: <prop_type> [, ...])
+ALTER TAG <tag_name> RENAME TO <new_name>
+
+ALTER EDGE <edge_type> ADD (...)
+ALTER EDGE <edge_type> DROP (...)
+ALTER EDGE <edge_type> CHANGE (...)
+ALTER EDGE <edge_type> RENAME TO <new_name>
+ALTER EDGE <edge_type> ADD FROM <src_tag> TO <dst_tag>     -- 增加端点约束
+ALTER EDGE <edge_type> DROP FROM <src_tag> TO <dst_tag>    -- 移除端点约束
 ```
 
 ### 关键特性
-- 支持添加属性
-- 支持删除属性
-- 支持重命名属性
-- 支持修改属性类型
+- 支持添加、删除属性
+- 支持属性重命名 + 类型修改（CHANGE）
+- 支持标签/边类型重命名（RENAME TO）
+- 边类型支持增加/移除端点约束（ADD/DROP FROM ... TO ...）
+- ADD/DROP/CHANGE 子句可在一个语句中连续出现多个
 
 ### 示例
 ```cypher
 ALTER TAG person ADD (email: STRING, phone: STRING)
 ALTER TAG person DROP (temp_field)
 ALTER TAG person CHANGE (old_name new_name: STRING)
-```
+ALTER TAG person RENAME TO user
 
----
-
-## 9. ALTER EDGE - 修改边类型
-
-### 功能
-修改边类型定义。
-
-### 语法结构
-```cypher
-ALTER EDGE <edge_type> ADD (<prop_name>: <prop_type> [, <prop_name>: <prop_type> ...])
-ALTER EDGE <edge_type> DROP (<prop_name> [, <prop_name> ...])
-ALTER EDGE <edge_type> CHANGE (<old_prop> <new_prop>: <prop_type>)
-```
-
-### 关键特性
-- 支持添加属性
-- 支持删除属性
-- 支持重命名属性
-- 支持修改属性类型
-
-### 示例
-```cypher
 ALTER EDGE follow ADD (note: STRING)
-ALTER EDGE follow DROP (old_field)
+ALTER EDGE follow RENAME TO follows
+ALTER EDGE follow ADD FROM person TO person
 ```
 
 ---
 
-## 10. DROP TAG - 删除标签
+## 11. ALTER FULLTEXT INDEX - 修改全文索引
 
-### 功能
-删除标签定义。
+见第 6 节「维护全文索引」。
+
+---
+
+## 12. DROP - 删除对象
 
 ### 语法结构
 ```cypher
 DROP TAG [IF EXISTS] <tag_name> [, <tag_name> ...]
+DROP EDGE [IF EXISTS] <edge_type> [, <edge_type> ...]
+DROP [SPACE | GRAPH] [IF EXISTS] <space_name>
+DROP TAG INDEX <index_name> [ON <space_name>]
+DROP EDGE INDEX <index_name> [ON <space_name>]
+DROP INDEX <index_name> [ON <space_name>]
+DROP FULLTEXT INDEX [IF EXISTS] <index_name>
+DROP VECTOR INDEX [IF EXISTS] <index_name>
+DROP SEQUENCE [IF EXISTS] <seq_name>
+DROP MACRO [IF EXISTS] <macro_name>
+DROP TYPE [IF EXISTS] <alias_name>
 ```
 
 ### 关键特性
-- 支持IF EXISTS
-- 支持批量删除
-- 级联删除相关数据
+- TAG/EDGE 支持批量删除与 IF EXISTS
+- `DROP INDEX` 默认按 TAG 索引处理；`ON <space_name>` 可选
+- `DROP SPACE` 与 `DROP GRAPH` 等价，支持 IF EXISTS
+- 删除被引用的类型别名会报错（依赖检查）
 
 ### 示例
 ```cypher
 DROP TAG IF EXISTS person, company
-```
-
----
-
-## 11. DROP EDGE - 删除边类型
-
-### 功能
-删除边类型定义。
-
-### 语法结构
-```cypher
-DROP EDGE [IF EXISTS] <edge_type> [, <edge_type> ...]
-```
-
-### 关键特性
-- 支持IF EXISTS
-- 支持批量删除
-- 级联删除相关数据
-
-### 示例
-```cypher
 DROP EDGE IF EXISTS follow, like
-```
-
----
-
-## 12. DROP SPACE - 删除图空间
-
-### 功能
-删除图空间。
-
-### 语法结构
-```cypher
-DROP SPACE [IF EXISTS] <space_name>
-```
-
-### 示例
-```cypher
 DROP SPACE IF EXISTS test_space
-```
-
----
-
-## 13. DROP INDEX - 删除索引
-
-### 功能
-删除索引。
-
-### 语法结构
-```cypher
-DROP INDEX [IF EXISTS] <index_name> [ON <space_name>]
-DROP TAG INDEX [IF EXISTS] <index_name> [ON <space_name>]
-DROP EDGE INDEX [IF EXISTS] <index_name> [ON <space_name>]
-```
-
-### 示例
-```cypher
-DROP INDEX IF EXISTS idx_person_name
-DROP TAG INDEX idx_person_name ON test_space
-```
-
----
-
-## 14. DROP FULLTEXT INDEX - 删除全文索引
-
-### 功能
-删除全文索引。
-
-### 语法结构
-```cypher
-DROP FULLTEXT INDEX [IF EXISTS] <index_name>
-```
-
-### 示例
-```cypher
+DROP TAG INDEX idx_person_name
 DROP FULLTEXT INDEX IF EXISTS idx_article_content
-```
-
----
-
-## 15. DROP VECTOR INDEX - 删除向量索引
-
-### 功能
-删除向量索引。
-
-### 语法结构
-```cypher
-DROP VECTOR INDEX [IF EXISTS] <index_name>
-```
-
-### 示例
-```cypher
 DROP VECTOR INDEX IF EXISTS idx_doc_embedding
+DROP MACRO IF EXISTS full_name
+DROP TYPE IF EXISTS account_id
 ```
 
 ---
 
-## 16. DESC/DESCRIBE - 描述对象
+## 13. DESC/DESCRIBE - 描述对象
 
 ### 功能
-显示标签、边类型或用户的定义。
+显示标签、边类型、图空间或用户的定义。
 
 ### 语法结构
 ```cypher
 DESCRIBE TAG <tag_name> [IN <space_name>]
 DESCRIBE EDGE <edge_type> [IN <space_name>]
 DESCRIBE SPACE <space_name>
+DESCRIBE USER <username>
 ```
-
-### 关键特性
-- 显示属性列表
-- 显示属性类型
-- 显示索引信息
 
 ### 示例
 ```cypher
 DESCRIBE TAG person
-DESCRIBE EDGE follow
+DESC EDGE follow
 DESCRIBE SPACE test_space
+DESCRIBE USER root
 ```
 
 ---
 
-## 17. SHOW - 显示信息
+## 14. SHOW - 显示信息
 
 ### 功能
-显示数据库中的各种信息。
+显示数据库中的各种元信息。
 
 ### 语法结构
 ```cypher
@@ -652,8 +637,18 @@ SHOW SPACES
 SHOW TAGS
 SHOW EDGES
 SHOW INDEXES
-SHOW FULLTEXT INDEXES
-SHOW VECTOR INDEXES
+SHOW FULLTEXT INDEX [<index_name>]
+SHOW USERS
+SHOW ROLES
+SHOW FUNCTIONS
+SHOW GRAPHS
+SHOW MACROS
+SHOW EXTENSIONS
+SHOW ATTACHED DATABASES
+SHOW SESSIONS
+SHOW QUERIES
+SHOW CONFIGS [IN <module>]
+SHOW HOSTS / SHOW PARTS
 ```
 
 ### 示例
@@ -661,13 +656,13 @@ SHOW VECTOR INDEXES
 SHOW SPACES
 SHOW TAGS
 SHOW EDGES
-SHOW FULLTEXT INDEXES
-SHOW VECTOR INDEXES
+SHOW FULLTEXT INDEX idx_article_content
+SHOW CONFIGS IN storage
 ```
 
 ---
 
-## 18. SHOW CREATE - 显示创建语句
+## 15. SHOW CREATE - 显示创建语句
 
 ### 功能
 显示对象的完整创建语句（DDL），便于查看对象定义或迁移数据。
@@ -689,16 +684,9 @@ SHOW CREATE INDEX <index_name>
 
 ### 示例
 ```cypher
--- 查看图空间创建语句
 SHOW CREATE SPACE test_space
-
--- 查看标签创建语句
 SHOW CREATE TAG Person
-
--- 查看边类型创建语句
 SHOW CREATE EDGE KNOWS
-
--- 查看索引创建语句
 SHOW CREATE INDEX idx_person_name
 ```
 
@@ -728,9 +716,13 @@ SHOW CREATE INDEX idx_person_name
 |------|------------|-------------|------|
 | IF NOT EXISTS | ✅ | ✅ | 避免重复创建错误 |
 | NOT NULL | ✅ | ✅ | 非空约束 |
-| DEFAULT | ✅ | ✅ | 默认值 |
+| DEFAULT | ✅ | ✅ | 默认值（字面量/常量函数） |
 | COMMENT | ✅ | ✅ | 属性注释 |
 | TTL | ✅ | ✅ | 自动过期 |
+| SERIAL | ✅ | ✅ | 自增列 |
+| RENAME | ✅ | ✅ | ALTER ... RENAME TO |
+| AS 子查询 | ✅ | ✅ | 从查询结果定义 Schema |
+| 端点约束 | - | ✅ | FROM ... TO ... |
 
 ### 默认值汇总
 
@@ -740,14 +732,15 @@ SHOW CREATE INDEX idx_person_name
 | **DEFAULT 约束** | 无 | 不指定时无默认值，插入 NULL |
 | **COMMENT 约束** | 无 | 不指定时无注释 |
 | **TTL** | 禁用 | 不指定 `ttl_duration` 时 TTL 禁用 |
-| **IF NOT EXISTS** | 无 | 不指定时重复创建会报错 |
+| **IF NOT EXISTS / IF EXISTS** | 无 | 不指定时重复创建/删除不存在对象会报错 |
+| **VID 类型** | `INT64` | 创建 SPACE 时不指定 vid_type 时的默认值 |
 
 ### 完整示例
 
 ```cypher
 -- 创建一个完整的用户标签
 CREATE TAG IF NOT EXISTS User(
-    user_id: INT NOT NULL COMMENT '用户ID',
+    user_id: SERIAL COMMENT '用户ID',
     username: STRING NOT NULL COMMENT '用户名',
     email: STRING NOT NULL DEFAULT '' COMMENT '邮箱',
     age: INT NULL DEFAULT 0 COMMENT '年龄',
@@ -760,13 +753,9 @@ CREATE TAG IF NOT EXISTS User(
 
 -- 创建关注关系边
 CREATE EDGE IF NOT EXISTS FOLLOWS(
-    follow_id: INT NOT NULL COMMENT '关注ID',
-    source_user: INT NOT NULL COMMENT '关注者ID',
-    target_user: INT NOT NULL COMMENT '被关注者ID',
     created_at: TIMESTAMP NOT NULL COMMENT '关注时间',
-    degree: DOUBLE DEFAULT 1.0 COMMENT '关系程度',
-    ttl_duration=0
-);
+    degree: DOUBLE DEFAULT 1.0 COMMENT '关系程度'
+) FROM User TO User;
 
 -- 查看创建语句
 SHOW CREATE TAG User;

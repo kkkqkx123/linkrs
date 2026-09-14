@@ -13,18 +13,21 @@
 
 ### 语法结构
 ```cypher
-CREATE USER [IF NOT EXISTS] <user_name> WITH PASSWORD '<password>' [WITH ROLE <role>]
+CREATE USER [IF NOT EXISTS] <user_name> [WITH] PASSWORD '<password>' [WITH ROLE <role>]
 ```
 
 ### 关键特性
 - 支持IF NOT EXISTS
-- 支持密码设置
-- 支持角色分配
+- 支持密码设置（`PASSWORD` 前的 `WITH` 可省略）
+- 支持创建时分配角色
+- 用户名与密码支持 Unicode 与特殊字符
+- 也可通过通用 `CREATE USER ...` 语法触发（与 DDL 的 CREATE 语句共用入口）
 
 ### 示例
 ```cypher
 CREATE USER IF NOT EXISTS alice WITH PASSWORD 'secure_password'
 CREATE USER bob WITH PASSWORD 'password123' WITH ROLE ADMIN
+CREATE USER carol PASSWORD 'password123'   -- WITH省略形式
 ```
 
 ---
@@ -126,6 +129,7 @@ GRANT [ROLE] <role_type> ON <space_name> TO <user_name>
 - ROLE关键字可选
 - 支持多种角色类型
 - 基于图空间的权限控制
+- 授权受角色层级约束：GOD 可授予除 GOD 外的所有角色；ADMIN 可授予 DBA/USER/GUEST；DBA 可授予 USER/GUEST
 
 ### 示例
 ```cypher
@@ -150,6 +154,7 @@ REVOKE [ROLE] <role_type> ON <space_name> FROM <user_name>
 - ROLE关键字可选
 - 撤销指定角色权限
 - 不影响其他角色权限
+- 撤销同样受角色层级约束（与授权规则一致）
 
 ### 示例
 ```cypher
