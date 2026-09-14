@@ -66,6 +66,8 @@ impl YieldClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input)),
                     columns: yield_columns.to_vec(),
+                    subqueries: Vec::new(),
+                    has_folded_expressions: false,
                     output_var: None,
                     col_names: project_node.col_names().to_vec(),
                     column_types: vec![],
@@ -291,45 +293,7 @@ impl YieldClausePlanner {
     fn convert_yield_items(
         items: &[crate::parser::ast::stmt::YieldItem],
     ) -> Result<Vec<YieldColumn>, PlannerError> {
-        let yield_columns: Vec<YieldColumn> = items
-            .iter()
-            .map(|item| {
-                let alias = item.alias.clone().or_else(|| {
-                    if let Some(expr_meta) = item.expression.expression() {
-                        Some(Self::generate_default_alias(expr_meta.inner()))
-                    } else {
-                        Some("expr".to_string())
-                    }
-                });
-                YieldColumn {
-                    expression: item.expression.clone(),
-                    alias: alias.unwrap_or_else(|| "expr".to_string()),
-                    is_matched: false,
-                }
-            })
-            .collect();
-        Ok(yield_columns)
-    }
-
-    /// Generate default aliases
-    ///
-    /// When the user does not specify an alias, a default alias is generated based on the expression.
-    fn generate_default_alias(expression: &graphdb_core::Expression) -> String {
-        use graphdb_core::Expression;
-
-        match expression {
-            Expression::Variable(name) => name.clone(),
-            Expression::Property { object, property } => {
-                if let Expression::Variable(name) = object.as_ref() {
-                    format!("{}.{}", name, property)
-                } else {
-                    "expr".to_string()
-                }
-            }
-            Expression::Function { name, .. } => name.clone(),
-            Expression::Aggregate { func, .. } => format!("{:?}", func).to_lowercase(),
-            _ => "expr".to_string(),
-        }
+        crate::planning::statements::projection_util::yield_items_to_columns(items)
     }
 }
 
@@ -453,22 +417,31 @@ mod tests {
 
     #[test]
     fn test_generate_default_alias() {
-        let expr = Expression::Variable("n".to_string());
-        let alias = YieldClausePlanner::generate_default_alias(&expr);
+        use graphdb_core::types::expr::ExpressionMeta;
+        fn ctx_of(expr: Expression) -> ContextualExpression {
+            let ctx = Arc::new(ExpressionAnalysisContext::new());
+            let id = ctx.register_expression(ExpressionMeta::new(expr));
+            ContextualExpression::new(id, ctx)
+        }
+        let alias = crate::planning::statements::projection_util::default_projection_alias(
+            &ctx_of(Expression::Variable("n".to_string())),
+        );
         assert_eq!(alias, "n");
 
-        let expr = Expression::Property {
-            object: Box::new(Expression::Variable("n".to_string())),
-            property: "name".to_string(),
-        };
-        let alias = YieldClausePlanner::generate_default_alias(&expr);
+        let alias = crate::planning::statements::projection_util::default_projection_alias(
+            &ctx_of(Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: "name".to_string(),
+            }),
+        );
         assert_eq!(alias, "n.name");
 
-        let expr = Expression::Function {
-            name: "count".to_string(),
-            args: vec![],
-        };
-        let alias = YieldClausePlanner::generate_default_alias(&expr);
+        let alias = crate::planning::statements::projection_util::default_projection_alias(
+            &ctx_of(Expression::Function {
+                name: "count".to_string(),
+                args: vec![],
+            }),
+        );
         assert_eq!(alias, "count");
     }
 

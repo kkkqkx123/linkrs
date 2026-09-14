@@ -437,11 +437,17 @@ mod tests {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);
-        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx);
+        let ctx_expr = graphdb_core::types::ContextualExpression::new(id, ctx.clone());
+        let proj_meta = ExpressionMeta::new(Expression::Variable("a".to_string()));
+        let proj_id = ctx.register_expression(proj_meta);
+        let proj_expr = graphdb_core::types::ContextualExpression::new(proj_id, ctx);
 
         let start = PlanNodeEnum::Start(StartNode::new());
-        let project =
-            ProjectNode::new(start.clone(), vec![]).expect("Failed to create ProjectNode");
+        let project = ProjectNode::new(
+            start.clone(),
+            vec![graphdb_core::YieldColumn::new(proj_expr, "a".to_string())],
+        )
+        .expect("Failed to create ProjectNode");
         let filter = FilterNode::new(PlanNodeEnum::Project(project), ctx_expr)
             .expect("Failed to create FilterNode");
 

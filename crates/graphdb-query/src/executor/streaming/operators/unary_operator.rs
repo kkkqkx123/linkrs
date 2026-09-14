@@ -113,6 +113,19 @@ impl UnaryOperatorKind {
     }
 }
 
+/// Whether a projection expression qualifies for the columnar fast path:
+/// a bare column passthrough or a constant (gather / broadcast upstream,
+/// no per-row expression work, NULL/selection/multiplicity preserved).
+fn is_passthrough_or_const(expression: &Expression) -> bool {
+    match expression {
+        Expression::Variable(_) | Expression::Literal(_) => true,
+        Expression::Property { object, .. } => {
+            matches!(object.as_ref(), Expression::Variable(_))
+        }
+        _ => false,
+    }
+}
+
 impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(spec: &super::spec::UnarySpec, output_layout: Arc<SlotLayout>) -> Self {
@@ -129,6 +142,7 @@ impl UnaryOperator {
                 output_expressions,
                 output_col_names,
                 subquery_runners: _,
+                ..
             } => UnaryOperatorKind::Project {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
@@ -336,11 +350,24 @@ impl UnaryOperator {
 
     /// Evaluate the project output expressions, preferring the compiled
     /// closure tree over the scalar chunk path.
+    ///
+    /// Columnar fast path: when every output is a passthrough (`Variable` /
+    /// `Property` over a variable) or a `Literal`, evaluation goes straight
+    /// through the chunk's column gather/broadcast helpers without building
+    /// per-expression compiled closures. Anything else keeps the existing
+    /// compiled-batch path.
     fn evaluate_project_expressions(
         chunk: &mut DataChunk,
         output_expressions: &[Expression],
         state: &mut UnaryOperatorState,
     ) -> Result<Vec<Vec<Value>>, QueryError> {
+        if output_expressions.iter().all(is_passthrough_or_const) {
+            return chunk
+                .evaluate_expressions(output_expressions, Some(&state.env))
+                .map_err(|e| {
+                    QueryError::execution(format!("Project expression evaluation failed: {}", e))
+                });
+        }
         if compiled_eval_enabled() {
             if state.compiled_project.is_none() {
                 let layout = chunk.get_layout();
@@ -457,7 +484,7 @@ impl UnaryOperator {
                             // multiplicity (each output row occurs that often).
                             let multiplicity = chunk.multiplicity();
                             return Ok(Some(
-                                DataChunk::from_columns(columns, Arc::clone(output_layout))
+                                DataChunk::project_columns(columns, Arc::clone(output_layout))
                                     .with_multiplicity(multiplicity),
                             ));
                         }
@@ -468,7 +495,7 @@ impl UnaryOperator {
                     if !columns.is_empty() && !columns[0].is_empty() {
                         let multiplicity = chunk.multiplicity();
                         return Ok(Some(
-                            DataChunk::from_columns(columns, Arc::clone(output_layout))
+                            DataChunk::project_columns(columns, Arc::clone(output_layout))
                                 .with_multiplicity(multiplicity),
                         ));
                     }
@@ -1183,5 +1210,115 @@ mod tests {
         append.open().expect("open should succeed");
         let error = append.advance().expect_err("storage required");
         assert!(error.to_string().contains("requires storage"));
+    }
+}
+
+#[cfg(test)]
+mod project_fast_path_tests {
+    use super::*;
+    use graphdb_core::Value;
+
+    fn layout() -> Arc<SlotLayout> {
+        Arc::new(SlotLayout::from_names(&[
+            "n".to_string(),
+            "n.age".to_string(),
+        ]))
+    }
+
+    fn chunk_with_selection() -> DataChunk {
+        let rows = vec![
+            vec![Value::Int(1), Value::Int(30)],
+            vec![
+                Value::Int(2),
+                Value::Null(graphdb_core::value::NullType::Null),
+            ],
+            vec![Value::Int(3), Value::Int(40)],
+        ];
+        DataChunk::new_with_layout(rows, layout())
+            .with_selection(vec![0, 2])
+            .with_multiplicity(3)
+    }
+
+    #[test]
+    fn test_is_passthrough_or_const() {
+        assert!(is_passthrough_or_const(&Expression::Variable(
+            "n".to_string()
+        )));
+        assert!(is_passthrough_or_const(&Expression::Literal(Value::Int(1))));
+        assert!(is_passthrough_or_const(&Expression::Property {
+            object: Box::new(Expression::Variable("n".to_string())),
+            property: "age".to_string(),
+        }));
+        assert!(!is_passthrough_or_const(&Expression::Binary {
+            left: Box::new(Expression::Variable("n".to_string())),
+            op: graphdb_core::types::operators::BinaryOperator::Add,
+            right: Box::new(Expression::Literal(Value::Int(1))),
+        }));
+    }
+
+    #[test]
+    fn test_project_fast_path_gathers_all_rows() {
+        // The fast path serves the no-selection branch of `Project::next`:
+        // every visible row is evaluated, including NULLs.
+        let exprs = vec![
+            Expression::Variable("n".to_string()),
+            Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: "age".to_string(),
+            },
+            Expression::Literal(Value::Int(7)),
+        ];
+        let mut state = UnaryOperatorState::default();
+        let rows = vec![
+            vec![Value::Int(1), Value::Int(30)],
+            vec![
+                Value::Int(2),
+                Value::Null(graphdb_core::value::NullType::Null),
+            ],
+            vec![Value::Int(3), Value::Int(40)],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout());
+        let fast = UnaryOperator::evaluate_project_expressions(&mut chunk, &exprs, &mut state)
+            .expect("fast path evaluates");
+        assert_eq!(
+            fast,
+            vec![
+                vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+                vec![
+                    Value::Int(30),
+                    Value::Null(graphdb_core::value::NullType::Null),
+                    Value::Int(40)
+                ],
+                vec![Value::Int(7), Value::Int(7), Value::Int(7)],
+            ]
+        );
+
+        // The selection branch keeps visible-row semantics (NULL row hidden
+        // here) and carries multiplicity into the projected chunk.
+        let mut selected = chunk_with_selection();
+        let mut visible = Vec::new();
+        for expr in &exprs {
+            visible.push(
+                selected
+                    .evaluate_expression_visible(expr, Some(&state.env))
+                    .expect("visible evaluates"),
+            );
+        }
+        let out_layout = Arc::new(SlotLayout::from_names(&[
+            "n".to_string(),
+            "n.age".to_string(),
+            "c".to_string(),
+        ]));
+        let out = DataChunk::project_columns(visible, Arc::clone(&out_layout)).with_multiplicity(3);
+        assert_eq!(out.rows.len(), 2);
+        assert_eq!(
+            out.rows[0],
+            vec![Value::Int(1), Value::Int(30), Value::Int(7)]
+        );
+        assert_eq!(
+            out.rows[1],
+            vec![Value::Int(3), Value::Int(40), Value::Int(7)]
+        );
+        assert_eq!(out.multiplicity(), 3);
     }
 }

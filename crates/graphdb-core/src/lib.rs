@@ -16,6 +16,7 @@ pub mod wal;
 // Utility modules
 pub mod arena;
 pub mod bloom_filter;
+pub mod columnar;
 pub mod function;
 pub mod id_gen;
 pub mod null_bitmap;

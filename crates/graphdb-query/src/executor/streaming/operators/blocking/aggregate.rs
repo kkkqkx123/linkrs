@@ -4,6 +4,7 @@ use crate::executor::streaming::helpers::accumulator_states::{
     decode_partial_with_args, AggregateAccumulator,
 };
 use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledRun};
+use graphdb_core::columnar::{MaterializedBatch, RowKey};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::Value;
@@ -16,12 +17,15 @@ pub const ACCUMULATOR_OVERHEAD_BYTES: usize = 64;
 
 #[derive(Debug)]
 pub struct AggregateState {
-    /// Accumulator state per group key; every aggregate function has an
-    /// `AggregateAccumulator`, so no row-based fallback exists.
-    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    /// Accumulator state per group key (computed key values, already minimal;
+    /// `RowKey` documents the key-projection contract without changing layout).
+    pub group_map: HashMap<RowKey, Vec<AggregateAccumulator>>,
     /// Per-group memory-budget overhead charged for accumulator instances.
     pub accumulator_overhead: usize,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,
@@ -33,9 +37,13 @@ pub struct AggregateState {
 
 #[derive(Debug)]
 pub struct GroupByState {
-    pub all_rows: Vec<Vec<Value>>,
+    /// Column-oriented input buffer (was `Vec<Vec<Value>>`).
+    pub batch: MaterializedBatch,
     pub col_names: Vec<String>,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,
@@ -46,16 +54,22 @@ pub struct GroupByState {
 
 #[derive(Debug)]
 pub struct PartialAggregateState {
-    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    pub group_map: HashMap<RowKey, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
 }
 
 #[derive(Debug)]
 pub struct FinalAggregateState {
-    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    pub group_map: HashMap<RowKey, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
 }
 
 pub(crate) fn value_to_partial_accumulator(

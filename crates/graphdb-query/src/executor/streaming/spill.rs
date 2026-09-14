@@ -3,8 +3,9 @@
 //! Provides:
 //! - `SpillConfig / SpillManager`: temp-file lifecycle management
 //! - `SpilledRun / RunWriter / RunReader`: the single spill file format —
-//!   versioned header, schema fingerprint, checksum, optional zstd body
-//!   (rows are length-prefixed postcard-encoded bytes)
+//!   columnar v2 run (`GRSC`): versioned header, schema fingerprint,
+//!   per-section checksums, optional per-section zstd body (columns are
+//!   contiguous postcard-encoded value slices, one section per column group)
 //! - `HashPartitionSpiller`: per-partition run writers
 //! - `DiskQuota`: separate disk usage tracking for spill operations
 
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use graphdb_core::columnar::MaterializedBatch;
 use graphdb_core::error::QueryError;
 use graphdb_core::Value;
 
@@ -55,16 +57,21 @@ pub const HASH_JOIN_MAX_DEPTH: u32 = 3;
 
 // ── Run file format constants ───────────────────────────────────────────────
 
-/// Magic bytes at the start of every spill run file: `GRSP` = GraphDB Run Spill.
-const RUN_MAGIC: [u8; 4] = [0x47, 0x52, 0x53, 0x50];
+/// Magic bytes at the start of every spill run file: `GRSC` = GraphDB Run
+/// Spill Columnar. The legacy row-major `GRSP` format is rejected.
+const RUN_MAGIC: [u8; 4] = [0x47, 0x52, 0x53, 0x43];
 
-/// Current run file format version.
-const RUN_VERSION: u32 = 2;
+/// Current run file format version (columnar v2).
+const RUN_VERSION: u32 = 3;
 
 /// Size of the run file header in bytes.
-const RUN_HEADER_SIZE: u32 = 41;
+const RUN_HEADER_SIZE: u32 = 48;
 
-/// Minimum body size (bytes) below which compression is skipped.
+/// Rows staged per columnar section. Bounds writer staging memory and keeps
+/// each section independently checksummed and decompressible.
+const SECTION_ROWS: usize = 1024;
+
+/// Minimum section payload size (bytes) below which compression is skipped.
 const COMPRESSION_MIN_SIZE: usize = 256;
 
 // ── Simple FNV-1a 64-bit checksum ───────────────────────────────────────────
@@ -86,7 +93,7 @@ fn fnv1a_64_update(mut hash: u64, data: &[u8]) -> u64 {
 
 // ── RunHeader ────────────────────────────────────────────────────────────────
 
-/// Compression type stored in RunHeader.
+/// Compression marker stored per section frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RunCompression {
@@ -94,45 +101,57 @@ pub enum RunCompression {
     Zstd = 1,
 }
 
-/// Header for a sorted spill run file.
+/// Header for a columnar spill run file.
 ///
-/// Layout (41 bytes total):
+/// Layout (48 bytes total):
 /// ```text
-/// [0..4)   magic: b"GRSP"
-/// [4..8)   version: u32 LE
+/// [0..4)   magic: b"GRSC"
+/// [4..8)   version: u32 LE (= 3)
 /// [8..16)  schema_fingerprint: u64 LE
 /// [16..24) row_count: u64 LE
-/// [24..32) body_checksum: u64 LE  (FNV-1a of all body bytes)
-/// [32..36) flags: u32 LE          (bit 0: has_sort_keys)
-/// [36..37) compression_type: u8   (0=none, 1=zstd)
-/// [37..41) reserved: u32 LE       (zero)
+/// [24..28) num_columns: u32 LE
+/// [28..32) section_count: u32 LE
+/// [32..36) flags: u32 LE (reserved, zero)
+/// [36..40) reserved: u32 LE (zero)
+/// [40..48) header_checksum: u64 LE (FNV-1a of bytes [0..40))
 /// ```
+/// Body: `section_count` frames back to back. Each frame:
+/// `[payload_len u64 LE][flags u8][payload][checksum u64 LE]`
+/// (`flags` bit 0 = zstd; checksum = FNV-1a over flags byte + stored payload
+/// bytes). Each (decompressed) payload:
+/// `[num_rows u32 LE][num_cols u32 LE]` then per column
+/// `[col_len u64 LE][postcard(Vec<Value>) bytes]` — columns contiguous.
+/// Values stay postcard self-describing; column types are intentionally not
+/// stored (fingerprint + column count validate replay compatibility).
 #[derive(Debug, Clone, Copy)]
 pub struct RunHeader {
     pub version: u32,
     pub schema_fingerprint: u64,
     pub row_count: u64,
-    pub body_checksum: u64,
+    pub num_columns: u32,
+    pub section_count: u32,
     pub flags: u32,
-    pub compression_type: RunCompression,
 }
 
 impl RunHeader {
-    /// Encode header into a 41-byte buffer.
+    /// Encode header into a 48-byte buffer.
     fn encode(&self) -> [u8; RUN_HEADER_SIZE as usize] {
         let mut buf = [0u8; RUN_HEADER_SIZE as usize];
         buf[0..4].copy_from_slice(&RUN_MAGIC);
         buf[4..8].copy_from_slice(&self.version.to_le_bytes());
         buf[8..16].copy_from_slice(&self.schema_fingerprint.to_le_bytes());
         buf[16..24].copy_from_slice(&self.row_count.to_le_bytes());
-        buf[24..32].copy_from_slice(&self.body_checksum.to_le_bytes());
+        buf[24..28].copy_from_slice(&self.num_columns.to_le_bytes());
+        buf[28..32].copy_from_slice(&self.section_count.to_le_bytes());
         buf[32..36].copy_from_slice(&self.flags.to_le_bytes());
-        buf[36] = self.compression_type as u8;
-        // reserved bytes 37..41 stay zero
+        // bytes 36..40 stay zero (reserved)
+        let checksum = fnv1a_64(&buf[0..40]);
+        buf[40..48].copy_from_slice(&checksum.to_le_bytes());
         buf
     }
 
-    /// Decode header from a 41-byte buffer, validating magic and version.
+    /// Decode header from a 48-byte buffer, validating magic, version, and
+    /// header checksum. Legacy row-major files are rejected.
     fn decode(buf: &[u8]) -> Result<Self, QueryError> {
         if buf.len() < RUN_HEADER_SIZE as usize {
             return Err(QueryError::execution(
@@ -151,25 +170,86 @@ impl RunHeader {
                 version, RUN_VERSION
             )));
         }
-        let compression_type = match buf[36] {
-            0 => RunCompression::None,
-            1 => RunCompression::Zstd,
-            other => {
-                return Err(QueryError::execution(format!(
-                    "spill run: unknown compression type {}",
-                    other
-                )));
-            }
-        };
+        let expected = fnv1a_64(&buf[0..40]);
+        let actual = u64::from_le_bytes(buf[40..48].try_into().unwrap());
+        if expected != actual {
+            return Err(QueryError::execution(
+                "spill run: header checksum mismatch".to_string(),
+            ));
+        }
         Ok(Self {
             version,
             schema_fingerprint: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
             row_count: u64::from_le_bytes(buf[16..24].try_into().unwrap()),
-            body_checksum: u64::from_le_bytes(buf[24..32].try_into().unwrap()),
+            num_columns: u32::from_le_bytes(buf[24..28].try_into().unwrap()),
+            section_count: u32::from_le_bytes(buf[28..32].try_into().unwrap()),
             flags: u32::from_le_bytes(buf[32..36].try_into().unwrap()),
-            compression_type,
         })
     }
+}
+
+/// Encode one staging batch as a columnar section payload (uncompressed).
+fn encode_section(batch: &MaterializedBatch) -> Result<Vec<u8>, QueryError> {
+    let num_rows = batch.num_rows();
+    let num_cols = batch.num_columns();
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(num_rows as u32).to_le_bytes());
+    payload.extend_from_slice(&(num_cols as u32).to_le_bytes());
+    for i in 0..num_cols {
+        let encoded = postcard::to_allocvec(batch.column_slice(i))
+            .map_err(|e| QueryError::execution(format!("run serialize column: {}", e)))?;
+        payload.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
+        payload.extend_from_slice(&encoded);
+    }
+    Ok(payload)
+}
+
+/// Decode one section payload into a batch, validating column count.
+fn decode_section(
+    payload: &[u8],
+    expected_cols: Option<u32>,
+) -> Result<MaterializedBatch, QueryError> {
+    let fail = |msg: String| QueryError::execution(format!("spill run: {msg}"));
+    if payload.len() < 8 {
+        return Err(fail("truncated section payload".to_string()));
+    }
+    let num_rows = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let num_cols = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+    if num_rows > 10_000_000 || num_cols > 100_000 {
+        return Err(fail("section dimensions out of range".to_string()));
+    }
+    if let Some(expected) = expected_cols {
+        if num_cols != expected {
+            return Err(fail(format!(
+                "section column count {} != run column count {}",
+                num_cols, expected
+            )));
+        }
+    }
+    let mut offset = 8usize;
+    let mut batch = MaterializedBatch::new(0, 0);
+    for _ in 0..num_cols {
+        if payload.len() < offset + 8 {
+            return Err(fail("truncated section column".to_string()));
+        }
+        let col_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+        if payload.len() < offset + col_len {
+            return Err(fail("truncated section column data".to_string()));
+        }
+        let values: Vec<Value> = postcard::from_bytes(&payload[offset..offset + col_len])
+            .map_err(|e| QueryError::execution(format!("spill run: deserialize column: {}", e)))?;
+        offset += col_len;
+        if values.len() != num_rows {
+            return Err(fail(format!(
+                "section column length {} != section row count {}",
+                values.len(),
+                num_rows
+            )));
+        }
+        batch.append_column(values);
+    }
+    Ok(batch)
 }
 
 // ── Metadata for a spill file with enhanced run format ───────────────────────
@@ -273,19 +353,21 @@ impl DiskQuota {
 
 // ── RunWriter ────────────────────────────────────────────────────────────────
 
-/// Writes a sorted run to disk with a versioned header, schema fingerprint,
-/// and body checksum.
+/// Writes a columnar run to disk with a versioned header, schema fingerprint,
+/// and per-section checksums.
 ///
-/// Each row is written as length-prefixed postcard-encoded bytes.  The file
-/// is finalized by flushing and computing the checksum.
+/// Rows are staged in a columnar batch (bounded by [`SECTION_ROWS`]) and
+/// flushed as column-major sections, so writer memory stays flat regardless
+/// of run size. Each section is optionally zstd-compressed and individually
+/// checksummed; the header is patched in at finalize time.
 pub struct RunWriter {
     pub(crate) writer: BufWriter<std::fs::File>,
     pub(crate) path: PathBuf,
     pub(crate) schema_fingerprint: u64,
     pub(crate) row_count: u64,
+    pub(crate) section_count: u32,
     pub(crate) body_bytes: u64,
-    pub(crate) body_hash: u64,
-    pub(crate) body_buffer: Vec<u8>,
+    pub(crate) staging: MaterializedBatch,
 }
 
 impl RunWriter {
@@ -301,24 +383,25 @@ impl RunWriter {
             path,
             schema_fingerprint,
             row_count: 0,
+            section_count: 0,
             body_bytes: 0,
-            body_hash: 0xcbf29ce484222325,
-            body_buffer: Vec::new(),
+            staging: MaterializedBatch::new(0, 0),
         }
     }
 
-    /// Write a single row to the run file (postcard-encoded, length-prefixed).
+    /// Write a single row to the run file (staged, flushed per section).
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), QueryError> {
-        let encoded = postcard::to_allocvec(row)
-            .map_err(|e| QueryError::execution(format!("run serialize: {}", e)))?;
-        let len = encoded.len() as u64;
-        let len_bytes = len.to_le_bytes();
-        self.body_buffer.extend_from_slice(&len_bytes);
-        self.body_buffer.extend_from_slice(&encoded);
-        self.row_count += 1;
-        self.body_bytes += 8 + len as u64;
-        self.body_hash = fnv1a_64_update(self.body_hash, &len_bytes);
-        self.body_hash = fnv1a_64_update(self.body_hash, &encoded);
+        if self.staging.num_columns() > 0 && row.len() != self.staging.num_columns() {
+            return Err(QueryError::execution(format!(
+                "spill run: row arity {} != run column count {}",
+                row.len(),
+                self.staging.num_columns()
+            )));
+        }
+        self.staging.append_row(row.to_vec());
+        if self.staging.num_rows() >= SECTION_ROWS {
+            self.flush_staging()?;
+        }
         Ok(())
     }
 
@@ -330,7 +413,55 @@ impl RunWriter {
         Ok(())
     }
 
-    /// Finalize the run: optionally compress body, write header + body, flush.
+    /// Write a columnar batch to the run file (staged per section).
+    pub fn write_batch(&mut self, batch: &MaterializedBatch) -> Result<(), QueryError> {
+        for row in batch.rows() {
+            self.write_row(&row)?;
+        }
+        Ok(())
+    }
+
+    /// Encode the staging batch as one columnar frame and append it.
+    fn flush_staging(&mut self) -> Result<(), QueryError> {
+        if self.staging.is_empty() {
+            return Ok(());
+        }
+        let payload = encode_section(&self.staging)?;
+        let (compression, stored) = if payload.len() >= COMPRESSION_MIN_SIZE {
+            match zstd::encode_all(payload.as_slice(), 3) {
+                Ok(compressed) if compressed.len() < payload.len() => {
+                    (RunCompression::Zstd, compressed)
+                }
+                _ => (RunCompression::None, payload),
+            }
+        } else {
+            (RunCompression::None, payload)
+        };
+        let flags = compression as u8;
+        let checksum = fnv1a_64_update(FNV1A_64_INIT, &[flags]);
+        let checksum = fnv1a_64_update(checksum, &stored);
+        self.writer
+            .write_all(&(stored.len() as u64).to_le_bytes())
+            .map_err(|e| QueryError::execution(format!("spill run: write section len: {}", e)))?;
+        self.writer
+            .write_all(&[flags])
+            .map_err(|e| QueryError::execution(format!("spill run: write section flags: {}", e)))?;
+        self.writer
+            .write_all(&stored)
+            .map_err(|e| QueryError::execution(format!("spill run: write section: {}", e)))?;
+        self.writer
+            .write_all(&checksum.to_le_bytes())
+            .map_err(|e| {
+                QueryError::execution(format!("spill run: write section checksum: {}", e))
+            })?;
+        self.body_bytes += 8 + 1 + stored.len() as u64 + 8;
+        self.row_count += self.staging.num_rows() as u64;
+        self.section_count += 1;
+        self.staging.clear();
+        Ok(())
+    }
+
+    /// Finalize the run: flush staging, patch the header, flush.
     /// Returns `SpilledRun` metadata.
     ///
     /// Low-level primitive: production spill paths should route through
@@ -340,47 +471,33 @@ impl RunWriter {
     pub fn finalize(mut self) -> Result<SpilledRun, QueryError> {
         use std::io::Seek;
 
-        let (compression_type, final_body) = if self.body_buffer.len() >= COMPRESSION_MIN_SIZE {
-            let compressed = zstd::encode_all(self.body_buffer.as_slice(), 3)
-                .map_err(|e| QueryError::execution(format!("run compress: {}", e)))?;
-            if compressed.len() < self.body_buffer.len() {
-                (RunCompression::Zstd, compressed)
-            } else {
-                (RunCompression::None, std::mem::take(&mut self.body_buffer))
-            }
-        } else {
-            (RunCompression::None, std::mem::take(&mut self.body_buffer))
-        };
-
-        self.writer
-            .write_all(&final_body)
-            .map_err(|e| QueryError::execution(format!("run write body: {}", e)))?;
+        self.flush_staging()?;
         self.writer
             .flush()
-            .map_err(|e| QueryError::execution(format!("run flush body: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: flush body: {}", e)))?;
 
         let header = RunHeader {
             version: RUN_VERSION,
             schema_fingerprint: self.schema_fingerprint,
             row_count: self.row_count,
-            body_checksum: self.body_hash,
+            num_columns: self.staging.num_columns() as u32,
+            section_count: self.section_count,
             flags: 0,
-            compression_type,
         };
 
         // Seek back to position 0 to overwrite header placeholder with actual header.
         self.writer
             .seek(std::io::SeekFrom::Start(0))
-            .map_err(|e| QueryError::execution(format!("run seek: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: seek: {}", e)))?;
         let header_bytes = header.encode();
         self.writer
             .write_all(&header_bytes)
-            .map_err(|e| QueryError::execution(format!("run write header: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: write header: {}", e)))?;
         self.writer
             .flush()
-            .map_err(|e| QueryError::execution(format!("run flush header: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: flush header: {}", e)))?;
 
-        let file_size = final_body.len() as u64 + RUN_HEADER_SIZE as u64;
+        let file_size = self.body_bytes + RUN_HEADER_SIZE as u64;
         Ok(SpilledRun {
             path: self.path.clone(),
             row_count: self.row_count,
@@ -410,25 +527,30 @@ impl std::fmt::Debug for RunWriter {
 
 // ── RunReader ────────────────────────────────────────────────────────────────
 
-/// Reads a sorted run file back, validating the header (version, magic,
-/// checksum) on open.
+/// Reads a columnar run file back, validating the header (magic, version,
+/// checksum) on open and each section frame (checksum) on decode.
+///
+/// Sections stream one at a time (bounded by [`SECTION_ROWS`]), so reader
+/// memory stays flat regardless of run size.
 pub struct RunReader {
-    reader: BufReader<std::io::Cursor<Vec<u8>>>,
+    reader: BufReader<std::fs::File>,
     path: PathBuf,
     header: RunHeader,
     remaining: u64,
+    section_rows: Vec<Vec<Value>>,
+    section_pos: usize,
 }
 
 impl RunReader {
     /// Open and validate a run file.
     pub fn open(run: &SpilledRun) -> Result<Self, QueryError> {
         let mut f = std::fs::File::open(&run.path)
-            .map_err(|e| QueryError::execution(format!("open run file: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: open file: {}", e)))?;
 
         // Read header
         let mut header_buf = [0u8; RUN_HEADER_SIZE as usize];
         f.read_exact(&mut header_buf)
-            .map_err(|e| QueryError::execution(format!("read run header: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("spill run: read header: {}", e)))?;
         let header = RunHeader::decode(&header_buf)?;
 
         // Validate schema fingerprint if provided
@@ -447,32 +569,13 @@ impl RunReader {
             )));
         }
 
-        // Read all body data
-        let mut body_data = Vec::new();
-        f.read_to_end(&mut body_data)
-            .map_err(|e| QueryError::execution(format!("read run body: {}", e)))?;
-
-        // Decompress if needed
-        let decompressed = match header.compression_type {
-            RunCompression::None => body_data,
-            RunCompression::Zstd => zstd::decode_all(body_data.as_slice())
-                .map_err(|e| QueryError::execution(format!("run decompress: {}", e)))?,
-        };
-
-        // Verify checksum on decompressed data
-        let actual_checksum = fnv1a_64(&decompressed);
-        if actual_checksum != header.body_checksum {
-            return Err(QueryError::execution(format!(
-                "spill run: checksum mismatch: expected {}, got {}",
-                header.body_checksum, actual_checksum
-            )));
-        }
-
         Ok(Self {
-            reader: BufReader::new(std::io::Cursor::new(decompressed)),
+            reader: BufReader::new(f),
             path: run.path.clone(),
-            header,
             remaining: header.row_count,
+            header,
+            section_rows: Vec::new(),
+            section_pos: 0,
         })
     }
 
@@ -487,22 +590,75 @@ impl RunReader {
         Self::open(&dummy)
     }
 
+    /// Decode the next section frame into the row buffer.
+    fn load_next_section(&mut self) -> Result<(), QueryError> {
+        let mut len_buf = [0u8; 8];
+        self.reader
+            .read_exact(&mut len_buf)
+            .map_err(|e| QueryError::execution(format!("spill run: read section len: {}", e)))?;
+        let payload_len = u64::from_le_bytes(len_buf) as usize;
+        if payload_len > 512 * 1024 * 1024 {
+            return Err(QueryError::execution(
+                "spill run: section payload length out of range".to_string(),
+            ));
+        }
+        let mut flags_buf = [0u8; 1];
+        self.reader
+            .read_exact(&mut flags_buf)
+            .map_err(|e| QueryError::execution(format!("spill run: read section flags: {}", e)))?;
+        let mut stored = vec![0u8; payload_len];
+        self.reader.read_exact(&mut stored).map_err(|e| {
+            QueryError::execution(format!("spill run: read section payload: {}", e))
+        })?;
+        let mut checksum_buf = [0u8; 8];
+        self.reader.read_exact(&mut checksum_buf).map_err(|e| {
+            QueryError::execution(format!("spill run: read section checksum: {}", e))
+        })?;
+        let expected = fnv1a_64_update(FNV1A_64_INIT, &flags_buf);
+        let expected = fnv1a_64_update(expected, &stored);
+        if expected != u64::from_le_bytes(checksum_buf) {
+            return Err(QueryError::execution(
+                "spill run: section checksum mismatch".to_string(),
+            ));
+        }
+        let payload: Vec<u8> = match flags_buf[0] {
+            0 => stored,
+            1 => zstd::decode_all(stored.as_slice())
+                .map_err(|e| QueryError::execution(format!("spill run: decompress: {}", e)))?,
+            other => {
+                return Err(QueryError::execution(format!(
+                    "spill run: unknown section compression {}",
+                    other
+                )));
+            }
+        };
+        let expected_cols = if self.header.num_columns > 0 {
+            Some(self.header.num_columns)
+        } else {
+            None
+        };
+        let mut batch = decode_section(&payload, expected_cols)?;
+        batch.set_fingerprint(self.header.schema_fingerprint);
+        self.section_rows = batch.into_rows();
+        self.section_pos = 0;
+        Ok(())
+    }
+
     /// Read the next row from the run.
     pub fn read_row(&mut self) -> Result<Option<Vec<Value>>, QueryError> {
         if self.remaining == 0 {
             return Ok(None);
         }
-        let mut len_buf = [0u8; 8];
-        self.reader
-            .read_exact(&mut len_buf)
-            .map_err(|e| QueryError::execution(format!("run read len: {}", e)))?;
-        let len = u64::from_le_bytes(len_buf) as usize;
-        let mut encoded = vec![0u8; len];
-        self.reader
-            .read_exact(&mut encoded)
-            .map_err(|e| QueryError::execution(format!("run read data: {}", e)))?;
-        let row: Vec<Value> = postcard::from_bytes(&encoded)
-            .map_err(|e| QueryError::execution(format!("run deserialize: {}", e)))?;
+        if self.section_pos >= self.section_rows.len() {
+            self.load_next_section()?;
+        }
+        if self.section_pos >= self.section_rows.len() {
+            return Err(QueryError::execution(
+                "spill run: section row underflow".to_string(),
+            ));
+        }
+        let row = std::mem::take(&mut self.section_rows[self.section_pos]);
+        self.section_pos += 1;
         self.remaining -= 1;
         Ok(Some(row))
     }
@@ -514,6 +670,32 @@ impl RunReader {
             rows.push(row);
         }
         Ok(rows)
+    }
+
+    /// Read up to `n` rows into a columnar batch.
+    ///
+    /// Returns `None` when the run is exhausted. Bounds peak memory to one
+    /// output slice instead of the full run.
+    pub fn read_batch(&mut self, n: usize) -> Result<Option<MaterializedBatch>, QueryError> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        let mut batch = MaterializedBatch::new(0, self.header.schema_fingerprint);
+        let mut count = 0usize;
+        while count < n {
+            match self.read_row()? {
+                Some(row) => {
+                    batch.append_row(row);
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+        if count == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(batch))
+        }
     }
 
     pub fn header(&self) -> &RunHeader {
@@ -569,6 +751,29 @@ pub fn hash_bytes_partition(bytes: &[u8], num_partitions: u64) -> u64 {
         return 0;
     }
     fnv1a_64_update(HASH_PARTITION_SEED, bytes) % num_partitions
+}
+
+/// Compute one partition index per batch row over a column subset.
+///
+/// Key-column projection of [`hash_row_partition`]: rows are hashed by the
+/// selected columns only (empty `cols` means the full row), so Distinct and
+/// Aggregate spill by key instead of by full-row bytes.
+pub fn hash_column_partition(
+    batch: &MaterializedBatch,
+    cols: &[usize],
+    num_partitions: u64,
+) -> Vec<u64> {
+    batch
+        .hash_rows(cols)
+        .into_iter()
+        .map(|h| {
+            if num_partitions == 0 {
+                0
+            } else {
+                h % num_partitions
+            }
+        })
+        .collect()
 }
 
 /// Configuration for hash-based partition spill.
@@ -992,7 +1197,8 @@ mod tests {
         writer.write_rows(&sample_rows(10)).unwrap();
         let run = writer.finalize().unwrap();
 
-        // Corrupt the file by truncating it
+        // Corrupt the file by truncating it. The header stays valid, so the
+        // corruption surfaces when the section frame is decoded.
         let file_size = std::fs::metadata(&run.path).unwrap().len();
         let corrupted_file = std::fs::File::options()
             .write(true)
@@ -1001,7 +1207,8 @@ mod tests {
         corrupted_file.set_len(file_size - 4).unwrap(); // truncate last 4 bytes
         drop(corrupted_file);
 
-        let err = RunReader::open(&run).unwrap_err();
+        let mut reader = RunReader::open(&run).unwrap();
+        let err = reader.read_all().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("checksum mismatch") || msg.contains("spill run:"));
     }
@@ -1073,7 +1280,8 @@ mod tests {
 
         let mut reader = RunReader::open(&run).unwrap();
         assert_eq!(reader.read_all().unwrap(), rows);
-        assert_eq!(reader.header().compression_type, RunCompression::Zstd);
+        assert_eq!(reader.header().version, 3);
+        assert!(reader.header().section_count >= 1);
     }
 
     #[test]
@@ -1087,7 +1295,79 @@ mod tests {
 
         let mut reader = RunReader::open(&run).unwrap();
         assert_eq!(reader.read_all().unwrap(), rows);
-        assert_eq!(reader.header().compression_type, RunCompression::None);
+        assert_eq!(reader.header().section_count, 1);
+        assert_eq!(reader.header().num_columns, 4);
+    }
+
+    #[test]
+    fn test_run_multi_section_roundtrip() {
+        let manager = SpillManager::new(SpillConfig::default(), 213).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        let rows = sample_rows(2500);
+        writer.write_rows(&rows).unwrap();
+        let run = writer.finalize().unwrap();
+        assert_eq!(run.row_count, 2500);
+
+        let mut reader = RunReader::open(&run).unwrap();
+        assert_eq!(reader.header().section_count, 3);
+        // Streamed reads cross section boundaries transparently.
+        assert_eq!(reader.read_all().unwrap(), rows);
+    }
+
+    #[test]
+    fn test_run_sectioned_batch_reads() {
+        let manager = SpillManager::new(SpillConfig::default(), 214).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        let rows = sample_rows(1500);
+        writer
+            .write_batch(&MaterializedBatch::from_rows(rows.clone()))
+            .unwrap();
+        let run = writer.finalize().unwrap();
+
+        let mut reader = RunReader::open(&run).unwrap();
+        let first = reader.read_batch(1000).unwrap().expect("first batch");
+        assert_eq!(first.num_rows(), 1000);
+        let rest = reader.read_all().unwrap();
+        assert_eq!(rest.len(), 500);
+        let mut combined = first.to_rows();
+        combined.extend(rest);
+        assert_eq!(combined, rows);
+    }
+
+    #[test]
+    fn test_run_rejects_legacy_magic() {
+        let manager = SpillManager::new(SpillConfig::default(), 215).unwrap();
+        let writer = manager.create_run_writer(0).unwrap();
+        let path = writer.path().to_path_buf();
+        let run = writer.finalize().unwrap();
+        // Overwrite with the legacy row-major magic.
+        let mut buf = std::fs::read(&run.path).unwrap();
+        buf[0..4].copy_from_slice(&[0x47, 0x52, 0x53, 0x50]);
+        std::fs::write(&path, &buf).unwrap();
+        let err = RunReader::open(&run).unwrap_err();
+        assert!(err.to_string().contains("invalid magic"));
+    }
+
+    #[test]
+    fn test_run_header_checksum_detects_corruption() {
+        let manager = SpillManager::new(SpillConfig::default(), 216).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        writer.write_rows(&sample_rows(10)).unwrap();
+        let run = writer.finalize().unwrap();
+        let mut buf = std::fs::read(&run.path).unwrap();
+        buf[16] ^= 0xff;
+        std::fs::write(&run.path, &buf).unwrap();
+        let err = RunReader::open(&run).unwrap_err();
+        assert!(err.to_string().contains("header checksum mismatch"));
+    }
+
+    #[test]
+    fn test_run_row_arity_mismatch_rejected() {
+        let manager = SpillManager::new(SpillConfig::default(), 217).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+        writer.write_rows(&sample_rows(3)).unwrap();
+        let err = writer.write_row(&[Value::BigInt(1)]).unwrap_err();
+        assert!(err.to_string().contains("row arity"));
     }
 
     #[test]
@@ -1146,5 +1426,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(disabled.collector_spill_threshold(), u64::MAX);
+    }
+
+    #[test]
+    fn test_write_batch_read_batch_roundtrip() {
+        use graphdb_core::columnar::MaterializedBatch;
+        let manager = SpillManager::new(SpillConfig::default(), 213).unwrap();
+        let mut writer = manager.create_run_writer(7).unwrap();
+        let batch = MaterializedBatch::from_rows(sample_rows(50));
+        writer.write_batch(&batch).unwrap();
+        let run = writer.finalize().unwrap();
+        assert_eq!(run.row_count, 50);
+
+        let mut reader = RunReader::open(&run).unwrap();
+        let first = reader.read_batch(20).unwrap().expect("first slice");
+        assert_eq!(first.num_rows(), 20);
+        let rest = reader.read_batch(100).unwrap().expect("rest slice");
+        assert_eq!(rest.num_rows(), 30);
+        assert!(reader.read_batch(10).unwrap().is_none());
+        let mut combined = first.to_rows();
+        combined.extend(rest.to_rows());
+        assert_eq!(combined, sample_rows(50));
+    }
+
+    #[test]
+    fn test_hash_column_partition_keys_only() {
+        use graphdb_core::columnar::MaterializedBatch;
+        let batch = MaterializedBatch::from_rows(vec![
+            vec![Value::BigInt(1), Value::string("same")],
+            vec![Value::BigInt(2), Value::string("same")],
+            vec![Value::BigInt(1), Value::string("same")],
+        ]);
+        // Full-row hash separates row 0 and row 1.
+        let full = hash_column_partition(&batch, &[], 1024);
+        assert_ne!(full[0], full[1]);
+        // Key column [1] is identical: all partitions equal.
+        let keyed = hash_column_partition(&batch, &[1], 1024);
+        assert_eq!(keyed[0], keyed[1]);
+        assert_eq!(keyed[0], keyed[2]);
+        // Key column [0]: rows 0 and 2 share a partition.
+        let keyed0 = hash_column_partition(&batch, &[0], 1024);
+        assert_eq!(keyed0[0], keyed0[2]);
     }
 }

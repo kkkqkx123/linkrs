@@ -15,12 +15,21 @@ pub use vector_search::types::VectorFilter;
 #[derive(Debug, Clone)]
 pub struct VectorFilter;
 
-/// Output field definition
+/// Output field definition.
+///
+/// This is the vector chain's spelling of the output-column concept that
+/// `YieldColumn` carries elsewhere (`name` is the source field, `alias` the
+/// output column name). `STRUCT` internals keep the `field` spelling; graph
+/// attributes use `property` here and everywhere else.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputField {
     pub name: String,
     pub alias: Option<String>,
 }
+
+/// Alias unifying the vector output-field naming with the projection column
+/// concept (`YieldColumn`).
+pub type VectorOutputColumn = OutputField;
 
 /// Parameters for creating a vector search node
 #[derive(Debug, Clone)]

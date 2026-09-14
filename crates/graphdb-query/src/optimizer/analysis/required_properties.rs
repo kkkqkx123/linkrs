@@ -154,6 +154,25 @@ impl ExpressionVisitor for RefCollector {
         }
     }
 
+    fn visit_struct_field(&mut self, base: &Expression, field: &str) {
+        match base {
+            Expression::Variable(var) => {
+                self.props.push((var.clone(), field.to_string()));
+            }
+            other => self.visit(other),
+        }
+    }
+
+    fn visit_tag_property(&mut self, tag_name: &str, property: &str) {
+        self.props
+            .push((tag_name.to_string(), property.to_string()));
+    }
+
+    fn visit_edge_property(&mut self, edge_name: &str, property: &str) {
+        self.props
+            .push((edge_name.to_string(), property.to_string()));
+    }
+
     fn visit_variable(&mut self, name: &str) {
         self.full_vars.insert(name.to_string());
     }
@@ -489,6 +508,17 @@ impl RequiredPropertyAnalyzer {
                 let mut tagged = req.clone();
                 tagged.tag_name = tag_name.clone();
                 resolved.push(tagged);
+            } else if let Some(tag) = tag_name.as_deref() {
+                // `TagProperty{tag, prop}` / `EdgeProperty{edge, prop}` references
+                // are collected under the tag/edge name; remap them onto the
+                // binding variable when the names match so scans can narrow.
+                // `full_value` stays sticky: an opaque use still blocks pruning.
+                if req.alias == tag {
+                    let mut remapped = req.clone();
+                    remapped.alias = var.to_string();
+                    remapped.tag_name = tag_name.clone();
+                    resolved.push(remapped);
+                }
             }
         }
         if !resolved.is_empty() {
@@ -839,5 +869,83 @@ mod tests {
             .narrowable_properties(p.input().id(), "n")
             .expect("scan must be narrowable");
         assert_eq!(props, vec!["age".to_string()]);
+    }
+
+    #[test]
+    fn test_analyzer_tag_property_narrows_scan() {
+        let mut scan = ScanVerticesNode::new(0, "test");
+        scan.set_tag("person");
+        scan.set_col_names(vec!["n".to_string()]);
+        let project = PlanNodeEnum::Project(
+            ProjectNode::new(
+                PlanNodeEnum::ScanVertices(scan),
+                vec![yield_column(
+                    Expression::TagProperty {
+                        tag_name: "person".to_string(),
+                        property: "age".to_string(),
+                    },
+                    "age",
+                )],
+            )
+            .expect("project node"),
+        );
+
+        let map = RequiredPropertyAnalyzer::new().analyze(&project);
+        let PlanNodeEnum::Project(pr) = &project else {
+            unreachable!()
+        };
+        let props = map
+            .narrowable_properties(pr.input().id(), "n")
+            .expect("tag property must narrow");
+        assert_eq!(props, vec!["age".to_string()]);
+    }
+
+    #[test]
+    fn test_analyzer_struct_field_narrows_top_level() {
+        let project = PlanNodeEnum::Project(
+            ProjectNode::new(
+                get_vertices("v"),
+                vec![yield_column(
+                    Expression::StructField {
+                        base: Box::new(Expression::Variable("v".to_string())),
+                        field: "addr".to_string(),
+                    },
+                    "addr",
+                )],
+            )
+            .expect("project node"),
+        );
+
+        let map = RequiredPropertyAnalyzer::new().analyze(&project);
+        let PlanNodeEnum::Project(pr) = &project else {
+            unreachable!()
+        };
+        let props = map
+            .narrowable_properties(pr.input().id(), "v")
+            .expect("struct field must narrow");
+        assert_eq!(props, vec!["addr".to_string()]);
+    }
+
+    #[test]
+    fn test_analyzer_function_arg_property_narrows() {
+        let project = PlanNodeEnum::Project(
+            ProjectNode::new(
+                get_vertices("v"),
+                vec![yield_column(
+                    Expression::function("lower", vec![prop("v", "name")]),
+                    "name",
+                )],
+            )
+            .expect("project node"),
+        );
+
+        let map = RequiredPropertyAnalyzer::new().analyze(&project);
+        let PlanNodeEnum::Project(pr) = &project else {
+            unreachable!()
+        };
+        let props = map
+            .narrowable_properties(pr.input().id(), "v")
+            .expect("function arg must narrow");
+        assert_eq!(props, vec!["name".to_string()]);
     }
 }

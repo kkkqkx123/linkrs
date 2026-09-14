@@ -1,6 +1,7 @@
 //! Immutable configuration for unary (one-input) operators.
 
 use graphdb_core::types::expr::Expression;
+use graphdb_core::DataType;
 
 /// Immutable config for unary (one-input) operators.
 #[derive(Debug, Clone)]
@@ -14,6 +15,9 @@ pub enum UnarySpec {
     Project {
         output_expressions: Vec<Expression>,
         output_col_names: Vec<String>,
+        /// Resolved per-column types from the planner (`ProjectNode.column_types`).
+        /// May be empty for hand-built plans; layouts fall back to untyped slots.
+        output_col_types: Vec<DataType>,
         /// Expression-level subqueries compiled for this project.
         subquery_runners: Vec<crate::executor::streaming::subquery::SubqueryRunnerSpec>,
     },

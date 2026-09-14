@@ -678,6 +678,8 @@ fn build_group_join_right_subtree(
             id: next_node_id(),
             input: Some(Box::new(input)),
             columns: columns.clone(),
+            subqueries: Vec::new(),
+            has_folded_expressions: false,
             output_var: None,
             col_names: project_col_names.clone(),
             column_types: vec![],

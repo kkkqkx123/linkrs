@@ -27,7 +27,6 @@ use crate::planning::statements::statement_planner::ClausePlanner;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::expression::ExpressionMeta;
-use graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual;
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::Expression;
 use graphdb_core::YieldColumn;
@@ -102,18 +101,9 @@ fn extract_return_columns(stmt: &Stmt) -> Result<Vec<YieldColumn>, PlannerError>
     if let Stmt::Match(match_stmt) = stmt {
         if let Some(return_clause) = &match_stmt.return_clause {
             for item in &return_clause.items {
-                match item {
-                    crate::parser::ast::stmt::ReturnItem::Expression { expression, alias } => {
-                        let alias = alias
-                            .clone()
-                            .or_else(|| Some(generate_default_alias_from_contextual(expression)));
-                        columns.push(YieldColumn {
-                            expression: expression.clone(),
-                            alias: alias.unwrap_or_else(|| "expr".to_string()),
-                            is_matched: false,
-                        });
-                    }
-                }
+                columns.push(
+                    crate::planning::statements::projection_util::return_item_to_yield_column(item),
+                );
             }
         }
     }
@@ -273,6 +263,8 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input)),
                     columns: project_columns.clone(),
+                    subqueries: yield_subqueries.clone(),
+                    has_folded_expressions: false,
                     output_var: None,
                     col_names: project_columns
                         .iter()
@@ -446,6 +438,8 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input)),
                     columns: project_columns.clone(),
+                    subqueries: yield_subqueries.clone(),
+                    has_folded_expressions: false,
                     output_var: None,
                     col_names: project_columns
                         .iter()
@@ -503,7 +497,7 @@ impl ClausePlanner for ReturnClausePlanner {
             })
         } else {
             let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?
-                .with_subqueries(yield_subqueries);
+                .with_subqueries(yield_subqueries.clone());
 
             let mut final_node = if self.distinct {
                 match DedupNode::new(project_node.clone().into_enum()) {
@@ -520,6 +514,8 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input)),
                     columns: yield_columns.clone(),
+                    subqueries: yield_subqueries.clone(),
+                    has_folded_expressions: false,
                     output_var: None,
                     col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
                     column_types: vec![],
@@ -825,7 +821,10 @@ mod tests {
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
-        let alias = generate_default_alias_from_contextual(&contextual);
+        let alias =
+            graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual(
+                &contextual,
+            );
         assert_eq!(alias, "n");
 
         let expr = Expression::Property {
@@ -835,7 +834,10 @@ mod tests {
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
-        let alias = generate_default_alias_from_contextual(&contextual);
+        let alias =
+            graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual(
+                &contextual,
+            );
         assert_eq!(alias, "n.name");
 
         let expr = Expression::Function {
@@ -845,7 +847,10 @@ mod tests {
         let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.register_expression(expr_meta);
         let contextual = ContextualExpression::new(id, ctx.clone());
-        let alias = generate_default_alias_from_contextual(&contextual);
+        let alias =
+            graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual(
+                &contextual,
+            );
         assert_eq!(alias, "count");
     }
 

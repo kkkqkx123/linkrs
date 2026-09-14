@@ -55,13 +55,34 @@ pub(crate) fn wrap_logical_project(
     columns: Vec<YieldColumn>,
     col_names: Vec<String>,
 ) -> LogicalNodeEnum {
+    wrap_logical_project_with(input, columns, Vec::new(), false, col_names)
+}
+
+/// Stack a projection mirror carrying expression-level subqueries.
+pub(crate) fn wrap_logical_project_with(
+    input: LogicalNodeEnum,
+    columns: Vec<YieldColumn>,
+    subqueries: Vec<crate::planning::statements::clauses::exists_planner::PlannedSubquery>,
+    has_folded_expressions: bool,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    let column_types: Vec<graphdb_core::DataType> = columns
+        .iter()
+        .map(|col| {
+            col.expression
+                .data_type()
+                .unwrap_or(graphdb_core::DataType::Unknown)
+        })
+        .collect();
     LogicalNodeEnum::Project(LogicalProjectNode {
         id: next_node_id(),
         input: Some(Box::new(input)),
         columns,
+        subqueries,
+        has_folded_expressions,
         output_var: None,
         col_names,
-        column_types: vec![],
+        column_types,
     })
 }
 

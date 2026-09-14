@@ -464,8 +464,18 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
     match spec {
         OperatorKindSpec::Source(spec) => source_output_layout(spec),
         OperatorKindSpec::Unary(UnarySpec::Project {
-            output_col_names, ..
-        }) => SlotLayout::from_names(output_col_names),
+            output_col_names,
+            output_col_types,
+            ..
+        }) => {
+            let typed: Vec<Option<graphdb_core::DataType>> =
+                output_col_types.iter().cloned().map(Some).collect();
+            if typed.len() == output_col_names.len() && !typed.is_empty() {
+                SlotLayout::from_names_and_types(output_col_names, &typed)
+            } else {
+                SlotLayout::from_names(output_col_names)
+            }
+        }
         OperatorKindSpec::Unary(UnarySpec::Assign { assignments, .. }) => {
             layout_with_added_names(&input, assignments.iter().map(|(name, _)| name.clone()))
         }
@@ -693,13 +703,29 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
 /// that scan sources expose a compound slot per projected property, letting
 /// the columnar evaluator's `Property` branch hit without per-row extraction.
 fn flat_scan_col_names(col_names: &[String], projected_properties: &[String]) -> Vec<String> {
+    flat_scan_col_names_set(
+        col_names,
+        &crate::planning::plan::core::nodes::access::ProjectionSet::from_vec(
+            projected_properties.to_vec(),
+        ),
+    )
+}
+
+/// Layout columns for a storage scan under an explicit [`ProjectionSet`].
+///
+/// [`ProjectionSet::All`] yields the binding columns only (the scan reads
+/// everything at the storage level); [`ProjectionSet::Some`] additionally
+/// exposes the flat `{var}.{prop}` columns.
+fn flat_scan_col_names_set(
+    col_names: &[String],
+    projected: &crate::planning::plan::core::nodes::access::ProjectionSet,
+) -> Vec<String> {
+    use crate::planning::plan::core::nodes::access::ProjectionSet;
     let mut names = col_names.to_vec();
-    if let Some(var) = col_names.first() {
-        names.extend(
-            projected_properties
-                .iter()
-                .map(|prop| format!("{var}.{prop}")),
-        );
+    if let ProjectionSet::Some(properties) = projected {
+        if let Some(var) = col_names.first() {
+            names.extend(properties.iter().map(|prop| format!("{var}.{prop}")));
+        }
     }
     names
 }

@@ -1000,10 +1000,9 @@ impl FulltextIndexManager {
             .get(&key)
             .map(|m| m.storage_path.clone())
             .unwrap_or_default();
-        let live_path = self
-            .rebuild_temp_dir(&PathBuf::from(&previous_path), &index_id, generation)
-            .to_string_lossy()
-            .to_string();
+        let temp_path =
+            self.rebuild_temp_dir(&PathBuf::from(&previous_path), &index_id, generation);
+        let live_path = temp_path.to_string_lossy().to_string();
 
         let old = self.engines.insert(key.clone(), Arc::clone(&engine));
 
@@ -1021,12 +1020,7 @@ impl FulltextIndexManager {
         if let Some(old_engine) = old {
             old_engine.close().await.ok();
         }
-        if !previous_path.is_empty()
-            && previous_path
-                != self
-                    .rebuild_temp_dir(&PathBuf::from(&previous_path), &index_id, generation)
-                    .to_string_lossy()
-                    .to_string()
+        if !previous_path.is_empty() && std::path::Path::new(&previous_path) != temp_path.as_path()
         {
             let backup = PathBuf::from(format!("{}.old-{}", previous_path, generation));
             if PathBuf::from(&previous_path).exists() {
@@ -1205,7 +1199,9 @@ impl FulltextIndexManager {
                 &index_id,
                 generation,
             );
-            if temp_dir.exists() && PathBuf::from(&metadata.storage_path) != temp_dir {
+            if temp_dir.exists()
+                && std::path::Path::new(&metadata.storage_path) != temp_dir.as_path()
+            {
                 if let Err(e) = tokio::fs::remove_dir_all(&temp_dir).await {
                     tracing::warn!(
                         "Failed to remove rebuild scratch directory {}: {}",

@@ -87,6 +87,8 @@ impl Planner for FetchEdgesPlanner {
                 id: next_node_id(),
                 input: Some(Box::new(get_edges_logical)),
                 columns,
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
                 output_var: None,
                 col_names: root.col_names().to_vec(),
                 column_types: vec![],

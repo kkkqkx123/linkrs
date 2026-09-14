@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
@@ -14,16 +13,17 @@ use crate::executor::streaming::spill::{
     finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
 };
 
-use super::helpers::BlockingContext;
+use super::helpers::{emit_batch_slice, BlockingContext};
 use super::window::{
     compute_window_partition_result, sort_partition_rows, WindowFunctionState, WindowState,
 };
 
 pub(super) fn open_window_function(state: &mut Option<WindowFunctionState>) {
     *state = Some(WindowFunctionState {
-        all_rows: vec![],
+        batch: graphdb_core::columnar::MaterializedBatch::new(0, 0),
         col_names: vec![],
-        result_iter: None,
+        result_batch: graphdb_core::columnar::MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -34,9 +34,10 @@ pub(super) fn open_window_function(state: &mut Option<WindowFunctionState>) {
 
 pub(super) fn open_window(state: &mut Option<WindowState>) {
     *state = Some(WindowState {
-        all_rows: vec![],
+        batch: graphdb_core::columnar::MaterializedBatch::new(0, 0),
         col_names: vec![],
-        result_iter: None,
+        result_batch: graphdb_core::columnar::MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -78,20 +79,20 @@ pub(super) fn next_window_function(
             return Ok(None);
         }
 
-        // Output phase
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                state.result_iter = None;
-                if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
-                    state.output_complete = true;
-                    return Ok(None);
-                }
-            } else {
-                return Ok(Some(DataChunk::new_with_layout(
-                    chunk_rows,
-                    Arc::clone(ctx.output_layout),
-                )));
+        // Output phase: serve slices from the result batch.
+        if state.emitted_offset < state.result_batch.num_rows() {
+            return Ok(Some(emit_batch_slice(
+                &state.result_batch,
+                &mut state.emitted_offset,
+                ctx,
+            )));
+        }
+        if state.emitted_offset > 0 {
+            state.emitted_offset = 0;
+            state.result_batch.clear();
+            if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
+                state.output_complete = true;
+                return Ok(None);
             }
         }
 
@@ -144,21 +145,16 @@ pub(super) fn next_window_function(
                 memory_tracker.reset();
 
                 if !result_rows.is_empty() {
-                    state.result_iter = Some(result_rows.into_iter());
-                    let chunk_rows: Vec<Vec<Value>> = state
-                        .result_iter
-                        .as_mut()
-                        .unwrap()
-                        .by_ref()
-                        .take(2048)
-                        .collect();
-                    if !chunk_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            Arc::clone(ctx.output_layout),
-                        )));
+                    state.result_batch.clear();
+                    state.emitted_offset = 0;
+                    for result_row in result_rows {
+                        state.result_batch.append_row(result_row);
                     }
-                    state.result_iter = None;
+                    return Ok(Some(emit_batch_slice(
+                        &state.result_batch,
+                        &mut state.emitted_offset,
+                        ctx,
+                    )));
                 }
             }
             state.output_complete = true;
@@ -202,7 +198,7 @@ pub(super) fn next_window_function(
                                 let num_partitions = config.num_partitions;
                                 let mut spiller = HashPartitionSpiller::new(config, &sm, 0)?;
 
-                                for pending in std::mem::take(&mut state.all_rows) {
+                                for pending in state.batch.into_rows() {
                                     let partition_key =
                                         eval_partition_key(&pending, &state.col_names);
                                     let p = crate::executor::streaming::spill::hash_row_partition(
@@ -228,7 +224,7 @@ pub(super) fn next_window_function(
                                 return Err(e);
                             }
                         }
-                        state.all_rows.push(row);
+                        state.batch.append_row(row);
                     }
                 }
                 None => {
@@ -249,12 +245,12 @@ pub(super) fn next_window_function(
         }
 
         // In-memory output
-        if state.all_rows.is_empty() {
+        if state.batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
         let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> = BTreeMap::new();
-        for (idx, row) in std::mem::take(&mut state.all_rows).into_iter().enumerate() {
+        for (idx, row) in state.batch.into_rows().into_iter().enumerate() {
             let partition_key = eval_partition_key(&row, &state.col_names);
             partitions
                 .entry(partition_key)
@@ -276,16 +272,19 @@ pub(super) fn next_window_function(
             ));
         }
 
-        let mut result_iter = result_rows.into_iter();
-        let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
-        state.result_iter = Some(result_iter);
-        if chunk_rows.is_empty() {
+        state.result_batch.clear();
+        state.emitted_offset = 0;
+        for result_row in result_rows {
+            state.result_batch.append_row(result_row);
+        }
+        if state.result_batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            chunk_rows,
-            Arc::clone(ctx.output_layout),
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
         )));
     }
 }
@@ -323,20 +322,20 @@ pub(super) fn next_window(
             return Ok(None);
         }
 
-        // Output phase
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                state.result_iter = None;
-                if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
-                    state.output_complete = true;
-                    return Ok(None);
-                }
-            } else {
-                return Ok(Some(DataChunk::new_with_layout(
-                    chunk_rows,
-                    Arc::clone(ctx.output_layout),
-                )));
+        // Output phase: serve slices from the result batch.
+        if state.emitted_offset < state.result_batch.num_rows() {
+            return Ok(Some(emit_batch_slice(
+                &state.result_batch,
+                &mut state.emitted_offset,
+                ctx,
+            )));
+        }
+        if state.emitted_offset > 0 {
+            state.emitted_offset = 0;
+            state.result_batch.clear();
+            if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
+                state.output_complete = true;
+                return Ok(None);
             }
         }
 
@@ -389,21 +388,16 @@ pub(super) fn next_window(
                 memory_tracker.reset();
 
                 if !result_rows.is_empty() {
-                    state.result_iter = Some(result_rows.into_iter());
-                    let chunk_rows: Vec<Vec<Value>> = state
-                        .result_iter
-                        .as_mut()
-                        .unwrap()
-                        .by_ref()
-                        .take(2048)
-                        .collect();
-                    if !chunk_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            Arc::clone(ctx.output_layout),
-                        )));
+                    state.result_batch.clear();
+                    state.emitted_offset = 0;
+                    for result_row in result_rows {
+                        state.result_batch.append_row(result_row);
                     }
-                    state.result_iter = None;
+                    return Ok(Some(emit_batch_slice(
+                        &state.result_batch,
+                        &mut state.emitted_offset,
+                        ctx,
+                    )));
                 }
             }
             state.output_complete = true;
@@ -447,7 +441,7 @@ pub(super) fn next_window(
                                 let num_partitions = config.num_partitions;
                                 let mut spiller = HashPartitionSpiller::new(config, &sm, 0)?;
 
-                                for pending in std::mem::take(&mut state.all_rows) {
+                                for pending in state.batch.into_rows() {
                                     let partition_key =
                                         eval_partition_key(&pending, &state.col_names);
                                     let p = crate::executor::streaming::spill::hash_row_partition(
@@ -473,7 +467,7 @@ pub(super) fn next_window(
                                 return Err(e);
                             }
                         }
-                        state.all_rows.push(row);
+                        state.batch.append_row(row);
                     }
                 }
                 None => {
@@ -494,12 +488,12 @@ pub(super) fn next_window(
         }
 
         // In-memory output
-        if state.all_rows.is_empty() {
+        if state.batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
         let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> = BTreeMap::new();
-        for (idx, row) in std::mem::take(&mut state.all_rows).into_iter().enumerate() {
+        for (idx, row) in state.batch.into_rows().into_iter().enumerate() {
             let partition_key = eval_partition_key(&row, &state.col_names);
             partitions
                 .entry(partition_key)
@@ -521,16 +515,19 @@ pub(super) fn next_window(
             ));
         }
 
-        let mut result_iter = result_rows.into_iter();
-        let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
-        state.result_iter = Some(result_iter);
-        if chunk_rows.is_empty() {
+        state.result_batch.clear();
+        state.emitted_offset = 0;
+        for result_row in result_rows {
+            state.result_batch.append_row(result_row);
+        }
+        if state.result_batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            chunk_rows,
-            Arc::clone(ctx.output_layout),
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
         )));
     }
 }
@@ -559,11 +556,11 @@ pub(super) fn spill_window_function(
     partition_by_exprs: &[Expression],
     sm: &SpillManager,
 ) -> Result<(), QueryError> {
-    if state.partition_spiller.is_none() && !state.all_rows.is_empty() {
+    if state.partition_spiller.is_none() && !state.batch.is_empty() {
         let config = HashPartitionConfig::default();
         let num_partitions = config.num_partitions;
         let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
-        for row in std::mem::take(&mut state.all_rows) {
+        for row in state.batch.into_rows() {
             let mut partition_key = Vec::new();
             if partition_by_exprs.is_empty() {
                 partition_key.push(Value::Null(NullType::Null));
@@ -595,11 +592,11 @@ pub(super) fn spill_window(
     partition_by_exprs: &[Expression],
     sm: &SpillManager,
 ) -> Result<(), QueryError> {
-    if state.partition_spiller.is_none() && !state.all_rows.is_empty() {
+    if state.partition_spiller.is_none() && !state.batch.is_empty() {
         let config = HashPartitionConfig::default();
         let num_partitions = config.num_partitions;
         let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
-        for row in std::mem::take(&mut state.all_rows) {
+        for row in state.batch.into_rows() {
             let mut partition_key = Vec::new();
             if partition_by_exprs.is_empty() {
                 partition_key.push(Value::Null(NullType::Null));

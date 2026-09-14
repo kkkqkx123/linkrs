@@ -510,7 +510,10 @@ pub use self::schema_change::{
 pub use self::space::CharsetInfo;
 pub use self::user::{set_bcrypt_cost, PasswordInfo, UserAlterInfo, UserInfo};
 
-pub use self::expr::{ContextualExpression, Expression, ExpressionMeta, SerializableExpression};
+pub use self::expr::{
+    ContextualExpression, Expression, ExpressionMeta, SerializableExpression,
+    SerializableYieldColumn,
+};
 pub use self::graph_schema::{
     EdgeDirection, EdgeTypeRef, GraphTypeInference, JoinType, OrderDirection, PathInfo,
     PropertyType, VertexType,
@@ -547,6 +550,12 @@ pub use EdgeTypeInfo as EdgeTypeSchema;
 pub struct YieldColumn {
     pub expression: crate::types::expr::contextual::ContextualExpression,
     pub alias: String,
+    /// Whether the column was produced by pattern matching.
+    ///
+    /// Planners always construct this as `false`; the flag is preserved
+    /// verbatim through rewrites and serialization for future matcher use.
+    /// Do not branch on it: no planner, optimizer, or executor reads it for
+    /// decisions today.
     pub is_matched: bool,
 }
 

@@ -11,9 +11,29 @@ use graphdb_core::YieldColumn;
 define_logical_plan_node_with_deps! {
     pub struct LogicalProjectNode {
         columns: Vec<YieldColumn>,
+        subqueries: Vec<crate::planning::statements::clauses::exists_planner::PlannedSubquery>,
+        has_folded_expressions: bool,
     }
     enum: Project
     input: SingleInputNode
+}
+
+impl LogicalProjectNode {
+    /// Attach expression-level subqueries to this logical projection.
+    pub fn with_subqueries(
+        mut self,
+        subqueries: Vec<crate::planning::statements::clauses::exists_planner::PlannedSubquery>,
+    ) -> Self {
+        self.subqueries = subqueries;
+        self
+    }
+
+    /// Expression-level subqueries compiled for this projection.
+    pub fn subqueries(
+        &self,
+    ) -> &[crate::planning::statements::clauses::exists_planner::PlannedSubquery] {
+        &self.subqueries
+    }
 }
 
 define_logical_plan_node_with_deps! {

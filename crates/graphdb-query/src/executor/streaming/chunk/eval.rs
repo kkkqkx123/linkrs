@@ -106,6 +106,34 @@ impl DataChunk {
         let Some(sel) = self.selection().map(|s| s.to_vec()) else {
             return self.evaluate_expression(expression, env);
         };
+        if let Expression::Literal(value) = expression {
+            self.count_columnar(true);
+            self.count_selection_pushed();
+            return Ok(vec![value.clone(); sel.len()]);
+        }
+        if let Expression::Parameter(name) = expression {
+            let value = env
+                .and_then(|env| env.params.as_ref())
+                .and_then(|p| p.get(name).cloned())
+                .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
+            self.count_columnar(true);
+            self.count_selection_pushed();
+            return Ok(vec![value; sel.len()]);
+        }
+        if let Expression::SessionVariable(name) = expression {
+            let value = env
+                .and_then(|env| env.session_variables.as_ref())
+                .and_then(|v| v.get(name).cloned())
+                .ok_or_else(|| {
+                    ExpressionError::type_error(format!(
+                        "Session variable `{}` is not defined",
+                        name
+                    ))
+                })?;
+            self.count_columnar(true);
+            self.count_selection_pushed();
+            return Ok(vec![value; sel.len()]);
+        }
         let slot: Option<SlotId> = match expression {
             Expression::Variable(name) => self.layout.slot_id(name),
             Expression::Property { object, property }

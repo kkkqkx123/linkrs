@@ -155,13 +155,34 @@ impl ExpressionVisitor for PropertyCollector {
         }
     }
 
+    fn visit_struct_field(&mut self, base: &Expression, field: &str) {
+        if matches!(base, Expression::Variable(_)) {
+            let prop_name = field.to_string();
+            if !self.properties.contains(&prop_name) {
+                self.properties.push(prop_name);
+            }
+        } else {
+            self.visit(base);
+        }
+    }
+
     fn visit_label_tag_property(&mut self, tag: &Expression, _property: &str) {
         self.visit(tag);
     }
 
-    fn visit_tag_property(&mut self, _tag_name: &str, _property: &str) {}
+    fn visit_tag_property(&mut self, _tag_name: &str, property: &str) {
+        let prop_name = property.to_string();
+        if !self.properties.contains(&prop_name) {
+            self.properties.push(prop_name);
+        }
+    }
 
-    fn visit_edge_property(&mut self, _edge_name: &str, _property: &str) {}
+    fn visit_edge_property(&mut self, _edge_name: &str, property: &str) {
+        let prop_name = property.to_string();
+        if !self.properties.contains(&prop_name) {
+            self.properties.push(prop_name);
+        }
+    }
 
     fn visit_predicate(&mut self, _func: &str, args: &[Expression]) {
         for arg in args {

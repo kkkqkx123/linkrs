@@ -168,6 +168,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     id: n.id(),
                     input: Some(Box::new(logical_input)),
                     columns: n.columns().to_vec(),
+                    subqueries: n.subqueries().to_vec(),
+                    has_folded_expressions: n.has_folded_expressions(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),

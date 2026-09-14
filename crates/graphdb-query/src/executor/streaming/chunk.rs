@@ -52,7 +52,7 @@ mod tests;
 pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
-pub use policy::ColumnarPolicy;
+pub use policy::{ColumnarPolicy, QueryColumnarOverride};
 pub use pool::{RowBufferPool, MAX_POOLED_ROWS, MAX_POOLED_ROW_CAPACITY};
 pub use schema::{ColumnInfo, Schema};
 pub(crate) use typed::gather_typed_column;

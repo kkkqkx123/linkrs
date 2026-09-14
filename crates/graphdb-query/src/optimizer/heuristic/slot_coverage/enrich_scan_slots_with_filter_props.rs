@@ -424,12 +424,14 @@ mod tests {
 
     #[test]
     fn test_skips_non_scan_input() {
+        let scan = PlanNodeEnum::ScanVertices(ScanVerticesNode::new(0, "default"));
+        let column = graphdb_core::YieldColumn::new(
+            contextual(Expression::Variable("x".to_string())),
+            "x".to_string(),
+        );
         let input = PlanNodeEnum::Project(
-            crate::planning::plan::core::nodes::ProjectNode::new(
-                PlanNodeEnum::ScanVertices(ScanVerticesNode::new(0, "default")),
-                Vec::new(),
-            )
-            .expect("project node"),
+            crate::planning::plan::core::nodes::ProjectNode::new(scan, vec![column])
+                .expect("project node"),
         );
         let node = filter_node(contextual(Expression::Variable("x".to_string())), input);
 

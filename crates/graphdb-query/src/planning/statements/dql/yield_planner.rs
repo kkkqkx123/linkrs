@@ -53,20 +53,7 @@ impl Planner for YieldPlanner {
         let yield_columns: Vec<YieldColumn> = yield_stmt
             .items
             .iter()
-            .map(|item| {
-                let expression = item.expression.clone();
-                let alias = item.alias.clone().unwrap_or_else(|| {
-                    expression
-                        .get_expression()
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "_".to_string())
-                });
-                YieldColumn {
-                    expression,
-                    alias,
-                    is_matched: false,
-                }
-            })
+            .map(crate::planning::statements::projection_util::yield_item_to_yield_column)
             .collect();
 
         let project_node =

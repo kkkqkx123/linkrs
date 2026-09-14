@@ -20,6 +20,7 @@ pub mod index_scan_planner;
 pub mod paths;
 pub mod pattern_planner;
 pub mod plan_combiner;
+pub mod projection_util;
 pub mod seeks;
 
 // Core traits and special planners

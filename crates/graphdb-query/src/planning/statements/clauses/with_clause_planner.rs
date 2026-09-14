@@ -65,6 +65,8 @@ impl WithClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input)),
                     columns: with_ctx.yield_clause.yield_columns.clone(),
+                    subqueries: Vec::new(),
+                    has_folded_expressions: false,
                     output_var: None,
                     col_names: project_node.col_names().to_vec(),
                     column_types: vec![],
@@ -330,9 +332,11 @@ impl WithClausePlanner {
         for item in &with_stmt.items {
             match item {
                 crate::parser::ast::stmt::ReturnItem::Expression { expression, alias } => {
-                    let col_alias = alias
-                        .clone()
-                        .unwrap_or_else(|| Self::generate_default_alias(expression));
+                    let col_alias = alias.clone().unwrap_or_else(|| {
+                        crate::planning::statements::projection_util::default_projection_alias(
+                            expression,
+                        )
+                    });
 
                     yield_columns.push(YieldColumn {
                         expression: expression.clone(),
@@ -499,31 +503,6 @@ impl WithClausePlanner {
         }
 
         AliasType::Runtime
-    }
-
-    /// Generate default aliases
-    fn generate_default_alias(
-        expression: &graphdb_core::types::expr::contextual::ContextualExpression,
-    ) -> String {
-        use graphdb_core::Expression;
-
-        if let Some(e) = expression.get_expression() {
-            match e {
-                Expression::Variable(name) => name.clone(),
-                Expression::Property { object, property } => {
-                    if let Expression::Variable(name) = object.as_ref() {
-                        format!("{}.{}", name, property)
-                    } else {
-                        "expr".to_string()
-                    }
-                }
-                Expression::Function { name, .. } => name.clone(),
-                Expression::Aggregate { func, .. } => format!("{:?}", func).to_lowercase(),
-                _ => "expr".to_string(),
-            }
-        } else {
-            "expr".to_string()
-        }
     }
 }
 

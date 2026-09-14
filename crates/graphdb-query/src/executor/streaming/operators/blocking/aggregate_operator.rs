@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
+use graphdb_core::columnar::{MaterializedBatch, RowKey};
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
@@ -22,7 +22,7 @@ use super::aggregate::{
     value_to_partial_accumulator, AggregateState, FinalAggregateState, GroupByState,
     PartialAggregateState, ACCUMULATOR_OVERHEAD_BYTES,
 };
-use super::helpers::{aggregate_arg_field_name, BlockingContext};
+use super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext};
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 
@@ -30,7 +30,8 @@ pub(super) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: 
     *state = Some(AggregateState {
         group_map: HashMap::new(),
         accumulator_overhead: num_agg_funcs * ACCUMULATOR_OVERHEAD_BYTES,
-        result_iter: None,
+        result_batch: MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -42,9 +43,10 @@ pub(super) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: 
 
 pub(super) fn open_groupby(state: &mut Option<GroupByState>) {
     *state = Some(GroupByState {
-        all_rows: vec![],
+        batch: MaterializedBatch::new(0, 0),
         col_names: vec![],
-        result_iter: None,
+        result_batch: MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
         partition_spiller: None,
         spilled_runs: vec![],
         current_partition: 0,
@@ -57,7 +59,8 @@ pub(super) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) 
     *state = Some(PartialAggregateState {
         group_map: HashMap::new(),
         col_names: vec![],
-        result_iter: None,
+        result_batch: MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
     });
 }
 
@@ -65,7 +68,8 @@ pub(super) fn open_final_aggregate(state: &mut Option<FinalAggregateState>) {
     *state = Some(FinalAggregateState {
         group_map: HashMap::new(),
         col_names: vec![],
-        result_iter: None,
+        result_batch: MaterializedBatch::new(0, 0),
+        emitted_offset: 0,
     });
 }
 
@@ -97,20 +101,20 @@ pub(super) fn next_aggregate(
     };
 
     loop {
-        // Output phase
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                state.result_iter = None;
-                if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
-                    state.output_complete = true;
-                    return Ok(None);
-                }
-            } else {
-                return Ok(Some(DataChunk::new_with_layout(
-                    chunk_rows,
-                    Arc::clone(ctx.output_layout),
-                )));
+        // Output phase: serve slices from the result batch.
+        if state.emitted_offset < state.result_batch.num_rows() {
+            return Ok(Some(emit_batch_slice(
+                &state.result_batch,
+                &mut state.emitted_offset,
+                ctx,
+            )));
+        }
+        if state.emitted_offset > 0 {
+            state.emitted_offset = 0;
+            state.result_batch.clear();
+            if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
+                state.output_complete = true;
+                return Ok(None);
             }
         }
 
@@ -131,7 +135,7 @@ pub(super) fn next_aggregate(
 
                 let mut reader = crate::executor::streaming::spill::RunReader::open(run)?;
                 let mut partition_results = Vec::new();
-                let mut group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>> = HashMap::new();
+                let mut group_map: HashMap<RowKey, Vec<AggregateAccumulator>> = HashMap::new();
                 while let Some(row) = reader.read_row()? {
                     let group_key: Vec<Value> = row.iter().take(num_group_keys).cloned().collect();
                     let accs = group_map.entry(group_key).or_insert_with(|| {
@@ -173,21 +177,16 @@ pub(super) fn next_aggregate(
                 state.current_partition += 1;
 
                 if !partition_results.is_empty() {
-                    state.result_iter = Some(partition_results.into_iter());
-                    let chunk_rows: Vec<Vec<Value>> = state
-                        .result_iter
-                        .as_mut()
-                        .unwrap()
-                        .by_ref()
-                        .take(2048)
-                        .collect();
-                    if !chunk_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            Arc::clone(ctx.output_layout),
-                        )));
+                    state.result_batch.clear();
+                    state.emitted_offset = 0;
+                    for result_row in partition_results {
+                        state.result_batch.append_row(result_row);
                     }
-                    state.result_iter = None;
+                    return Ok(Some(emit_batch_slice(
+                        &state.result_batch,
+                        &mut state.emitted_offset,
+                        ctx,
+                    )));
                 }
             }
             state.output_complete = true;
@@ -379,9 +378,10 @@ pub(super) fn next_aggregate(
             continue;
         }
 
-        // In-memory output: finalize accumulated groups
+        // In-memory output: finalize accumulated groups into the result batch.
         let group_map = std::mem::take(&mut state.group_map);
-        let mut result_rows = Vec::new();
+        state.result_batch.clear();
+        state.emitted_offset = 0;
         for (group_key, accs) in group_map {
             let mut result_row = if has_group_keys {
                 group_key
@@ -391,31 +391,29 @@ pub(super) fn next_aggregate(
             for acc in accs {
                 result_row.push(acc.finalize());
             }
-            result_rows.push(result_row);
+            state.result_batch.append_row(result_row);
         }
         // Global aggregation (no GROUP BY keys) over empty input still emits
         // a single row with default aggregate values (e.g. count = 0).
         // (Empty input never spills, so the spilled path needs no equivalent.)
-        if !has_group_keys && result_rows.is_empty() {
+        if !has_group_keys && state.result_batch.is_empty() {
             let mut result_row = Vec::new();
             for (func, args) in aggregate_functions.iter() {
                 let acc = AggregateAccumulator::for_function(func, args)
                     .expect("every aggregate function has an accumulator");
                 result_row.push(acc.finalize());
             }
-            result_rows.push(result_row);
+            state.result_batch.append_row(result_row);
         }
 
-        let mut result_iter = result_rows.into_iter();
-        let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
-        state.result_iter = Some(result_iter);
-        if chunk_rows.is_empty() {
+        if state.result_batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            chunk_rows,
-            Arc::clone(ctx.output_layout),
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
         )));
     }
 }
@@ -459,20 +457,20 @@ pub(super) fn next_groupby(
             return Ok(None);
         }
 
-        // Output phase
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                state.result_iter = None;
-                if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
-                    state.output_complete = true;
-                    return Ok(None);
-                }
-            } else {
-                return Ok(Some(DataChunk::new_with_layout(
-                    chunk_rows,
-                    Arc::clone(ctx.output_layout),
-                )));
+        // Output phase: serve slices from the result batch.
+        if state.emitted_offset < state.result_batch.num_rows() {
+            return Ok(Some(emit_batch_slice(
+                &state.result_batch,
+                &mut state.emitted_offset,
+                ctx,
+            )));
+        }
+        if state.emitted_offset > 0 {
+            state.emitted_offset = 0;
+            state.result_batch.clear();
+            if !state.has_spilled || state.current_partition >= state.spilled_runs.len() {
+                state.output_complete = true;
+                return Ok(None);
             }
         }
 
@@ -512,21 +510,16 @@ pub(super) fn next_groupby(
                 memory_tracker.reset();
 
                 if !result_rows.is_empty() {
-                    state.result_iter = Some(result_rows.into_iter());
-                    let chunk_rows: Vec<Vec<Value>> = state
-                        .result_iter
-                        .as_mut()
-                        .unwrap()
-                        .by_ref()
-                        .take(2048)
-                        .collect();
-                    if !chunk_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            Arc::clone(ctx.output_layout),
-                        )));
+                    state.result_batch.clear();
+                    state.emitted_offset = 0;
+                    for result_row in result_rows {
+                        state.result_batch.append_row(result_row);
                     }
-                    state.result_iter = None;
+                    return Ok(Some(emit_batch_slice(
+                        &state.result_batch,
+                        &mut state.emitted_offset,
+                        ctx,
+                    )));
                 }
             }
             state.output_complete = true;
@@ -542,7 +535,7 @@ pub(super) fn next_groupby(
                         rt.ensure_not_cancelled()?;
                     }
                     // Opaque consumer: expand symbolic multiplicity and compact the
-                    // selection so every logical row enters `all_rows` exactly once.
+                    // selection so every logical row enters the batch exactly once.
                     chunk.normalize_for_opaque("GroupBy");
                     if state.col_names.is_empty() {
                         state.col_names = match chunk.col_names() {
@@ -577,7 +570,7 @@ pub(super) fn next_groupby(
                                 let num_partitions = config.num_partitions;
                                 let mut spiller = HashPartitionSpiller::new(config, &sm, 0)?;
 
-                                for pending in std::mem::take(&mut state.all_rows) {
+                                for pending in state.batch.into_rows() {
                                     let group_key = eval_group_key(&pending, &state.col_names);
                                     let p = crate::executor::streaming::spill::hash_row_partition(
                                         &group_key,
@@ -602,7 +595,7 @@ pub(super) fn next_groupby(
                                 return Err(e);
                             }
                         }
-                        state.all_rows.push(row);
+                        state.batch.append_row(row);
                     }
                 }
                 None => {
@@ -623,28 +616,31 @@ pub(super) fn next_groupby(
         }
 
         // In-memory output
-        if state.all_rows.is_empty() {
+        if state.batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
         let col_names = if state.col_names.is_empty() {
-            (0..state.all_rows[0].len())
+            (0..state.batch.num_columns())
                 .map(|i| format!("col_{}", i))
                 .collect()
         } else {
             state.col_names.clone()
         };
-        let result_rows = group_rows(std::mem::take(&mut state.all_rows), &col_names);
-        let mut result_iter = result_rows.into_iter();
-        let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
-        state.result_iter = Some(result_iter);
-        if chunk_rows.is_empty() {
+        let result_rows = group_rows(state.batch.into_rows(), &col_names);
+        state.result_batch.clear();
+        state.emitted_offset = 0;
+        for result_row in result_rows {
+            state.result_batch.append_row(result_row);
+        }
+        if state.result_batch.is_empty() {
             state.output_complete = true;
             return Ok(None);
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            chunk_rows,
-            Arc::clone(ctx.output_layout),
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
         )));
     }
 }
@@ -657,17 +653,14 @@ pub(super) fn next_partial_aggregate(
     ctx: &BlockingContext<'_>,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if state.result_iter.is_some() {
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                return Ok(None);
-            }
-            return Ok(Some(DataChunk::new_with_layout(
-                chunk_rows,
-                Arc::clone(ctx.output_layout),
-            )));
-        }
+    if state.emitted_offset < state.result_batch.num_rows() {
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
+        )));
+    }
+    if state.emitted_offset > 0 {
         return Ok(None);
     }
 
@@ -766,20 +759,20 @@ pub(super) fn next_partial_aggregate(
         result_rows.push(row);
     }
 
-    state.result_iter = Some(result_rows.into_iter());
+    state.result_batch.clear();
+    state.emitted_offset = 0;
+    for row in result_rows {
+        state.result_batch.append_row(row);
+    }
 
-    if let Some(ref mut iter) = state.result_iter {
-        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-        if chunk_rows.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(DataChunk::new_with_layout(
-                chunk_rows,
-                Arc::clone(ctx.output_layout),
-            )))
-        }
-    } else {
+    if state.result_batch.is_empty() {
         Ok(None)
+    } else {
+        Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
+        )))
     }
 }
 
@@ -791,17 +784,14 @@ pub(super) fn next_final_aggregate(
     ctx: &BlockingContext<'_>,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if state.result_iter.is_some() {
-        if let Some(ref mut iter) = state.result_iter {
-            let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-            if chunk_rows.is_empty() {
-                return Ok(None);
-            }
-            return Ok(Some(DataChunk::new_with_layout(
-                chunk_rows,
-                Arc::clone(ctx.output_layout),
-            )));
-        }
+    if state.emitted_offset < state.result_batch.num_rows() {
+        return Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
+        )));
+    }
+    if state.emitted_offset > 0 {
         return Ok(None);
     }
 
@@ -867,20 +857,20 @@ pub(super) fn next_final_aggregate(
         result_rows.push(row);
     }
 
-    state.result_iter = Some(result_rows.into_iter());
+    state.result_batch.clear();
+    state.emitted_offset = 0;
+    for row in result_rows {
+        state.result_batch.append_row(row);
+    }
 
-    if let Some(ref mut iter) = state.result_iter {
-        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
-        if chunk_rows.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(DataChunk::new_with_layout(
-                chunk_rows,
-                Arc::clone(ctx.output_layout),
-            )))
-        }
-    } else {
+    if state.result_batch.is_empty() {
         Ok(None)
+    } else {
+        Ok(Some(emit_batch_slice(
+            &state.result_batch,
+            &mut state.emitted_offset,
+            ctx,
+        )))
     }
 }
 
@@ -942,11 +932,11 @@ pub(super) fn spill_groupby(
     group_by_expressions: &[Expression],
     sm: &SpillManager,
 ) -> Result<(), QueryError> {
-    if state.partition_spiller.is_none() && !state.all_rows.is_empty() {
+    if state.partition_spiller.is_none() && !state.batch.is_empty() {
         let config = HashPartitionConfig::default();
         let num_partitions = config.num_partitions;
         let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
-        for row in std::mem::take(&mut state.all_rows) {
+        for row in state.batch.into_rows() {
             let mut group_key = Vec::new();
             for expr in group_by_expressions.iter() {
                 let mut ctx = ValueRowContext::from_names(row.clone(), state.col_names.clone());

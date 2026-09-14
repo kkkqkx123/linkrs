@@ -3,7 +3,7 @@
 //! Query planning for queries that handle the WITH statement
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
+use crate::parser::ast::stmt::{OrderDirection, Stmt, WithStmt};
 use crate::planning::plan::core::{
     next_node_id,
     nodes::{DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode},
@@ -14,8 +14,9 @@ use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStat
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
     logical_start_root, wrap_logical_dedup, wrap_logical_filter, wrap_logical_limit,
-    wrap_logical_project, wrap_logical_sort,
+    wrap_logical_project, wrap_logical_project_with, wrap_logical_sort,
 };
+use crate::planning::statements::projection_util::return_item_to_yield_column;
 use crate::QueryContext;
 use graphdb_core::YieldColumn;
 use std::sync::Arc;
@@ -38,28 +39,6 @@ impl WithPlanner {
             _ => Err(PlannerError::PlanGenerationFailed(
                 "statement does not contain the WITH".to_string(),
             )),
-        }
-    }
-
-    /// Convert “ReturnItem” to “YieldColumn”.
-    fn convert_return_item_to_yield_column(
-        &self,
-        item: &ReturnItem,
-        _validated: &ValidatedStatement,
-    ) -> YieldColumn {
-        let (expression, alias) = match item {
-            ReturnItem::Expression { expression, alias } => (expression.clone(), alias.clone()),
-        };
-        let alias = alias.unwrap_or_else(|| {
-            expression
-                .get_expression()
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "_".to_string())
-        });
-        YieldColumn {
-            expression,
-            alias,
-            is_matched: false,
         }
     }
 }
@@ -98,7 +77,7 @@ impl Planner for WithPlanner {
         let mut yield_columns: Vec<YieldColumn> = with_stmt
             .items
             .iter()
-            .map(|item| self.convert_return_item_to_yield_column(item, validated))
+            .map(return_item_to_yield_column)
             .collect();
         for col in &mut yield_columns {
             let subqueries = exists_planner::plan_contextual_subqueries(
@@ -168,11 +147,13 @@ impl Planner for WithPlanner {
             .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?
-            .with_subqueries(yield_subqueries);
+            .with_subqueries(yield_subqueries.clone());
         current_node = PlanNodeEnum::Project(project_node);
-        current_logical = wrap_logical_project(
+        current_logical = wrap_logical_project_with(
             current_logical,
             yield_columns,
+            yield_subqueries,
+            false,
             current_node.col_names().to_vec(),
         );
 

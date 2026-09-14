@@ -118,6 +118,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_project_spec(
             return Ok(UnarySpec::Project {
                 output_expressions: vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
                 output_col_names: vec![COUNT_ONLY_COLUMN.to_string()],
+                output_col_types: vec![graphdb_core::DataType::Int],
                 subquery_runners,
             });
         }
@@ -130,6 +131,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_project_spec(
     Ok(UnarySpec::Project {
         output_expressions,
         output_col_names: node.col_names().to_vec(),
+        output_col_types: node.column_types().to_vec(),
         subquery_runners,
     })
 }

@@ -301,11 +301,18 @@ mod tests {
     fn test_pattern_matches() {
         let pattern = Pattern::new_with_name("Project");
         let input_node = PlanNodeEnum::ScanVertices(ScanVerticesNode::new(1, "default"));
-        let project_node = PlanNodeEnum::Project(
-            ProjectNode::new(input_node.clone(), Vec::new())
-                .expect("Creating the ProjectNode should succeed"),
-        );
         let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let proj_meta =
+            graphdb_core::types::expr::ExpressionMeta::new(Expression::Variable("a".to_string()));
+        let proj_id = ctx.register_expression(proj_meta);
+        let proj_expr = ContextualExpression::new(proj_id, ctx.clone());
+        let project_node = PlanNodeEnum::Project(
+            ProjectNode::new(
+                input_node.clone(),
+                vec![graphdb_core::YieldColumn::new(proj_expr, "a".to_string())],
+            )
+            .expect("Creating the ProjectNode should succeed"),
+        );
         let expr_meta =
             graphdb_core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);
@@ -346,11 +353,18 @@ mod tests {
         let pattern = Pattern::new_with_name("Filter").with_dependency_name("Project");
 
         let scan = PlanNodeEnum::ScanVertices(ScanVerticesNode::new(1, "default"));
-        let project = PlanNodeEnum::Project(
-            ProjectNode::new(scan.clone(), Vec::new())
-                .expect("Creating the ProjectNode should succeed"),
-        );
         let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let proj_meta =
+            graphdb_core::types::expr::ExpressionMeta::new(Expression::Variable("a".to_string()));
+        let proj_id = ctx.register_expression(proj_meta);
+        let proj_expr = ContextualExpression::new(proj_id, ctx.clone());
+        let project = PlanNodeEnum::Project(
+            ProjectNode::new(
+                scan.clone(),
+                vec![graphdb_core::YieldColumn::new(proj_expr, "a".to_string())],
+            )
+            .expect("Creating the ProjectNode should succeed"),
+        );
         let expr_meta =
             graphdb_core::types::expr::ExpressionMeta::new(Expression::Literal(Value::Bool(true)));
         let id = ctx.register_expression(expr_meta);

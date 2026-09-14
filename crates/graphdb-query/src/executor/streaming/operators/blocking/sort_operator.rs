@@ -180,6 +180,9 @@ pub(super) fn next_sort(
         if out_rows.is_empty() {
             Ok(None)
         } else {
+            if let Some(rt) = ctx.runtime.as_ref() {
+                rt.columnar_stats().record_batch_outlet();
+            }
             Ok(Some(
                 crate::executor::streaming::chunk::DataChunk::new_with_layout(
                     out_rows,
@@ -192,6 +195,9 @@ pub(super) fn next_sort(
         if chunk_rows.is_empty() {
             Ok(None)
         } else {
+            if let Some(rt) = ctx.runtime.as_ref() {
+                rt.columnar_stats().record_batch_outlet();
+            }
             Ok(Some(
                 crate::executor::streaming::chunk::DataChunk::new_with_layout(
                     chunk_rows,
@@ -257,6 +263,9 @@ pub(super) fn next_topn(
 
     if let Some(iter) = &mut state.result_iter {
         if let Some(row) = iter.next() {
+            if let Some(rt) = ctx.runtime.as_ref() {
+                rt.columnar_stats().record_batch_outlet();
+            }
             Ok(Some(
                 crate::executor::streaming::chunk::DataChunk::new_with_layout(
                     vec![row],

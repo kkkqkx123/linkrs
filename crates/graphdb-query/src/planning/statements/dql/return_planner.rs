@@ -3,16 +3,17 @@
 //! Query planning for statements that handle the RETURN command
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{OrderDirection, ReturnItem, ReturnStmt, Stmt};
+use crate::parser::ast::stmt::{OrderDirection, ReturnStmt, Stmt};
 use crate::planning::plan::core::nodes::{DedupNode, LimitNode, ProjectNode, SortNode, StartNode};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
-    logical_start_root, wrap_logical_dedup, wrap_logical_limit, wrap_logical_project,
+    logical_start_root, wrap_logical_dedup, wrap_logical_limit, wrap_logical_project_with,
     wrap_logical_sort,
 };
+use crate::planning::statements::projection_util::return_item_to_yield_column;
 use crate::QueryContext;
 use graphdb_core::YieldColumn;
 use std::sync::Arc;
@@ -35,28 +36,6 @@ impl ReturnPlanner {
             _ => Err(PlannerError::PlanGenerationFailed(
                 "statement does not contain a RETURN".to_string(),
             )),
-        }
-    }
-
-    /// Convert “ReturnItem” to “YieldColumn”.
-    fn convert_return_item_to_yield_column(
-        &self,
-        item: &ReturnItem,
-        _validated: &ValidatedStatement,
-    ) -> YieldColumn {
-        let (expression, alias) = match item {
-            ReturnItem::Expression { expression, alias } => (expression.clone(), alias.clone()),
-        };
-        let alias = alias.unwrap_or_else(|| {
-            expression
-                .get_expression()
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "_".to_string())
-        });
-        YieldColumn {
-            expression,
-            alias,
-            is_matched: false,
         }
     }
 }
@@ -95,7 +74,7 @@ impl Planner for ReturnPlanner {
         let mut yield_columns: Vec<YieldColumn> = return_stmt
             .items
             .iter()
-            .map(|item| self.convert_return_item_to_yield_column(item, validated))
+            .map(return_item_to_yield_column)
             .collect();
         for col in &mut yield_columns {
             let subqueries = exists_planner::plan_contextual_subqueries(
@@ -132,11 +111,13 @@ impl Planner for ReturnPlanner {
             .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?
-            .with_subqueries(yield_subqueries);
+            .with_subqueries(yield_subqueries.clone());
         current_node = PlanNodeEnum::Project(project_node);
-        current_logical = wrap_logical_project(
+        current_logical = wrap_logical_project_with(
             current_logical,
             yield_columns,
+            yield_subqueries,
+            false,
             current_node.col_names().to_vec(),
         );
 
@@ -250,7 +231,7 @@ impl Planner for ReturnPlanner {
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
 
-        let yield_columns: Vec<YieldColumn> = return_stmt
+        let mut yield_columns: Vec<YieldColumn> = return_stmt
             .items
             .iter()
             .map(|item| {
@@ -271,18 +252,38 @@ impl Planner for ReturnPlanner {
             })
             .collect::<Result<Vec<_>, PlannerError>>()?;
 
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut yield_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        for col in &mut yield_columns {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut col.expression,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
+            yield_subqueries.extend(subqueries);
+        }
+
         let start_node = StartNode::new();
         let mut current_node = PlanNodeEnum::Start(start_node.clone());
         let mut current_logical: LogicalNodeEnum = logical_start_root();
 
-        let project_node =
-            ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns.clone())
+            .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+            })?
+            .with_subqueries(yield_subqueries.clone());
         current_node = PlanNodeEnum::Project(project_node);
-        current_logical = wrap_logical_project(
+        current_logical = wrap_logical_project_with(
             current_logical,
             yield_columns,
+            yield_subqueries,
+            false,
             current_node.col_names().to_vec(),
         );
 

@@ -2,6 +2,7 @@ use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::executor::{SortDirection, ValueRowContext};
 use crate::executor::streaming::helpers::compare_values;
 use crate::executor::streaming::spill::{HashPartitionSpiller, SpilledRun};
+use graphdb_core::columnar::MaterializedBatch;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
@@ -59,9 +60,13 @@ pub(crate) fn sort_partition_rows(
 
 #[derive(Debug)]
 pub struct WindowFunctionState {
-    pub all_rows: Vec<Vec<Value>>,
+    /// Column-oriented input buffer (was `Vec<Vec<Value>>`).
+    pub batch: MaterializedBatch,
     pub col_names: Vec<String>,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,
@@ -72,9 +77,13 @@ pub struct WindowFunctionState {
 
 #[derive(Debug)]
 pub struct WindowState {
-    pub all_rows: Vec<Vec<Value>>,
+    /// Column-oriented input buffer (was `Vec<Vec<Value>>`).
+    pub batch: MaterializedBatch,
     pub col_names: Vec<String>,
-    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Output buffer replacing the drained row iterator.
+    pub result_batch: MaterializedBatch,
+    /// Output cursor into `result_batch`.
+    pub emitted_offset: usize,
     pub partition_spiller: Option<HashPartitionSpiller>,
     pub spilled_runs: Vec<Option<SpilledRun>>,
     pub current_partition: usize,

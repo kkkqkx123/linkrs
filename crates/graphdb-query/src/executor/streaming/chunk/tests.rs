@@ -1262,3 +1262,28 @@ fn columnar_and_row_paths_agree_fuzz() {
         }
     }
 }
+
+#[test]
+fn batch_round_trip_preserves_rows_and_names() {
+    use graphdb_core::columnar::MaterializedBatch;
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
+    let rows = vec![
+        vec![Value::BigInt(1), Value::string("x")],
+        vec![Value::BigInt(2), Value::string("y")],
+        vec![Value::BigInt(3), Value::string("z")],
+    ];
+    let chunk = DataChunk::new_with_layout(rows.clone(), Arc::clone(&layout));
+    let batch = chunk.to_batch();
+    assert_eq!(batch.num_rows(), 3);
+    assert_eq!(
+        batch.schema_names().unwrap().as_ref(),
+        &["a".to_string(), "b".to_string()]
+    );
+    let back = DataChunk::from_batch(&batch, Arc::clone(&layout));
+    assert_eq!(back.rows, rows);
+    let sliced = DataChunk::slice_from_batch(&batch, 1, 5, Arc::clone(&layout));
+    assert_eq!(sliced.rows, rows[1..].to_vec());
+    let empty = DataChunk::slice_from_batch(&batch, 10, 3, Arc::clone(&layout));
+    assert!(empty.is_empty());
+    let _ = MaterializedBatch::new(0, 0);
+}

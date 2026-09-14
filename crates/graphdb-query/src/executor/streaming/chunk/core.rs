@@ -5,6 +5,7 @@ use super::typed::TypedColumn;
 use crate::executor::base::MemoryReservation;
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
+use graphdb_core::columnar::MaterializedBatch;
 use graphdb_core::Value;
 use std::sync::Arc;
 
@@ -210,6 +211,9 @@ impl DataChunk {
     }
 
     pub fn from_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
+        // Compatibility transpose: row storage is authoritative and column
+        // caches are derived. New columnar projection code must use
+        // `project_columns` instead of adding call sites here.
         let num_cols = columns.len();
         assert!(
             layout.is_empty() || num_cols == layout.len(),
@@ -258,6 +262,17 @@ impl DataChunk {
         }
     }
 
+    /// Columnar projection assembly: build an output chunk from evaluated
+    /// output columns without a row intermediate.
+    ///
+    /// This is the designated constructor for the streaming `Project` fast
+    /// path (passthrough / constant columns gathered or broadcast upstream).
+    /// Row storage stays authoritative downstream; the transpose into rows
+    /// is the single compatibility edge until the chunk itself is columnar.
+    pub fn project_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
+        Self::from_columns(columns, layout)
+    }
+
     pub fn with_columns(mut self, columns: Vec<Vec<Value>>) -> Self {
         assert_eq!(columns.len(), self.num_columns(), "column count mismatch");
         if !self.rows.is_empty() {
@@ -267,6 +282,43 @@ impl DataChunk {
         }
         self.columns = Some(columns);
         self
+    }
+
+    /// Build a row chunk from a columnar batch slice.
+    ///
+    /// Coexistence API: the batch stays the operator state authority while
+    /// the chunk carries the row view downstream. A transpose is still
+    /// performed internally until the chunk itself becomes columnar.
+    pub fn from_batch(batch: &MaterializedBatch, layout: Arc<SlotLayout>) -> Self {
+        let rows = batch.to_rows();
+        Self::try_new_with_layout(rows, layout).expect("DataChunk row width mismatch")
+    }
+
+    /// Build a row chunk from a row range of a columnar batch.
+    pub fn slice_from_batch(
+        batch: &MaterializedBatch,
+        offset: usize,
+        len: usize,
+        layout: Arc<SlotLayout>,
+    ) -> Self {
+        Self::from_batch(&batch.slice_rows(offset, len), layout)
+    }
+
+    /// Convert this chunk back into a columnar batch (single transpose edge).
+    pub fn to_batch(&self) -> MaterializedBatch {
+        let mut batch = MaterializedBatch::new(self.num_columns(), 0);
+        let names: Arc<[String]> = Arc::from(
+            self.schema
+                .columns
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+        );
+        batch.set_schema_names(names);
+        for row in &self.rows {
+            batch.append_row(row.clone());
+        }
+        batch
     }
 
     /// Memory estimate for the *visible expanded* rows
@@ -456,6 +508,8 @@ impl DataChunk {
     // ── Column materialization ──
 
     pub fn materialize_columns(&mut self) {
+        // Compatibility transpose cache: prefer `typed_columns` when valid,
+        // else derive a cloned column view from rows. Not a storage format.
         if self.columns.is_some() {
             return;
         }

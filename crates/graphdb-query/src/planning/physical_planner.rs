@@ -351,7 +351,9 @@ fn convert_project(
     let mut node = crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(
         input, n.columns,
     )
-    .expect("Failed to construct ProjectNode");
+    .expect("Failed to construct ProjectNode")
+    .with_subqueries(n.subqueries);
+    node.set_has_folded_expressions(n.has_folded_expressions);
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }

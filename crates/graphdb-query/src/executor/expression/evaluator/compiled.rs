@@ -595,8 +595,33 @@ impl CompiledExpr {
                 }
             }
 
-            // Short-circuit semantics (CASE, subqueries, parameter lookup,
-            // per-row collection access) run through the per-row evaluator.
+            // Short-circuit semantics (CASE, subqueries, per-row collection
+            // access) run through the per-row evaluator. Parameters resolve
+            // once to a shared constant; a missing parameter keeps the exact
+            // per-row error by evaluating the first row through the scalar
+            // path.
+            CompiledExpr::Parameter(name) => match env
+                .and_then(|e| e.params.as_ref())
+                .and_then(|p| p.get(name).cloned())
+            {
+                Some(value) => Ok(ColumnarValue::Const(value)),
+                None => {
+                    let first = rows.first().cloned().unwrap_or_default();
+                    self.evaluate(&first, layout, env)?;
+                    Ok(ColumnarValue::Column(Vec::new()))
+                }
+            },
+            CompiledExpr::SessionVariable(name) => match env
+                .and_then(|e| e.session_variables.as_ref())
+                .and_then(|v| v.get(name).cloned())
+            {
+                Some(value) => Ok(ColumnarValue::Const(value)),
+                None => {
+                    let first = rows.first().cloned().unwrap_or_default();
+                    self.evaluate(&first, layout, env)?;
+                    Ok(ColumnarValue::Column(Vec::new()))
+                }
+            },
             _ => {
                 let mut out = Vec::with_capacity(len);
                 for row in rows {
@@ -787,6 +812,41 @@ mod tests {
             .evaluate_batch(&rows, layout, None)
             .expect("batch evaluation should succeed");
         assert!(matches!(batch, ColumnarValue::Const(_)));
+    }
+
+    #[test]
+    fn batch_parameter_broadcasts_const() {
+        use crate::executor::streaming::subquery::EvalEnv;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let expr = Expression::Parameter("x".to_string());
+        let layout = layout(&["a"]);
+        let rows = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
+        let compiled = CompiledExpr::compile(&expr, &layout);
+        let mut params = HashMap::new();
+        params.insert("x".to_string(), Value::Int(9));
+        let env = EvalEnv {
+            params: Some(Arc::new(params)),
+            session_variables: None,
+            subquery_executor: None,
+        };
+        let batch = compiled
+            .evaluate_batch(&rows, layout, Some(&env))
+            .expect("batch evaluation should succeed");
+        assert!(matches!(batch, ColumnarValue::Const(Value::Int(9))));
+    }
+
+    #[test]
+    fn batch_missing_parameter_preserves_error() {
+        let expr = Expression::Parameter("missing".to_string());
+        let layout = layout(&["a"]);
+        let rows = vec![vec![Value::Int(1)]];
+        let compiled = CompiledExpr::compile(&expr, &layout);
+        let err = compiled
+            .evaluate_batch(&rows, layout, None)
+            .expect_err("missing parameter must fail");
+        assert!(err.to_string().contains("missing"));
     }
 
     #[test]

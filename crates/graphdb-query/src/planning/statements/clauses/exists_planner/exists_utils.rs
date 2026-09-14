@@ -184,13 +184,15 @@ pub(crate) fn wrap_project_with_subqueries(
     let column =
         graphdb_core::YieldColumn::new(expression.clone(), expression.to_expression_string());
     let project_node =
-        ProjectNode::new(input_node, vec![column.clone()])?.with_subqueries(subqueries);
+        ProjectNode::new(input_node, vec![column.clone()])?.with_subqueries(subqueries.clone());
 
     let logical_root = plan.logical_root().cloned().map(|input| {
         LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(input)),
             columns: vec![column],
+            subqueries,
+            has_folded_expressions: false,
             output_var: None,
             col_names: vec![],
             column_types: vec![],

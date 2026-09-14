@@ -51,6 +51,18 @@ impl ColumnarPolicy {
     /// (default-on), and thereafter when the cumulative hit rate stays at or
     /// above the threshold.
     pub fn should_use_columnar(&self) -> bool {
+        self.should_use_columnar_with(QueryColumnarOverride::inherit())
+    }
+
+    /// Decide with a per-query override applied first.
+    ///
+    /// A forced override wins over the adaptive decision so a single query
+    /// can be pinned without mutating the shared counters; otherwise the
+    /// shared threshold logic applies unchanged.
+    pub fn should_use_columnar_with(&self, query_override: QueryColumnarOverride) -> bool {
+        if let Some(forced) = query_override.force_columnar {
+            return forced;
+        }
         let total = self.hits.load(Ordering::Relaxed) + self.misses.load(Ordering::Relaxed);
         if total < self.min_samples {
             return true;
@@ -128,6 +140,33 @@ impl Default for ColumnarPolicy {
     }
 }
 
+/// Per-query override for the shared [`ColumnarPolicy`] decision.
+///
+/// `None` (default) inherits the adaptive global decision; `Some(true/false)`
+/// forces the columnar path on/off for one query. Carried by
+/// [`crate::executor::streaming::runtime::ExecutionRuntime`]; a future SQL
+/// hint may populate it, but today only internal callers set it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueryColumnarOverride {
+    pub force_columnar: Option<bool>,
+}
+
+impl QueryColumnarOverride {
+    /// Inherit the shared policy decision.
+    pub fn inherit() -> Self {
+        Self {
+            force_columnar: None,
+        }
+    }
+
+    /// Force the columnar path on/off for one query.
+    pub fn force(enabled: bool) -> Self {
+        Self {
+            force_columnar: Some(enabled),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +228,18 @@ mod tests {
             policy.merge(60, 0);
         }
         assert!(policy.should_use_columnar());
+    }
+
+    #[test]
+    fn test_query_override_pins_decision() {
+        let policy = ColumnarPolicy::new(0.8, 10);
+        for _ in 0..10 {
+            policy.record_miss();
+        }
+        assert!(!policy.should_use_columnar());
+        assert!(policy.should_use_columnar_with(QueryColumnarOverride::force(true)));
+        assert!(!policy.should_use_columnar_with(QueryColumnarOverride::force(false)));
+        assert!(!policy.should_use_columnar_with(QueryColumnarOverride::inherit()));
     }
 
     #[test]

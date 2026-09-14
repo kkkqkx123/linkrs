@@ -105,15 +105,13 @@ pub(crate) fn flatten_next_batch(
 
 /// Materialize one flatten output chunk for `positions` of `chunk`.
 ///
-/// Row order follows `positions`; `columns` and `typed_columns` are
-/// gathered column-wise so the vectorized layout is preserved end to end.
+/// Row order follows `positions`; rows are gathered column-wise through the
+/// shared batch primitive while `columns` and `typed_columns` keep their
+/// dedicated gather paths so the vectorized layout is preserved end to end.
 fn build_flatten_batch_chunk(chunk: &DataChunk, positions: &[usize]) -> DataChunk {
     let layout = chunk.get_layout();
     let schema = chunk.schema.clone();
-    let rows = positions
-        .iter()
-        .map(|&sel_pos| chunk.rows[sel_pos].clone())
-        .collect::<Vec<_>>();
+    let rows = chunk.to_batch().gather(positions).to_rows();
     let columns = chunk.columns.as_ref().map(|cols| {
         cols.iter()
             .map(|col| {

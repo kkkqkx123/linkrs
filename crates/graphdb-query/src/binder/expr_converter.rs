@@ -15,7 +15,27 @@ pub(crate) fn bound_expr_to_contextual(
     let expr = convert_bound_to_expression(bound)?;
     let meta = ExpressionMeta::new(expr);
     let id = ctx.register_expression(meta);
+    ctx.set_type(&id, bound.return_type());
     Ok(ContextualExpression::new(id, ctx.clone()))
+}
+
+/// Convert a bound projection item into a `YieldColumn`, preserving the
+/// resolved type in the contextual type slot and applying the shared default
+/// alias rule when the item has no explicit alias.
+pub(crate) fn bound_projection_to_yield_column(
+    bound: &super::bound::BoundProjectionItem,
+    ctx: &Arc<ExpressionAnalysisContext>,
+) -> Result<graphdb_core::YieldColumn, String> {
+    let ctx_expr = bound_expr_to_contextual(&bound.expression, ctx)?;
+    let alias = bound
+        .alias
+        .clone()
+        .unwrap_or_else(|| ctx_expr.to_expression_string());
+    Ok(graphdb_core::YieldColumn {
+        expression: ctx_expr,
+        alias,
+        is_matched: false,
+    })
 }
 
 fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, String> {
@@ -361,5 +381,38 @@ fn function_name_to_aggregate(a: &BoundAggregateCall) -> Result<AggregateFunctio
         "VEC_SUM" => Ok(AggregateFunction::VecSum),
         "VEC_AVG" => Ok(AggregateFunction::VecAvg),
         _ => Err(format!("Unknown aggregate function: {}", name)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binder::bound::{BoundColumnRef, BoundProjectionItem};
+    use graphdb_core::types::ValueType;
+    use graphdb_core::DataType;
+
+    #[test]
+    fn test_bound_column_ref_preserves_type() {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let bound = BoundExpression::ColumnRef(BoundColumnRef {
+            variable: "n".to_string(),
+            property: "age".to_string(),
+            resolved_tag: None,
+            value_type: ValueType::Int,
+        });
+        let ctx_expr = bound_expr_to_contextual(&bound, &ctx).expect("convert");
+        assert_eq!(ctx_expr.data_type(), Some(DataType::Int));
+    }
+
+    #[test]
+    fn test_bound_projection_default_alias_and_type() {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let item = BoundProjectionItem {
+            expression: BoundExpression::Variable("n".to_string(), DataType::String),
+            alias: None,
+        };
+        let col = bound_projection_to_yield_column(&item, &ctx).expect("convert");
+        assert_eq!(col.alias, "n");
+        assert_eq!(col.expression.data_type(), Some(DataType::String));
     }
 }

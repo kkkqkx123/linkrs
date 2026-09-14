@@ -133,6 +133,39 @@ impl PartialEq for SerializableExpression {
 
 impl Eq for SerializableExpression {}
 
+/// Serializable projection column.
+///
+/// Carries the expression payload plus the output alias and match flag so a
+/// `ProjectNode` serialization round-trip preserves the exact output schema
+/// instead of recomputing the alias from the expression string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializableYieldColumn {
+    pub expression: SerializableExpression,
+    pub alias: String,
+    pub is_matched: bool,
+}
+
+impl SerializableYieldColumn {
+    /// Convert from a yield column reference.
+    pub fn from_yield_column(column: &crate::YieldColumn) -> Result<Self, String> {
+        Ok(Self {
+            expression: SerializableExpression::from_contextual(&column.expression)?,
+            alias: column.alias.clone(),
+            is_matched: column.is_matched,
+        })
+    }
+
+    /// Convert back into a yield column.
+    pub fn to_yield_column(self, ctx: Arc<ExpressionAnalysisContext>) -> crate::YieldColumn {
+        let ctx_expr = self.expression.to_contextual(ctx);
+        crate::YieldColumn {
+            expression: ctx_expr,
+            alias: self.alias,
+            is_matched: self.is_matched,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

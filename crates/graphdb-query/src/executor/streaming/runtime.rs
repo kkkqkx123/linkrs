@@ -138,6 +138,8 @@ pub struct ColumnarStats {
     pub spill_bytes: AtomicU64,
     /// Number of spill runs finalized.
     pub spill_runs: AtomicU64,
+    /// Chunks emitted through the batch-slice outlet path.
+    pub batch_outlets: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -155,6 +157,7 @@ impl Default for ColumnarStats {
             spill_rows: AtomicU64::new(0),
             spill_bytes: AtomicU64::new(0),
             spill_runs: AtomicU64::new(0),
+            batch_outlets: AtomicU64::new(0),
         }
     }
 }
@@ -231,6 +234,11 @@ impl ColumnarStats {
     /// Record one finalized spill run.
     pub fn record_spill(&self, rows: u64, bytes: u64) {
         self.record_spill_with_runs(rows, bytes, 1);
+    }
+
+    /// Record one chunk emitted through the batch-slice outlet path.
+    pub fn record_batch_outlet(&self) {
+        self.batch_outlets.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record aggregated spill output covering `runs` finalized runs.
@@ -510,6 +518,7 @@ pub struct ColumnarStatsSnapshot {
     pub spill_rows: u64,
     pub spill_bytes: u64,
     pub spill_runs: u64,
+    pub batch_outlets: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -526,6 +535,7 @@ impl ColumnarStatsSnapshot {
             spill_rows: stats.spill_rows.load(Ordering::Relaxed),
             spill_bytes: stats.spill_bytes.load(Ordering::Relaxed),
             spill_runs: stats.spill_runs.load(Ordering::Relaxed),
+            batch_outlets: stats.batch_outlets.load(Ordering::Relaxed),
         }
     }
 
@@ -564,7 +574,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -577,6 +587,7 @@ impl ColumnarStatsSnapshot {
             self.spill_rows,
             self.spill_bytes,
             self.spill_runs,
+            self.batch_outlets,
         )
     }
 }
@@ -817,6 +828,11 @@ pub struct ExecutionRuntime {
     /// the scan gates; when the runtime finishes, the per-query columnar
     /// stats are merged back into the policy so later queries can adapt.
     columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
+    /// Per-query override for the shared columnar policy decision.
+    ///
+    /// Defaults to inherit; internal callers may pin one query without
+    /// touching the shared counters.
+    columnar_override: super::chunk::QueryColumnarOverride,
     /// Shared query feedback history for collecting execution statistics.
     ///
     /// Injected by the materializer from the query bindings; when set, the
@@ -880,6 +896,7 @@ impl ExecutionRuntime {
             arena: Some(Arc::new(Mutex::new(Arena::new()))),
             columnar_stats: Arc::new(ColumnarStats::new()),
             columnar_policy: None,
+            columnar_override: super::chunk::QueryColumnarOverride::inherit(),
             feedback_history: None,
             macro_manager: None,
             type_alias_manager: None,
@@ -1341,6 +1358,16 @@ impl ExecutionRuntime {
     /// engine; set by the materializer from the query bindings).
     pub fn set_columnar_policy(&mut self, policy: Option<Arc<super::chunk::ColumnarPolicy>>) {
         self.columnar_policy = policy;
+    }
+
+    /// Per-query columnar override for this runtime.
+    pub fn columnar_override(&self) -> super::chunk::QueryColumnarOverride {
+        self.columnar_override
+    }
+
+    /// Pin the columnar decision for this query only.
+    pub fn set_columnar_override(&mut self, query_override: super::chunk::QueryColumnarOverride) {
+        self.columnar_override = query_override;
     }
 
     /// Merge this query's columnar hit/miss counts into the shared policy.

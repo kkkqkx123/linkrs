@@ -254,49 +254,52 @@ impl VectorBackend {
     /// spurious `CollectionConfigConflict`. Remote backends store the
     /// request as given, so the config passes through unchanged.
     pub fn effective_collection_config(&self, config: &CollectionConfig) -> CollectionConfig {
-        let VectorBackend::Local(engine) = self else {
-            return config.clone();
-        };
-        let mut effective = config.clone();
-        match effective
-            .index_type
-            .unwrap_or(vector_search::types::IndexType::HNSW)
-        {
-            vector_search::types::IndexType::HNSW => {
-                if effective.hnsw_config.is_none() {
-                    effective.hnsw_config = engine
-                        .default_hnsw_config()
-                        .or(Some(vector_search::types::HnswConfig::default()));
+        match self {
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(_) => config.clone(),
+            VectorBackend::Local(engine) => {
+                let mut effective = config.clone();
+                match effective
+                    .index_type
+                    .unwrap_or(vector_search::types::IndexType::HNSW)
+                {
+                    vector_search::types::IndexType::HNSW => {
+                        if effective.hnsw_config.is_none() {
+                            effective.hnsw_config = engine
+                                .default_hnsw_config()
+                                .or(Some(vector_search::types::HnswConfig::default()));
+                        }
+                        effective.ivf_config = None;
+                    }
+                    vector_search::types::IndexType::IVF => {
+                        if effective.ivf_config.is_none() {
+                            effective.ivf_config = engine.default_ivf_config();
+                        }
+                        effective.hnsw_config = None;
+                    }
+                    vector_search::types::IndexType::FLAT => {
+                        effective.hnsw_config = None;
+                        effective.ivf_config = None;
+                    }
                 }
-                effective.ivf_config = None;
-            }
-            vector_search::types::IndexType::IVF => {
-                if effective.ivf_config.is_none() {
-                    effective.ivf_config = engine.default_ivf_config();
+                if effective.quantization_config.is_none() {
+                    effective.quantization_config = engine.default_quantization_config();
                 }
-                effective.hnsw_config = None;
+                effective.index_type = Some(
+                    effective
+                        .index_type
+                        .unwrap_or(vector_search::types::IndexType::HNSW),
+                );
+                let drop_quantization = effective
+                    .quantization_config
+                    .as_ref()
+                    .is_some_and(|quantization| !quantization.enabled);
+                if drop_quantization {
+                    effective.quantization_config = None;
+                }
+                effective
             }
-            vector_search::types::IndexType::FLAT => {
-                effective.hnsw_config = None;
-                effective.ivf_config = None;
-            }
         }
-        if effective.quantization_config.is_none() {
-            effective.quantization_config = engine.default_quantization_config();
-        }
-        effective.index_type = Some(
-            effective
-                .index_type
-                .unwrap_or(vector_search::types::IndexType::HNSW),
-        );
-        let drop_quantization = effective
-            .quantization_config
-            .as_ref()
-            .is_some_and(|quantization| !quantization.enabled);
-        if drop_quantization {
-            effective.quantization_config = None;
-        }
-        effective
     }
 
     /// Create a collection. Fails if it already exists.

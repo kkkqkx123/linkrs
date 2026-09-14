@@ -780,12 +780,54 @@ mod tests {
         assert!(corrupted > 0, "expected at least one run file to corrupt");
     }
 
+    fn corrupt_run_bodies(manager: &SpillManager, offset: u64) {
+        let entries = std::fs::read_dir(manager.base_dir()).unwrap();
+        let mut corrupted = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("run") {
+                continue;
+            }
+            let mut bytes = std::fs::read(&path).unwrap();
+            if bytes.len() <= offset as usize {
+                continue;
+            }
+            bytes[offset as usize] ^= 0xff;
+            std::fs::write(&path, &bytes).unwrap();
+            corrupted += 1;
+        }
+        assert!(corrupted > 0, "expected at least one run file to corrupt");
+    }
+
+    fn repair_run_header_checksums(manager: &SpillManager) {
+        fn fnv1a_64_local(data: &[u8]) -> u64 {
+            let mut hash = 0xcbf29ce484222325u64;
+            for &b in data {
+                hash ^= b as u64;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash
+        }
+        let entries = std::fs::read_dir(manager.base_dir()).unwrap();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("run") {
+                continue;
+            }
+            let mut bytes = std::fs::read(&path).unwrap();
+            assert!(bytes.len() >= 48);
+            let checksum = fnv1a_64_local(&bytes[0..40]);
+            bytes[40..48].copy_from_slice(&checksum.to_le_bytes());
+            std::fs::write(&path, &bytes).unwrap();
+        }
+    }
+
     #[test]
     fn spilled_checksum_failure_surfaces_at_replay() {
         let (collector, manager) = spill_with_rows(4211, 20);
-        // Flip a byte in the stored body checksum (header bytes 24..32):
-        // bodies stay intact so replay must fail with a checksum error.
-        corrupt_run_headers(&manager, 24);
+        // Flip a byte inside the first section payload (past the 48-byte
+        // header and 9-byte frame prefix): the frame checksum must fail.
+        corrupt_run_bodies(&manager, 57);
         let err = collector.into_rows().unwrap_err();
         assert!(
             err.to_string().contains("checksum mismatch"),
@@ -797,8 +839,11 @@ mod tests {
     #[test]
     fn spilled_fingerprint_failure_surfaces_at_replay() {
         let (collector, manager) = spill_with_rows(4212, 20);
-        // Flip a byte in the stored schema fingerprint (header bytes 8..16).
+        // Flip a byte in the stored schema fingerprint (header bytes 8..16),
+        // then repair the header checksum so replay reaches fingerprint
+        // validation instead of failing on header integrity.
         corrupt_run_headers(&manager, 8);
+        repair_run_header_checksums(&manager);
         let err = collector.into_rows().unwrap_err();
         assert!(
             err.to_string().contains("fingerprint mismatch"),

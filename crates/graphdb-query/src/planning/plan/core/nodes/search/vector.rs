@@ -10,5 +10,7 @@ pub mod management;
 #[cfg(feature = "vector")]
 pub use data_access::VectorSearchParams;
 #[cfg(feature = "vector")]
-pub use data_access::{OutputField, VectorLookupNode, VectorMatchNode, VectorSearchNode};
+pub use data_access::{
+    OutputField, VectorLookupNode, VectorMatchNode, VectorOutputColumn, VectorSearchNode,
+};
 pub use management::{CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode};

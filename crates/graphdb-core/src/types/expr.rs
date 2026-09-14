@@ -125,6 +125,7 @@ pub use def::FunctionArg;
 pub use def::SubqueryBody;
 pub use expression::{ExpressionId, ExpressionMeta};
 pub use serializable::SerializableExpression;
+pub use serializable::SerializableYieldColumn;
 pub use substitute::substitute_variables;
 
 // Unified Export - Visitor pattern

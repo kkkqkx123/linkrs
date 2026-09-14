@@ -423,6 +423,8 @@ mod tests {
                 id: next_node_id(),
                 input: Some(Box::new(scan())),
                 columns: vec![yield_col],
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
                 output_var: None,
                 col_names: vec!["a2".to_string()],
                 column_types: vec![],

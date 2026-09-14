@@ -14,5 +14,6 @@ pub use fulltext::{
 pub use vector::{CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode};
 #[cfg(feature = "vector")]
 pub use vector::{
-    OutputField, VectorLookupNode, VectorMatchNode, VectorSearchNode, VectorSearchParams,
+    OutputField, VectorLookupNode, VectorMatchNode, VectorOutputColumn, VectorSearchNode,
+    VectorSearchParams,
 };

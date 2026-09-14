@@ -1,12 +1,10 @@
-use crate::executor::base::MemoryTracker;
+use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
-use crate::executor::streaming::spill::SpillManager;
-use graphdb_core::error::QueryError;
+use graphdb_core::columnar::MaterializedBatch;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::AggregateFunction;
-use graphdb_core::Value;
 use std::sync::Arc;
 
 pub(super) struct BlockingContext<'a> {
@@ -33,20 +31,20 @@ pub(crate) fn aggregate_arg_field_name(
     }
 }
 
-/// Reject spill for operators that do not support disk-based overflow.
-///
-/// Unified partition spill for these operators waits for the columnar
-/// materialization state (R4 design); until then the memory-budget breach
-/// surfaces as an explicit error instead of silent OOM or partial spill.
-pub(crate) fn spill_not_supported(
-    operator: &'static str,
-    _buffer: &mut Vec<Vec<Value>>,
-    _sm: &SpillManager,
-    _memory_tracker: &mut MemoryTracker,
-) -> Result<(), QueryError> {
-    Err(QueryError::execution(
-        format!(
-            "Spill is not implemented for blocking operator {operator}; query memory budget exceeded (unified spill deferred to columnar materialization state)"
-        ),
-    ))
+/// Shared outlet for blocking operators: replaces the drained
+/// `IntoIter<Vec<Value>>` pattern while keeping chunking (2048 rows),
+/// logical row order, and outlet observability identical.
+pub(super) fn emit_batch_slice(
+    batch: &MaterializedBatch,
+    offset: &mut usize,
+    ctx: &BlockingContext<'_>,
+) -> DataChunk {
+    let total = batch.num_rows();
+    let len = 2048.min(total.saturating_sub(*offset));
+    let chunk = DataChunk::slice_from_batch(batch, *offset, len, Arc::clone(ctx.output_layout));
+    *offset += len;
+    if let Some(rt) = ctx.runtime.as_ref() {
+        rt.columnar_stats().record_batch_outlet();
+    }
+    chunk
 }
