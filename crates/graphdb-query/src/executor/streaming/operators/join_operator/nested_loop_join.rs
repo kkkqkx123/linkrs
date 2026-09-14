@@ -12,6 +12,7 @@ use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
 use super::build_combined_names;
+use super::finalize_join_output;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn next_nested_loop_join(
@@ -83,9 +84,9 @@ pub(super) fn next_nested_loop_join(
         }
 
         if !result_rows.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                result_rows,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }

@@ -140,6 +140,15 @@ pub struct ColumnarStats {
     pub spill_runs: AtomicU64,
     /// Chunks emitted through the batch-slice outlet path.
     pub batch_outlets: AtomicU64,
+    /// Expressions served by the typed columnar fast path on the compiled
+    /// (project/filter) hot path — i.e. the compiled-over-rows path was
+    /// bypassed because the chunk carried a usable typed layout. Distinct
+    /// from `columnar_typed_hits`, which counts the scalar chunk evaluator.
+    pub columnar_b_path_hits: AtomicU64,
+    /// Typed layouts built by a producer that were dropped before any
+    /// downstream consumer read them (`take_rows_for_reuse`, join build
+    /// consumption). A high count means typed columns were built in vain.
+    pub columnar_wasted_builds: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -158,6 +167,8 @@ impl Default for ColumnarStats {
             spill_bytes: AtomicU64::new(0),
             spill_runs: AtomicU64::new(0),
             batch_outlets: AtomicU64::new(0),
+            columnar_b_path_hits: AtomicU64::new(0),
+            columnar_wasted_builds: AtomicU64::new(0),
         }
     }
 }
@@ -178,6 +189,17 @@ impl ColumnarStats {
     /// Record an evaluation served by the typed batch fast path.
     pub fn record_typed_hit(&self) {
         self.columnar_typed_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an expression served by the typed columnar fast path on the
+    /// compiled (project/filter) hot path.
+    pub fn record_b_path_hit(&self) {
+        self.columnar_b_path_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a typed layout dropped before any downstream consumer read it.
+    pub fn record_wasted_build(&self) {
+        self.columnar_wasted_builds.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a chunk handed downstream with a selection vector.
@@ -519,6 +541,8 @@ pub struct ColumnarStatsSnapshot {
     pub spill_bytes: u64,
     pub spill_runs: u64,
     pub batch_outlets: u64,
+    pub columnar_b_path_hits: u64,
+    pub columnar_wasted_builds: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -536,6 +560,8 @@ impl ColumnarStatsSnapshot {
             spill_bytes: stats.spill_bytes.load(Ordering::Relaxed),
             spill_runs: stats.spill_runs.load(Ordering::Relaxed),
             batch_outlets: stats.batch_outlets.load(Ordering::Relaxed),
+            columnar_b_path_hits: stats.columnar_b_path_hits.load(Ordering::Relaxed),
+            columnar_wasted_builds: stats.columnar_wasted_builds.load(Ordering::Relaxed),
         }
     }
 
@@ -574,11 +600,13 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
             self.typed_hit_rate(),
+            self.columnar_b_path_hits,
+            self.columnar_wasted_builds,
             self.selection_attached,
             self.selection_materialized,
             self.selection_pushed,

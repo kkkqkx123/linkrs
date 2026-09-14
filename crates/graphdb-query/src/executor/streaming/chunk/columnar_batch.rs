@@ -19,10 +19,14 @@
 //! into a batch without re-inspecting values; keep them in sync when adding
 //! a kind.
 //!
+//! ## Relationship to `MaterializedBatch`
+//!
 //! Other blocking operators (aggregate, distinct, materialize, window) keep
 //! their state in `graphdb_core::columnar::MaterializedBatch`, which is
 //! column-oriented but stores one `Vec<Value>` per column and therefore does
-//! not get the typed-scalar treatment.
+//! not get the typed-scalar treatment. Treat `MaterializedBatch` as the
+//! spill and persistence form; the in-memory streaming fast path uses
+//! `TypedColumn` and `ColumnarBatch`.
 
 use std::cmp::Ordering;
 use std::sync::Arc;

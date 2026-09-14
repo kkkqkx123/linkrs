@@ -210,10 +210,10 @@ impl DataChunk {
         }
     }
 
-    pub fn from_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
+    pub(crate) fn from_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
         // Compatibility transpose: row storage is authoritative and column
-        // caches are derived. New columnar projection code must use
-        // `project_columns` instead of adding call sites here.
+        // caches are derived. Production code must use `project_columns`;
+        // this stays crate-private for row-major test fixtures only.
         let num_cols = columns.len();
         assert!(
             layout.is_empty() || num_cols == layout.len(),
@@ -269,6 +269,9 @@ impl DataChunk {
     /// path (passthrough / constant columns gathered or broadcast upstream).
     /// Row storage stays authoritative downstream; the transpose into rows
     /// is the single compatibility edge until the chunk itself is columnar.
+    /// The typed rebuild here is unconditional by design: projected outputs
+    /// are bounded by the input chunk size, unlike join outputs which honor
+    /// the shared columnar gate.
     pub fn project_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
         let mut chunk = Self::from_columns(columns, layout);
         // Symmetric with the `Assign` rebuild: the projected chunk starts
@@ -276,17 +279,6 @@ impl DataChunk {
         // non-trivial projection drops the columnar fast path downstream.
         chunk.build_typed_columns(true);
         chunk
-    }
-
-    pub fn with_columns(mut self, columns: Vec<Vec<Value>>) -> Self {
-        assert_eq!(columns.len(), self.num_columns(), "column count mismatch");
-        if !self.rows.is_empty() {
-            for col in &columns {
-                assert_eq!(col.len(), self.len(), "column length mismatch");
-            }
-        }
-        self.columns = Some(columns);
-        self
     }
 
     /// Build a row chunk from a columnar batch slice.
@@ -385,6 +377,9 @@ impl DataChunk {
             .and_then(|row| row.get(slot).cloned())
     }
 
+    /// Compatibility column view over `Value`s. New expression code should
+    /// prefer `typed_column` and only use this for join keys and fallback
+    /// paths that require owned `Value` columns.
     pub fn get_column(&mut self, slot: SlotId) -> Option<Vec<Value>> {
         if slot >= self.layout.len() {
             return None;
@@ -428,7 +423,13 @@ impl DataChunk {
     pub fn take_rows_for_reuse(&mut self) -> Vec<Vec<Value>> {
         self.selection = None;
         self.columns = None;
-        self.typed_columns = None;
+        if self.typed_columns.take().is_some() {
+            // The typed layout is dropped without a downstream consumer; count
+            // it so a high build cost with no reader becomes visible.
+            if let Some(stats) = &self.columnar_stats {
+                stats.record_wasted_build();
+            }
+        }
         self.multiplicity = 1;
         std::mem::take(&mut self.rows)
     }
@@ -541,11 +542,6 @@ impl DataChunk {
         self.columns = Some(columns);
     }
 
-    pub fn get_or_materialize_columns(&mut self) -> &[Vec<Value>] {
-        self.materialize_columns();
-        self.columns.as_ref().unwrap()
-    }
-
     // ── Columnar stats helpers ──
 
     pub(super) fn count_columnar(&self, hit: bool) {
@@ -558,7 +554,7 @@ impl DataChunk {
         }
     }
 
-    pub(super) fn count_typed_hit(&self) {
+    pub(crate) fn count_typed_hit(&self) {
         if let Some(stats) = &self.columnar_stats {
             stats.record_typed_hit();
         }

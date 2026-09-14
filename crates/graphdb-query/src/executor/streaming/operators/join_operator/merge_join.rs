@@ -14,6 +14,7 @@ use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
 use super::build_combined_names;
+use super::finalize_join_output;
 
 /// Drain the right child into the build side for the symmetric inner/left
 /// merge joins. `build_done` mirrors the design rename of the previous
@@ -98,9 +99,9 @@ pub(super) fn next_inner_join(
         }
 
         if !result_rows.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                result_rows,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }
@@ -183,9 +184,9 @@ pub(super) fn next_left_join(
         if result_rows.is_empty() {
             continue;
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            result_rows,
-            Arc::clone(output_layout),
+        return Ok(Some(finalize_join_output(
+            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+            runtime,
         )));
     }
     Ok(None)
@@ -274,9 +275,9 @@ pub(super) fn next_right_join(
         if result_rows.is_empty() {
             continue;
         }
-        return Ok(Some(DataChunk::new_with_layout(
-            result_rows,
-            Arc::clone(output_layout),
+        return Ok(Some(finalize_join_output(
+            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+            runtime,
         )));
     }
     Ok(None)
@@ -389,9 +390,12 @@ pub(super) fn next_full_outer_join(
                     let rows: Vec<Vec<Value>> = all_results.into_iter().collect();
                     if !rows.is_empty() {
                         *result_iter = Some(rows.into_iter());
-                        return Ok(Some(DataChunk::new_with_layout(
-                            result_iter.as_mut().unwrap().collect::<Vec<_>>(),
-                            Arc::clone(output_layout),
+                        return Ok(Some(finalize_join_output(
+                            DataChunk::new_with_layout(
+                                result_iter.as_mut().unwrap().collect::<Vec<_>>(),
+                                Arc::clone(output_layout),
+                            ),
+                            runtime,
                         )));
                     }
                 }
@@ -401,9 +405,9 @@ pub(super) fn next_full_outer_join(
                 if let Some(iter) = result_iter {
                     let rows: Vec<Vec<Value>> = iter.collect();
                     if !rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            rows,
-                            Arc::clone(output_layout),
+                        return Ok(Some(finalize_join_output(
+                            DataChunk::new_with_layout(rows, Arc::clone(output_layout)),
+                            runtime,
                         )));
                     }
                     *result_iter = None;
@@ -433,9 +437,9 @@ pub(super) fn next_full_outer_join(
                 if unmatched.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(DataChunk::new_with_layout(
-                    unmatched,
-                    Arc::clone(output_layout),
+                return Ok(Some(finalize_join_output(
+                    DataChunk::new_with_layout(unmatched, Arc::clone(output_layout)),
+                    runtime,
                 )));
             }
         }

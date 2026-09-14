@@ -73,6 +73,33 @@ impl DataChunk {
         Ok(results)
     }
 
+    /// Batch-evaluate a list of output expressions, preferring the typed
+    /// columnar path.
+    ///
+    /// Returns `Ok(None)` as soon as any expression is not covered by the
+    /// typed fast path (no `typed_columns`, a kind mismatch, or an operator
+    /// outside the typed batch set), letting the caller fall back to the
+    /// compiled-over-rows path with unchanged semantics. This is the entry
+    /// point the Project/Filter hot path uses so a chunk that carries a typed
+    /// layout is evaluated on raw scalars instead of per-row `Value`s.
+    pub fn try_evaluate_expressions_typed(
+        &mut self,
+        expressions: &[Expression],
+        env: Option<&EvalEnv>,
+    ) -> Result<Option<Vec<Vec<Value>>>, ExpressionError> {
+        if self.rows.is_empty() {
+            return Ok(Some(vec![Vec::new(); expressions.len()]));
+        }
+        let mut out = Vec::with_capacity(expressions.len());
+        for expr in expressions {
+            match self.try_eval_typed_batch(expr, env)? {
+                Some(batch) => out.push(batch.into_values()),
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(out))
+    }
+
     pub fn evaluate_expression(
         &mut self,
         expression: &Expression,

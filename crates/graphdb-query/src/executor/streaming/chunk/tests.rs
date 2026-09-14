@@ -779,7 +779,7 @@ fn rebuild_carries_multiplicity_to_collector() {
     let rows = vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]];
     let chunk = DataChunk::new_with_layout(rows, layout).with_multiplicity(2);
 
-    let rebuilt = DataChunk::from_columns(
+    let rebuilt = DataChunk::project_columns(
         vec![vec![Value::BigInt(1), Value::BigInt(2)]],
         chunk.get_layout(),
     )
@@ -804,6 +804,68 @@ fn selection_preserves_typed_columns_until_materialized() {
     chunk.materialize_selection_by("Test");
     let typed = chunk.typed_column(0).expect("typed layout gathered");
     assert_eq!(typed.to_values(), vec![Value::BigInt(1), Value::BigInt(3)]);
+}
+
+#[test]
+fn multiplicity_expansion_preserves_typed_columns() {
+    // Regression for the boundary inconsistency: expanding `multiplicity`
+    // must keep the typed layout (gathered + repeated), matching the rows
+    // path, instead of dropping it.
+    let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..3).map(|i| vec![Value::BigInt(i as i64)]).collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    let mut chunk = chunk.with_multiplicity(2);
+    chunk.expand_multiplicity_in_place();
+    assert_eq!(chunk.len(), 6);
+    let typed = chunk
+        .typed_column(0)
+        .expect("typed layout kept across expand");
+    // The typed layout must mirror the rows exactly (row-duplication order).
+    let typed_values = typed.to_values();
+    let row_values: Vec<Value> = chunk.rows.iter().map(|r| r[0].clone()).collect();
+    assert_eq!(typed_values, row_values);
+    // Block replication (`[all rows] * multiplicity`), matching
+    // `expand_rows_reusing_buffers`.
+    assert_eq!(
+        typed_values,
+        vec![
+            Value::BigInt(0),
+            Value::BigInt(1),
+            Value::BigInt(2),
+            Value::BigInt(0),
+            Value::BigInt(1),
+            Value::BigInt(2),
+        ]
+    );
+}
+
+#[test]
+fn expand_visible_rows_with_selection_preserves_typed_columns() {
+    let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..4).map(|i| vec![Value::BigInt(i as i64)]).collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    let mut chunk = chunk.with_selection(vec![1, 3]).with_multiplicity(2);
+    let out = chunk.expand_visible_rows();
+    assert_eq!(out.len(), 4);
+    let typed = chunk
+        .typed_column(0)
+        .expect("typed layout kept across expand");
+    let typed_values = typed.to_values();
+    let row_values: Vec<Value> = out.iter().map(|r| r[0].clone()).collect();
+    // Typed layout mirrors the expanded rows exactly.
+    assert_eq!(typed_values, row_values);
+    assert_eq!(
+        typed_values,
+        vec![
+            Value::BigInt(1),
+            Value::BigInt(3),
+            Value::BigInt(1),
+            Value::BigInt(3),
+        ]
+    );
+    assert_eq!(typed_values, row_values);
 }
 
 #[test]

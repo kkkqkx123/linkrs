@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::DataChunk;
+use crate::executor::streaming::chunk::{use_columnar_path, DataChunk};
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::executor::FullOuterJoinPhase;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -35,6 +35,23 @@ fn build_combined_names(
         }
     }
     names
+}
+
+/// Rebuild the typed columnar layout on a freshly materialized join output.
+///
+/// Join outputs are assembled from rows and (unlike the storage scan) start
+/// row-major, which would otherwise drop the typed fast path for every
+/// operator downstream of a join. Honoring the shared [`ColumnarPolicy`] gate
+/// keeps this a no-op when the policy has disabled columnar, so a disabled
+/// policy pays nothing. `pub(crate)` so the join modules can reuse it.
+pub(crate) fn finalize_join_output(
+    mut chunk: DataChunk,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+) -> DataChunk {
+    if use_columnar_path(runtime) {
+        chunk.build_typed_columns(true);
+    }
+    chunk
 }
 
 /// Specialized hash join key that avoids `Vec<Value>` allocation for
@@ -212,10 +229,15 @@ impl HashJoinBuildSide {
             }
         }
         // The build chunk is fully consumed; drop rows/selection without a
-        // second compaction pass.
+        // second compaction pass. A dropped typed layout counts as a wasted
+        // build so a high build cost with no reader becomes visible.
         chunk.take_selection();
         chunk.rows.clear();
-        chunk.typed_columns = None;
+        if chunk.typed_columns.take().is_some() {
+            if let Some(stats) = &chunk.columnar_stats {
+                stats.record_wasted_build();
+            }
+        }
         Ok(())
     }
 

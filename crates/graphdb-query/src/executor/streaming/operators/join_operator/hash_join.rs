@@ -17,7 +17,7 @@ use super::grace_join::{
     hash_join_key_partition, spill_build_side, GraceJoinState, PartitionedJoinState,
     PendingBuildSpill, RotatingPartitionWriter,
 };
-use super::{build_combined_names, evaluate_join_key, HashJoinBuildSide};
+use super::{build_combined_names, evaluate_join_key, finalize_join_output, HashJoinBuildSide};
 
 /// Rows emitted per partitioned-serve batch.
 const PARTITIONED_BATCH_ROWS: usize = 1024;
@@ -239,9 +239,9 @@ fn next_partitioned(
             return if out.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(DataChunk::new_with_layout(
-                    out,
-                    Arc::clone(output_layout),
+                Ok(Some(finalize_join_output(
+                    DataChunk::new_with_layout(out, Arc::clone(output_layout)),
+                    runtime,
                 )))
             };
         }
@@ -253,9 +253,9 @@ fn next_partitioned(
                 return if out.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::new_with_layout(
-                        out,
-                        Arc::clone(output_layout),
+                    Ok(Some(finalize_join_output(
+                        DataChunk::new_with_layout(out, Arc::clone(output_layout)),
+                        runtime,
                     )))
                 };
             }
@@ -337,9 +337,9 @@ fn next_partitioned(
             state.set_probe_pos(pos + 1);
         }
         if !out.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                out,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(out, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }
@@ -498,9 +498,9 @@ pub(super) fn next_hash_join(
         }
 
         if !result_rows.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                result_rows,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }
@@ -681,9 +681,9 @@ pub(super) fn next_hash_left_join(
         }
 
         if !result_rows.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                result_rows,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }

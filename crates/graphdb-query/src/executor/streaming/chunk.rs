@@ -33,6 +33,16 @@
 //! - `new(rows, schema)` — Schema-driven path. Layout auto-created from column names.
 //! - `from_rows(rows)` / `from_rows_with_col_names(rows, col_names)` — Convenience
 //!   constructors for tests. Always produce a layout (auto-created).
+//! - `project_columns(columns, layout)` — Designated `Project` output path; rebuilds
+//!   the typed layout unconditionally because the output is chunk-bounded.
+//!   `from_columns` is the crate-private row-major fixture behind it.
+//!
+//! # Columnar gating
+//!
+//! Fresh column sets from storage scans and join outputs honor
+//! `use_columnar_path`; small 1:1 rebuilds (project, assign) rebuild
+//! unconditionally by design. Blocking accumulation uses `ColumnarBatch`
+//! (typed) for sort/topn and `MaterializedBatch` (spill form) elsewhere.
 
 mod collector;
 mod columnar_batch;
@@ -52,6 +62,7 @@ mod tests;
 pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
+pub(crate) use policy::use_columnar_path;
 pub use policy::{ColumnarPolicy, QueryColumnarOverride};
 pub use pool::{RowBufferPool, MAX_POOLED_ROWS, MAX_POOLED_ROW_CAPACITY};
 pub use schema::{ColumnInfo, Schema};

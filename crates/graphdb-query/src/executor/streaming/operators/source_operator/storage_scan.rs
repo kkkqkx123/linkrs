@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
+use crate::executor::streaming::chunk::{use_columnar_path, DataChunk, TypedColumn};
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
@@ -272,23 +272,6 @@ where
         }
         *cursor = Some(cur);
     }
-}
-
-/// Whether the typed columnar layout should be used for this operator's
-/// chunks.
-///
-/// The shared [`ColumnarPolicy`] provides the adaptive decision. The policy
-/// is only mutated between queries (stats merge at query completion), so the
-/// decision is stable for the whole query even though it is read per chunk.
-fn use_columnar_path(runtime: &Option<Arc<ExecutionRuntime>>) -> bool {
-    let query_override = runtime
-        .as_ref()
-        .map(|runtime| runtime.columnar_override())
-        .unwrap_or_else(crate::executor::streaming::chunk::QueryColumnarOverride::inherit);
-    runtime
-        .as_ref()
-        .and_then(|runtime| runtime.columnar_policy())
-        .is_none_or(|policy| policy.should_use_columnar_with(query_override))
 }
 
 /// Column-block pull loop over a storage cursor (A1).

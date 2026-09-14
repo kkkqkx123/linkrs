@@ -29,7 +29,7 @@
 //!   it leaves `multiplicity > 1` behind and downstream row counts shrink.
 
 use super::pool::RowBufferPool;
-use super::typed::gather_typed_column;
+use super::typed::{gather_typed_column, repeat_typed_column};
 use crate::executor::streaming::chunk::core::DataChunk;
 
 impl DataChunk {
@@ -83,6 +83,12 @@ impl DataChunk {
     /// first (see the module-level multiplicity contract).
     pub fn expand_visible_rows(&mut self) -> Vec<Vec<graphdb_core::Value>> {
         let multiplicity = self.multiplicity;
+        // Capture the visible indices before the selection is taken so the
+        // typed layout can be re-expanded in lockstep with the rows.
+        let visible_indices: Vec<usize> = match &self.selection {
+            Some(indices) => indices.clone(),
+            None => (0..self.rows.len()).collect(),
+        };
         let out = match self.selection.take() {
             Some(indices) => {
                 let mut selected = Vec::with_capacity(indices.len());
@@ -95,7 +101,22 @@ impl DataChunk {
             None => std::mem::take(&mut self.rows),
         };
         self.columns = None;
-        self.typed_columns = None;
+        // Keep the typed layout across the expansion (same ownership rule as
+        // `materialize_selection_inner`): gather the visible rows, then repeat
+        // each per `multiplicity`, so downstream operators still see a typed
+        // columnar chunk.
+        self.typed_columns = self.typed_columns.take().map(|cols| {
+            cols.iter()
+                .map(|col| {
+                    let gathered = gather_typed_column(col, &visible_indices);
+                    if multiplicity <= 1 {
+                        gathered
+                    } else {
+                        repeat_typed_column(&gathered, multiplicity as usize)
+                    }
+                })
+                .collect()
+        });
         self.multiplicity = 1;
         debug_assert!(
             self.selection.is_none() && self.multiplicity == 1,
@@ -163,6 +184,12 @@ impl DataChunk {
             return false;
         }
         let multiplicity = self.multiplicity;
+        // Capture the visible indices before the selection is taken so the
+        // typed layout can be re-expanded in lockstep with the rows.
+        let visible_indices: Vec<usize> = match &self.selection {
+            Some(indices) => indices.clone(),
+            None => (0..self.rows.len()).collect(),
+        };
         // Take visible rows once (same ownership discipline as
         // `expand_visible_rows`); hidden rows are dropped.
         let taken: Vec<Vec<graphdb_core::Value>> = match self.selection.take() {
@@ -177,7 +204,17 @@ impl DataChunk {
             None => std::mem::take(&mut self.rows),
         };
         self.columns = None;
-        self.typed_columns = None;
+        // Keep the typed layout across the expansion (consistent with
+        // `materialize_selection_inner`): gather the visible rows, then repeat
+        // each per `multiplicity`.
+        self.typed_columns = self.typed_columns.take().map(|cols| {
+            cols.iter()
+                .map(|col| {
+                    let gathered = gather_typed_column(col, &visible_indices);
+                    repeat_typed_column(&gathered, multiplicity as usize)
+                })
+                .collect()
+        });
         self.multiplicity = 1;
         debug_assert!(
             self.selection.is_none() && self.multiplicity == 1,

@@ -323,6 +323,26 @@ impl UnaryOperator {
         predicate: &Expression,
         state: &mut UnaryOperatorState,
     ) -> Result<Vec<Value>, QueryError> {
+        // Typed columnar fast path: a predicate over raw scalars (e.g.
+        // `p.age > 30` on a typed column) is evaluated on the batch without
+        // constructing one `Value` per row. Falls through when the chunk has
+        // no typed layout or the predicate is outside the typed batch set.
+        match chunk
+            .try_evaluate_expressions_typed(std::slice::from_ref(predicate), Some(&state.env))
+        {
+            Ok(Some(mut cols)) => {
+                chunk.count_typed_hit();
+                if let Some(stats) = &chunk.columnar_stats {
+                    stats.record_b_path_hit();
+                }
+                return Ok(cols.pop().unwrap_or_default());
+            }
+            Ok(None) => {}
+            Err(_) => {
+                // Follow the compiled path's error policy: defer to the
+                // scalar chunk path so the runtime error text stays identical.
+            }
+        }
         if compiled_eval_enabled() {
             if state.compiled_predicate.is_none() {
                 let layout = chunk.get_layout();
@@ -366,6 +386,23 @@ impl UnaryOperator {
                 .map_err(|e| {
                     QueryError::execution(format!("Project expression evaluation failed: {}", e))
                 });
+        }
+        // Typed columnar fast path: expressions over raw scalars (bare
+        // columns, arithmetic/cast on typed columns) are evaluated on the
+        // batch. Falls through to the compiled path when the chunk has no
+        // typed layout or any expression is outside the typed batch set.
+        match chunk.try_evaluate_expressions_typed(output_expressions, Some(&state.env)) {
+            Ok(Some(cols)) => {
+                for _ in 0..output_expressions.len() {
+                    chunk.count_typed_hit();
+                    if let Some(stats) = &chunk.columnar_stats {
+                        stats.record_b_path_hit();
+                    }
+                }
+                return Ok(cols);
+            }
+            Ok(None) => {}
+            Err(_) => {}
         }
         if compiled_eval_enabled() {
             if state.compiled_project.is_none() {

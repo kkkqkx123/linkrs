@@ -11,6 +11,8 @@ use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
+use super::finalize_join_output;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn next_cross_join(
     all_left_rows: &mut Vec<Vec<Value>>,
@@ -84,9 +86,9 @@ pub(super) fn next_cross_join(
     if result_rows.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(DataChunk::new_with_layout(
-            result_rows,
-            Arc::clone(output_layout),
+        Ok(Some(finalize_join_output(
+            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+            runtime,
         )))
     }
 }
@@ -160,9 +162,9 @@ pub(super) fn next_semi_join(
         }
 
         if !result_rows.is_empty() {
-            return Ok(Some(DataChunk::new_with_layout(
-                result_rows,
-                Arc::clone(output_layout),
+            return Ok(Some(finalize_join_output(
+                DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
+                runtime,
             )));
         }
     }

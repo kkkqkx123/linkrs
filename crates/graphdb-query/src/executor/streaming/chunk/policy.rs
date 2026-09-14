@@ -8,6 +8,32 @@
 //! path is worth building for subsequent queries.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use crate::executor::streaming::runtime::ExecutionRuntime;
+
+/// Whether the typed columnar layout should be built for this operator's
+/// chunks.
+///
+/// The shared [`ColumnarPolicy`] provides the adaptive decision; a per-query
+/// override (carried by the runtime) wins over it. The policy is only mutated
+/// between queries (stats merge at query completion), so the decision is
+/// stable for the whole query even though it is read per chunk. Operators
+/// that produce a fresh column set (storage scan, join outputs) gate their
+/// `build_typed_columns` call on this so a disabled policy pays nothing.
+/// Small 1:1 rebuilds (project, assign) rebuild unconditionally by design:
+/// their output is bounded by the input chunk and the downstream fast path
+/// benefit outweighs the build cost, so they skip this gate.
+pub(crate) fn use_columnar_path(runtime: &Option<Arc<ExecutionRuntime>>) -> bool {
+    let query_override = runtime
+        .as_ref()
+        .map(|runtime| runtime.columnar_override())
+        .unwrap_or_else(QueryColumnarOverride::inherit);
+    runtime
+        .as_ref()
+        .and_then(|runtime| runtime.columnar_policy())
+        .is_none_or(|policy| policy.should_use_columnar_with(query_override))
+}
 
 /// Adaptive gate for the typed columnar chunk layout (cross-query shared).
 ///
