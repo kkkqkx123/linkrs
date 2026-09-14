@@ -170,16 +170,18 @@ fn column_cache_is_lazy_and_deferred_after_take_indices() {
         ],
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    assert!(chunk.columns.is_none(), "no proactive materialisation");
+    assert!(
+        chunk.typed_columns.is_none(),
+        "no proactive materialisation"
+    );
 
     let col = chunk.get_column(1).expect("age column");
     assert_eq!(col, vec![Value::BigInt(30), Value::BigInt(20)]);
-    assert!(chunk.columns.is_some(), "materialised and cached on demand");
 
     let mut selected = chunk.take_indices(&[1]);
     assert!(
-        selected.columns.is_none(),
-        "columnar cache rebuild is deferred after take_indices"
+        selected.typed_columns.is_none(),
+        "typed rebuild is deferred after take_indices"
     );
     assert_eq!(
         selected.get_column(1).expect("age column"),
@@ -1348,4 +1350,54 @@ fn batch_round_trip_preserves_rows_and_names() {
     let empty = DataChunk::slice_from_batch(&batch, 10, 3, Arc::clone(&layout));
     assert!(empty.is_empty());
     let _ = MaterializedBatch::new(0, 0);
+}
+
+#[test]
+fn deferred_join_output_rebuilds_typed_on_first_use() {
+    // A join output skips the eager typed build and marks the chunk
+    // deferred; the first typed consumer rebuilds the layout lazily with
+    // identical values.
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
+    let rows = vec![
+        vec![Value::BigInt(1), Value::BigInt(10)],
+        vec![Value::BigInt(2), Value::BigInt(20)],
+        vec![Value::BigInt(3), Value::BigInt(30)],
+    ];
+    let mut chunk = DataChunk::new_with_layout(rows.clone(), Arc::clone(&layout));
+    chunk.columnar_build_deferred = true;
+    assert!(chunk.typed_columns.is_none());
+
+    let expr = Expression::variable("a");
+    let cols = chunk
+        .try_evaluate_expressions_typed(std::slice::from_ref(&expr), None)
+        .expect("typed eval should succeed")
+        .expect("deferred layout must rebuild on first use");
+    assert!(!chunk.columnar_build_deferred);
+    assert_eq!(
+        cols,
+        vec![vec![Value::BigInt(1), Value::BigInt(2), Value::BigInt(3)]]
+    );
+}
+
+#[test]
+fn deferred_build_skipped_for_unsupported_expression() {
+    // Expressions outside the typed set must not pay the deferred build:
+    // the flag stays set and no layout is materialized.
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows = vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]];
+    let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(&layout));
+    chunk.columnar_build_deferred = true;
+
+    let expr = Expression::Function {
+        name: "toString".to_string(),
+        args: vec![graphdb_core::types::expr::FunctionArg::Positional(
+            Expression::variable("a"),
+        )],
+    };
+    let out = chunk
+        .try_evaluate_expressions_typed(std::slice::from_ref(&expr), None)
+        .expect("typed eval should succeed");
+    assert!(out.is_none(), "function call stays outside the typed set");
+    assert!(chunk.columnar_build_deferred, "no build was triggered");
+    assert!(chunk.typed_columns.is_none());
 }

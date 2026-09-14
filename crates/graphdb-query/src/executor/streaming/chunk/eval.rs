@@ -175,6 +175,9 @@ impl DataChunk {
             _ => None,
         };
         if let Some(slot) = slot {
+            // Resolve a deferred join-output layout on first typed slot
+            // read; unsupported expressions below never pay the build.
+            self.ensure_typed_columns();
             let mut out = Vec::with_capacity(sel.len());
             for &i in &sel {
                 match self.get_typed_by_slot(i, slot) {
@@ -391,6 +394,9 @@ impl DataChunk {
                     Some(slot) => slot,
                     None => return Ok(None),
                 };
+                // Resolve a deferred join-output layout on first typed
+                // slot read; unsupported expressions never pay the build.
+                self.ensure_typed_columns();
                 Ok(self.typed_column(slot).and_then(typed_column_batch))
             }
             Expression::Property { object, property } => {
@@ -406,6 +412,7 @@ impl DataChunk {
                     Some(slot) => slot,
                     None => return Ok(None),
                 };
+                self.ensure_typed_columns();
                 Ok(self.typed_column(slot).and_then(typed_column_batch))
             }
             Expression::Unary { op, operand } => {

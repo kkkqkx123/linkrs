@@ -24,6 +24,7 @@ use crate::executor::expression::functions::{
     global_registry, global_registry_ref, OwnedFunctionRef,
 };
 use crate::executor::expression::ExpressionError;
+use crate::executor::streaming::chunk::TypedColumn;
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::slot::{SlotId, SlotLayout};
 use crate::executor::streaming::subquery::EvalEnv;
@@ -527,16 +528,32 @@ impl CompiledExpr {
     /// columns, binary/unary operators run elementwise over the produced
     /// columns, and fallback nodes delegate per row to the scalar
     /// interpreter.
+    ///
+    /// `typed_columns` is an optional zero-clone read path for slot leaves:
+    /// when present, `Slot`/`CompoundSlot` nodes materialize their column
+    /// from the typed layout instead of cloning per-row values out of
+    /// `rows`. Non-slot subtrees still evaluate over `rows`, so mixed
+    /// expressions keep exact semantics while their slot leaves skip the
+    /// per-row clone.
     pub fn evaluate_batch(
         &self,
         rows: &[Vec<Value>],
         layout: Arc<SlotLayout>,
         env: Option<&EvalEnv>,
+        typed_columns: Option<&[TypedColumn]>,
     ) -> Result<ColumnarValue, ExpressionError> {
         let len = rows.len();
         match self {
             CompiledExpr::Const(v) => Ok(ColumnarValue::Const(v.clone())),
             CompiledExpr::Slot(slot) | CompiledExpr::CompoundSlot(slot) => {
+                // Fast path: read the slot column from the typed layout
+                // without per-row cloning; fall back to rows when the
+                // layout is absent or does not cover the slot.
+                if let Some(cols) = typed_columns {
+                    if let Some(col) = cols.get(*slot) {
+                        return Ok(ColumnarValue::Column(col.to_values()));
+                    }
+                }
                 let mut col = Vec::with_capacity(len);
                 for row in rows {
                     col.push(
@@ -549,7 +566,7 @@ impl CompiledExpr {
             }
 
             CompiledExpr::Unary { op, operand } => {
-                let operand = operand.evaluate_batch(rows, layout, env)?;
+                let operand = operand.evaluate_batch(rows, layout, env, typed_columns)?;
                 match operand {
                     ColumnarValue::Const(v) => Ok(ColumnarValue::Const(
                         UnaryOperationEvaluator::evaluate(op, &v)?,
@@ -565,8 +582,8 @@ impl CompiledExpr {
             }
 
             CompiledExpr::Binary { op, left, right } => {
-                let left = left.evaluate_batch(rows, layout.clone(), env)?;
-                let right = right.evaluate_batch(rows, layout, env)?;
+                let left = left.evaluate_batch(rows, layout.clone(), env, typed_columns)?;
+                let right = right.evaluate_batch(rows, layout, env, typed_columns)?;
                 match (left, right) {
                     (ColumnarValue::Const(l), ColumnarValue::Const(r)) => Ok(ColumnarValue::Const(
                         BinaryOperationEvaluator::evaluate(&l, op, &r)?,
@@ -636,6 +653,7 @@ impl CompiledExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::streaming::chunk::DataChunk;
     use crate::executor::streaming::slot::SlotLayout;
     use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 
@@ -796,7 +814,7 @@ mod tests {
         ];
         let compiled = CompiledExpr::compile(&expr, &layout);
         let batch = compiled
-            .evaluate_batch(&rows, layout.clone(), None)
+            .evaluate_batch(&rows, layout.clone(), None, None)
             .expect("batch evaluation should succeed")
             .into_values(rows.len());
         assert_eq!(batch, vec![Value::Int(11), Value::Int(12), Value::Int(13)]);
@@ -809,7 +827,7 @@ mod tests {
         let rows = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
         let compiled = CompiledExpr::compile(&expr, &layout);
         let batch = compiled
-            .evaluate_batch(&rows, layout, None)
+            .evaluate_batch(&rows, layout, None, None)
             .expect("batch evaluation should succeed");
         assert!(matches!(batch, ColumnarValue::Const(_)));
     }
@@ -832,7 +850,7 @@ mod tests {
             subquery_executor: None,
         };
         let batch = compiled
-            .evaluate_batch(&rows, layout, Some(&env))
+            .evaluate_batch(&rows, layout, Some(&env), None)
             .expect("batch evaluation should succeed");
         assert!(matches!(batch, ColumnarValue::Const(Value::Int(9))));
     }
@@ -844,7 +862,7 @@ mod tests {
         let rows = vec![vec![Value::Int(1)]];
         let compiled = CompiledExpr::compile(&expr, &layout);
         let err = compiled
-            .evaluate_batch(&rows, layout, None)
+            .evaluate_batch(&rows, layout, None, None)
             .expect_err("missing parameter must fail");
         assert!(err.to_string().contains("missing"));
     }
@@ -901,5 +919,39 @@ mod tests {
             eval_once(&expr, vec![Value::Int(1)], &["a"]),
             Value::string("small")
         );
+    }
+
+    #[test]
+    fn batch_mixed_expression_reads_typed_slots() {
+        // Mixed expression: both slot leaves are typed, the binary node
+        // itself stays on the rows path. Typed slot reads must agree with
+        // the rows-only baseline exactly.
+        let expr = Expression::Binary {
+            left: Box::new(Expression::Variable("x".to_string())),
+            op: BinaryOperator::Add,
+            right: Box::new(Expression::Variable("y".to_string())),
+        };
+        let layout = layout(&["x", "y"]);
+        let rows = vec![
+            vec![Value::Int(1), Value::Int(10)],
+            vec![Value::Int(2), Value::Int(20)],
+        ];
+        let compiled = CompiledExpr::compile(&expr, &layout);
+        let baseline = compiled
+            .evaluate_batch(&rows, layout.clone(), None, None)
+            .expect("batch evaluation should succeed")
+            .into_values(rows.len());
+        let mut chunk = DataChunk::new_with_layout(rows.clone(), layout.clone());
+        chunk.build_typed_columns(true);
+        assert!(
+            chunk.typed_columns.is_some(),
+            "typed layout must be built for the test"
+        );
+        let typed = compiled
+            .evaluate_batch(&rows, layout, None, chunk.typed_columns.as_deref())
+            .expect("batch evaluation should succeed")
+            .into_values(rows.len());
+        assert_eq!(typed, baseline);
+        assert_eq!(typed, vec![Value::Int(11), Value::Int(22)]);
     }
 }

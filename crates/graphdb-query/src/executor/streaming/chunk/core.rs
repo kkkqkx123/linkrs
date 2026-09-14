@@ -14,10 +14,12 @@ use std::sync::Arc;
 pub struct DataChunk {
     /// Row data with Value types
     pub rows: Vec<Vec<Value>>,
-    /// Optional column-major representation for efficient columnar access.
-    pub columns: Option<Vec<Vec<Value>>>,
     /// Optional typed column layout.
     pub typed_columns: Option<Vec<TypedColumn>>,
+    /// When true, `build_typed_columns` was intentionally skipped at
+    /// construction (e.g. join output). The typed layout is rebuilt on
+    /// first consumer access when the columnar policy allows it.
+    pub(crate) columnar_build_deferred: bool,
     /// Selection vector.
     pub selection: Option<Vec<usize>>,
     /// Symbolic row multiplicity (Ladybug `ResultSet::multiplicity` analogue).
@@ -40,8 +42,11 @@ impl Clone for DataChunk {
     fn clone(&self) -> Self {
         Self {
             rows: self.rows.clone(),
-            columns: self.columns.clone(),
             typed_columns: self.typed_columns.clone(),
+            // A clone resolves the layout eagerly or not at all: it either
+            // carries the built typed columns above or rebuilds on demand
+            // only when explicitly marked deferred again by its producer.
+            columnar_build_deferred: false,
             selection: self.selection.clone(),
             multiplicity: self.multiplicity,
             schema: self.schema.clone(),
@@ -65,8 +70,8 @@ impl DataChunk {
         ));
         Self {
             rows,
-            columns: None,
             typed_columns: None,
+            columnar_build_deferred: false,
             selection: None,
             multiplicity: 1,
             schema,
@@ -124,8 +129,8 @@ impl DataChunk {
         let schema = Arc::new(Schema::new(columns));
         Ok(Self {
             rows,
-            columns: None,
             typed_columns: None,
+            columnar_build_deferred: false,
             selection: None,
             multiplicity: 1,
             schema,
@@ -199,8 +204,8 @@ impl DataChunk {
         ));
         Self {
             rows,
-            columns: None,
             typed_columns: None,
+            columnar_build_deferred: false,
             selection: None,
             multiplicity: 1,
             schema,
@@ -211,9 +216,9 @@ impl DataChunk {
     }
 
     pub(crate) fn from_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
-        // Compatibility transpose: row storage is authoritative and column
-        // caches are derived. Production code must use `project_columns`;
-        // this stays crate-private for row-major test fixtures only.
+        // Compatibility transpose: row storage is authoritative.
+        // Production code must use `project_columns`; this stays
+        // crate-private for row-major test fixtures only.
         let num_cols = columns.len();
         assert!(
             layout.is_empty() || num_cols == layout.len(),
@@ -251,8 +256,8 @@ impl DataChunk {
 
         Self {
             rows,
-            columns: Some(columns),
             typed_columns: None,
+            columnar_build_deferred: false,
             selection: None,
             multiplicity: 1,
             schema,
@@ -377,18 +382,23 @@ impl DataChunk {
             .and_then(|row| row.get(slot).cloned())
     }
 
-    /// Compatibility column view over `Value`s. New expression code should
-    /// prefer `typed_column` and only use this for join keys and fallback
-    /// paths that require owned `Value` columns.
+    /// Column view over `Value`s, derived on demand from the typed layout.
+    ///
+    /// New expression code should prefer `typed_column`; this stays for join
+    /// keys and fallback paths that require owned `Value` columns. The
+    /// column is rebuilt from the typed layout (or cloned from rows) on
+    /// every call and never cached: row storage is authoritative.
     pub fn get_column(&mut self, slot: SlotId) -> Option<Vec<Value>> {
         if slot >= self.layout.len() {
             return None;
         }
-        if self.columns.is_none() && !self.rows.is_empty() {
-            self.materialize_columns();
-        }
-        if let Some(ref columns) = self.columns {
-            return columns.get(slot).cloned();
+        // Prefer the typed layout, resolving a deferred join-output build
+        // first; fall back to a row-major clone.
+        self.ensure_typed_columns();
+        if let Some(ref typed) = self.typed_columns {
+            if let Some(col) = typed.get(slot) {
+                return Some(col.to_values());
+            }
         }
         Some(self.rows.iter().map(|row| row[slot].clone()).collect())
     }
@@ -414,7 +424,7 @@ impl DataChunk {
     }
 
     /// Take the physical rows out for buffer reuse, resetting selection,
-    /// multiplicity, and derived column caches.
+    /// multiplicity, and derived typed state.
     ///
     /// Unlike [`Clone`](Self::clone) (documented deep copy), this moves the
     /// allocation out so the caller can return the drained buffers to
@@ -422,7 +432,7 @@ impl DataChunk {
     /// them. Prefer move-first construction plus this pool over cloning.
     pub fn take_rows_for_reuse(&mut self) -> Vec<Vec<Value>> {
         self.selection = None;
-        self.columns = None;
+        self.columnar_build_deferred = false;
         if self.typed_columns.take().is_some() {
             // The typed layout is dropped without a downstream consumer; count
             // it so a high build cost with no reader becomes visible.
@@ -444,7 +454,13 @@ impl DataChunk {
     /// always attempted (there is no global off switch).
     /// Returns the number of extra typed bytes allocated.
     pub fn build_typed_columns(&mut self, use_columnar: bool) -> usize {
-        if !use_columnar || self.typed_columns.is_some() {
+        if !use_columnar {
+            return 0;
+        }
+        // An explicit build resolves any pending deferred build, whether
+        // the layout already exists or is rebuilt below.
+        self.columnar_build_deferred = false;
+        if self.typed_columns.is_some() {
             return 0;
         }
         // Global memory pressure: skip building new acceleration caches and
@@ -511,35 +527,17 @@ impl DataChunk {
         self.typed_columns.as_ref().and_then(|cols| cols.get(slot))
     }
 
-    // ── Column materialization ──
-
-    pub fn materialize_columns(&mut self) {
-        // Compatibility transpose cache: prefer `typed_columns` when valid,
-        // else derive a cloned column view from rows. Not a storage format.
-        if self.columns.is_some() {
-            return;
+    /// Rebuild the typed layout when construction deferred it.
+    ///
+    /// Join outputs skip the eager build and set the deferred flag; the
+    /// first typed consumer calls this to pay the build cost lazily. The
+    /// columnar policy gate already ran at construction, so the rebuild
+    /// is unconditional. Returns the extra typed bytes allocated.
+    pub fn ensure_typed_columns(&mut self) -> usize {
+        if self.typed_columns.is_none() && self.columnar_build_deferred {
+            return self.build_typed_columns(true);
         }
-        if let Some(ref typed) = self.typed_columns {
-            if typed.len() == self.num_columns() && !self.rows.is_empty() {
-                self.columns = Some(typed.iter().map(TypedColumn::to_values).collect());
-                return;
-            }
-        }
-        let num_cols = self.num_columns();
-        if self.rows.is_empty() || num_cols == 0 {
-            self.columns = Some(Vec::new());
-            return;
-        }
-        let num_rows = self.rows.len();
-        let mut columns = Vec::with_capacity(num_cols);
-        for col_idx in 0..num_cols {
-            let mut col = Vec::with_capacity(num_rows);
-            for row in &self.rows {
-                col.push(row[col_idx].clone());
-            }
-            columns.push(col);
-        }
-        self.columns = Some(columns);
+        0
     }
 
     // ── Columnar stats helpers ──

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::executor::base::MemoryTracker;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::{use_columnar_path, DataChunk};
+use crate::executor::streaming::chunk::{gather_typed_column, use_columnar_path, DataChunk};
 use crate::executor::streaming::context::BorrowedRowContext;
 use crate::executor::streaming::executor::FullOuterJoinPhase;
 use crate::executor::streaming::executor::StreamingExecutor;
@@ -37,19 +37,22 @@ fn build_combined_names(
     names
 }
 
-/// Rebuild the typed columnar layout on a freshly materialized join output.
+/// Defer the typed columnar layout on a freshly materialized join output.
 ///
 /// Join outputs are assembled from rows and (unlike the storage scan) start
 /// row-major, which would otherwise drop the typed fast path for every
-/// operator downstream of a join. Honoring the shared [`ColumnarPolicy`] gate
-/// keeps this a no-op when the policy has disabled columnar, so a disabled
-/// policy pays nothing. `pub(crate)` so the join modules can reuse it.
+/// operator downstream of a join. Instead of building eagerly, the chunk is
+/// marked deferred when the shared [`ColumnarPolicy`] gate allows columnar:
+/// the first typed consumer rebuilds the layout via
+/// [`DataChunk::ensure_typed_columns`], so large join results that are never
+/// read as typed columns pay no build cost. `pub(crate)` so the join modules
+/// can reuse it.
 pub(crate) fn finalize_join_output(
     mut chunk: DataChunk,
     runtime: &Option<Arc<ExecutionRuntime>>,
 ) -> DataChunk {
     if use_columnar_path(runtime) {
-        chunk.build_typed_columns(true);
+        chunk.columnar_build_deferred = true;
     }
     chunk
 }
@@ -88,21 +91,6 @@ impl From<Value> for JoinKeyValue {
     }
 }
 
-fn try_column_value(
-    expr: &Expression,
-    layout: &SlotLayout,
-    columns: &[Vec<Value>],
-    row_idx: usize,
-) -> Option<Value> {
-    let name = expr.as_variable()?;
-    let slot = layout.slot_id(name)?;
-    if slot < columns.len() {
-        Some(columns[slot][row_idx].clone())
-    } else {
-        None
-    }
-}
-
 fn eval_join_expr(expr: &Expression, ctx: &mut BorrowedRowContext) -> Result<Value, QueryError> {
     ExpressionEvaluator::evaluate(expr, ctx)
         .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))
@@ -112,7 +100,6 @@ fn evaluate_join_key(
     row: &[Value],
     col_names: &[String],
     key_expressions: &[Expression],
-    columns: Option<(&[Vec<Value>], usize)>,
 ) -> Result<JoinKeyValue, QueryError> {
     if key_expressions.is_empty() {
         return Ok(JoinKeyValue::Multi(Vec::new()));
@@ -121,23 +108,14 @@ fn evaluate_join_key(
     let layout = Arc::new(SlotLayout::from_names(col_names));
     let mut ctx = BorrowedRowContext::new(row, Arc::clone(&layout));
 
-    let eval_one = |expr: &Expression, ctx: &mut BorrowedRowContext| -> Result<Value, QueryError> {
-        if let Some((cols, row_idx)) = columns {
-            if let Some(val) = try_column_value(expr, &layout, cols, row_idx) {
-                return Ok(val);
-            }
-        }
-        eval_join_expr(expr, ctx)
-    };
-
     if key_expressions.len() == 1 {
-        let value = eval_one(&key_expressions[0], &mut ctx)?;
+        let value = eval_join_expr(&key_expressions[0], &mut ctx)?;
         return Ok(JoinKeyValue::from(value));
     }
 
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let value = eval_one(expr, &mut ctx)?;
+        let value = eval_join_expr(expr, &mut ctx)?;
         key.push(value);
     }
     Ok(JoinKeyValue::Multi(key))
@@ -151,7 +129,9 @@ fn evaluate_join_key(
 /// rows back by index.
 #[derive(Debug)]
 pub struct HashJoinBuildSide {
-    columns: Vec<Vec<Value>>,
+    /// Build-side column store (authoritative row-indexed storage).
+    /// Unrelated to the removed `DataChunk.columns` lazy shim.
+    build_columns: Vec<Vec<Value>>,
     index: HashMap<JoinKeyValue, Vec<u32>>,
 }
 
@@ -164,78 +144,96 @@ impl Default for HashJoinBuildSide {
 impl HashJoinBuildSide {
     pub fn new() -> Self {
         Self {
-            columns: Vec::new(),
+            build_columns: Vec::new(),
             index: HashMap::new(),
         }
     }
 
-    /// Append one input chunk: join keys are evaluated per visible row using
-    /// the column fast path, chunk columns are moved into the column store,
-    /// and each visible row is indexed by its key.
+    /// Append one input chunk: join keys are evaluated per visible row,
+    /// visible rows move into the column store, and each visible row is
+    /// indexed by its key.
     ///
     /// This is the single build-side entry point: an attached selection is
-    /// consumed in place (only visible column values move), so callers must
-    /// not `materialize_selection` beforehand.
+    /// consumed in place (only visible rows move), so callers must
+    /// not `materialize_selection` beforehand. Values move from the typed
+    /// column layout when present (gathered per visible row) and fall back
+    /// to row-major clones otherwise; keys evaluate per row through the
+    /// scalar interpreter.
     pub fn insert_chunk(
         &mut self,
         chunk: &mut DataChunk,
         col_names: &[String],
         key_expressions: &[Expression],
     ) -> Result<(), QueryError> {
-        chunk.materialize_columns();
-        let cols = chunk.columns.as_deref().ok_or_else(|| {
-            QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string())
-        })?;
-        debug_assert_eq!(
-            chunk.rows.len(),
-            cols.first().map_or(0, Vec::len),
+        let visible = chunk.visible_indices();
+        let num_cols = chunk.num_columns();
+        debug_assert!(
+            chunk.rows.iter().all(|row| row.len() == num_cols),
             "row/column count mismatch: chunk has rows without columnar data"
         );
-        let visible = chunk.visible_indices();
         let base = self.row_count();
         for (pos, row_idx) in visible.iter().enumerate() {
             let row = &chunk.rows[*row_idx];
-            let key = evaluate_join_key(row, col_names, key_expressions, Some((cols, *row_idx)))?;
+            let key = evaluate_join_key(row, col_names, key_expressions)?;
             self.index.entry(key).or_default().push((base + pos) as u32);
         }
-        let chunk_cols = chunk.columns.take().ok_or_else(|| {
-            QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string())
-        })?;
-        if self.columns.is_empty() {
-            self.columns = if chunk.selection().is_none() {
-                chunk_cols
-            } else {
-                chunk_cols
-                    .into_iter()
-                    .map(|col| visible.iter().map(|&i| col[i].clone()).collect())
-                    .collect()
-            };
-        } else {
-            if self.columns.len() != chunk_cols.len() {
+        // Prefer the typed layout: gather visible rows per column in one pass
+        // instead of cloning value-by-value out of `rows`. The typed layout is
+        // consumed here, so dropping it afterwards is not a wasted build.
+        let typed = chunk.typed_columns.take();
+        let typed_usable = typed.as_ref().is_some_and(|cols| cols.len() == num_cols);
+        if typed_usable {
+            if !self.build_columns.is_empty() && num_cols != self.build_columns.len() {
+                chunk.typed_columns = typed;
                 return Err(QueryError::execution(format!(
                     "HashJoinBuildSide: chunk column count {} differs from build side column count {}",
-                    chunk_cols.len(),
-                    self.columns.len()
+                    num_cols,
+                    self.build_columns.len()
                 )));
             }
-            if chunk.selection().is_none() {
-                for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
-                    target.extend(src);
-                }
+            let cols = typed.as_ref().expect("typed layout checked usable");
+            if self.build_columns.is_empty() {
+                // First chunk defines the build width; only visible rows move.
+                self.build_columns = cols
+                    .iter()
+                    .map(|col| gather_typed_column(col, &visible).to_values())
+                    .collect();
             } else {
-                for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
-                    target.extend(visible.iter().map(|&i| src[i].clone()));
+                for (target, col) in self.build_columns.iter_mut().zip(cols.iter()) {
+                    target.extend(gather_typed_column(col, &visible).to_values());
+                }
+            }
+        } else {
+            if self.build_columns.is_empty() {
+                // First chunk defines the build width; only visible rows move.
+                self.build_columns = (0..num_cols)
+                    .map(|j| visible.iter().map(|&i| chunk.rows[i][j].clone()).collect())
+                    .collect();
+            } else {
+                if num_cols != self.build_columns.len() {
+                    chunk.typed_columns = typed;
+                    return Err(QueryError::execution(format!(
+                        "HashJoinBuildSide: chunk column count {} differs from build side column count {}",
+                        num_cols,
+                        self.build_columns.len()
+                    )));
+                }
+                for (j, target) in self.build_columns.iter_mut().enumerate() {
+                    target.extend(visible.iter().map(|&i| chunk.rows[i][j].clone()));
                 }
             }
         }
         // The build chunk is fully consumed; drop rows/selection without a
-        // second compaction pass. A dropped typed layout counts as a wasted
-        // build so a high build cost with no reader becomes visible.
+        // second compaction pass. A typed layout dropped without being
+        // consumed counts as a wasted build so a high build cost with no
+        // reader becomes visible.
         chunk.take_selection();
         chunk.rows.clear();
-        if chunk.typed_columns.take().is_some() {
-            if let Some(stats) = &chunk.columnar_stats {
-                stats.record_wasted_build();
+        if !typed_usable {
+            if typed.is_some() {
+                if let Some(stats) = &chunk.columnar_stats {
+                    stats.record_wasted_build();
+                }
             }
         }
         Ok(())
@@ -248,7 +246,7 @@ impl HashJoinBuildSide {
 
     /// Number of rows held in the columnar build store.
     pub fn row_count(&self) -> usize {
-        self.columns.first().map_or(0, Vec::len)
+        self.build_columns.first().map_or(0, Vec::len)
     }
 
     /// Append the build row at `row_idx` directly into `target`.
@@ -258,7 +256,7 @@ impl HashJoinBuildSide {
     /// extends column values in place.
     pub fn append_row_to(&self, target: &mut Vec<Value>, row_idx: u32) {
         let idx = row_idx as usize;
-        target.extend(self.columns.iter().map(|col| col[idx].clone()));
+        target.extend(self.build_columns.iter().map(|col| col[idx].clone()));
     }
 
     /// Insert one fully materialized row under a precomputed key.
@@ -266,9 +264,9 @@ impl HashJoinBuildSide {
     /// Used when rebuilding a Grace partition from spilled rows: keys come
     /// from re-evaluation, values move straight into the column store.
     pub fn insert_keyed_row(&mut self, key: JoinKeyValue, row: &[Value]) -> Result<(), QueryError> {
-        let width = self.columns.len();
+        let width = self.build_columns.len();
         if width == 0 {
-            self.columns = row.iter().map(|v| vec![v.clone()]).collect();
+            self.build_columns = row.iter().map(|v| vec![v.clone()]).collect();
         } else {
             if row.len() != width {
                 return Err(QueryError::execution(format!(
@@ -277,7 +275,7 @@ impl HashJoinBuildSide {
                     width,
                 )));
             }
-            for (target, value) in self.columns.iter_mut().zip(row.iter()) {
+            for (target, value) in self.build_columns.iter_mut().zip(row.iter()) {
                 target.push(value.clone());
             }
         }
@@ -292,7 +290,7 @@ impl HashJoinBuildSide {
     /// disk without re-evaluating key expressions.
     pub fn take_indexed_rows(&mut self) -> Vec<(JoinKeyValue, Vec<Value>)> {
         let index = std::mem::take(&mut self.index);
-        let columns = std::mem::take(&mut self.columns);
+        let columns = std::mem::take(&mut self.build_columns);
         let row_count = columns.first().map_or(0, Vec::len);
         if row_count == 0 {
             return Vec::new();
@@ -321,13 +319,13 @@ impl HashJoinBuildSide {
 
     /// Materialize the row at the given index by cloning column values.
     pub fn row_at(&self, row_idx: u32) -> Vec<Value> {
-        let mut out = Vec::with_capacity(self.columns.len());
+        let mut out = Vec::with_capacity(self.build_columns.len());
         self.append_row_to(&mut out, row_idx);
         out
     }
 
     pub fn clear(&mut self) {
-        self.columns.clear();
+        self.build_columns.clear();
         self.index.clear();
     }
 }
@@ -1045,9 +1043,9 @@ mod tests {
         side.insert_chunk(&mut c1, &[], &[]).unwrap();
         let mut c2 = chunk_from_columns(vec![vec![Value::Int(3)], vec![Value::string("c")]]);
         side.insert_chunk(&mut c2, &[], &[]).unwrap();
-        assert_eq!(side.columns.len(), 2);
+        assert_eq!(side.build_columns.len(), 2);
         assert_eq!(
-            side.columns[0],
+            side.build_columns[0],
             vec![Value::Int(1), Value::Int(2), Value::Int(3)]
         );
         assert_eq!(side.row_at(2), vec![Value::Int(3), Value::string("c")]);
@@ -1067,8 +1065,8 @@ mod tests {
         ]);
         let err = side.insert_chunk(&mut c2, &[], &[]).unwrap_err();
         assert!(err.to_string().contains("column count"));
-        assert_eq!(side.columns.len(), 2);
-        assert_eq!(side.columns[0], vec![Value::Int(1)]);
+        assert_eq!(side.build_columns.len(), 2);
+        assert_eq!(side.build_columns[0], vec![Value::Int(1)]);
     }
 
     #[test]
@@ -1083,7 +1081,7 @@ mod tests {
         .with_selection(vec![0, 2]);
         side.insert_chunk(&mut chunk, &[], &[]).unwrap();
         assert_eq!(side.row_count(), 2);
-        assert_eq!(side.columns[0], vec![Value::Int(1), Value::Int(3)]);
+        assert_eq!(side.build_columns[0], vec![Value::Int(1), Value::Int(3)]);
         assert!(chunk.selection().is_none());
         assert!(chunk.rows.is_empty());
         let indexed_rows: usize = side.index.values().map(|v| v.len()).sum();
@@ -1101,5 +1099,88 @@ mod tests {
             Arc::new(SlotLayout::from_names(&[])),
         );
         let _ = side.insert_chunk(&mut chunk, &[], &[]);
+    }
+
+    #[test]
+    fn insert_chunk_typed_layout_matches_row_path() {
+        // Same logical chunk built twice: once with the typed layout, once
+        // without. Both build paths must land byte-identical values,
+        // including hidden rows skipped via selection and NULL cells.
+        use graphdb_core::value::NullType;
+        let cols = || {
+            vec![
+                vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+                vec![
+                    Value::string("a"),
+                    Value::Null(NullType::Null),
+                    Value::string("c"),
+                ],
+            ]
+        };
+        let mut typed_chunk = chunk_from_columns(cols());
+        typed_chunk.build_typed_columns(true);
+        assert!(typed_chunk.typed_columns.is_some());
+        let mut typed_chunk = typed_chunk.with_selection(vec![0, 2]);
+        let mut rows_chunk = chunk_from_columns(cols()).with_selection(vec![0, 2]);
+
+        let mut typed_side = HashJoinBuildSide::new();
+        typed_side
+            .insert_chunk(&mut typed_chunk, &[], &[])
+            .expect("typed insert");
+        let mut rows_side = HashJoinBuildSide::new();
+        rows_side
+            .insert_chunk(&mut rows_chunk, &[], &[])
+            .expect("rows insert");
+
+        assert_eq!(typed_side.row_count(), 2);
+        assert_eq!(typed_side.row_count(), rows_side.row_count());
+        for idx in 0..typed_side.row_count() as u32 {
+            assert_eq!(typed_side.row_at(idx), rows_side.row_at(idx));
+        }
+        assert_eq!(
+            typed_side.row_at(1),
+            vec![Value::Int(3), Value::string("c")]
+        );
+        // The typed layout is consumed by the build, not dropped.
+        assert!(typed_chunk.typed_columns.is_none());
+    }
+
+    #[test]
+    fn insert_chunk_typed_consume_skips_wasted_build_count() {
+        use std::sync::atomic::Ordering;
+        // Typed layout consumed by the build: no wasted-build record.
+        let stats = Arc::new(crate::executor::streaming::runtime::ColumnarStats::new());
+        let mut chunk = chunk_from_columns(vec![
+            vec![Value::Int(1), Value::Int(2)],
+            vec![Value::string("a"), Value::string("b")],
+        ])
+        .with_columnar_stats(Arc::clone(&stats));
+        chunk.build_typed_columns(true);
+        let mut side = HashJoinBuildSide::new();
+        side.insert_chunk(&mut chunk, &[], &[])
+            .expect("typed insert");
+        assert_eq!(stats.columnar_wasted_builds.load(Ordering::Relaxed), 0);
+
+        // Typed layout present but unusable (width mismatch): the build falls
+        // back to rows and the dropped layout still counts as wasted.
+        let stats = Arc::new(crate::executor::streaming::runtime::ColumnarStats::new());
+        let mut chunk = chunk_from_columns(vec![vec![Value::Int(1)], vec![Value::string("a")]])
+            .with_columnar_stats(Arc::clone(&stats));
+        chunk.build_typed_columns(true);
+        chunk.typed_columns.as_mut().expect("typed layout").pop();
+        let mut side = HashJoinBuildSide::new();
+        side.insert_chunk(&mut chunk, &[], &[])
+            .expect("fallback insert");
+        assert_eq!(side.row_count(), 1);
+        assert_eq!(stats.columnar_wasted_builds.load(Ordering::Relaxed), 1);
+
+        // No typed layout at all: nothing to waste.
+        let stats = Arc::new(crate::executor::streaming::runtime::ColumnarStats::new());
+        let mut chunk =
+            chunk_from_columns(vec![vec![Value::Int(1)]]).with_columnar_stats(Arc::clone(&stats));
+        let mut side = HashJoinBuildSide::new();
+        side.insert_chunk(&mut chunk, &[], &[])
+            .expect("plain insert");
+        assert_eq!(stats.columnar_wasted_builds.load(Ordering::Relaxed), 0);
     }
 }

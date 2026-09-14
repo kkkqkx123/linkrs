@@ -21,6 +21,8 @@ use graphdb_core::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use super::columnar_common::{bitmap_is_valid, column_variants, gather_bitmap, gather_column};
+
 /// Kind of a typed fixed-size scalar column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypedKind {
@@ -40,102 +42,22 @@ pub enum TypedKind {
     Decimal,
 }
 
-/// Typed column representation for fixed-size scalar columns.
-///
-/// `I64`/`F64`/`I32`/`Bool`/`Date`/`DateTime`/`Utf8`/`Decimal` columns are
-/// stored as dense raw `Vec`s so that batch evaluation operates on scalars
-/// (auto-vectorizable) instead of constructing one `Value` per row. Columns
-/// that contain NULLs keep the typed representation through the matching
-/// `Nullable*` variants (raw values + validity bitmap); columns that mix
-/// kinds or carry non-scalar values fall back to [`TypedColumn::Fallback`].
-///
-/// Bitmap encoding: bit `i` of `bitmap[i / 64]` marks row `i` valid (`1` =
-/// valid value, `0` = NULL). Invalid rows keep a placeholder in the value
-/// vector so element access stays index-aligned.
-#[derive(Debug, Clone)]
-pub enum TypedColumn {
-    I64(Vec<i64>),
-    F64(Vec<f64>),
-    I32(Vec<i32>),
-    Bool(Vec<bool>),
-    /// Days since epoch per row (see [`DateValue::to_days`]).
-    Date(Vec<i64>),
-    /// Micros since epoch per row (see [`DateTimeValue::to_micros`]).
-    DateTime(Vec<i64>),
-    Utf8(Vec<Arc<str>>),
-    /// Decimal128 per row (decimal semantics, `Ord`).
-    Decimal(Vec<Decimal128Value>),
-    /// I64 column with a validity bitmap (see the encoding note above).
-    NullableI64(Vec<i64>, Vec<u64>),
-    /// F64 column with a validity bitmap.
-    NullableF64(Vec<f64>, Vec<u64>),
-    /// I32 column with a validity bitmap.
-    NullableI32(Vec<i32>, Vec<u64>),
-    /// Bool column with a validity bitmap.
-    NullableBool(Vec<bool>, Vec<u64>),
-    /// Date column with a validity bitmap.
-    NullableDate(Vec<i64>, Vec<u64>),
-    /// DateTime column with a validity bitmap.
-    NullableDateTime(Vec<i64>, Vec<u64>),
-    /// Utf8 column with a validity bitmap.
-    NullableUtf8(Vec<Arc<str>>, Vec<u64>),
-    /// Decimal column with a validity bitmap.
-    NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
-    Fallback(Vec<Value>),
-}
-
-/// Whether row `idx` is valid in `bitmap` (bit set = valid, bit clear = NULL).
-#[inline]
-pub(crate) fn bitmap_is_valid(bitmap: &[u64], idx: usize) -> bool {
-    bitmap[idx / 64] & (1u64 << (idx % 64)) != 0
-}
-
-/// Set (`valid == true`) or clear the validity bit of row `idx`.
-#[inline]
-pub(crate) fn bitmap_set_bit(bitmap: &mut [u64], idx: usize, valid: bool) {
-    if valid {
-        bitmap[idx / 64] |= 1u64 << (idx % 64);
-    } else {
-        bitmap[idx / 64] &= !(1u64 << (idx % 64));
-    }
-}
-
-/// Gather the validity bits at `indices` into a new bitmap.
-fn gather_bitmap(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
-    let mut out = vec![0u64; indices.len().div_ceil(64)];
-    for (j, &i) in indices.iter().enumerate() {
-        bitmap_set_bit(&mut out, j, bitmap_is_valid(bitmap, i));
-    }
-    out
-}
+// Typed column representation for fixed-size scalar columns: dense raw
+// `Vec`s for the typed variants (see `columnar_common` for the shared
+// variant list), `Nullable*` variants carrying a validity bitmap, and
+// `Fallback` for mixed-kind columns.
+//
+// Bitmap encoding: bit `i` of `bitmap[i / 64]` marks row `i` valid (`1` =
+// valid value, `0` = NULL). Invalid rows keep a placeholder in the value
+// vector so element access stays index-aligned.
+//
+// The variant set is declared once by `column_variants!` in
+// `columnar_common` and shared with `BatchColumn`; `len`, `is_empty`, and
+// `estimated_size` are generated from that list.
+// Immutable per-chunk snapshot; see `columnar_common` for the shared list.
+column_variants!(TypedColumn);
 
 impl TypedColumn {
-    pub fn len(&self) -> usize {
-        match self {
-            TypedColumn::I64(v) => v.len(),
-            TypedColumn::F64(v) => v.len(),
-            TypedColumn::I32(v) => v.len(),
-            TypedColumn::Bool(v) => v.len(),
-            TypedColumn::Date(v) => v.len(),
-            TypedColumn::DateTime(v) => v.len(),
-            TypedColumn::Utf8(v) => v.len(),
-            TypedColumn::Decimal(v) => v.len(),
-            TypedColumn::NullableI64(v, _) => v.len(),
-            TypedColumn::NullableF64(v, _) => v.len(),
-            TypedColumn::NullableI32(v, _) => v.len(),
-            TypedColumn::NullableBool(v, _) => v.len(),
-            TypedColumn::NullableDate(v, _) => v.len(),
-            TypedColumn::NullableDateTime(v, _) => v.len(),
-            TypedColumn::NullableUtf8(v, _) => v.len(),
-            TypedColumn::NullableDecimal(v, _) => v.len(),
-            TypedColumn::Fallback(v) => v.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Whether this column uses a typed (non-fallback) representation.
     pub fn is_typed(&self) -> bool {
         !matches!(self, TypedColumn::Fallback(_))
@@ -323,52 +245,6 @@ impl TypedColumn {
                 })
                 .collect(),
             TypedColumn::Fallback(v) => v.clone(),
-        }
-    }
-
-    /// Estimated heap bytes of this column (for memory accounting).
-    pub fn estimated_size(&self) -> usize {
-        match self {
-            TypedColumn::I64(v) => v.capacity() * std::mem::size_of::<i64>(),
-            TypedColumn::F64(v) => v.capacity() * std::mem::size_of::<f64>(),
-            TypedColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
-            TypedColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
-            TypedColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
-            TypedColumn::DateTime(v) => v.capacity() * std::mem::size_of::<i64>(),
-            TypedColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
-            TypedColumn::Decimal(v) => v.capacity() * std::mem::size_of::<Decimal128Value>(),
-            TypedColumn::NullableI64(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableF64(v, b) => {
-                v.capacity() * std::mem::size_of::<f64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableI32(v, b) => {
-                v.capacity() * std::mem::size_of::<i32>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableBool(v, b) => {
-                v.capacity() * std::mem::size_of::<bool>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableDate(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableDateTime(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableUtf8(v, b) => {
-                v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::NullableDecimal(v, b) => {
-                v.capacity() * std::mem::size_of::<Decimal128Value>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            TypedColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
     }
 }
@@ -1273,53 +1149,7 @@ pub(super) fn typed_cast_batch(
 
 /// Gather a typed column's entries at `indices`.
 pub(crate) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> TypedColumn {
-    match column {
-        TypedColumn::I64(v) => TypedColumn::I64(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::F64(v) => TypedColumn::F64(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::I32(v) => TypedColumn::I32(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::Bool(v) => TypedColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::Date(v) => TypedColumn::Date(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::DateTime(v) => TypedColumn::DateTime(indices.iter().map(|&i| v[i]).collect()),
-        TypedColumn::Utf8(v) => TypedColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect()),
-        TypedColumn::Decimal(v) => {
-            TypedColumn::Decimal(indices.iter().map(|&i| v[i].clone()).collect())
-        }
-        TypedColumn::NullableI64(v, b) => TypedColumn::NullableI64(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableF64(v, b) => TypedColumn::NullableF64(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableI32(v, b) => TypedColumn::NullableI32(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableBool(v, b) => TypedColumn::NullableBool(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableDate(v, b) => TypedColumn::NullableDate(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableDateTime(v, b) => TypedColumn::NullableDateTime(
-            indices.iter().map(|&i| v[i]).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableUtf8(v, b) => TypedColumn::NullableUtf8(
-            indices.iter().map(|&i| v[i].clone()).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::NullableDecimal(v, b) => TypedColumn::NullableDecimal(
-            indices.iter().map(|&i| v[i].clone()).collect(),
-            gather_bitmap(b, indices),
-        ),
-        TypedColumn::Fallback(v) => {
-            TypedColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
-        }
-    }
+    gather_column!(TypedColumn, column, indices)
 }
 
 /// Repeat every row of `column` `multiplicity` times (row duplication).

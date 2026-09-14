@@ -23,7 +23,7 @@
 //! - **`take_indices`/`slice`**: move a subset of rows into a new chunk
 //!   (efficient, uses `std::mem::take` per row), preserving `multiplicity`.
 //! - **`Clone`**: the single explicit deep copy. It drops memory reservations
-//!   and derived column caches; the new owner must re-account memory via its
+//!   and the deferred-build flag; the new owner must re-account memory via its
 //!   own pool/tracker.
 //!
 //! # Construction Paths
@@ -46,6 +46,7 @@
 
 mod collector;
 mod columnar_batch;
+mod columnar_common;
 mod core;
 mod eval;
 mod kind;

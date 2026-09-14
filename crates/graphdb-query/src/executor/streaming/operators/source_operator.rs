@@ -745,8 +745,8 @@ mod tests {
             .expect("chunk should be Some");
         assert_eq!(chunk.num_columns(), 2);
         assert_eq!(chunk.col_names(), vec!["c0", "c1"]);
-        chunk.materialize_columns();
-        assert_eq!(chunk.columns.as_deref().unwrap()[0].len(), 1);
+        let col = chunk.get_column(0).expect("column derived from rows");
+        assert_eq!(col.len(), 1);
     }
 
     #[test]

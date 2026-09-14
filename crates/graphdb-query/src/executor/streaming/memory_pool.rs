@@ -472,8 +472,8 @@ impl PoolHandle {
             .map_err(|e| QueryError::execution(e.to_string()))?;
         let copied = DataChunk {
             rows: chunk.rows.clone(),
-            columns: None,
             typed_columns: None,
+            columnar_build_deferred: false,
             selection: chunk.selection.clone(),
             multiplicity: chunk.multiplicity,
             schema: std::sync::Arc::clone(&chunk.schema),

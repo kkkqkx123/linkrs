@@ -306,7 +306,7 @@ impl PartitionedJoinState {
                             idx,
                         ))
                     })?;
-                    let key = evaluate_join_key(&row, &self.build_col_names, hash_keys, None)?;
+                    let key = evaluate_join_key(&row, &self.build_col_names, hash_keys)?;
                     self.build_side.insert_keyed_row(key, &row)?;
                 }
             }
@@ -362,7 +362,7 @@ impl PartitionedJoinState {
                 QueryError::execution(format!("spill run: build partition load: {}", e))
             })?;
             while let Some(row) = reader.read_row()? {
-                let key = evaluate_join_key(&row, &build_names, &hash_keys, None)?;
+                let key = evaluate_join_key(&row, &build_names, &hash_keys)?;
                 let partition = hash_join_key_partition(&key, sub);
                 build_writer.insert(partition, &row)?;
             }
@@ -372,7 +372,7 @@ impl PartitionedJoinState {
                 QueryError::execution(format!("spill run: probe partition load: {}", e))
             })?;
             while let Some(row) = reader.read_row()? {
-                let key = evaluate_join_key(&row, &probe_names, &probe_keys, None)?;
+                let key = evaluate_join_key(&row, &probe_names, &probe_keys)?;
                 let partition = hash_join_key_partition(&key, sub);
                 probe_writer.insert(partition, &row)?;
             }

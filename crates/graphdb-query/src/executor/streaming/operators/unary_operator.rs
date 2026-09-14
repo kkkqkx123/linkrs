@@ -351,7 +351,12 @@ impl UnaryOperator {
             if let Some(compiled) = &state.compiled_predicate {
                 let layout = chunk.get_layout();
                 let len = chunk.rows.len();
-                match compiled.evaluate_batch(&chunk.rows, layout, Some(&state.env)) {
+                match compiled.evaluate_batch(
+                    &chunk.rows,
+                    layout,
+                    Some(&state.env),
+                    chunk.typed_columns.as_deref(),
+                ) {
                     Ok(col) => return Ok(col.into_values(len)),
                     Err(_) => {
                         // Compiled evaluation failed; fall back to the scalar
@@ -420,7 +425,12 @@ impl UnaryOperator {
                 let mut columns = Vec::with_capacity(compiled.len());
                 let mut ok = true;
                 for expr in compiled {
-                    match expr.evaluate_batch(&chunk.rows, layout.clone(), Some(&state.env)) {
+                    match expr.evaluate_batch(
+                        &chunk.rows,
+                        layout.clone(),
+                        Some(&state.env),
+                        chunk.typed_columns.as_deref(),
+                    ) {
                         Ok(col) => columns.push(col.into_values(len)),
                         Err(_) => {
                             ok = false;

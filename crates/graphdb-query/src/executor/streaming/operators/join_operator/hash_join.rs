@@ -68,7 +68,7 @@ fn build_side_loop(
             }
             let num_partitions = pending.writer.num_partitions();
             for row in chunk.visible_rows() {
-                let key = evaluate_join_key(row, &col_names, hash_keys, None)?;
+                let key = evaluate_join_key(row, &col_names, hash_keys)?;
                 let partition = hash_join_key_partition(&key, num_partitions);
                 pending.writer.insert(partition, row)?;
             }
@@ -100,7 +100,7 @@ fn build_side_loop(
         let pending = grace.pending_build.as_mut().expect("pending must exist");
         let num_partitions = pending.writer.num_partitions();
         for row in chunk.visible_rows() {
-            let key = evaluate_join_key(row, &col_names, hash_keys, None)?;
+            let key = evaluate_join_key(row, &col_names, hash_keys)?;
             let partition = hash_join_key_partition(&key, num_partitions);
             pending.writer.insert(partition, row)?;
         }
@@ -151,7 +151,7 @@ fn enter_partitioned_mode(
             }
         };
         for row in chunk.visible_rows() {
-            let key = evaluate_join_key(row, &col_names, probe_keys, None)?;
+            let key = evaluate_join_key(row, &col_names, probe_keys)?;
             let partition = hash_join_key_partition(&key, num_partitions);
             writer.insert(partition, row)?;
         }
@@ -269,7 +269,7 @@ fn next_partitioned(
         while state.probe_pos() < state.probe_rows().len() && out.len() < PARTITIONED_BATCH_ROWS {
             let pos = state.probe_pos();
             let probe_row = state.probe_rows()[pos].clone();
-            let probe_key = evaluate_join_key(&probe_row, &probe_names, probe_keys, None)?;
+            let probe_key = evaluate_join_key(&probe_row, &probe_names, probe_keys)?;
             if let Some(right_indices) = state.build_side().matching(&probe_key) {
                 let right_indices: Vec<u32> = right_indices.to_vec();
                 if let Some((condition, layout)) =
@@ -450,19 +450,12 @@ pub(super) fn next_hash_join(
         } else {
             None
         };
-        probe_chunk.materialize_columns();
-        let probe_cols = probe_chunk.columns.as_deref();
         // The probe side consumes the child's selection vector — only
-        // visible rows are probed, while the materialized columnar cache
-        // stays valid across the Filter boundary (no re-transpose).
+        // visible rows are probed. Keys evaluate per row through the scalar
+        // interpreter; row storage is the only column source.
         for row_idx in probe_chunk.visible_indices() {
             let probe_row = &probe_chunk.rows[row_idx];
-            let probe_key = evaluate_join_key(
-                probe_row,
-                &probe_col_names,
-                probe_keys,
-                probe_cols.map(|c| (c, row_idx)),
-            )?;
+            let probe_key = evaluate_join_key(probe_row, &probe_col_names, probe_keys)?;
 
             if let Some(right_indices) = build_side.matching(&probe_key) {
                 if let Some((condition, layout)) =
@@ -613,17 +606,11 @@ pub(super) fn next_hash_left_join(
         } else {
             None
         };
-        probe_chunk.materialize_columns();
-        let probe_cols = probe_chunk.columns.as_deref();
-        // Consume the child's selection vector (see next_hash_join).
+        // Consume the child's selection vector (see next_hash_join). Keys
+        // evaluate per row through the scalar interpreter.
         for row_idx in probe_chunk.visible_indices() {
             let probe_row = &probe_chunk.rows[row_idx];
-            let probe_key = evaluate_join_key(
-                probe_row,
-                &probe_col_names,
-                probe_keys,
-                probe_cols.map(|c| (c, row_idx)),
-            )?;
+            let probe_key = evaluate_join_key(probe_row, &probe_col_names, probe_keys)?;
 
             if let Some(right_indices) = build_side.matching(&probe_key) {
                 if let Some((condition, layout)) =

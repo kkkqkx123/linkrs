@@ -100,7 +100,6 @@ impl DataChunk {
             }
             None => std::mem::take(&mut self.rows),
         };
-        self.columns = None;
         // Keep the typed layout across the expansion (same ownership rule as
         // `materialize_selection_inner`): gather the visible rows, then repeat
         // each per `multiplicity`, so downstream operators still see a typed
@@ -203,7 +202,6 @@ impl DataChunk {
             }
             None => std::mem::take(&mut self.rows),
         };
-        self.columns = None;
         // Keep the typed layout across the expansion (consistent with
         // `materialize_selection_inner`): gather the visible rows, then repeat
         // each per `multiplicity`.
@@ -274,11 +272,6 @@ impl DataChunk {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
         self.rows = selected;
-        self.columns = self.columns.as_ref().map(|cols| {
-            cols.iter()
-                .map(|col| indices.iter().map(|&i| col[i].clone()).collect())
-                .collect()
-        });
         self.typed_columns = self.typed_columns.as_ref().map(|cols| {
             cols.iter()
                 .map(|col| gather_typed_column(col, &indices))
@@ -303,8 +296,8 @@ impl DataChunk {
         });
         Self {
             rows: selected,
-            columns: None,
             typed_columns,
+            columnar_build_deferred: self.columnar_build_deferred,
             selection: None,
             multiplicity: self.multiplicity,
             schema,
@@ -330,8 +323,8 @@ impl DataChunk {
         });
         Self {
             rows: selected,
-            columns: None,
             typed_columns,
+            columnar_build_deferred: self.columnar_build_deferred,
             selection: None,
             multiplicity: self.multiplicity,
             schema,

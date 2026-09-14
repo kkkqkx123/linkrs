@@ -31,44 +31,24 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use crate::executor::streaming::chunk::columnar_common::{
+    bitmap_is_valid, column_variants, gather_bitmap, gather_column,
+};
 use crate::executor::streaming::chunk::core::DataChunk;
-use crate::executor::streaming::chunk::typed::{bitmap_is_valid, TypedColumn, TypedKind};
+use crate::executor::streaming::chunk::typed::{TypedColumn, TypedKind};
 use crate::executor::streaming::helpers::compare_values;
 use graphdb_core::value::date_time::{DateTimeValue, DateValue};
 use graphdb_core::value::decimal128::Decimal128Value;
 use graphdb_core::value::NullType;
 use graphdb_core::Value;
 
-/// Column-major accumulation of one output column across chunks.
-#[derive(Debug, Clone)]
-pub enum BatchColumn {
-    /// No rows appended yet; the concrete kind is fixed by the first append.
-    Empty,
-    I64(Vec<i64>),
-    F64(Vec<f64>),
-    I32(Vec<i32>),
-    Bool(Vec<bool>),
-    /// Days since epoch per row (see [`DateValue::to_days`]).
-    Date(Vec<i64>),
-    /// Micros since epoch per row (see [`DateTimeValue::to_micros`]).
-    DateTime(Vec<i64>),
-    /// String column stored as `Vec<Arc<str>>`, avoiding per-row `Value` boxing.
-    Utf8(Vec<Arc<str>>),
-    /// Decimal128 per row (decimal semantics, `Ord`).
-    Decimal(Vec<Decimal128Value>),
-    /// Typed column with a validity bitmap (`1` = valid, `0` = NULL).
-    /// Invalid rows materialize as NULL and sort last.
-    NullableI64(Vec<i64>, Vec<u64>),
-    NullableF64(Vec<f64>, Vec<u64>),
-    NullableI32(Vec<i32>, Vec<u64>),
-    NullableBool(Vec<bool>, Vec<u64>),
-    NullableDate(Vec<i64>, Vec<u64>),
-    NullableDateTime(Vec<i64>, Vec<u64>),
-    NullableUtf8(Vec<Arc<str>>, Vec<u64>),
-    NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
-    /// Mixed-kind or NULL-bearing column; value-level semantics preserved.
-    Fallback(Vec<Value>),
-}
+// Column-major accumulation of one output column across chunks.
+//
+// The variant set is declared once by `column_variants!` in
+// `columnar_common` and shared with `TypedColumn`; `len`, `is_empty`, and
+// `estimated_size` are generated from that list.
+// Accumulable blocking-operator state; see `columnar_common` for the list.
+column_variants!(BatchColumn, Empty);
 
 /// Compare two rows of a nullable column with NULL-last ordering (mirrors
 /// [`compare_values`]: NULL equals NULL and sorts last).
@@ -104,46 +84,7 @@ fn extend_bitmap(bm: &mut Vec<u64>, rows_before: usize, valid: impl Iterator<Ite
     }
 }
 
-/// Build a packed validity bitmap marking the rows at `indices` that are
-/// valid in the source bitmap.
-fn bitmap_from_indices(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
-    let mut out = vec![0u64; indices.len().div_ceil(64)];
-    for (j, &i) in indices.iter().enumerate() {
-        if bitmap_is_valid(bitmap, i) {
-            out[j / 64] |= 1u64 << (j % 64);
-        }
-    }
-    out
-}
-
 impl BatchColumn {
-    pub fn len(&self) -> usize {
-        match self {
-            BatchColumn::Empty => 0,
-            BatchColumn::I64(v) => v.len(),
-            BatchColumn::F64(v) => v.len(),
-            BatchColumn::I32(v) => v.len(),
-            BatchColumn::Bool(v) => v.len(),
-            BatchColumn::Date(v) => v.len(),
-            BatchColumn::DateTime(v) => v.len(),
-            BatchColumn::Utf8(v) => v.len(),
-            BatchColumn::Decimal(v) => v.len(),
-            BatchColumn::NullableI64(v, _) => v.len(),
-            BatchColumn::NullableF64(v, _) => v.len(),
-            BatchColumn::NullableI32(v, _) => v.len(),
-            BatchColumn::NullableBool(v, _) => v.len(),
-            BatchColumn::NullableDate(v, _) => v.len(),
-            BatchColumn::NullableDateTime(v, _) => v.len(),
-            BatchColumn::NullableUtf8(v, _) => v.len(),
-            BatchColumn::NullableDecimal(v, _) => v.len(),
-            BatchColumn::Fallback(v) => v.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Whether this column uses a typed (non-fallback) representation.
     pub fn is_typed(&self) -> bool {
         !matches!(self, BatchColumn::Empty | BatchColumn::Fallback(_))
@@ -358,53 +299,6 @@ impl BatchColumn {
         match raw {
             Some(ordering) => ordering,
             None => compare_values(v, &self.value_at(idx)),
-        }
-    }
-
-    /// Estimated heap bytes of this column (for memory accounting).
-    pub fn estimated_size(&self) -> usize {
-        match self {
-            BatchColumn::Empty => 0,
-            BatchColumn::I64(v) => v.capacity() * std::mem::size_of::<i64>(),
-            BatchColumn::F64(v) => v.capacity() * std::mem::size_of::<f64>(),
-            BatchColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
-            BatchColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
-            BatchColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
-            BatchColumn::DateTime(v) => v.capacity() * std::mem::size_of::<i64>(),
-            BatchColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
-            BatchColumn::Decimal(v) => v.capacity() * std::mem::size_of::<Decimal128Value>(),
-            BatchColumn::NullableI64(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableF64(v, b) => {
-                v.capacity() * std::mem::size_of::<f64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableI32(v, b) => {
-                v.capacity() * std::mem::size_of::<i32>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableBool(v, b) => {
-                v.capacity() * std::mem::size_of::<bool>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableDate(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableDateTime(v, b) => {
-                v.capacity() * std::mem::size_of::<i64>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableUtf8(v, b) => {
-                v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::NullableDecimal(v, b) => {
-                v.capacity() * std::mem::size_of::<Decimal128Value>()
-                    + b.capacity() * std::mem::size_of::<u64>()
-            }
-            BatchColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
     }
 
@@ -696,57 +590,7 @@ impl BatchColumn {
     /// Build a batch column from a chunk column at `indices` (kind taken
     /// from the chunk column).
     fn gather(col: &TypedColumn, indices: &[usize]) -> Self {
-        match col {
-            TypedColumn::I64(v) => BatchColumn::I64(indices.iter().map(|&i| v[i]).collect()),
-            TypedColumn::F64(v) => BatchColumn::F64(indices.iter().map(|&i| v[i]).collect()),
-            TypedColumn::I32(v) => BatchColumn::I32(indices.iter().map(|&i| v[i]).collect()),
-            TypedColumn::Bool(v) => BatchColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
-            TypedColumn::Date(v) => BatchColumn::Date(indices.iter().map(|&i| v[i]).collect()),
-            TypedColumn::DateTime(v) => {
-                BatchColumn::DateTime(indices.iter().map(|&i| v[i]).collect())
-            }
-            TypedColumn::Utf8(v) => {
-                BatchColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect())
-            }
-            TypedColumn::Decimal(v) => {
-                BatchColumn::Decimal(indices.iter().map(|&i| v[i].clone()).collect())
-            }
-            TypedColumn::NullableI64(v, bm) => BatchColumn::NullableI64(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableF64(v, bm) => BatchColumn::NullableF64(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableI32(v, bm) => BatchColumn::NullableI32(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableBool(v, bm) => BatchColumn::NullableBool(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableDate(v, bm) => BatchColumn::NullableDate(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableDateTime(v, bm) => BatchColumn::NullableDateTime(
-                indices.iter().map(|&i| v[i]).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableUtf8(v, bm) => BatchColumn::NullableUtf8(
-                indices.iter().map(|&i| v[i].clone()).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::NullableDecimal(v, bm) => BatchColumn::NullableDecimal(
-                indices.iter().map(|&i| v[i].clone()).collect(),
-                bitmap_from_indices(bm, indices),
-            ),
-            TypedColumn::Fallback(v) => {
-                BatchColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
-            }
-        }
+        gather_column!(BatchColumn, col, indices)
     }
 
     /// Upgrade a plain typed column to its `Nullable*` form (past rows all
@@ -1014,42 +858,42 @@ impl BatchColumn {
             BatchColumn::NullableI64(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableF64(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableI32(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableBool(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableDate(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableDateTime(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i]).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableUtf8(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i].clone()).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::NullableDecimal(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i].clone()).collect();
-                *bm = bitmap_from_indices(&old_bm, perm);
+                *bm = gather_bitmap(&old_bm, perm);
             }
             BatchColumn::Fallback(v) => {
                 let old = std::mem::take(v);

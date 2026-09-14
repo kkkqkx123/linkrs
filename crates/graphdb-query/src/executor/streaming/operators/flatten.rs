@@ -106,22 +106,12 @@ pub(crate) fn flatten_next_batch(
 /// Materialize one flatten output chunk for `positions` of `chunk`.
 ///
 /// Row order follows `positions`; rows are gathered column-wise through the
-/// shared batch primitive while `columns` and `typed_columns` keep their
-/// dedicated gather paths so the vectorized layout is preserved end to end.
+/// shared batch primitive while `typed_columns` keeps its dedicated gather
+/// path so the vectorized layout is preserved end to end.
 fn build_flatten_batch_chunk(chunk: &DataChunk, positions: &[usize]) -> DataChunk {
     let layout = chunk.get_layout();
     let schema = chunk.schema.clone();
     let rows = chunk.to_batch().gather(positions).to_rows();
-    let columns = chunk.columns.as_ref().map(|cols| {
-        cols.iter()
-            .map(|col| {
-                positions
-                    .iter()
-                    .map(|&sel_pos| col[sel_pos].clone())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-    });
     let typed_columns = chunk.typed_columns.as_ref().map(|cols| {
         cols.iter()
             .map(|col| gather_typed_column(col, positions))
@@ -130,8 +120,10 @@ fn build_flatten_batch_chunk(chunk: &DataChunk, positions: &[usize]) -> DataChun
     let columnar_stats = chunk.columnar_stats.clone();
     let mut out = DataChunk::new_with_layout(rows, layout);
     out.schema = schema;
-    out.columns = columns;
     out.typed_columns = typed_columns;
+    // A deferred source layout stays deferred when no typed columns were
+    // gathered; the flattened rows remain a valid build input.
+    out.columnar_build_deferred = chunk.columnar_build_deferred && out.typed_columns.is_none();
     out.columnar_stats = columnar_stats;
     out
 }
