@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn splits_large_push_into_blocks() {
-        let rows: Vec<Vec<Value>> = (0..5000).map(|i| vec![Value::Int(i as i32)]).collect();
+        let rows: Vec<Vec<Value>> = (0..5000).map(|i| vec![Value::Int(i)]).collect();
         let mut c = chunk_with(rows, None, 1);
         let mut collector = LocalChunkCollector::new(vec!["a".to_string()]);
         collector.push_chunk(&mut c).unwrap();

@@ -23,11 +23,7 @@ pub fn return_item_to_yield_column(item: &ReturnItem) -> YieldColumn {
         ReturnItem::Expression { expression, alias } => (expression.clone(), alias.clone()),
     };
     let alias = alias.unwrap_or_else(|| default_projection_alias(&expression));
-    YieldColumn {
-        expression,
-        alias,
-        is_matched: false,
-    }
+    YieldColumn { expression, alias }
 }
 
 /// Convert one `YieldItem` into a `YieldColumn`.
@@ -39,7 +35,6 @@ pub fn yield_item_to_yield_column(item: &YieldItem) -> YieldColumn {
     YieldColumn {
         expression: item.expression.clone(),
         alias,
-        is_matched: false,
     }
 }
 
@@ -51,6 +46,31 @@ pub fn yield_items_to_columns(items: &[YieldItem]) -> Result<Vec<YieldColumn>, P
         ));
     }
     Ok(items.iter().map(yield_item_to_yield_column).collect())
+}
+
+/// Output column types for a projection, derived from the yield columns.
+///
+/// Single definition point so every `LogicalProjectNode` carries the same
+/// type information; without it the executor resolves `SlotLayout` types to
+/// `None` and column-oriented consumers lose the typed path.
+pub fn project_column_types(columns: &[YieldColumn]) -> Vec<graphdb_core::DataType> {
+    columns
+        .iter()
+        .map(|col| {
+            col.expression
+                .data_type()
+                .unwrap_or(graphdb_core::DataType::Unknown)
+        })
+        .collect()
+}
+
+/// Placeholder types for nodes whose output width is known but whose element
+/// types cannot be resolved at plan time (system / management nodes).
+///
+/// Keeps `column_types.len() == col_names.len()` so downstream width estimates
+/// and slot layouts never observe a truncated vector.
+pub fn unknown_column_types(width: usize) -> Vec<graphdb_core::DataType> {
+    vec![graphdb_core::DataType::Unknown; width]
 }
 
 /// Validate output aliases: non-empty and unique.

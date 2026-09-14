@@ -53,72 +53,48 @@ impl RemoveFactorizationRewriter {
                     .expect("flatten missing input");
                 Self::visit_operator(child)
             }
-            LogicalNodeEnum::Project(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Project(n))
-            }
-            LogicalNodeEnum::Filter(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Filter(n))
-            }
-            LogicalNodeEnum::Sort(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Sort(n)),
-            LogicalNodeEnum::Limit(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Limit(n)),
-            LogicalNodeEnum::Skip(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Skip(n)),
-            LogicalNodeEnum::TopN(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::TopN(n)),
-            LogicalNodeEnum::Sample(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Sample(n))
-            }
-            LogicalNodeEnum::Dedup(n) => Self::visit_single_input(n, |n| LogicalNodeEnum::Dedup(n)),
+            LogicalNodeEnum::Project(n) => Self::visit_single_input(n, LogicalNodeEnum::Project),
+            LogicalNodeEnum::Filter(n) => Self::visit_single_input(n, LogicalNodeEnum::Filter),
+            LogicalNodeEnum::Sort(n) => Self::visit_single_input(n, LogicalNodeEnum::Sort),
+            LogicalNodeEnum::Limit(n) => Self::visit_single_input(n, LogicalNodeEnum::Limit),
+            LogicalNodeEnum::Skip(n) => Self::visit_single_input(n, LogicalNodeEnum::Skip),
+            LogicalNodeEnum::TopN(n) => Self::visit_single_input(n, LogicalNodeEnum::TopN),
+            LogicalNodeEnum::Sample(n) => Self::visit_single_input(n, LogicalNodeEnum::Sample),
+            LogicalNodeEnum::Dedup(n) => Self::visit_single_input(n, LogicalNodeEnum::Dedup),
             LogicalNodeEnum::Aggregate(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Aggregate(n))
+                Self::visit_single_input(n, LogicalNodeEnum::Aggregate)
             }
-            LogicalNodeEnum::Window(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Window(n))
-            }
-            LogicalNodeEnum::GetVertices(n) => {
-                Self::visit_deps(n, |n| LogicalNodeEnum::GetVertices(n))
-            }
-            LogicalNodeEnum::GetNeighbors(n) => {
-                Self::visit_deps(n, |n| LogicalNodeEnum::GetNeighbors(n))
-            }
-            LogicalNodeEnum::Assign(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Assign(n))
-            }
-            LogicalNodeEnum::Remove(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Remove(n))
-            }
+            LogicalNodeEnum::Window(n) => Self::visit_single_input(n, LogicalNodeEnum::Window),
+            LogicalNodeEnum::GetVertices(n) => Self::visit_deps(n, LogicalNodeEnum::GetVertices),
+            LogicalNodeEnum::GetNeighbors(n) => Self::visit_deps(n, LogicalNodeEnum::GetNeighbors),
+            LogicalNodeEnum::Assign(n) => Self::visit_single_input(n, LogicalNodeEnum::Assign),
+            LogicalNodeEnum::Remove(n) => Self::visit_single_input(n, LogicalNodeEnum::Remove),
             LogicalNodeEnum::DataCollect(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::DataCollect(n))
+                Self::visit_single_input(n, LogicalNodeEnum::DataCollect)
             }
             LogicalNodeEnum::Materialize(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Materialize(n))
+                Self::visit_single_input(n, LogicalNodeEnum::Materialize)
             }
             LogicalNodeEnum::RollUpApply(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::RollUpApply(n))
+                Self::visit_single_input(n, LogicalNodeEnum::RollUpApply)
             }
-            LogicalNodeEnum::Union(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Union(n)),
-            LogicalNodeEnum::Minus(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Minus(n)),
-            LogicalNodeEnum::Intersect(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Intersect(n)),
-            LogicalNodeEnum::WcoIntersect(n) => {
-                Self::visit_deps(n, |n| LogicalNodeEnum::WcoIntersect(n))
-            }
-            LogicalNodeEnum::InnerJoin(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::InnerJoin(n))
-            }
-            LogicalNodeEnum::LeftJoin(n) => Self::visit_binary(n, |n| LogicalNodeEnum::LeftJoin(n)),
-            LogicalNodeEnum::RightJoin(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::RightJoin(n))
-            }
-            LogicalNodeEnum::CrossJoin(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::CrossJoin(n))
-            }
+            LogicalNodeEnum::Union(n) => Self::visit_deps(n, LogicalNodeEnum::Union),
+            LogicalNodeEnum::Minus(n) => Self::visit_deps(n, LogicalNodeEnum::Minus),
+            LogicalNodeEnum::Intersect(n) => Self::visit_deps(n, LogicalNodeEnum::Intersect),
+            LogicalNodeEnum::WcoIntersect(n) => Self::visit_deps(n, LogicalNodeEnum::WcoIntersect),
+            LogicalNodeEnum::InnerJoin(n) => Self::visit_binary(n, LogicalNodeEnum::InnerJoin),
+            LogicalNodeEnum::LeftJoin(n) => Self::visit_binary(n, LogicalNodeEnum::LeftJoin),
+            LogicalNodeEnum::RightJoin(n) => Self::visit_binary(n, LogicalNodeEnum::RightJoin),
+            LogicalNodeEnum::CrossJoin(n) => Self::visit_binary(n, LogicalNodeEnum::CrossJoin),
             LogicalNodeEnum::FullOuterJoin(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::FullOuterJoin(n))
+                Self::visit_binary(n, LogicalNodeEnum::FullOuterJoin)
             }
-            LogicalNodeEnum::SemiJoin(n) => Self::visit_binary(n, |n| LogicalNodeEnum::SemiJoin(n)),
+            LogicalNodeEnum::SemiJoin(n) => Self::visit_binary(n, LogicalNodeEnum::SemiJoin),
             LogicalNodeEnum::PatternApply(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::PatternApply(n))
+                Self::visit_binary(n, LogicalNodeEnum::PatternApply)
             }
             LogicalNodeEnum::CorrelatedApply(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::CorrelatedApply(n))
+                Self::visit_binary(n, LogicalNodeEnum::CorrelatedApply)
             }
             LogicalNodeEnum::Apply(mut n) => {
                 let (left, left_schema) = Self::visit_operator(n.left_input().clone())?;
@@ -129,31 +105,23 @@ impl RemoveFactorizationRewriter {
                 let schema = node.compute_flat_schema(&[left_schema, right_schema])?;
                 Ok((node, schema))
             }
-            LogicalNodeEnum::Traverse(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Traverse(n))
-            }
-            LogicalNodeEnum::Expand(n) => Self::visit_deps(n, |n| LogicalNodeEnum::Expand(n)),
-            LogicalNodeEnum::ExpandAll(n) => Self::visit_deps(n, |n| LogicalNodeEnum::ExpandAll(n)),
+            LogicalNodeEnum::Traverse(n) => Self::visit_single_input(n, LogicalNodeEnum::Traverse),
+            LogicalNodeEnum::Expand(n) => Self::visit_deps(n, LogicalNodeEnum::Expand),
+            LogicalNodeEnum::ExpandAll(n) => Self::visit_deps(n, LogicalNodeEnum::ExpandAll),
             LogicalNodeEnum::AppendVertices(n) => {
-                Self::visit_deps(n, |n| LogicalNodeEnum::AppendVertices(n))
+                Self::visit_deps(n, LogicalNodeEnum::AppendVertices)
             }
-            LogicalNodeEnum::BiExpand(n) => Self::visit_binary(n, |n| LogicalNodeEnum::BiExpand(n)),
-            LogicalNodeEnum::BiTraverse(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::BiTraverse(n))
-            }
+            LogicalNodeEnum::BiExpand(n) => Self::visit_binary(n, LogicalNodeEnum::BiExpand),
+            LogicalNodeEnum::BiTraverse(n) => Self::visit_binary(n, LogicalNodeEnum::BiTraverse),
             LogicalNodeEnum::MultiShortestPath(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::MultiShortestPath(n))
+                Self::visit_binary(n, LogicalNodeEnum::MultiShortestPath)
             }
-            LogicalNodeEnum::BFSShortest(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::BFSShortest(n))
-            }
-            LogicalNodeEnum::AllPaths(n) => Self::visit_binary(n, |n| LogicalNodeEnum::AllPaths(n)),
+            LogicalNodeEnum::BFSShortest(n) => Self::visit_binary(n, LogicalNodeEnum::BFSShortest),
+            LogicalNodeEnum::AllPaths(n) => Self::visit_binary(n, LogicalNodeEnum::AllPaths),
             LogicalNodeEnum::ShortestPath(n) => {
-                Self::visit_binary(n, |n| LogicalNodeEnum::ShortestPath(n))
+                Self::visit_binary(n, LogicalNodeEnum::ShortestPath)
             }
-            LogicalNodeEnum::Unwind(n) => {
-                Self::visit_single_input(n, |n| LogicalNodeEnum::Unwind(n))
-            }
+            LogicalNodeEnum::Unwind(n) => Self::visit_single_input(n, LogicalNodeEnum::Unwind),
             LogicalNodeEnum::Select(mut n) => {
                 let mut child_schemas = Vec::new();
                 if let Some(branch) = n.take_if_branch() {
@@ -469,8 +437,8 @@ impl RemoveFactorizationRewriter {
         N: LogicalBinaryInputNode,
         F: FnOnce(N) -> LogicalNodeEnum,
     {
-        let left_old = std::mem::replace(n.left_input_mut(), LogicalNodeEnum::default());
-        let right_old = std::mem::replace(n.right_input_mut(), LogicalNodeEnum::default());
+        let left_old = std::mem::take(n.left_input_mut());
+        let right_old = std::mem::take(n.right_input_mut());
         let (left, left_schema) = Self::visit_operator(left_old)?;
         let (right, right_schema) = Self::visit_operator(right_old)?;
         n.set_left_input(left);

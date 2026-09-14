@@ -162,6 +162,8 @@ impl ClauseParser {
     ) -> Result<YieldClause, ParseError> {
         let start_span = ctx.current_span();
 
+        let distinct = ctx.match_token(TokenKind::Distinct);
+
         let mut items = Vec::new();
 
         // Check whether it is *.
@@ -249,6 +251,7 @@ impl ClauseParser {
 
         Ok(YieldClause {
             span: ctx.merge_span(start_span.start, end_span.end),
+            distinct,
             items,
             where_clause,
             order_by,

@@ -3,6 +3,15 @@
 //! Typed columns store dense `Vec<i64>`/`Vec<f64>`/`Vec<i32>`/`Vec<bool>` so
 //! batch evaluation can operate on scalars (auto-vectorizable) instead of
 //! constructing one `Value` per row.
+//!
+//! NULLs are carried by the matching `Nullable*` variant (values plus a
+//! validity bitmap) rather than by widening every element to `Option<T>`.
+//! The standalone bitmap benchmark in
+//! `docs/archive/benches/columnar-necessity-verification.md` favoured
+//! `Option<T>` for a plain `Vec<i64>` scan, but here the bitmap is what
+//! keeps a NULL-bearing column on the typed path at all: the alternative is
+//! degrading the whole column to `Fallback`. Re-measure both encodings
+//! before changing this trade-off.
 
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::value::date_time::{DateTimeValue, DateValue};

@@ -492,7 +492,6 @@ mod tests {
         let col = graphdb_core::YieldColumn {
             expression: ctx_expr(expr),
             alias: dst.to_string(),
-            is_matched: false,
         };
         PlanNodeEnum::Project(ProjectNode::new(input, vec![col]).expect("project should build"))
     }
@@ -508,7 +507,6 @@ mod tests {
         let col = graphdb_core::YieldColumn {
             expression: ctx_expr(expr),
             alias: var.to_string(),
-            is_matched: false,
         };
         PlanNodeEnum::Project(ProjectNode::new(input, vec![col]).expect("project should build"))
     }

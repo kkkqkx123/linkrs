@@ -1049,16 +1049,16 @@ mod tests {
     #[test]
     fn test_union_roundtrip() {
         let u = UtilityFunction::UnionValue
-            .execute(&[Value::Int(1), Value::Double(3.14)])
+            .execute(&[Value::Int(1), Value::Double(3.5)])
             .expect("create union");
         let tag = UtilityFunction::UnionTag
-            .execute(&[u.clone()])
+            .execute(std::slice::from_ref(&u))
             .expect("get tag");
         assert_eq!(tag, Value::Int(1));
         let val = UtilityFunction::UnionExtract
             .execute(&[u])
             .expect("extract value");
-        assert_eq!(val, Value::Double(3.14));
+        assert_eq!(val, Value::Double(3.5));
     }
 
     #[test]

@@ -244,7 +244,6 @@ impl RewriteRule for CollapseProjectRule {
                     expr_context.clone(),
                 ),
                 alias: col.alias.clone(),
-                is_matched: col.is_matched,
             })
             .collect();
 
@@ -314,7 +313,6 @@ mod tests {
         let child_columns = vec![YieldColumn {
             expression: child_ctx_expr,
             alias: "col1".to_string(),
-            is_matched: false,
         }];
         let child_proj =
             ProjectNode::new(start, child_columns).expect("Failed to create ProjectNode");
@@ -329,7 +327,6 @@ mod tests {
         let parent_columns = vec![YieldColumn {
             expression: parent_ctx_expr,
             alias: "col2".to_string(),
-            is_matched: false,
         }];
         let parent_proj = ProjectNode::new(child_node.clone(), parent_columns)
             .expect("Failed to create ProjectNode");

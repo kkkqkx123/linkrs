@@ -550,13 +550,6 @@ pub use EdgeTypeInfo as EdgeTypeSchema;
 pub struct YieldColumn {
     pub expression: crate::types::expr::contextual::ContextualExpression,
     pub alias: String,
-    /// Whether the column was produced by pattern matching.
-    ///
-    /// Planners always construct this as `false`; the flag is preserved
-    /// verbatim through rewrites and serialization for future matcher use.
-    /// Do not branch on it: no planner, optimizer, or executor reads it for
-    /// decisions today.
-    pub is_matched: bool,
 }
 
 impl YieldColumn {
@@ -564,16 +557,7 @@ impl YieldColumn {
         expression: crate::types::expr::contextual::ContextualExpression,
         alias: String,
     ) -> Self {
-        Self {
-            expression,
-            alias,
-            is_matched: false,
-        }
-    }
-
-    pub fn with_matched(mut self, is_matched: bool) -> Self {
-        self.is_matched = is_matched;
-        self
+        Self { expression, alias }
     }
 
     /// Get column name (alias)

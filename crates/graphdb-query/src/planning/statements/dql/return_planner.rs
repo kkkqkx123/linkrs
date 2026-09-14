@@ -235,20 +235,8 @@ impl Planner for ReturnPlanner {
             .items
             .iter()
             .map(|item| {
-                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-                    &item.expression,
-                    &expr_ctx,
-                )
-                .map_err(PlannerError::PlanGenerationFailed)?;
-                let alias = item
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| ctx_expr.to_expression_string());
-                Ok(YieldColumn {
-                    expression: ctx_expr,
-                    alias,
-                    is_matched: false,
-                })
+                crate::binder::expr_converter::bound_projection_to_yield_column(item, &expr_ctx)
+                    .map_err(PlannerError::PlanGenerationFailed)
             })
             .collect::<Result<Vec<_>, PlannerError>>()?;
 

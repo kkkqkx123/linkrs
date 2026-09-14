@@ -10,6 +10,7 @@ use crate::planning::plan::logical::logical_nodes::access::LogicalGetEdgesNode;
 use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use graphdb_core::types::expr::expression_utils::extract_string_from_expr;
 use std::sync::Arc;
@@ -73,16 +74,14 @@ impl Planner for FetchEdgesPlanner {
 
         // Apply the YIELD clause as a projection when present.
         let (root, current_logical) = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
-            let mut columns = Vec::new();
-            for item in &yield_clause.items {
-                columns.push(graphdb_core::YieldColumn {
-                    expression: item.expression.clone(),
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
-            }
+            let columns: Vec<graphdb_core::YieldColumn> = yield_clause
+                .items
+                .iter()
+                .map(projection_util::yield_item_to_yield_column)
+                .collect();
             let project_node = ProjectNode::new(get_edges_enum, columns.clone())?;
             let root = PlanNodeEnum::Project(project_node);
+            let column_types = projection_util::project_column_types(&columns);
             let logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(get_edges_logical)),
@@ -91,7 +90,7 @@ impl Planner for FetchEdgesPlanner {
                 has_folded_expressions: false,
                 output_var: None,
                 col_names: root.col_names().to_vec(),
-                column_types: vec![],
+                column_types,
             });
             (root, logical)
         } else {
@@ -208,6 +207,6 @@ fn get_edges_mirror(get_edges_node: &GetEdgesNode) -> LogicalNodeEnum {
         limit: get_edges_node.limit(),
         output_var: get_edges_node.output_var().map(|s| s.to_string()),
         col_names: get_edges_node.col_names().to_vec(),
-        column_types: vec![],
+        column_types: projection_util::unknown_column_types(get_edges_node.col_names().len()),
     })
 }

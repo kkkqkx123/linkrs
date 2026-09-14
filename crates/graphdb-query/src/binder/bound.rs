@@ -26,9 +26,6 @@ pub enum BoundExpression {
     /// Literal value with resolved type
     Literal(Value, DataType),
 
-    /// Column reference resolved to a variable + property
-    ColumnRef(BoundColumnRef),
-
     /// Variable reference (no property access)
     Variable(String, DataType),
 
@@ -199,19 +196,6 @@ pub enum BoundExpression {
     Vector(Vec<f32>),
 }
 
-/// A reference to a column, resolved to the defining variable and property.
-#[derive(Debug, Clone)]
-pub struct BoundColumnRef {
-    /// Variable name (e.g., "n", "e")
-    pub variable: String,
-    /// Property name (e.g., "name", "age")
-    pub property: String,
-    /// Resolved tag name from catalog (if applicable)
-    pub resolved_tag: Option<String>,
-    /// Resolved type
-    pub value_type: ValueType,
-}
-
 /// A function call with resolved arguments.
 #[derive(Debug, Clone)]
 pub struct BoundFunctionCall {
@@ -235,7 +219,6 @@ impl BoundExpression {
     pub fn return_type(&self) -> DataType {
         match self {
             Self::Literal(_, dt) => dt.clone(),
-            Self::ColumnRef(r) => r.value_type.to_data_type(),
             Self::Variable(_, dt) => dt.clone(),
             Self::Property { value_type, .. } => value_type.clone(),
             Self::StructField { return_type, .. } => return_type.clone(),

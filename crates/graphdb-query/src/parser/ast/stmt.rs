@@ -397,6 +397,7 @@ mod tests {
         };
         let yield_clause = YieldClause {
             span,
+            distinct: false,
             items: vec![],
             where_clause: None,
             order_by: None,

@@ -34,11 +34,6 @@
 //! - WITH: Pipe results between query parts
 //! - YIELD: Yield results (standalone statement)
 //!
-//! ## Pipe Variable Support
-//!
-//! The `pipe_variable_resolver` module handles resolution of pipe variable references (`$-`)
-//! in chained queries, enabling complex query pipelines.
-//!
 //! ## Composite Index Optimization
 //!
 //! The `composite_index_analyzer` module provides optimal index selection for LOOKUP queries
@@ -56,7 +51,6 @@ pub mod group_by_planner;
 pub mod lookup_planner;
 pub mod path_planner;
 pub mod pipe_planner;
-pub mod pipe_variable_resolver;
 pub mod return_planner;
 pub mod set_operation_planner;
 pub mod subgraph_planner;
@@ -67,8 +61,4 @@ pub mod yield_planner;
 pub use composite_index_analyzer::{
     ColumnStats, CompositeIndexAnalyzer, CompositeIndexSelection, IndexSelectionResult, MatchType,
     PredicateInfo, PredicateOp, SingleColumnSelection,
-};
-pub use pipe_variable_resolver::{
-    ColumnDataType, ColumnSchema, FromClausePlan, ParsedPipeVariable, PipeVariableResolver,
-    ResolverError, VariableInfo, VariableSchema,
 };

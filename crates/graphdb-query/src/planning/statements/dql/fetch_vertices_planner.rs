@@ -14,6 +14,7 @@ use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::plan_combiner::logical_argument_root;
+use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use std::sync::Arc;
 
@@ -120,16 +121,14 @@ impl Planner for FetchVerticesPlanner {
         // 3. Apply the YIELD clause as a projection when present; without one
         // the fetched vertices are returned directly.
         let root = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
-            let mut columns = Vec::new();
-            for item in &yield_clause.items {
-                columns.push(graphdb_core::YieldColumn {
-                    expression: item.expression.clone(),
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
-            }
+            let columns: Vec<graphdb_core::YieldColumn> = yield_clause
+                .items
+                .iter()
+                .map(projection_util::yield_item_to_yield_column)
+                .collect();
             let project_node = ProjectNode::new(get_vertices_node_enum.clone(), columns.clone())?;
             let root = PlanNodeEnum::Project(project_node);
+            let column_types = projection_util::project_column_types(&columns);
             current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(current_logical)),
@@ -138,7 +137,7 @@ impl Planner for FetchVerticesPlanner {
                 has_folded_expressions: false,
                 output_var: None,
                 col_names: root.col_names().to_vec(),
-                column_types: vec![],
+                column_types,
             });
             root
         } else {
@@ -277,6 +276,6 @@ fn get_vertices_mirror(
         projected_properties: get_vertices_node.projected_properties().to_vec(),
         output_var: get_vertices_node.output_var().map(|s| s.to_string()),
         col_names: get_vertices_node.col_names().to_vec(),
-        column_types: vec![],
+        column_types: projection_util::unknown_column_types(get_vertices_node.col_names().len()),
     })
 }

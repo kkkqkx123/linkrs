@@ -519,8 +519,8 @@ mod tests {
         for key in [
             key_of(Value::Int(7)),
             key_of(Value::BigInt(-3)),
-            key_of(Value::string("k".to_string())),
-            JoinKeyValue::Multi(vec![Value::Int(1), Value::string("x".to_string())]),
+            key_of(Value::string("k")),
+            JoinKeyValue::Multi(vec![Value::Int(1), Value::string("x")]),
         ] {
             let build = hash_join_key_partition(&key, 32);
             let probe = hash_join_key_partition(&key, 32);
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(total, (COLLECTOR_RUN_ROWS_MAX + 10) as usize);
         assert_eq!(
             runs.iter().flatten().map(|r| r.row_count).sum::<u64>(),
-            (COLLECTOR_RUN_ROWS_MAX + 11) as u64
+            COLLECTOR_RUN_ROWS_MAX + 11
         );
     }
 

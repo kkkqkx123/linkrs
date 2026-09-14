@@ -71,6 +71,7 @@ pub(super) fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, P
             .collect();
         YieldClause {
             span: start_span,
+            distinct: false,
             items,
             where_clause: None,
             order_by: None,

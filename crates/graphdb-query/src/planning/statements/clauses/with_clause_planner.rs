@@ -341,7 +341,6 @@ impl WithClausePlanner {
                     yield_columns.push(YieldColumn {
                         expression: expression.clone(),
                         alias: col_alias.clone(),
-                        is_matched: false,
                     });
 
                     // Collect the generated aliases.

@@ -268,12 +268,11 @@ mod tests {
     impl SequenceStorage for MockStorage {
         fn load_all(&self) -> Result<Vec<SequenceDef>, StorageError> {
             let data = self.data.read();
-            let mut result = Vec::new();
-            for (_key, _value) in data.iter() {
+            for _value in data.values() {
                 // Simplified: in real impl would deserialize
                 // For tests we just return empty
             }
-            Ok(result)
+            Ok(Vec::new())
         }
 
         fn save(&self, def: &SequenceDef) -> Result<(), StorageError> {
@@ -294,7 +293,7 @@ mod tests {
             let key = format!("sequences:{}", name);
             let mut data = self.data.write();
             if let Some(raw) = data.get(&key) {
-                let mut def: SequenceDef = postcard::from_bytes(raw)
+                let def: SequenceDef = postcard::from_bytes(raw)
                     .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
                 def.set_value(value);
                 let new_raw = postcard::to_allocvec(&def)

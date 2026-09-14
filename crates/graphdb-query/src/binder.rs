@@ -15,7 +15,7 @@ pub mod semantic_checker;
 pub mod validation;
 
 pub use bind::Binder;
-pub use bound::{BoundColumnRef, BoundExpression, BoundMatchStatement, BoundStatement};
+pub use bound::{BoundExpression, BoundMatchStatement, BoundStatement};
 pub use expr_binder::ExpressionBinder;
 pub use query_graph::{BoundEdgePattern, BoundEdgeTypeRef, BoundNodePattern, QueryGraph};
 pub use scope::{BinderScope, BinderVariable};

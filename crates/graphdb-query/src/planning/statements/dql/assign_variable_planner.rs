@@ -49,7 +49,6 @@ impl Planner for AssignVariablePlanner {
         let yield_column = YieldColumn {
             expression: assign.expression.clone(),
             alias: assign.name.clone(),
-            is_matched: false,
         };
         let project_node = ProjectNode::new(current_node.clone(), vec![yield_column.clone()])
             .map_err(|e| {
@@ -101,7 +100,6 @@ impl Planner for AssignVariablePlanner {
         let yield_column = YieldColumn {
             expression: ctx_expr,
             alias: assign.name.clone(),
-            is_matched: false,
         };
         let project_node = ProjectNode::new(current_node.clone(), vec![yield_column.clone()])
             .map_err(|e| {

@@ -776,7 +776,6 @@ mod tests {
                 },
             ),
             alias: "half".to_string(),
-            is_matched: false,
         };
         let project = ProjectNode::new(start, vec![column]).expect("project node");
         let node = PlanNodeEnum::Project(project);
@@ -821,7 +820,6 @@ mod tests {
                 },
             ),
             alias: "age_plus".to_string(),
-            is_matched: false,
         };
         let project = ProjectNode::new(start, vec![column]).expect("project node");
         let node = PlanNodeEnum::Project(project);

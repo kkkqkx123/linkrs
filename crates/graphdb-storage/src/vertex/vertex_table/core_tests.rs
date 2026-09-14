@@ -973,7 +973,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
                 &format!("v{}", i),
                 &[
                     ("name".to_string(), Value::string(format!("n{}", i))),
-                    ("age".to_string(), Value::Int(i as i32)),
+                    ("age".to_string(), Value::Int(i)),
                 ],
                 100,
             )

@@ -35,7 +35,7 @@ use std::sync::Arc;
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::transaction_scope::CancelReason;
 use graphdb_core::types::{CharsetInfo, SpaceInfo, Timestamp};
-use graphdb_core::{Arena, IdGenerator};
+use graphdb_core::IdGenerator;
 
 use super::QueryRequestContext;
 
@@ -80,8 +80,10 @@ pub struct QueryContext {
     /// statement-level snapshot semantics. Execution-time knob: the runtime
     /// and operators can consult it instead of only the storage layer.
     isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
-    /// Optional arena allocator for temporary allocations during query execution
-    arena: Option<Arena>,
+    /// Whether arena allocation is enabled for this query's execution. The
+    /// concrete arena is owned by the execution context, not by this struct, so
+    /// the context stays `Send + Sync`.
+    arena_enabled: bool,
 }
 
 /// Builder-supplied context parameters, grouped so the internal constructor
@@ -93,7 +95,7 @@ pub(super) struct ContextParams {
     pub charset_info: Option<Box<CharsetInfo>>,
     pub snapshot_ts: Option<Timestamp>,
     pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
-    pub arena: Option<Arena>,
+    pub arena_enabled: bool,
 }
 
 impl QueryContext {
@@ -110,7 +112,7 @@ impl QueryContext {
             charset_info: None,
             snapshot_ts: None,
             isolation_level: None,
-            arena: None,
+            arena_enabled: false,
         }
     }
 
@@ -140,7 +142,7 @@ impl QueryContext {
             charset_info: params.charset_info,
             snapshot_ts: params.snapshot_ts,
             isolation_level: params.isolation_level,
-            arena: params.arena,
+            arena_enabled: params.arena_enabled,
         }
     }
 
@@ -259,25 +261,12 @@ impl QueryContext {
         self.charset_info = None;
         self.snapshot_ts = None;
         self.isolation_level = None;
-        if let Some(ref mut arena) = self.arena {
-            arena.reset();
-        }
         log::info!("Query context has been reset");
     }
 
-    /// Check if arena allocation is enabled
+    /// Check if arena allocation is enabled for this query's execution.
     pub fn has_arena(&self) -> bool {
-        self.arena.is_some()
-    }
-
-    /// Get a reference to the arena allocator
-    pub fn arena(&self) -> Option<&Arena> {
-        self.arena.as_ref()
-    }
-
-    /// Get arena memory statistics (allocated_bytes)
-    pub fn arena_stats(&self) -> Option<usize> {
-        self.arena.as_ref().map(|a| a.allocated_bytes())
+        self.arena_enabled
     }
 
     // Note: resource_context() and space_context() methods have been removed
@@ -295,7 +284,7 @@ impl std::fmt::Debug for QueryContext {
             .field("snapshot_ts", &self.snapshot_ts)
             .field("isolation_level", &self.isolation_level)
             .field("killed", &self.is_killed())
-            .field("has_arena", &self.arena.is_some())
+            .field("has_arena", &self.arena_enabled)
             .finish()
     }
 }
@@ -309,6 +298,13 @@ impl Default for QueryContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_context_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<QueryContext>();
+        assert_send_sync::<Arc<QueryContext>>();
+    }
 
     #[test]
     fn mark_killed_cancels_shared_token() {

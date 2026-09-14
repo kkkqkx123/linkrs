@@ -643,7 +643,7 @@ mod tests {
             delete_clause: None,
         });
 
-        let planner = PlannerEnum::Match(Box::new(MatchStatementPlanner::new()));
+        let planner = PlannerEnum::Match(Box::default());
         assert!(planner.matches(&match_stmt));
     }
 }

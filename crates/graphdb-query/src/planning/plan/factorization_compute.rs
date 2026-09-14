@@ -416,7 +416,6 @@ mod tests {
         let yield_col = graphdb_core::YieldColumn {
             expression: col_expr,
             alias: "a2".to_string(),
-            is_matched: false,
         };
         let mut proj = LogicalNodeEnum::Project(
             crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode {
@@ -521,7 +520,7 @@ mod tests {
         assert!(schema.is_flat_schema());
         let mut flatten = LogicalNodeEnum::Flatten(LogicalFlattenNode::new(0, scan()));
         let out = flatten
-            .compute_factorized_schema(&[schema.clone()])
+            .compute_factorized_schema(std::slice::from_ref(&schema))
             .unwrap();
         assert!(out.is_flat_schema());
         assert_eq!(out.num_groups(), schema.num_groups());

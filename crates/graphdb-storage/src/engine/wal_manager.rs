@@ -346,8 +346,10 @@ mod tests {
     #[test]
     fn test_wal_manager_open_sync_mode_stays_synchronous() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let mut cfg = WalConfig::default();
-        cfg.enable_async_flush = false;
+        let cfg = WalConfig {
+            enable_async_flush: false,
+            ..Default::default()
+        };
         let mut manager = WalManager::with_config(cfg);
         manager
             .open(temp_dir.path(), 0)

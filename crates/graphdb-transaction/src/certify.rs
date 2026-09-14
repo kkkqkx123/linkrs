@@ -734,8 +734,10 @@ mod tests {
         read_only: bool,
         mode: ConcurrencyMode,
     ) -> Arc<TransactionContext> {
-        let mut config = TransactionConfig::default();
-        config.concurrency_mode = mode;
+        let config = TransactionConfig {
+            concurrency_mode: mode,
+            ..Default::default()
+        };
         let ctx = if read_only {
             TransactionContext::new_readonly(TransactionId(txn_id), txn_id, config)
         } else {

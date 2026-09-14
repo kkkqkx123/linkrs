@@ -172,7 +172,6 @@ mod tests {
         YieldColumn {
             expression: contextual(expr),
             alias: alias.to_string(),
-            is_matched: false,
         }
     }
 

@@ -21,6 +21,7 @@ use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::logical_argument_root;
+use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::YieldColumn;
@@ -43,18 +44,7 @@ impl UnwindPlanner {
             let return_columns = if let Some(return_clause) = &unwind_stmt.return_clause {
                 let mut columns = Vec::new();
                 for item in &return_clause.items {
-                    match item {
-                        crate::parser::ast::stmt::ReturnItem::Expression { expression, alias } => {
-                            let col_alias = alias
-                                .clone()
-                                .unwrap_or_else(|| expression.to_expression_string());
-                            columns.push(YieldColumn {
-                                expression: expression.clone(),
-                                alias: col_alias,
-                                is_matched: false,
-                            });
-                        }
-                    }
+                    columns.push(projection_util::return_item_to_yield_column(item));
                 }
                 Some(columns)
             } else {
@@ -192,6 +182,7 @@ impl Planner for UnwindPlanner {
                     ))
                 })?;
             current_node = PlanNodeEnum::Project(project_node);
+            let column_types = projection_util::project_column_types(&columns);
             current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(current_logical)),
@@ -200,7 +191,7 @@ impl Planner for UnwindPlanner {
                 has_folded_expressions: false,
                 output_var: None,
                 col_names: current_node.col_names().to_vec(),
-                column_types: vec![],
+                column_types,
             });
         }
 

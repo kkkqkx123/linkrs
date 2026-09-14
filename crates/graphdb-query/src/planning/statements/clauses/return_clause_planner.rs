@@ -248,7 +248,6 @@ impl ClausePlanner for ReturnClausePlanner {
                                 project_columns.push(YieldColumn {
                                     expression: ctx_expr,
                                     alias: arg_expr_str,
-                                    is_matched: false,
                                 });
                             }
                         }
@@ -270,7 +269,10 @@ impl ClausePlanner for ReturnClausePlanner {
                         .iter()
                         .map(|col| col.alias.clone())
                         .collect(),
-                    column_types: vec![],
+                    column_types:
+                        crate::planning::statements::projection_util::project_column_types(
+                            &project_columns,
+                        ),
                 })
             });
             let project_plan = SubPlan {
@@ -412,7 +414,6 @@ impl ClausePlanner for ReturnClausePlanner {
                                 project_columns.push(YieldColumn {
                                     expression: ctx_expr,
                                     alias: arg_expr_str,
-                                    is_matched: false,
                                 });
                             }
                         }
@@ -445,7 +446,10 @@ impl ClausePlanner for ReturnClausePlanner {
                         .iter()
                         .map(|col| col.alias.clone())
                         .collect(),
-                    column_types: vec![],
+                    column_types:
+                        crate::planning::statements::projection_util::project_column_types(
+                            &project_columns,
+                        ),
                 })
             });
             let mut logical_root = project_logical.map(|input| {
@@ -518,7 +522,10 @@ impl ClausePlanner for ReturnClausePlanner {
                     has_folded_expressions: false,
                     output_var: None,
                     col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
-                    column_types: vec![],
+                    column_types:
+                        crate::planning::statements::projection_util::project_column_types(
+                            &yield_columns,
+                        ),
                 })
             });
 

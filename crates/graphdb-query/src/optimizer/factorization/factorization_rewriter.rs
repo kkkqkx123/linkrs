@@ -2052,7 +2052,7 @@ mod tests {
             column_types: vec![],
         });
         assert!(FactorizationRewriter::require_flat_probe_keys(
-            &[key.clone()],
+            std::slice::from_ref(&key),
             &[other],
             &scan_c,
         ));

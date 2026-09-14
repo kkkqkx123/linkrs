@@ -191,29 +191,10 @@ impl Planner for YieldPlanner {
             .items
             .iter()
             .map(|item| {
-                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-                    &item.expression,
-                    &expr_ctx,
-                )
-                .unwrap_or_else(|_| {
-                    let ctx = Arc::new(
-                        graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    );
-                    let id = ctx.register_expression(
-                        graphdb_core::types::expr::ExpressionMeta::new(
-                            graphdb_core::Expression::Variable("_".to_string()),
-                        ),
-                    );
-                    graphdb_core::types::ContextualExpression::new(id, ctx)
-                });
-                let alias = item.alias.clone().unwrap_or_else(|| "_".to_string());
-                YieldColumn {
-                    expression: ctx_expr,
-                    alias,
-                    is_matched: false,
-                }
+                crate::binder::expr_converter::bound_projection_to_yield_column(item, &expr_ctx)
+                    .map_err(PlannerError::PlanGenerationFailed)
             })
-            .collect();
+            .collect::<Result<Vec<_>, PlannerError>>()?;
 
         let project_node =
             ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {

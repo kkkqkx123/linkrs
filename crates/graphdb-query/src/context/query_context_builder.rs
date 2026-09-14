@@ -19,7 +19,7 @@
 
 use crate::executor::streaming::query_registry::CancelToken;
 use graphdb_core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
-use graphdb_core::{Arena, IdGenerator};
+use graphdb_core::IdGenerator;
 use std::sync::Arc;
 
 use super::{QueryContext, QueryRequestContext};
@@ -48,7 +48,7 @@ pub struct QueryContextBuilder {
     charset_info: Option<Box<CharsetInfo>>,
     snapshot_ts: Option<Timestamp>,
     isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
-    arena: Option<Arena>,
+    arena_enabled: bool,
 }
 
 impl QueryContextBuilder {
@@ -61,7 +61,7 @@ impl QueryContextBuilder {
             charset_info: None,
             snapshot_ts: None,
             isolation_level: None,
-            arena: None,
+            arena_enabled: false,
         }
     }
 
@@ -77,7 +77,7 @@ impl QueryContextBuilder {
             charset_info: None,
             snapshot_ts: None,
             isolation_level: None,
-            arena: None,
+            arena_enabled: false,
         }
     }
 
@@ -99,18 +99,13 @@ impl QueryContextBuilder {
         self
     }
 
-    /// Enable arena allocation with default capacity.
+    /// Enable arena allocation for query execution.
     ///
     /// Arena allocation is beneficial for queries that create many
-    /// temporary data structures during execution.
+    /// temporary data structures during execution. The concrete arena is
+    /// owned by the execution context; this flag only records the intent.
     pub fn with_arena(mut self) -> Self {
-        self.arena = Some(Arena::new());
-        self
-    }
-
-    /// Enable arena allocation with custom capacity.
-    pub fn with_arena_capacity(mut self, capacity: usize) -> Self {
-        self.arena = Some(Arena::with_capacity(capacity));
+        self.arena_enabled = true;
         self
     }
 
@@ -160,7 +155,7 @@ impl QueryContextBuilder {
                 charset_info: self.charset_info,
                 snapshot_ts: self.snapshot_ts,
                 isolation_level: self.isolation_level,
-                arena: self.arena,
+                arena_enabled: self.arena_enabled,
             },
         )
     }

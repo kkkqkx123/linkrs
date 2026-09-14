@@ -314,7 +314,6 @@ impl RewriteRule for RemoveAppendVerticesBelowJoinRule {
         new_columns[prj_idx] = YieldColumn {
             expression: none_direct_dst_expr,
             alias: av_node_alias.clone(),
-            is_matched: false,
         };
 
         // Create a new Project node.

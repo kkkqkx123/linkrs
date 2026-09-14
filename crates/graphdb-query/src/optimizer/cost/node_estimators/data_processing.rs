@@ -204,7 +204,6 @@ mod tests {
         let columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "col".to_string(),
-            is_matched: false,
         }];
         let node = ProjectNode::new(input, columns).expect("Node creation should succeed");
         let plan_node = PlanNodeEnum::Project(node);
@@ -421,7 +420,6 @@ mod tests {
                     graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "a".to_string(),
-                is_matched: false,
             },
             YieldColumn {
                 expression: {
@@ -430,7 +428,6 @@ mod tests {
                     graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "b".to_string(),
-                is_matched: false,
             },
             YieldColumn {
                 expression: {
@@ -439,7 +436,6 @@ mod tests {
                     graphdb_core::types::ContextualExpression::new(id, ctx.clone())
                 },
                 alias: "c".to_string(),
-                is_matched: false,
             },
         ];
         let node = ProjectNode::new(input, columns).expect("Node creation should succeed");

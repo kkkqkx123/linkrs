@@ -85,7 +85,6 @@ impl CollapseConsecutiveProjectRule {
                     expr_context.clone(),
                 ),
                 alias: col.alias.clone(),
-                is_matched: col.is_matched,
             })
             .collect();
 
@@ -202,12 +201,10 @@ mod tests {
             YieldColumn {
                 expression: a_ctx_expr,
                 alias: "col_a".to_string(),
-                is_matched: false,
             },
             YieldColumn {
                 expression: b_ctx_expr,
                 alias: "col_b".to_string(),
-                is_matched: false,
             },
         ];
         let child_proj =
@@ -223,7 +220,6 @@ mod tests {
         let parent_columns = vec![YieldColumn {
             expression: col_a_ctx_expr,
             alias: "result".to_string(),
-            is_matched: false,
         }];
         let parent_proj = ProjectNode::new(child_node, parent_columns)
             .expect("Failed to create upper-level Project");

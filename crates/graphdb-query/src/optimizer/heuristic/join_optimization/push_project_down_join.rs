@@ -93,7 +93,6 @@ impl PushProjectDownJoinRule {
                 YieldColumn {
                     expression: ctx_expr,
                     alias: col,
-                    is_matched: false,
                 }
             })
             .collect();

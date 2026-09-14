@@ -167,7 +167,7 @@ fn e2e_match_return_no_flatten() {
         },
     );
     let _gn_schema = get_nbr
-        .compute_factorized_schema(&[scan_schema.clone()])
+        .compute_factorized_schema(std::slice::from_ref(&scan_schema))
         .unwrap();
     // Build Project that returns a and b
     // We can't fully test without real ExpressionIds, but we verify no panic and invariant holds
@@ -463,8 +463,9 @@ fn factorization_disabled_vs_enabled_semantics() {
             columns: vec![graphdb_core::YieldColumn {
                 expression: ContextualExpression::new(id_a.clone(), ctx.clone()),
                 alias: "a".to_string(),
-                is_matched: false,
             }],
+            subqueries: Vec::new(),
+            has_folded_expressions: false,
             output_var: None,
             col_names: vec!["a".to_string()],
             column_types: vec![],

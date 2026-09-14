@@ -747,7 +747,7 @@ impl Binder {
 
         Ok(BoundYieldClause {
             items,
-            distinct: false,
+            distinct: yc.distinct,
             order_by,
             limit: yc.limit.clone(),
             skip: yc.skip.clone(),

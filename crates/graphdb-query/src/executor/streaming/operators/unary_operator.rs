@@ -141,7 +141,6 @@ impl UnaryOperator {
             super::spec::UnarySpec::Project {
                 output_expressions,
                 output_col_names,
-                subquery_runners: _,
                 ..
             } => UnaryOperatorKind::Project {
                 output_expressions: output_expressions.clone(),
@@ -589,13 +588,14 @@ impl UnaryOperator {
                         }
                     }
                     if !chunk.rows.is_empty() {
-                        // Invalidate columnar caches since rows changed
-                        chunk.columns = None;
-                        chunk.typed_columns = None;
-                        return Ok(Some(
+                        let mut rebuilt =
                             DataChunk::new_with_layout(chunk.rows, Arc::clone(output_layout))
-                                .with_multiplicity(multiplicity),
-                        ));
+                                .with_multiplicity(multiplicity);
+                        // The rebuilt chunk starts row-major, so re-derive the
+                        // typed layout here; otherwise downstream operators
+                        // lose the columnar fast path at every assignment.
+                        rebuilt.build_typed_columns(true);
+                        return Ok(Some(rebuilt));
                     }
                 } else {
                     return Ok(None);

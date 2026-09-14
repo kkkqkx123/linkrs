@@ -26,15 +26,17 @@ pub(crate) fn bound_projection_to_yield_column(
     bound: &super::bound::BoundProjectionItem,
     ctx: &Arc<ExpressionAnalysisContext>,
 ) -> Result<graphdb_core::YieldColumn, String> {
+    use graphdb_core::types::expr::expression_utils::generate_default_alias_from_contextual;
+    // Same rule as `planning::statements::projection_util::default_projection_alias`
+    // (called directly to avoid a binder -> planning dependency).
     let ctx_expr = bound_expr_to_contextual(&bound.expression, ctx)?;
     let alias = bound
         .alias
         .clone()
-        .unwrap_or_else(|| ctx_expr.to_expression_string());
+        .unwrap_or_else(|| generate_default_alias_from_contextual(&ctx_expr));
     Ok(graphdb_core::YieldColumn {
         expression: ctx_expr,
         alias,
-        is_matched: false,
     })
 }
 
@@ -43,11 +45,6 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         BoundExpression::Literal(v, _) => Ok(Expression::Literal(v.clone())),
 
         BoundExpression::Variable(name, _) => Ok(Expression::Variable(name.clone())),
-
-        BoundExpression::ColumnRef(cr) => Ok(Expression::Property {
-            object: Box::new(Expression::Variable(cr.variable.clone())),
-            property: cr.property.clone(),
-        }),
 
         BoundExpression::Property {
             object, property, ..
@@ -387,19 +384,20 @@ fn function_name_to_aggregate(a: &BoundAggregateCall) -> Result<AggregateFunctio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::binder::bound::{BoundColumnRef, BoundProjectionItem};
-    use graphdb_core::types::ValueType;
+    use crate::binder::bound::BoundProjectionItem;
     use graphdb_core::DataType;
 
     #[test]
-    fn test_bound_column_ref_preserves_type() {
+    fn test_bound_property_ref_preserves_type() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let bound = BoundExpression::ColumnRef(BoundColumnRef {
-            variable: "n".to_string(),
+        let bound = BoundExpression::Property {
+            object: Box::new(BoundExpression::Variable(
+                "n".to_string(),
+                DataType::Unknown,
+            )),
             property: "age".to_string(),
-            resolved_tag: None,
-            value_type: ValueType::Int,
-        });
+            value_type: DataType::Int,
+        };
         let ctx_expr = bound_expr_to_contextual(&bound, &ctx).expect("convert");
         assert_eq!(ctx_expr.data_type(), Some(DataType::Int));
     }

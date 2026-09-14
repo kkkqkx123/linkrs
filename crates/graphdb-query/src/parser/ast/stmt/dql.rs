@@ -134,6 +134,8 @@ pub struct OverClause {
 #[derive(Debug, Clone, PartialEq)]
 pub struct YieldClause {
     pub span: Span,
+    /// `YIELD DISTINCT`: collapse duplicate projected rows.
+    pub distinct: bool,
     pub items: Vec<YieldItem>,
     pub where_clause: Option<ContextualExpression>,
     pub order_by: Option<OrderByClause>,

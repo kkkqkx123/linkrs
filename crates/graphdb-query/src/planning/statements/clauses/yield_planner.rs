@@ -370,6 +370,7 @@ mod tests {
             where_clause: None,
             yield_clause: Some(crate::parser::ast::stmt::YieldClause {
                 span: Span::default(),
+                distinct: false,
                 items: vec![crate::parser::ast::stmt::YieldItem {
                     expression: ctx_expr.clone(),
                     alias: None,

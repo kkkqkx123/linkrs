@@ -52,7 +52,7 @@ mod semantic_validation {
             .exec_ddl("CREATE TAG person(name STRING)")
             .assert_success()
             .query("MATCH (n:person) RETURN n.name AS name, n.name AS name")
-            .assert_success();
+            .assert_error();
     }
 
     #[test]

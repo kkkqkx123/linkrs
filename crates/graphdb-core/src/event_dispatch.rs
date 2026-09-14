@@ -492,7 +492,7 @@ mod tests {
             Arc::new(move |_| {
                 even_probe.fetch_add(1, Ordering::SeqCst);
             }),
-            Some(Arc::new(|event: &u32| *event % 2 == 0)),
+            Some(Arc::new(|event: &u32| event.is_multiple_of(2))),
         );
         assert_eq!(registry.dispatch("test", &1), 0);
         assert_eq!(registry.dispatch("test", &2), 0);
@@ -585,7 +585,6 @@ mod tests {
 
     #[test]
     fn async_forwarder_delivers_without_blocking_emitter() {
-        use std::time::Duration;
         let registry: EventSubscriptions<u32> = EventSubscriptions::new();
         let received = Arc::new(AtomicUsize::new(0));
         let probe = Arc::clone(&received);

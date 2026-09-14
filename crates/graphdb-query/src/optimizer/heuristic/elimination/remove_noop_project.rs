@@ -252,7 +252,6 @@ mod tests {
         YieldColumn {
             expression: ctx_expr,
             alias: alias.to_string(),
-            is_matched: false,
         }
     }
 

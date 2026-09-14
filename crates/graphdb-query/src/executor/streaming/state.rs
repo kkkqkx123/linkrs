@@ -27,7 +27,7 @@ pub type TaskId = usize;
 #[derive(Debug)]
 pub enum GlobalState {
     Source(SourceState),
-    Blocking(BlockingState),
+    Blocking(Box<BlockingState>),
     Join(JoinState),
     Graph(GraphState),
     Sink(SinkState),
@@ -50,7 +50,7 @@ pub enum GlobalState {
 #[derive(Debug)]
 pub enum LocalState {
     Source(SourceState),
-    Blocking(BlockingState),
+    Blocking(Box<BlockingState>),
     Join(JoinState),
     Graph(GraphState),
     Sink(SinkState),

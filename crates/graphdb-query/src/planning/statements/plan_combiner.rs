@@ -14,6 +14,7 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use crate::planning::statements::projection_util;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::YieldColumn;
 
@@ -66,14 +67,7 @@ pub(crate) fn wrap_logical_project_with(
     has_folded_expressions: bool,
     col_names: Vec<String>,
 ) -> LogicalNodeEnum {
-    let column_types: Vec<graphdb_core::DataType> = columns
-        .iter()
-        .map(|col| {
-            col.expression
-                .data_type()
-                .unwrap_or(graphdb_core::DataType::Unknown)
-        })
-        .collect();
+    let column_types = projection_util::project_column_types(&columns);
     LogicalNodeEnum::Project(LogicalProjectNode {
         id: next_node_id(),
         input: Some(Box::new(input)),

@@ -134,7 +134,6 @@ impl CreatePlanner {
         vec![YieldColumn {
             expression: ctx_expr,
             alias: "created_count".to_string(),
-            is_matched: false,
         }]
     }
 }
@@ -327,12 +326,14 @@ impl Planner for CreatePlanner {
         let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(insert_node)),
-            columns: yield_columns,
+            columns: yield_columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
             output_var: None,
             col_names: vec![],
-            column_types: vec![],
+            column_types: crate::planning::statements::projection_util::project_column_types(
+                &yield_columns,
+            ),
         });
         let mut sub_plan = SubPlan::from_logical_root(logical_root);
         sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
@@ -525,12 +526,14 @@ impl Planner for CreatePlanner {
         let logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(insert_node)),
-            columns: yield_columns,
+            columns: yield_columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
             output_var: None,
             col_names: vec![],
-            column_types: vec![],
+            column_types: crate::planning::statements::projection_util::project_column_types(
+                &yield_columns,
+            ),
         });
 
         // Create a SubPlan

@@ -41,7 +41,6 @@ impl CollectPlanner {
         use crate::binder::bound::BoundExpression;
         match expr {
             BoundExpression::Variable(name, _) => name.clone(),
-            BoundExpression::ColumnRef(cr) => format!("{}.{}", cr.variable, cr.property),
             _ => "_".to_string(),
         }
     }

@@ -152,7 +152,6 @@ mod tests {
         let columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "test".to_string(),
-            is_matched: false,
         }];
 
         let project_node = ProjectNode::new(start_node, columns)
@@ -178,7 +177,6 @@ mod tests {
         let columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "n".to_string(),
-            is_matched: false,
         }];
         let node = ProjectNode::new(start_node, columns).expect("Project node should build");
         assert_eq!(node.column_types(), &[DataType::Int]);
@@ -207,12 +205,10 @@ mod tests {
             YieldColumn {
                 expression: name_ctx_expr,
                 alias: "name".to_string(),
-                is_matched: false,
             },
             YieldColumn {
                 expression: age_ctx_expr,
                 alias: "age".to_string(),
-                is_matched: false,
             },
         ];
 
@@ -239,7 +235,6 @@ mod tests {
         let columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "custom_alias".to_string(),
-            is_matched: true,
         }];
 
         let mut node = ProjectNode::new(start_node, columns).expect("Project node should build");
@@ -249,7 +244,6 @@ mod tests {
 
         assert_eq!(node.columns().len(), 1);
         assert_eq!(node.columns()[0].alias, "custom_alias");
-        assert!(node.columns()[0].is_matched);
         assert_eq!(node.col_names(), &["custom_alias".to_string()]);
     }
 
@@ -259,7 +253,6 @@ mod tests {
         YieldColumn {
             expression: ContextualExpression::new(id, ctx.clone()),
             alias: alias.to_string(),
-            is_matched: false,
         }
     }
 

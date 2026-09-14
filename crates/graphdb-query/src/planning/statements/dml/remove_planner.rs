@@ -103,18 +103,19 @@ impl Planner for RemovePlanner {
         let yield_columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "removed_count".to_string(),
-            is_matched: false,
         }];
 
         let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_remove)),
-            columns: yield_columns,
+            columns: yield_columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
             output_var: None,
             col_names: vec!["removed_count".to_string()],
-            column_types: vec![],
+            column_types: crate::planning::statements::projection_util::project_column_types(
+                &yield_columns,
+            ),
         });
 
         let mut sub_plan = SubPlan::from_logical_root(logical_project);
@@ -189,18 +190,19 @@ impl Planner for RemovePlanner {
         let yield_columns = vec![YieldColumn {
             expression: ctx_expr,
             alias: "removed_count".to_string(),
-            is_matched: false,
         }];
 
         let logical_project = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_remove)),
-            columns: yield_columns,
+            columns: yield_columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
             output_var: None,
             col_names: vec!["removed_count".to_string()],
-            column_types: vec![],
+            column_types: crate::planning::statements::projection_util::project_column_types(
+                &yield_columns,
+            ),
         });
 
         let mut sub_plan = SubPlan::from_logical_root(logical_project);

@@ -171,7 +171,6 @@ mod tests {
         let columns = vec![YieldColumn {
             expression: vid_ctx_expr,
             alias: "v".to_string(),
-            is_matched: false,
         }];
         let project = ProjectNode::new(start, columns).expect("Failed to create ProjectNode");
         let project_node = PlanNodeEnum::Project(project);

@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(stats.min_value, Some(Value::Int(5)));
         assert_eq!(stats.max_value, Some(Value::Int(20)));
         assert_eq!(stats.null_count, 1);
-        assert_eq!(stats.guaranteed_no_nulls, false);
+        assert!(!stats.guaranteed_no_nulls);
     }
 
     #[test]

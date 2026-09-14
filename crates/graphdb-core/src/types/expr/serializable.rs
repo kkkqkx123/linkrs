@@ -135,14 +135,13 @@ impl Eq for SerializableExpression {}
 
 /// Serializable projection column.
 ///
-/// Carries the expression payload plus the output alias and match flag so a
+/// Carries the expression payload plus the output alias so a
 /// `ProjectNode` serialization round-trip preserves the exact output schema
 /// instead of recomputing the alias from the expression string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableYieldColumn {
     pub expression: SerializableExpression,
     pub alias: String,
-    pub is_matched: bool,
 }
 
 impl SerializableYieldColumn {
@@ -151,7 +150,6 @@ impl SerializableYieldColumn {
         Ok(Self {
             expression: SerializableExpression::from_contextual(&column.expression)?,
             alias: column.alias.clone(),
-            is_matched: column.is_matched,
         })
     }
 
@@ -161,7 +159,6 @@ impl SerializableYieldColumn {
         crate::YieldColumn {
             expression: ctx_expr,
             alias: self.alias,
-            is_matched: self.is_matched,
         }
     }
 }

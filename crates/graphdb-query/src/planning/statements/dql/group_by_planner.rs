@@ -592,7 +592,6 @@ impl GroupByPlanner {
             yield_columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: property.clone(),
-                is_matched: false,
             });
         }
 

@@ -675,7 +675,6 @@ mod factorization_fallback_tests {
         let column = graphdb_core::YieldColumn {
             expression: var_key(&ctx, "a"),
             alias: "a".to_string(),
-            is_matched: false,
         };
         let input = SubPlan::from_logical_root(scan_logical("a"));
         let out = YieldClausePlanner::new()
@@ -699,7 +698,6 @@ mod factorization_fallback_tests {
         let column = graphdb_core::YieldColumn {
             expression: var_key(&ctx, "a"),
             alias: "a".to_string(),
-            is_matched: false,
         };
         let with_ctx = WithClauseContext {
             yield_clause: YieldClauseContext {
@@ -776,7 +774,6 @@ fn precompute_notes_emitted_for_reused_expressions() {
         .map(|i| YieldColumn {
             expression: contextual.clone(),
             alias: format!("c{}", i),
-            is_matched: false,
         })
         .collect();
     let project =

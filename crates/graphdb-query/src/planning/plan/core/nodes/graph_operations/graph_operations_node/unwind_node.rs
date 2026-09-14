@@ -93,7 +93,6 @@ mod tests {
         let col = graphdb_core::YieldColumn {
             expression: ContextualExpression::new(id, ctx),
             alias: "x".to_string(),
-            is_matched: false,
         };
         let project =
             crate::planning::plan::core::nodes::operation::project_node::ProjectNode::new(

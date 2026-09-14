@@ -22,6 +22,7 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::types::ContextualExpression;
@@ -236,7 +237,7 @@ impl LookupPlanner {
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
-                column_types: vec![],
+                column_types: projection_util::unknown_column_types(1),
             })
         } else {
             LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
@@ -251,7 +252,7 @@ impl LookupPlanner {
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
-                column_types: vec![],
+                column_types: projection_util::unknown_column_types(1),
             })
         };
 
@@ -269,6 +270,7 @@ impl LookupPlanner {
 
         if lookup_stmt.yield_clause.is_some() {
             let yield_columns = Self::build_yield_columns(lookup_stmt, validated)?;
+            let column_types = projection_util::project_column_types(&yield_columns);
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -277,7 +279,7 @@ impl LookupPlanner {
                 has_folded_expressions: false,
                 output_var: None,
                 col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
-                column_types: vec![],
+                column_types,
             };
             logical_root = LogicalNodeEnum::Project(logical_project);
         }
@@ -358,7 +360,7 @@ impl LookupPlanner {
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
-                column_types: vec![],
+                column_types: projection_util::unknown_column_types(1),
             })
         } else {
             LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
@@ -373,7 +375,7 @@ impl LookupPlanner {
                 estimated_cardinality: None,
                 output_var: None,
                 col_names: vec![target_name.clone()],
-                column_types: vec![],
+                column_types: projection_util::unknown_column_types(1),
             })
         };
 
@@ -393,6 +395,7 @@ impl LookupPlanner {
         // Add project node if YIELD clause present
         if lookup.yield_clause.is_some() {
             let yield_columns = self.build_yield_columns_from_bound(lookup, validated)?;
+            let column_types = projection_util::project_column_types(&yield_columns);
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -401,7 +404,7 @@ impl LookupPlanner {
                 has_folded_expressions: false,
                 output_var: None,
                 col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
-                column_types: vec![],
+                column_types,
             };
             logical_root = LogicalNodeEnum::Project(logical_project);
         }
@@ -419,16 +422,12 @@ impl LookupPlanner {
 
         if let Some(ref yield_clause) = lookup.yield_clause {
             for item in &yield_clause.items {
-                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-                    &item.expression,
+                let column = crate::binder::expr_converter::bound_projection_to_yield_column(
+                    item,
                     validated.expr_context(),
                 )
                 .map_err(PlannerError::PlanGenerationFailed)?;
-                columns.push(graphdb_core::YieldColumn {
-                    expression: ctx_expr,
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
+                columns.push(column);
             }
         }
 
@@ -440,7 +439,6 @@ impl LookupPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
-                is_matched: false,
             });
         }
 
@@ -456,11 +454,7 @@ impl LookupPlanner {
 
         if let Some(ref yield_clause) = lookup_stmt.yield_clause {
             for item in &yield_clause.items {
-                columns.push(graphdb_core::YieldColumn {
-                    expression: item.expression.clone(),
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
+                columns.push(projection_util::yield_item_to_yield_column(item));
             }
         }
 
@@ -475,7 +469,6 @@ impl LookupPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
-                is_matched: false,
             });
         }
 

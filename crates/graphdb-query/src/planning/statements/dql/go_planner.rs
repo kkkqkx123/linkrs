@@ -19,6 +19,7 @@ use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNo
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::{ContextualExpression, EdgeDirection};
@@ -150,6 +151,7 @@ impl Planner for GoPlanner {
         // Build a pure logical tree natively (GO statements have no
         // planner-level physical choices) and convert it to the physical plan
         // exactly once at the plan exit via `SubPlan::from_logical_root`.
+        let expand_width = col_names.len();
         let mut logical_root = LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
             id: next_node_id(),
             deps: vec![tail_logical],
@@ -170,7 +172,7 @@ impl Planner for GoPlanner {
             path_semantic: None,
             output_var: None,
             col_names,
-            column_types: vec![],
+            column_types: projection_util::unknown_column_types(expand_width),
         });
 
         if let Some(ref condition) = go_stmt.where_clause {
@@ -185,6 +187,7 @@ impl Planner for GoPlanner {
         }
 
         let project_columns = Self::build_yield_columns(go_stmt, validated.expr_context())?;
+        let column_types = projection_util::project_column_types(&project_columns);
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
@@ -196,10 +199,16 @@ impl Planner for GoPlanner {
                 .iter()
                 .map(|col| col.alias.clone())
                 .collect(),
-            column_types: vec![],
+            column_types,
         });
 
-        if step_limit > 1 {
+        // `YIELD DISTINCT` and multi-step traversal both require collapsing
+        // duplicate rows; a single dedup node covers either case.
+        let yield_distinct = go_stmt
+            .yield_clause
+            .as_ref()
+            .is_some_and(|clause| clause.distinct);
+        if yield_distinct || step_limit > 1 {
             logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -335,6 +344,7 @@ impl Planner for GoPlanner {
 
         let project_columns =
             self.build_yield_columns_from_bound(go_stmt, validated.expr_context())?;
+        let column_types = projection_util::project_column_types(&project_columns);
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
@@ -346,10 +356,16 @@ impl Planner for GoPlanner {
                 .iter()
                 .map(|col| col.alias.clone())
                 .collect(),
-            column_types: vec![],
+            column_types,
         });
 
-        if step_limit > 1 {
+        // `YIELD DISTINCT` and multi-step traversal both require collapsing
+        // duplicate rows; a single dedup node covers either case.
+        let yield_distinct = go_stmt
+            .yield_clause
+            .as_ref()
+            .is_some_and(|clause| clause.distinct);
+        if yield_distinct || step_limit > 1 {
             logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
@@ -377,11 +393,7 @@ impl GoPlanner {
 
         if let Some(ref yield_clause) = go_stmt.yield_clause {
             for item in &yield_clause.items {
-                columns.push(graphdb_core::YieldColumn {
-                    expression: item.expression.clone(),
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
+                columns.push(projection_util::yield_item_to_yield_column(item));
             }
         } else {
             let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
@@ -392,7 +404,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "dst".to_string(),
-                is_matched: false,
             });
 
             let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
@@ -403,7 +414,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "edge".to_string(),
-                is_matched: false,
             });
         }
 
@@ -416,7 +426,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
-                is_matched: false,
             });
         }
 
@@ -433,16 +442,12 @@ impl GoPlanner {
 
         if let Some(ref yield_clause) = go_stmt.yield_clause {
             for item in &yield_clause.items {
-                let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
-                    &item.expression,
+                let column = crate::binder::expr_converter::bound_projection_to_yield_column(
+                    item,
                     expr_context,
                 )
                 .map_err(PlannerError::PlanGenerationFailed)?;
-                columns.push(graphdb_core::YieldColumn {
-                    expression: ctx_expr,
-                    alias: item.alias.clone().unwrap_or_default(),
-                    is_matched: false,
-                });
+                columns.push(column);
             }
         } else {
             let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
@@ -453,7 +458,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "dst".to_string(),
-                is_matched: false,
             });
 
             let expr_meta = graphdb_core::types::expr::ExpressionMeta::new(
@@ -464,7 +468,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "edge".to_string(),
-                is_matched: false,
             });
         }
 
@@ -477,7 +480,6 @@ impl GoPlanner {
             columns.push(graphdb_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),
-                is_matched: false,
             });
         }
 

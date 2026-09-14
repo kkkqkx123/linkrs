@@ -270,7 +270,12 @@ impl DataChunk {
     /// Row storage stays authoritative downstream; the transpose into rows
     /// is the single compatibility edge until the chunk itself is columnar.
     pub fn project_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
-        Self::from_columns(columns, layout)
+        let mut chunk = Self::from_columns(columns, layout);
+        // Symmetric with the `Assign` rebuild: the projected chunk starts
+        // row-major, so re-derive the typed layout here; otherwise every
+        // non-trivial projection drops the columnar fast path downstream.
+        chunk.build_typed_columns(true);
+        chunk
     }
 
     pub fn with_columns(mut self, columns: Vec<Vec<Value>>) -> Self {
