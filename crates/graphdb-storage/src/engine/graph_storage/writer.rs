@@ -25,6 +25,15 @@ use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
 use super::reader;
 use super::serial::{scan_edge_serial_column, scan_vertex_serial_column};
 
+/// Pre-resolved, per-batch schema context shared by every row of a batch
+/// vertex insert: the tag table, the tag indexes, and the SERIAL state all
+/// come from a single pass over the batch instead of per-row lookups.
+struct PrecheckedBatchContext<'a> {
+    tag_map: &'a HashMap<&'a str, &'a TagInfo>,
+    tag_indexes: &'a [Index],
+    serial_state: &'a mut SerialBatchState,
+}
+
 #[derive(Debug)]
 struct InsertedVertexTag {
     label_id: LabelId,
@@ -301,15 +310,13 @@ fn insert_vertex_at_timestamp(
 fn insert_vertex_at_timestamp_prechecked(
     ctx: &GraphStorageContext,
     space_id: u64,
-    tag_map: &HashMap<&str, &TagInfo>,
-    tag_indexes: &[Index],
-    serial_state: &mut SerialBatchState,
+    batch: &mut PrecheckedBatchContext<'_>,
     vertex: Vertex,
     ts: Timestamp,
     rollback: &mut Vec<InsertedVertexTag>,
 ) -> StorageResult<VertexId> {
     for tag in &vertex.tags {
-        let tag_info = tag_map.get(tag.name.as_str()).ok_or_else(|| {
+        let tag_info = batch.tag_map.get(tag.name.as_str()).ok_or_else(|| {
             StorageError::not_found(format!("Tag {} not found", tag.name))
         })?;
         let label_id = tag_info.tag_id;
@@ -322,7 +329,7 @@ fn insert_vertex_at_timestamp_prechecked(
             ctx,
             space_id,
             tag_info,
-            serial_state,
+            batch.serial_state,
             props,
         )?;
         let redo = InsertVertexRedo {
@@ -353,7 +360,7 @@ fn insert_vertex_at_timestamp_prechecked(
 
         update_vertex_indexes_with_list(
             ctx,
-            tag_indexes,
+            batch.tag_indexes,
             space_id,
             &vid_value,
             &tag.name,
@@ -808,14 +815,17 @@ pub(crate) fn batch_insert_vertices(
     let ts = ctx.get_write_timestamp()?;
     let mut ids = Vec::with_capacity(vertices.len());
     let mut rollback = Vec::new();
+    let mut batch_ctx = PrecheckedBatchContext {
+        tag_map: &tag_map,
+        tag_indexes: &tag_indexes,
+        serial_state: &mut serial_state,
+    };
 
     for vertex in vertices {
         let id = match insert_vertex_at_timestamp_prechecked(
             ctx,
             space_info.space_id,
-            &tag_map,
-            &tag_indexes,
-            &mut serial_state,
+            &mut batch_ctx,
             vertex,
             ts,
             &mut rollback,
@@ -1871,7 +1881,7 @@ fn update_vertex_indexes_with_list(
             for (_prop_name, prop_value) in &indexed_props {
                 let existing = index_data
                     .read()
-                    .lookup_tag_index_pending_aware(space_id, &index, prop_value)?;
+                    .lookup_tag_index_pending_aware(space_id, index, prop_value)?;
                 if !existing.is_empty() && !existing.contains(vertex_id) {
                     return Err(StorageError::conflict(format!(
                         "Unique index '{}' violated: value {:?} already exists",
