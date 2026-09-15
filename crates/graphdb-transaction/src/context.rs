@@ -40,6 +40,14 @@ pub struct TransactionContext {
     commit_timestamp: AtomicU64,
     /// Snapshot timestamp for ReadCommitted statement refresh (None = use start_timestamp)
     refreshed_read_ts: RwLock<Option<Timestamp>>,
+    /// Statement snapshot currently pinned in the global snapshot tracker.
+    ///
+    /// `begin_statement` / `refresh_statement_snapshot` pin the refreshed
+    /// read timestamp here so GC cannot reclaim versions the running
+    /// statement may still read. Released by `finish_statement`, commit
+    /// and abort (see `take_statement_snapshot_pin`); replacing an
+    /// existing pin releases the old one first.
+    statement_snapshot_pin: RwLock<Option<Timestamp>>,
     /// Start time (for timeout tracking)
     pub start_time: Instant,
     /// Timeout duration
@@ -212,6 +220,7 @@ impl TransactionContext {
             start_timestamp,
             commit_timestamp: AtomicU64::new(0),
             refreshed_read_ts: RwLock::new(None),
+            statement_snapshot_pin: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: false,
@@ -268,6 +277,7 @@ impl TransactionContext {
             start_timestamp,
             commit_timestamp: AtomicU64::new(0),
             refreshed_read_ts: RwLock::new(None),
+            statement_snapshot_pin: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: true,
@@ -361,6 +371,20 @@ impl TransactionContext {
     /// Refresh the ReadCommitted statement snapshot
     pub fn set_refreshed_read_ts(&self, ts: Timestamp) {
         *self.refreshed_read_ts.write() = Some(ts);
+    }
+
+    /// Install a new statement snapshot pin, returning the previous one.
+    ///
+    /// The manager registers the returned value's release with the global
+    /// snapshot tracker; tracking the pin inside the context keeps
+    /// replace-on-refresh and take-on-finish atomic from the outside.
+    pub fn set_statement_snapshot_pin(&self, ts: Timestamp) -> Option<Timestamp> {
+        self.statement_snapshot_pin.write().replace(ts)
+    }
+
+    /// Take the current statement snapshot pin, if any.
+    pub fn take_statement_snapshot_pin(&self) -> Option<Timestamp> {
+        self.statement_snapshot_pin.write().take()
     }
 
     /// Drain pending budget warnings queued during mutation recording.

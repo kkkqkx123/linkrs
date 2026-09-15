@@ -105,3 +105,19 @@ impl GcCoordinator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wal_reclaim_gated_on_checkpoint_bounds() {
+        let vm = Arc::new(VersionManager::new());
+        let coordinator = GcCoordinator::new(vm);
+        // No checkpoint bounds flow into routine passes: version-GC
+        // cutoffs never depend on them, and WAL reclaim stays disabled.
+        let wm = coordinator.capture_watermarks();
+        assert!(!wm.can_reclaim_wal());
+        assert!(!wm.has_checkpoint_snapshot());
+    }
+}

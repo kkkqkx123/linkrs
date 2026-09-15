@@ -216,6 +216,31 @@ impl GraphStorageContext {
         }
     }
 
+    /// Settle an auto-commit write timestamp in commit order.
+    ///
+    /// Reserves a commit timestamp for `start` and publishes visibility
+    /// over both slots, so auto-commit statements share the
+    /// commit-ordered coordinate with explicit transactions (conflict
+    /// windows and the read frontier alike). Returns the commit
+    /// timestamp for conflict-index publication. Falls back to
+    /// start-ordered commit when the slot is already settled.
+    pub(crate) fn commit_write_timestamp_ordered(&self, start: Timestamp) -> Timestamp {
+        let version_manager = &self.persistent.version_manager;
+        match version_manager.reserve_commit_timestamp(start) {
+            Ok(commit_ts) => {
+                if let Some(lease) = &self.write_timestamp_lease {
+                    lease.finalized.store(true, Ordering::SeqCst);
+                }
+                version_manager.publish_reserved_commit(start, commit_ts);
+                commit_ts
+            }
+            Err(_) => {
+                self.commit_write_timestamp(start);
+                start
+            }
+        }
+    }
+
     pub(crate) fn finalize_operation(&self, committed: bool) -> StorageResult<()> {
         let Some(operation) = &self.operation_context else {
             return Ok(());
@@ -300,8 +325,11 @@ impl GraphStorageContext {
                 self.maybe_run_index_gc();
                 return Err(conflict);
             }
-            self.commit_write_timestamp(timestamp);
-            self.publish_auto_commit_write_set(timestamp);
+            // Commit-ordered visibility: the conflict window below is
+            // indexed by the same commit timestamp that advances the
+            // read frontier, matching explicit transactions.
+            let commit_ts = self.commit_write_timestamp_ordered(timestamp);
+            self.publish_auto_commit_write_set(commit_ts);
         } else {
             if let Some(undo) = &self.auto_commit_undo {
                 let mut log = undo.lock();
@@ -324,10 +352,7 @@ impl GraphStorageContext {
     /// Check the active auto-commit statement against recently committed
     /// write sets. Returns a write-write conflict error when the statement
     /// overlaps a commit newer than its read timestamp.
-    fn auto_commit_conflict(
-        &self,
-        operation: &StorageOperationContext,
-    ) -> Option<StorageError> {
+    fn auto_commit_conflict(&self, operation: &StorageOperationContext) -> Option<StorageError> {
         let write_set = self.auto_commit_write_set.as_ref()?.lock().clone();
         if write_set.is_empty() {
             return None;

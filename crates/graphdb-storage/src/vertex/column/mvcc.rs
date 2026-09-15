@@ -169,6 +169,12 @@ impl Column {
     /// `query_ts`. A `None` return means the value is null at `query_ts`.
     /// Uses the unified `Visibility` helper so column and edge layers share the
     /// same snapshot visibility semantics.
+    ///
+    /// Column visibility only: this says nothing about row liveness. A row
+    /// deleted at or before `query_ts` still returns its last column value
+    /// here. Every caller must filter through the row-liveness layer
+    /// (`VertexTimestamp::is_valid` or the table scan) and never serve this
+    /// result directly.
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
         let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
         if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {

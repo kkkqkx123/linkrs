@@ -120,10 +120,14 @@ impl GraphStorageContext {
                 id
             })?;
 
-        if let Some(cached) =
-            self.persistent
-                .cache_manager
-                .get_cached_vertex(label, internal_id, ts)
+        if let Some(cached) = self
+            .record_cache_eligible(ts)
+            .then(|| {
+                self.persistent
+                    .cache_manager
+                    .get_cached_vertex(label, internal_id, ts)
+            })
+            .flatten()
         {
             return Some(VertexRecord {
                 internal_id: cached.internal_id,
@@ -140,13 +144,15 @@ impl GraphStorageContext {
 
         let record = self.read_record(label, internal_id, None, ts)?;
 
-        self.persistent.cache_manager.cache_vertex(
-            label,
-            internal_id,
-            external_id.to_string(),
-            record.properties.clone(),
-            ts,
-        );
+        if self.record_cache_eligible(ts) {
+            self.persistent.cache_manager.cache_vertex(
+                label,
+                internal_id,
+                external_id.to_string(),
+                record.properties.clone(),
+                ts,
+            );
+        }
 
         Some(record)
     }
@@ -281,10 +287,14 @@ impl GraphStorageContext {
                 id
             })?;
 
-        if let Some(cached) =
-            self.persistent
-                .cache_manager
-                .get_cached_vertex(label, internal_id, ts)
+        if let Some(cached) = self
+            .record_cache_eligible(ts)
+            .then(|| {
+                self.persistent
+                    .cache_manager
+                    .get_cached_vertex(label, internal_id, ts)
+            })
+            .flatten()
         {
             return Some(VertexRecord {
                 internal_id: cached.internal_id,
@@ -301,13 +311,15 @@ impl GraphStorageContext {
             },
         )?;
 
-        self.persistent.cache_manager.cache_vertex(
-            label,
-            internal_id,
-            external_id_str,
-            record.properties.clone(),
-            ts,
-        );
+        if self.record_cache_eligible(ts) {
+            self.persistent.cache_manager.cache_vertex(
+                label,
+                internal_id,
+                external_id_str,
+                record.properties.clone(),
+                ts,
+            );
+        }
 
         Some(record)
     }
@@ -325,10 +337,14 @@ impl GraphStorageContext {
         // Lazily register snapshot for this vertex label if needed
         self.ensure_vertex_snapshot_registered(label);
 
-        if let Some(cached) =
-            self.persistent
-                .cache_manager
-                .get_cached_vertex(label, internal_id, ts)
+        if let Some(cached) = self
+            .record_cache_eligible(ts)
+            .then(|| {
+                self.persistent
+                    .cache_manager
+                    .get_cached_vertex(label, internal_id, ts)
+            })
+            .flatten()
         {
             return Some(VertexRecord {
                 internal_id: cached.internal_id,
@@ -368,13 +384,15 @@ impl GraphStorageContext {
                 .cache_vertex_id(label, &external_id, internal_id, ts);
         }
 
-        self.persistent.cache_manager.cache_vertex(
-            label,
-            internal_id,
-            external_id,
-            record.properties.clone(),
-            ts,
-        );
+        if self.record_cache_eligible(ts) {
+            self.persistent.cache_manager.cache_vertex(
+                label,
+                internal_id,
+                external_id,
+                record.properties.clone(),
+                ts,
+            );
+        }
 
         Some(record)
     }

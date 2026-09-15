@@ -707,10 +707,16 @@ impl TransactionManager {
             let committed = self.version_manager.read_timestamp();
             let snapshot = committed.max(context.timestamp());
             context.set_refreshed_read_ts(snapshot);
+            let start = context.begin_statement()?;
+            self.pin_statement_snapshot(&context, snapshot)?;
+            self.stats.begin_statement();
+            Ok((context, start))
+        } else {
+            let start = context.begin_statement()?;
+            self.pin_statement_snapshot(&context, context.timestamp())?;
+            self.stats.begin_statement();
+            Ok((context, start))
         }
-        let start = context.begin_statement()?;
-        self.stats.begin_statement();
-        Ok((context, start))
     }
 
     /// Refresh a transaction's statement snapshot without opening a
@@ -728,7 +734,11 @@ impl TransactionManager {
         context.check_timeouts()?;
         if context.isolation_level == IsolationLevel::ReadCommitted {
             let committed = self.version_manager.read_timestamp();
-            context.set_refreshed_read_ts(committed.max(context.timestamp()));
+            let snapshot = committed.max(context.timestamp());
+            context.set_refreshed_read_ts(snapshot);
+            self.pin_statement_snapshot(&context, snapshot)?;
+        } else {
+            self.pin_statement_snapshot(&context, context.timestamp())?;
         }
         Ok(context)
     }
@@ -740,6 +750,7 @@ impl TransactionManager {
         statement_start: std::time::Instant,
     ) -> Result<(), TransactionError> {
         let result = context.finish_statement(statement_start);
+        self.release_statement_snapshot_pin(context);
         self.stats.end_statement();
         result
     }
@@ -844,6 +855,89 @@ impl TransactionManager {
         true
     }
 
+    /// Pin a statement snapshot in the global snapshot tracker.
+    ///
+    /// Registers `snapshot` and installs it as the context pin, releasing
+    /// any previous pin first so refresh-replace never leaks. GC derives
+    /// its cutoff from the tracker, so a pinned statement snapshot cannot
+    /// be reclaimed while the statement runs.
+    fn pin_statement_snapshot(
+        &self,
+        context: &Arc<TransactionContext>,
+        snapshot: Timestamp,
+    ) -> Result<(), TransactionError> {
+        if let Err(error) = self
+            .version_manager
+            .snapshot_tracker()
+            .add_snapshot(snapshot)
+        {
+            return Err(TransactionError::internal(format!(
+                "Failed to pin statement snapshot {}: {}",
+                snapshot, error
+            )));
+        }
+        if let Some(previous) = context.set_statement_snapshot_pin(snapshot) {
+            let _ = self
+                .version_manager
+                .snapshot_tracker()
+                .release_snapshot(previous);
+        }
+        Ok(())
+    }
+
+    /// Release the statement snapshot pin held by `context`, if any.
+    ///
+    /// Called on every terminal path (statement finish, commit, abort,
+    /// recovery re-drive) so pins never outlive their statement. Releasing
+    /// a missing entry is ignored: the pin may already have been replaced.
+    pub(super) fn release_statement_snapshot_pin(&self, context: &TransactionContext) {
+        if let Some(pinned) = context.take_statement_snapshot_pin() {
+            if let Err(error) = self
+                .version_manager
+                .snapshot_tracker()
+                .release_snapshot(pinned)
+            {
+                log::debug!(
+                    "Statement snapshot {} release skipped for txn={:?}: {}",
+                    pinned,
+                    context.id,
+                    error
+                );
+            }
+        }
+    }
+
+    /// Release the single-writer exclusion when its owner is gone.
+    ///
+    /// The exclusion is an ownership flag, not a scope guard: if the owner
+    /// transaction crashed or was reaped without running the release path,
+    /// new writers would wedge forever. The cleaner calls this after every
+    /// sweep; a live owner is never disturbed.
+    fn release_dead_write_owner(&self) {
+        let owner = self.write_exclusion_owner.load(Ordering::SeqCst);
+        if owner == 0 {
+            return;
+        }
+        let alive = self
+            .active_transactions
+            .get(&TransactionId(owner))
+            .is_some_and(|entry| {
+                entry.value().has_pessimistic_lock() && entry.value().state().can_execute()
+            });
+        if !alive {
+            if self
+                .write_exclusion_owner
+                .compare_exchange(owner, 0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                log::warn!(
+                    "Released single-writer exclusion held by dead owner {}",
+                    owner
+                );
+            }
+        }
+    }
+
     /// Whether a checkpoint should be triggered after the latest commit.
     ///
     /// Threshold-based (commit count since the last checkpoint) instead of a
@@ -898,6 +992,7 @@ impl TransactionManager {
             .cleanup_expired_transactions_with(&self.active_transactions, |txn_id| {
                 self.abort_transaction(txn_id)
             });
+        self.release_dead_write_owner();
     }
 
     /// Shutdown transaction manager

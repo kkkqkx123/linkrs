@@ -381,6 +381,16 @@ impl GraphStorageContext {
     /// their read timestamp the same way auto-commit writes pin their write
     /// timestamp, so a long-running read cannot be unterminated by GC while
     /// the statement still observes the snapshot.
+    pub(crate) fn record_cache_eligible(&self, ts: Timestamp) -> bool {
+        // The record cache holds one entry per key: the value current at
+        // `cached_at_ts`, served to every reader at or past it. Only
+        // snapshots at the committed frontier observe current values, so
+        // only they may consult or populate the cache. Older snapshots
+        // must use the version chain: caching a historical value would
+        // poison later frontier readers with stale data.
+        ts >= self.persistent.version_manager.read_timestamp()
+    }
+
     pub(crate) fn ensure_vertex_snapshot_registered(
         &self,
         label: LabelId,

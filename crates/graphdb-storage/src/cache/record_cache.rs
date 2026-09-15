@@ -16,11 +16,15 @@ use super::types::*;
 /// A cached entry records the timestamp it was loaded at (`cached_at_ts`)
 /// and is served to any reader at or past that timestamp
 /// (`cached_at_ts <= query_ts`); older snapshots miss and fall back to a
-/// version-chain read. Correctness rests on write-through invalidation:
+/// version-chain read. Correctness rests on two contracts, not one:
 /// every vertex/edge write path removes (O(1)) or generation-bumps the
-/// affected entries, so a surviving entry still reflects the current value.
-/// Per-label invalidation generations mark stale entries invalid in O(1).
-/// Capacity can be adjusted at runtime via `set_capacity`.
+/// affected entries, AND callers only consult or populate the vertex cache
+/// for snapshots at the committed frontier (see `record_cache_eligible`).
+/// A historical snapshot read must never populate the cache: its value is
+/// not current, and a single entry per key cannot serve two snapshots that
+/// observe different versions. Per-label invalidation generations mark
+/// stale entries invalid in O(1). Capacity can be adjusted at runtime via
+/// `set_capacity`.
 pub struct RecordCache {
     vertex_pool: Arc<BufferPool<VertexCacheKey, CachedVertex>>,
     id_index_pool: Arc<BufferPool<IdIndexCacheKey, IdIndexCacheValue>>,

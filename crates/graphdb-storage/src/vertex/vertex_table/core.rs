@@ -766,12 +766,13 @@ impl VertexTable {
         // Compact to reclaim space
         self.compact_coordinated()?;
 
-        // If no snapshots are active, also compact timestamps to remove
-        // any entries with end_ts != MAX_TIMESTAMP. This is safe because
-        // without active snapshots there are no readers that need those
-        // version records.
+        // Timestamp compaction is cutoff-gated, not merely pin-gated: the
+        // table-local pin only proves readers that already touched this
+        // table, while a running statement at an older snapshot may first
+        // touch the table after this pass. Only rows invisible below the
+        // watermark cutoff (`min_ts`) are physically removed.
         if !table_has_active_snapshot {
-            self.compact_timestamps();
+            self.compact_timestamps(min_ts);
         }
 
         Ok((count, version_removed))
@@ -779,18 +780,19 @@ impl VertexTable {
 
     /// Compact timestamps independently of id_indexer and columns.
     ///
-    /// Removes all temporally-deleted entries (those with `end_ts != MAX_TIMESTAMP`)
-    /// and returns the old_id → new_id mapping for entries that moved.
-    /// This is a standalone operation — use it when only timestamp cleanup is
-    /// needed without full table compaction.
+    /// Removes entries invisible below `cutoff` (those with
+    /// `end_ts <= cutoff`) and returns the old_id → new_id mapping for
+    /// entries that moved. This is a standalone operation — use it when
+    /// only timestamp cleanup is needed without full table compaction.
     ///
     /// # Safety
     ///
-    /// Caller must ensure no active snapshots reference the removed entries.
-    /// When in doubt, use `gc()` instead, which coordinates all three structures
-    /// and respects snapshot isolation boundaries.
-    pub fn compact_timestamps(&mut self) -> std::collections::HashMap<u32, u32> {
-        self.timestamps.compact()
+    /// The cutoff must come from the global GC watermarks. Table-local pin
+    /// state alone cannot prove that no snapshot observes the removed
+    /// entries. When in doubt, use `gc()` instead, which coordinates all
+    /// three structures and respects snapshot isolation boundaries.
+    pub fn compact_timestamps(&mut self, cutoff: Timestamp) -> std::collections::HashMap<u32, u32> {
+        self.timestamps.compact_with_cutoff(cutoff)
     }
 }
 

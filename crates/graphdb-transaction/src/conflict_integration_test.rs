@@ -79,7 +79,10 @@ fn test_conflicting_writes_same_vertex() {
     assert!(manager.check_write_set_conflict(txn2).is_err());
 
     manager.commit_transaction(txn1).unwrap();
-    manager.commit_transaction(txn2).unwrap();
+    // First-committer-wins: txn1's commit timestamp is newer than txn2's
+    // start, so the conflicting late committer loses instead of
+    // overwriting txn1's write.
+    assert!(manager.commit_transaction(txn2).is_err());
 }
 
 /// Test 3.1.3: Conflict intensity measurement
@@ -284,6 +287,7 @@ fn test_sequential_conflict_cascade() {
     assert!(manager.check_write_set_conflict(txn3).is_err());
 
     manager.commit_transaction(txn1).unwrap();
-    manager.commit_transaction(txn2).unwrap();
-    manager.commit_transaction(txn3).unwrap();
+    // Both late committers lose against txn1's newer commit timestamp.
+    assert!(manager.commit_transaction(txn2).is_err());
+    assert!(manager.commit_transaction(txn3).is_err());
 }

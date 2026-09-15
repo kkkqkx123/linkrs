@@ -8,8 +8,6 @@ use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
-const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
-
 /// Per-edge creation and deletion timestamps.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
@@ -125,19 +123,23 @@ impl MVCCManager {
 
     /// Unregister an active snapshot at the given timestamp.
     ///
-    /// This decrements the reference count. When count reaches 0,
-    /// the timestamp is removed and tombstone GC is automatically triggered.
-    /// Uses incremental min maintenance: only rescans when the removed
-    /// timestamp was the current minimum.
+    /// This decrements the reference count. When count reaches 0 the
+    /// timestamp is removed and the cached minimum is recomputed.
+    ///
+    /// Deliberately performs no garbage collection: the table-local minimum
+    /// only sees this table's readers, while tombstones may still pin
+    /// readers of other tables. Reclamation always derives its cutoff from
+    /// the global watermarks (`MvccWatermarks::capture`) at pass level —
+    /// see `gc_tombstones` callers — never from this cache alone.
     pub fn unregister_active_snapshot(&mut self, ts: Timestamp) -> usize {
-        let mut should_gc = false;
+        let mut removed_min = false;
         let new_count = if let Some(count) = self.active_snapshots.get_mut(&ts) {
             if *count > 0 {
                 *count -= 1;
             }
             if *count == 0 {
                 self.active_snapshots.remove(&ts);
-                should_gc = true;
+                removed_min = ts == self.min_active_snapshot_ts;
                 0
             } else {
                 *count
@@ -146,18 +148,15 @@ impl MVCCManager {
             0
         };
 
-        if should_gc {
-            // Only rescan when the removed timestamp was the current minimum;
-            // otherwise the min is unchanged.
-            if ts == self.min_active_snapshot_ts {
-                self.min_active_snapshot_ts = self
-                    .active_snapshots
-                    .keys()
-                    .copied()
-                    .min()
-                    .unwrap_or(Timestamp::MAX);
-            }
-            self.gc_tombstones_batch(self.min_active_snapshot_ts, DEFAULT_TOMBSTONE_GC_BATCH);
+        // Only rescan when the removed timestamp was the current minimum;
+        // otherwise the min is unchanged. No GC here by design (see docs).
+        if removed_min {
+            self.min_active_snapshot_ts = self
+                .active_snapshots
+                .keys()
+                .copied()
+                .min()
+                .unwrap_or(Timestamp::MAX);
         }
 
         new_count
@@ -417,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_gc_with_snapshot_lifecycle() {
+    fn test_snapshot_lifecycle_never_gc_implicitly() {
         let mut table = create_edge_table_with_props();
 
         table
@@ -436,15 +435,20 @@ mod tests {
         let count_after_first = table.mvcc.unregister_active_snapshot(100);
         assert_eq!(count_after_first, 1);
 
-        let stats_after_first = table.mvcc.tombstone_stats();
-        assert_eq!(stats_after_first.count, 1);
-
+        // Unregistering snapshots is pure bookkeeping: tombstones survive
+        // until an explicit watermark-driven pass reclaims them, so a
+        // table-local minimum can never free another table's readers.
         let count_after_second = table.mvcc.unregister_active_snapshot(100);
         assert_eq!(count_after_second, 0);
 
         let count_120 = table.mvcc.unregister_active_snapshot(120);
         assert_eq!(count_120, 0);
 
+        let stats_after_unregister = table.mvcc.tombstone_stats();
+        assert_eq!(stats_after_unregister.count, 1);
+
+        let removed = table.mvcc.gc_tombstones(Timestamp::MAX);
+        assert_eq!(removed, 1);
         let stats_after_gc = table.mvcc.tombstone_stats();
         assert_eq!(stats_after_gc.count, 0);
     }

@@ -252,6 +252,7 @@ impl TransactionManager {
         rollback_context_timestamp(&self.version_manager, context);
         self.release_write_lease(context);
         self.certifier.unregister_reads(context.id);
+        self.release_statement_snapshot_pin(context);
         self.active_transactions.remove(&context.id);
         if let Err(error) = context.clear_undo_logs() {
             log::warn!(

@@ -316,22 +316,18 @@ fn insert_vertex_at_timestamp_prechecked(
     rollback: &mut Vec<InsertedVertexTag>,
 ) -> StorageResult<VertexId> {
     for tag in &vertex.tags {
-        let tag_info = batch.tag_map.get(tag.name.as_str()).ok_or_else(|| {
-            StorageError::not_found(format!("Tag {} not found", tag.name))
-        })?;
+        let tag_info = batch
+            .tag_map
+            .get(tag.name.as_str())
+            .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
         let label_id = tag_info.tag_id;
         let props: Vec<(String, Value)> = tag
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let props = apply_tag_constraints_prechecked(
-            ctx,
-            space_id,
-            tag_info,
-            batch.serial_state,
-            props,
-        )?;
+        let props =
+            apply_tag_constraints_prechecked(ctx, space_id, tag_info, batch.serial_state, props)?;
         let redo = InsertVertexRedo {
             label: label_id,
             vid: vertex.vid,
@@ -798,9 +794,7 @@ pub(crate) fn batch_insert_vertices(
                 })
             });
             if needs_scan {
-                if let Some(scan) =
-                    scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)
-                {
+                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name) {
                     serial_state.add_present(tag.tag_id, &prop_def.name, scan);
                 }
             }
@@ -873,8 +867,7 @@ impl SerialBatchState {
         scan: super::serial::SerialColumnScan,
     ) {
         let present: HashSet<i64> = scan.into_present().into_iter().collect();
-        self.present
-            .insert((label, prop_name.to_string()), present);
+        self.present.insert((label, prop_name.to_string()), present);
     }
 
     /// Validate an explicit SERIAL value against committed data and earlier

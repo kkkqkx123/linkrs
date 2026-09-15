@@ -155,37 +155,20 @@ impl TransactionManager {
             }
         }
 
-        // Certification publish runs before storage finalization so a commit
-        // that fails finalization still defends its write set against later
-        // committers (conservative: later conflicts abort rather than risk
-        // lost updates). Visibility itself is only published afterwards via
-        // the commit timestamp (see below).
+        // Conflict certification and read visibility share one timestamp
+        // coordinate: the write set is indexed by commit timestamp (see
+        // `Certifier::publish`), never by start timestamp. The commit
+        // timestamp is therefore reserved here — still `Pending`, so the
+        // read frontier cannot cross it — and only published to readers
+        // after storage finalization below.
         let mut needs_commit_ts = false;
         match context.txn_type {
-            TransactionType::ReadOnly => self
-                .version_manager
-                .release_read_timestamp_at(context.start_timestamp),
+            TransactionType::ReadOnly => {
+                self.version_manager
+                    .release_read_timestamp_at(context.start_timestamp);
+                self.release_statement_snapshot_pin(&context);
+            }
             TransactionType::Write => {
-                if !descriptor.write_set.is_empty() {
-                    if let Err(conflict) = self.certifier.publish(
-                        context.id,
-                        descriptor.write_timestamp,
-                        context.start_timestamp,
-                        &descriptor.write_set,
-                        &self.active_transactions,
-                        &self.stats,
-                    ) {
-                        if let Err(abort_error) = self.abort_transaction_internal(&context) {
-                            log::error!(
-                                "Final-review abort failed for txn={:?}: {}",
-                                context.id,
-                                abort_error
-                            );
-                            self.stats.increment_cleanup_failure();
-                        }
-                        return Err(conflict);
-                    }
-                }
                 let safe_ts = self.version_manager.get_safe_gc_timestamp();
                 self.prune_committed_write_sets(safe_ts);
                 // Release the gate lease before storage finalization (shared
@@ -195,6 +178,68 @@ impl TransactionManager {
                 needs_commit_ts = true;
             }
             TransactionType::Checkpoint | TransactionType::Recovery | TransactionType::Dummy => {}
+        }
+
+        let reserved_commit_ts = if needs_commit_ts {
+            match self
+                .version_manager
+                .reserve_commit_timestamp(context.timestamp())
+            {
+                Ok(commit_ts) => commit_ts,
+                Err(error) => {
+                    log::error!(
+                        "Commit {} is durable but commit-timestamp reservation failed: {}",
+                        txn_id,
+                        error
+                    );
+                    self.recovery.record(&descriptor, 0, commit_lsn);
+                    self.emit_commit_event(TransactionEvent::CommitDurableButUnfinalized {
+                        txn_id,
+                        write_timestamp: context.timestamp(),
+                        commit_lsn,
+                    });
+                    return Err(TransactionError::commit_failed(format!(
+                        "Failed to reserve commit timestamp for transaction {}: {}",
+                        txn_id, error
+                    )));
+                }
+            }
+        } else {
+            0
+        };
+
+        // Final certification review, indexed by the reserved commit
+        // timestamp. Still before storage finalization, so a conflict here
+        // aborts cleanly: no finalized writes exist yet and the canonical
+        // abort discards the durable WAL record plus both slots.
+        if needs_commit_ts {
+            if !descriptor.write_set.is_empty() {
+                if let Err(conflict) = self.certifier.publish(
+                    context.id,
+                    reserved_commit_ts,
+                    context.start_timestamp,
+                    &descriptor.write_set,
+                    &self.active_transactions,
+                    &self.stats,
+                ) {
+                    self.version_manager
+                        .abort_write_timestamp(reserved_commit_ts);
+                    if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                        log::error!(
+                            "Final-review abort failed for txn={:?}: {}",
+                            context.id,
+                            abort_error
+                        );
+                        self.stats.increment_cleanup_failure();
+                    }
+                    return Err(conflict);
+                }
+            } else {
+                // No write set to publish, but a Serializable transaction
+                // may still hold SSI read locks from pre-check: drop them
+                // so empty writers never leak read locks.
+                self.certifier.unregister_reads(context.id);
+            }
         }
         context.mark_commit_published(commit_lsn);
 
@@ -234,11 +279,16 @@ impl TransactionManager {
                         write_timestamp: context.timestamp(),
                         commit_lsn,
                     });
-                    // Retire the start slot without publishing visibility: the
-                    // read frontier is not allowed to cross this commit, but it
-                    // must not be pinned behind it either.
+                    // Retire both slots without publishing visibility: the
+                    // read frontier is not allowed to cross this commit, but
+                    // it must not be pinned behind it either. The recovery
+                    // re-drive reserves a fresh commit timestamp.
                     self.version_manager
                         .abort_write_timestamp(context.timestamp());
+                    if reserved_commit_ts != 0 {
+                        self.version_manager
+                            .abort_write_timestamp(reserved_commit_ts);
+                    }
                     self.certifier.unregister_reads(context.id);
                     return Err(TransactionError::commit_failed(format!(
                         "Transaction {} is durable but unfinalized after {} retries: {}; \
@@ -249,45 +299,34 @@ impl TransactionManager {
             }
         }
 
-        // Allocate the commit timestamp only after durability + finalization.
-        // This is what advances the read frontier and stamps the journal, so
-        // unfinalized writes can never become visible to new readers.
+        // Settle the reserved commit timestamp only after durability +
+        // finalization. This is what advances the read frontier and stamps
+        // the journal, so unfinalized writes can never become visible to
+        // new readers. Settling cannot fail: missing slots (restart
+        // re-drives) are treated as already settled.
         let commit_ts = if needs_commit_ts {
-            match self
-                .version_manager
-                .allocate_commit_timestamp(context.timestamp())
-            {
-                Ok(commit_ts) => {
-                    context.set_commit_timestamp(commit_ts);
-                    descriptor.commit_timestamp = commit_ts;
-                    // Distinguish write vs commit timestamp in the journal so
-                    // GC can tell committed history from still-pending history.
-                    context.publish_commit_timestamp(commit_ts);
-                    commit_ts
-                }
-                Err(error) => {
-                    log::error!(
-                        "Commit {} is durable and finalized but commit-timestamp allocation failed: {}",
-                        txn_id,
-                        error
-                    );
-                    self.recovery.record(&descriptor, 0, commit_lsn);
-                    self.emit_commit_event(TransactionEvent::CommitDurableButUnfinalized {
-                        txn_id,
-                        write_timestamp: context.timestamp(),
-                        commit_lsn,
-                    });
-                    return Err(TransactionError::commit_failed(format!(
-                        "Failed to allocate commit timestamp for transaction {}: {}",
-                        txn_id, error
-                    )));
-                }
-            }
+            self.version_manager
+                .publish_reserved_commit(context.timestamp(), reserved_commit_ts);
+            context.set_commit_timestamp(reserved_commit_ts);
+            descriptor.commit_timestamp = reserved_commit_ts;
+            // Distinguish write vs commit timestamp in the journal so
+            // GC can tell committed history from still-pending history.
+            context.publish_commit_timestamp(reserved_commit_ts);
+            self.release_statement_snapshot_pin(&context);
+            reserved_commit_ts
         } else {
             0
         };
 
-        if let Err(error) = context.clear_undo_logs() {
+        // Undo-log cleanup runs after visibility: retry once inline for
+        // transient file-backed failures before queuing recovery. The
+        // commit itself stays successful — it is already durable,
+        // finalized and visible — the queued record only re-drives the
+        // leftover cleanup.
+        if let Err(error) = context
+            .clear_undo_logs()
+            .or_else(|_| context.clear_undo_logs())
+        {
             // The commit is already durable, finalized and visible at this
             // point, so only queue recovery and report success instead of
             // rewriting the state to Aborted.
@@ -382,11 +421,19 @@ impl TransactionManager {
         let context = self.get_context(txn_id).ok();
         let Some(context) = context else {
             // No transaction-level state left to complete; still give the
-            // storage sink a chance to finish idempotently.
+            // storage sink a chance to finish idempotently, and defend the
+            // conflict window when the commit timestamp is known.
             if !self.config.in_memory {
                 if let Some(ref commit_sink) = self.commit_sink {
                     let _ = commit_sink.finalize_commit(&pending.descriptor, pending.commit_lsn);
                 }
+            }
+            if pending.commit_timestamp != 0 && !pending.descriptor.write_set.is_empty() {
+                self.certifier.force_publish(
+                    txn_id,
+                    pending.commit_timestamp,
+                    &pending.descriptor.write_set,
+                );
             }
             return Ok(());
         };
@@ -453,6 +500,16 @@ impl TransactionManager {
         };
         descriptor.commit_timestamp = commit_ts;
 
+        // The original commit may have failed before its certification
+        // publish (reservation failure path records commit_timestamp 0).
+        // Re-insert idempotently: a durable commit must defend later
+        // committers even when the first attempt never reached publish.
+        if commit_ts != 0 && !descriptor.write_set.is_empty() {
+            self.certifier
+                .force_publish(txn_id, commit_ts, &descriptor.write_set);
+        }
+        self.release_statement_snapshot_pin(&context);
+
         if let Err(error) = context.clear_undo_logs() {
             requeue(self);
             return Err(TransactionError::rollback_failed(format!(
@@ -465,6 +522,9 @@ impl TransactionManager {
         self.active_transactions.remove(&txn_id);
         self.certifier.unregister_reads(txn_id);
         self.drain_context_budget_warnings(&context);
+        // The re-drive owned its queue entry via take: mirror the removal
+        // into the sidecar so a restart does not re-advertise it.
+        self.recovery.sync_sidecar();
         // Skip boxing the write set when nobody listens (see commit path).
         if self.commit_callback_count() != 0 {
             self.emit_commit_event(TransactionEvent::Committed {

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use graphdb_core::types::{EdgeIdentifier, VertexId};
 
 /// Write Set - tracks entities modified by a transaction for conflict detection
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WriteSet {
     /// Vertices modified (insert/update/delete)
     pub vertices: HashSet<VertexId>,
@@ -86,10 +86,22 @@ impl WriteSet {
     }
 
     /// Check whether any committed write falls within a recorded read range.
+    ///
+    /// Conservative in two directions: the label and column recorded on the
+    /// range cannot be checked against bare vertex and edge identifiers, so
+    /// any identifier inside the bounds conflicts regardless of label;
+    /// committed edge writes count when either endpoint falls inside the
+    /// bounds, so edge phantoms cannot slip through a vertex-only scan.
+    /// Over-aborts are possible, missed phantoms are not.
     pub fn has_read_range_conflict_with(&self, committed: &WriteSet) -> bool {
         for range in &self.read_ranges {
             for vid in &committed.vertices {
                 if range.contains(vid) {
+                    return true;
+                }
+            }
+            for edge in &committed.edges {
+                if range.contains(&edge.src_vid) || range.contains(&edge.dst_vid) {
                     return true;
                 }
             }
@@ -173,7 +185,7 @@ impl WriteSet {
 /// Used for phantom detection: if a concurrent write creates a vertex whose
 /// ID falls within this range and matches the label, the Serializable
 /// transaction is aborted to prevent phantoms.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadRange {
     /// Vertex label (vertex type name).
     pub label: String,
@@ -211,6 +223,11 @@ impl ReadRange {
     }
 
     /// Check whether the given `VertexId` falls within this range.
+    ///
+    /// Bounds-only comparison: the range label and column narrow what the
+    /// reader asked for, but committed write identifiers carry no label, so
+    /// they cannot be checked here. Callers treat a bounds hit as a
+    /// conflict (conservative abort) rather than risking a missed phantom.
     pub fn contains(&self, vid: &VertexId) -> bool {
         if let Some(ref start) = self.start {
             let cmp = vid.as_bytes().cmp(start.as_bytes());
@@ -275,5 +292,53 @@ impl SsiState {
 
     pub fn is_empty(&self) -> bool {
         self.read_resources.is_empty() && self.write_resources.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphdb_core::types::EdgeIdentifier;
+
+    fn vid(n: i64) -> VertexId {
+        VertexId::from_int64(n)
+    }
+
+    #[test]
+    fn test_read_range_conflict_with_vertex_write() {
+        let mut reader = WriteSet::new();
+        reader.record_read_range(
+            ReadRange::new("person")
+                .with_start(vid(1))
+                .with_end(vid(10)),
+        );
+
+        let mut committed = WriteSet::new();
+        committed.record_vertex(vid(5));
+        assert!(reader.has_read_range_conflict_with(&committed));
+
+        let mut outside = WriteSet::new();
+        outside.record_vertex(vid(50));
+        assert!(!reader.has_read_range_conflict_with(&outside));
+    }
+
+    #[test]
+    fn test_read_range_conflict_with_edge_phantom() {
+        let mut reader = WriteSet::new();
+        reader.record_read_range(
+            ReadRange::new("person")
+                .with_start(vid(1))
+                .with_end(vid(10)),
+        );
+
+        // An edge write with no vertex write at all must still conflict
+        // when an endpoint falls inside the read range.
+        let mut committed = WriteSet::new();
+        committed.record_edge(EdgeIdentifier::new(0, vid(3), 0, vid(99), 0, 0));
+        assert!(reader.has_read_range_conflict_with(&committed));
+
+        let mut outside = WriteSet::new();
+        outside.record_edge(EdgeIdentifier::new(0, vid(50), 0, vid(60), 0, 0));
+        assert!(!reader.has_read_range_conflict_with(&outside));
     }
 }

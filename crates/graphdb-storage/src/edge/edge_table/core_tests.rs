@@ -329,10 +329,17 @@ fn test_auto_maintenance_serial_advances_without_progress() {
     assert_eq!(table.maintenance_serial, 9);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-    // Advancing the watermark past the deletions reclaims both tombstones.
+    // Advancing the watermark past the deletions reclaims both tombstones
+    // through an explicit watermark-driven pass: unregistering snapshots
+    // is pure bookkeeping and never reclaims on its own.
     table.mvcc.register_active_snapshot(200);
     table.mvcc.unregister_active_snapshot(100);
     table.mvcc.unregister_active_snapshot(200);
+    assert_eq!(table.mvcc.total_tombstone_count(), 2);
+    let reclaimed = table
+        .mvcc
+        .gc_tombstones(graphdb_core::types::Timestamp::MAX);
+    assert_eq!(reclaimed, 2);
     assert_eq!(table.mvcc.total_tombstone_count(), 0);
 }
 

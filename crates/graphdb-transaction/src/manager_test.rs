@@ -591,9 +591,17 @@ fn test_check_write_set_conflict_with_conflict() {
     manager
         .commit_transaction(txn1)
         .expect("Failed to commit txn1");
-    manager
+    // First-committer-wins is enforced at commit time too: txn1's write
+    // set is indexed by commit timestamp, which is newer than txn2's
+    // start, so the late committer must lose instead of silently
+    // overwriting txn1's write.
+    let txn2_error = manager
         .commit_transaction(txn2)
-        .expect("Failed to commit txn2");
+        .expect_err("Late committer must lose the conflict");
+    assert_eq!(txn2_error.kind(), TransactionErrorKind::SerializationFailed);
+    // The failed commit already ran the canonical abort: txn2 left the
+    // active table instead of lingering as a zombie.
+    assert!(manager.get_context(txn2).is_err());
 }
 
 #[test]
@@ -721,6 +729,81 @@ fn test_read_committed_refreshes_statement_snapshot() {
     manager
         .commit_transaction(reader)
         .expect("reader should commit");
+}
+
+#[test]
+fn test_statement_snapshot_pin_lifecycle() {
+    let manager = create_test_manager();
+    let reader = manager
+        .begin_read_transaction(
+            TransactionOptions::default()
+                .read_only()
+                .with_isolation_level(crate::IsolationLevel::ReadCommitted),
+        )
+        .expect("reader should begin");
+
+    // Advance the committed frontier past the reader start so the
+    // refreshed statement snapshot is a distinct timestamp with its
+    // own pin (repeatable-read pins coincide with the start slot).
+    let writer = manager
+        .begin_insert_transaction(TransactionOptions::default())
+        .expect("writer should begin");
+    manager
+        .commit_transaction(writer)
+        .expect("writer should commit");
+
+    let (context, statement_start) = manager
+        .begin_statement(reader)
+        .expect("statement should begin");
+    let pinned = context.effective_read_timestamp();
+    assert!(pinned > context.start_timestamp);
+    // The running statement snapshot is pinned globally: GC must observe it.
+    assert!(manager
+        .version_manager()
+        .snapshot_tracker()
+        .contains_snapshot(pinned));
+
+    manager
+        .finish_statement(&context, statement_start)
+        .expect("statement should finish");
+    // Released on finish: no pin outlives its statement.
+    assert!(!manager
+        .version_manager()
+        .snapshot_tracker()
+        .contains_snapshot(pinned));
+
+    manager
+        .commit_transaction(reader)
+        .expect("reader should commit");
+    assert_eq!(
+        manager.version_manager().snapshot_tracker().active_count(),
+        0
+    );
+}
+
+#[test]
+fn test_statement_snapshot_pin_released_on_abort() {
+    let manager = create_test_manager();
+    let writer = manager
+        .begin_insert_transaction(TransactionOptions::default())
+        .expect("writer should begin");
+
+    let (context, _) = manager
+        .begin_statement(writer)
+        .expect("statement should begin");
+    let pinned = context.effective_read_timestamp();
+    assert!(manager
+        .version_manager()
+        .snapshot_tracker()
+        .contains_snapshot(pinned));
+
+    manager
+        .abort_transaction(writer)
+        .expect("writer should abort");
+    assert!(!manager
+        .version_manager()
+        .snapshot_tracker()
+        .contains_snapshot(pinned));
 }
 
 #[test]
@@ -852,15 +935,16 @@ fn test_finalize_failure_keeps_reads_invisible_until_recovery() {
         .expect_err("finalize failure must surface as an error");
     assert_eq!(error.kind(), TransactionErrorKind::CommitFailed);
 
-    // No commit timestamp was allocated, so no new readers can observe the
-    // unfinalized writes; the frontier only retired the start slot. The
-    // transaction stays Committing and recoverable.
+    // The reserved commit timestamp was retired without publishing
+    // visibility, and the start slot with it: the frontier advances past
+    // both instead of pinning behind the failed commit. The transaction
+    // stays Committing and recoverable.
     let context = manager
         .get_context(txn_id)
         .expect("durable transaction stays in the active table");
     assert_eq!(context.state(), TransactionState::Committing);
     assert_eq!(context.commit_timestamp(), 0);
-    assert_eq!(manager.read_timestamp(), start_ts);
+    assert_eq!(manager.read_timestamp(), start_ts + 1);
     assert!(!manager.is_transaction_active(txn_id));
 
     // Aborting a durable commit is refused.

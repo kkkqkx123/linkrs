@@ -103,6 +103,11 @@ impl RecoveryManager {
 
     /// Rewrite the sidecar file from the in-memory queue. Callers must hold
     /// the queue lock (or have exclusive access) so the file mirrors memory.
+    ///
+    /// Atomic publish: contents go to a sibling temp file that is fsynced
+    /// before an atomic rename, so a crash can never leave a half-written
+    /// sidecar behind. A torn write previously surfaced as a zero commit
+    /// timestamp placeholder that recovery then treated as authoritative.
     fn persist_locked(&self, queue: &[PendingFinalization]) {
         let Some(path) = self.sidecar_path.lock().clone() else {
             return;
@@ -117,18 +122,19 @@ impl RecoveryManager {
                 pending.commit_lsn.get(),
             ));
         }
-        if let Err(error) = std::fs::write(&path, contents) {
+        let tmp_path = path.with_extension("tmp");
+        let write_result = std::fs::write(&tmp_path, contents).and_then(|()| {
+            std::fs::File::open(&tmp_path).and_then(|file| file.sync_all())?;
+            std::fs::rename(&tmp_path, &path)
+        });
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&tmp_path);
             log::warn!(
                 "Failed to persist {} pending finalization(s) to {}: {}",
                 queue.len(),
                 path.display(),
                 error
             );
-            return;
-        }
-        // Best-effort durability for the sidecar itself.
-        if let Ok(file) = std::fs::File::open(&path) {
-            let _ = file.sync_all();
         }
     }
 
@@ -215,6 +221,17 @@ impl RecoveryManager {
         let mut queue = self.pending_finalizations.lock();
         let position = queue.iter().position(|pending| pending.txn_id == txn_id)?;
         Some(queue.remove(position))
+    }
+
+    /// Rewrite the sidecar from the current in-memory queue.
+    ///
+    /// `take_pending` deliberately leaves the file untouched so a crash
+    /// between take and completion still recovers (at-least-once). Call
+    /// this after a re-drive completes so the sidecar stops advertising
+    /// an already-finished transaction.
+    pub fn sync_sidecar(&self) {
+        let queue = self.pending_finalizations.lock();
+        self.persist_locked(&queue);
     }
 
     /// Recover transactions whose data was durably persisted but whose

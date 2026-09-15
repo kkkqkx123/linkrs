@@ -47,6 +47,23 @@ impl std::fmt::Display for ConflictType {
 /// Maps a resource reference to its committed write timestamps + transaction IDs.
 type ConflictMap<V> = HashMap<V, Vec<(Timestamp, TransactionId)>>;
 
+/// Append an index entry unless the same commit already indexed it.
+///
+/// Keeps recovery re-drives (`force_publish`) idempotent: re-inserting an
+/// already published commit must not duplicate entries.
+fn push_index_entry(
+    entries: &mut Vec<(Timestamp, TransactionId)>,
+    commit_timestamp: Timestamp,
+    txn_id: TransactionId,
+) {
+    if !entries
+        .iter()
+        .any(|(ts, id)| *ts == commit_timestamp && *id == txn_id)
+    {
+        entries.push((commit_timestamp, txn_id));
+    }
+}
+
 /// SSI (Serializable Snapshot Isolation) rw-dependency tracker.
 ///
 /// Instead of scanning all committed write sets (O(N)), this tracker maintains
@@ -588,6 +605,13 @@ impl Certifier {
     /// transactions and all committed entries since `start_timestamp` as a
     /// final review.
     ///
+    /// `write_timestamp` MUST be the commit timestamp allocated by
+    /// `VersionManager::allocate_commit_timestamp`, never the transaction
+    /// start timestamp: conflict lookups compare stored timestamps against
+    /// later committers' start timestamps, and visibility is ordered by
+    /// commit time. Indexing by start time would miss conflicts from
+    /// long-running writers that commit after a later transaction starts.
+    ///
     /// On conflict, returns `Err` and publishes nothing.
     /// Lock-free bypass for empty write sets or in-memory read-only transactions.
     pub fn publish(
@@ -690,6 +714,70 @@ impl Certifier {
         // SSI: unregister read locks and register write locks.
         self.ssi_tracker.unregister_reads(txn_id);
         Ok(())
+    }
+
+    /// Insert a write set into the conflict indices without certification.
+    ///
+    /// Recovery-only path: the commit is already WAL-durable and finalized,
+    /// so it cannot be aborted on conflict. A conflicting entry still
+    /// defends later committers (they abort instead of silently losing the
+    /// update), which is the conservative direction. Normal commits MUST
+    /// use `publish` so conflicts abort before durability.
+    pub fn force_publish(
+        &self,
+        txn_id: TransactionId,
+        commit_timestamp: Timestamp,
+        write_set: &WriteSet,
+    ) {
+        if write_set.is_empty() {
+            self.ssi_tracker.unregister_reads(txn_id);
+            return;
+        }
+        let _cert_guard = self.commit_lock.lock();
+        let mut committed = self.committed_write_sets.lock();
+        let already_indexed = committed
+            .iter()
+            .any(|(ts, ws)| *ts == commit_timestamp && *ws == *write_set);
+        if already_indexed {
+            self.ssi_tracker.unregister_reads(txn_id);
+            return;
+        }
+        committed.push((commit_timestamp, write_set.clone()));
+        let mut vertex_idx = self.committed_vertex_writes.lock();
+        for vid in write_set.vertices.iter() {
+            push_index_entry(
+                vertex_idx.entry(*vid).or_default(),
+                commit_timestamp,
+                txn_id,
+            );
+        }
+        let mut edge_idx = self.committed_edge_writes.lock();
+        for edge in write_set.edges.iter() {
+            push_index_entry(
+                edge_idx
+                    .entry((edge.src_vid, edge.dst_vid, edge.edge_label))
+                    .or_default(),
+                commit_timestamp,
+                txn_id,
+            );
+        }
+        let mut schema_idx = self.committed_schema_writes.lock();
+        for resource in write_set.schema_resources.iter() {
+            push_index_entry(
+                schema_idx.entry(resource.clone()).or_default(),
+                commit_timestamp,
+                txn_id,
+            );
+        }
+        let mut index_idx = self.committed_index_writes.lock();
+        for resource in write_set.index_resources.iter() {
+            push_index_entry(
+                index_idx.entry(resource.clone()).or_default(),
+                commit_timestamp,
+                txn_id,
+            );
+        }
+        self.ssi_tracker.unregister_reads(txn_id);
     }
 
     /// Remove all SSI read locks held by `txn_id` (on commit or abort).
@@ -844,5 +932,56 @@ mod tests {
         ctx_a.mark_write_validated();
         let result = certifier.check_write_set_conflict(TransactionId(11), &active, &stats);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_publish_indexed_by_commit_timestamp_catches_late_committer() {
+        // Long-running writer A starts at 5 and commits at 15; B starts at
+        // 10 on the same vertex. Indexing A by commit timestamp makes B's
+        // check observe the conflict; indexing by start timestamp would
+        // miss it (5 < 10) and lose the update.
+        let certifier = Certifier::new();
+        let active: DashMap<TransactionId, Arc<TransactionContext>> = DashMap::new();
+        let stats = TransactionStats::new();
+        // Test contexts start at their id (`make_context` uses the id as
+        // the start timestamp): A starts at 5, B at 10.
+        let ctx_a = make_context(5, false, ConcurrencyMode::Optimistic);
+        let ctx_b = make_context(10, false, ConcurrencyMode::Optimistic);
+        let vid = graphdb_core::types::VertexId::from_int64(99);
+        ctx_a.record_vertex_write(vid);
+        ctx_b.record_vertex_write(vid);
+        active.insert(TransactionId(5), Arc::clone(&ctx_a));
+        active.insert(TransactionId(10), Arc::clone(&ctx_b));
+
+        certifier
+            .publish(
+                TransactionId(5),
+                15,
+                ctx_a.start_timestamp,
+                &ctx_a.get_write_set(),
+                &active,
+                &stats,
+            )
+            .expect("publish should succeed");
+        active.remove(&TransactionId(5));
+
+        let result = certifier.check_write_set_conflict(TransactionId(10), &active, &stats);
+        assert!(
+            result.is_err(),
+            "committer indexed at 15 must conflict with start 10"
+        );
+    }
+
+    #[test]
+    fn test_force_publish_is_idempotent() {
+        let certifier = Certifier::new();
+        let mut write_set = WriteSet::new();
+        write_set.record_vertex(graphdb_core::types::VertexId::from_int64(7));
+
+        certifier.force_publish(TransactionId(10), 15, &write_set);
+        certifier.force_publish(TransactionId(10), 15, &write_set);
+
+        let committed = certifier.committed_write_sets.lock();
+        assert_eq!(committed.iter().filter(|(ts, _)| *ts == 15).count(), 1);
     }
 }

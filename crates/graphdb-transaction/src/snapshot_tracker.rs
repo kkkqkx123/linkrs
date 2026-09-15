@@ -193,6 +193,18 @@ impl SnapshotTracker {
         self.snapshots.contains_key(&ts)
     }
 
+    /// Drop every tracked snapshot and reset the cached minimum.
+    ///
+    /// Used by version-manager reset and restart rebuilds so a stale pin
+    /// cannot hold the safe-GC waterfront back forever.
+    pub fn clear(&self) {
+        self.snapshots.clear();
+        self.registered_at.clear();
+        self.ordered_snapshots.write().clear();
+        self.min_active.store(u64::MAX, Ordering::Release);
+        self.active_references.store(0, Ordering::Release);
+    }
+
     /// Contains check for snapshot existence.
     pub fn contains_snapshot(&self, ts: Timestamp) -> bool {
         self.snapshots.contains_key(&ts)

@@ -139,6 +139,10 @@ impl VersionManager {
         self.write_ts.store(ts, Ordering::Release);
         self.read_ts.store(ts, Ordering::Release);
         self.write_states.lock().clear();
+        // Restart rebuild: pins held by the previous process are gone with
+        // it, so the tracker must restart empty. Otherwise the minimum
+        // stays behind and GC stalls forever.
+        self.snapshot_tracker.clear();
     }
 
     pub fn clear(&self) {
@@ -149,6 +153,10 @@ impl VersionManager {
         self.read_pending.store(0, Ordering::Relaxed);
         self.write_pending.store(0, Ordering::Relaxed);
         self.write_states.lock().clear();
+        // The counters above are meaningless while stale pins survive:
+        // drain the tracker as well so the safe-GC waterfront is not
+        // pinned by snapshots that no longer exist.
+        self.snapshot_tracker.clear();
     }
 
     pub fn write_timestamp(&self) -> Timestamp {
@@ -310,16 +318,24 @@ impl VersionManager {
 
     pub fn commit_write_timestamp(&self, ts: Timestamp) {
         // System/internal use only (storage background tasks such as
-        // compaction and GC leases that own no transaction context and bypass
-        // transaction certification). User transactions MUST go through
-        // `TransactionManager::commit_transaction`, which allocates a commit
-        // timestamp via `allocate_commit_timestamp` after WAL durability and
-        // storage finalization. Calling this directly for a user write would
-        // publish visibility ordered by start time instead of commit time.
+        // auto-commit statements, compaction and GC leases that own no
+        // transaction context and bypass transaction certification).
+        // User transactions MUST go through
+        // `TransactionManager::commit_transaction`, which certifies the
+        // write set and allocates a commit timestamp via
+        // `allocate_commit_timestamp` after WAL durability and storage
+        // finalization. Calling this directly for a user write would
+        // publish visibility ordered by start time instead of commit time
+        // and skip conflict certification entirely.
         self.finish_write_timestamp(ts, WriteTimestampState::Committed);
     }
 
     pub fn abort_write_timestamp(&self, ts: Timestamp) {
+        // Counterpart of `commit_write_timestamp`: retires a timestamp that
+        // will never become visible. Same system-only boundary for the
+        // commit direction; aborting a user transaction must go through
+        // the manager abort protocol so SSI locks, leases and undo logs
+        // are released together with the timestamp.
         self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
     }
 
@@ -337,6 +353,12 @@ impl VersionManager {
     /// Must only be called after the commit is durable (WAL) and storage
     /// finalization succeeded; otherwise unfinalized writes would become
     /// visible to new readers.
+    ///
+    /// Prefer the split `reserve_commit_timestamp` /
+    /// `publish_reserved_commit` pair for new commit paths: reserving
+    /// before finalization lets conflict certification index the exact
+    /// commit timestamp while keeping visibility gated on finalization.
+    /// This combined helper stays for recovery re-drives and tests.
     pub fn allocate_commit_timestamp(
         &self,
         start_ts: Timestamp,
@@ -356,6 +378,59 @@ impl VersionManager {
         drop(states);
         self.write_condvar.notify_all();
         Ok(commit_ts)
+    }
+
+    /// Reserve a commit timestamp before storage finalization.
+    ///
+    /// The reserved timestamp is `Pending`, so the read frontier cannot
+    /// cross it: visibility stays gated even though the exact commit
+    /// timestamp is already known to conflict certification. The caller
+    /// must settle the reservation exactly once, either with
+    /// `publish_reserved_commit` on success or with
+    /// `abort_write_timestamp` on failure (both are idempotent by slot
+    /// state, so double-settling is safe).
+    ///
+    /// Refuses when the start slot is not a live `Pending` write: ordering
+    /// visibility against a vanished owner would publish ownerless writes.
+    pub fn reserve_commit_timestamp(&self, start_ts: Timestamp) -> VersionManagerResult<Timestamp> {
+        let _guard = self.write_lock.lock();
+        let mut states = self.write_states.lock();
+        match states.get(&start_ts).map(|(_, state)| *state) {
+            Some(WriteTimestampState::Pending) => {}
+            _ => return Err(VersionManagerError::InvalidTimestamp(start_ts)),
+        }
+        let commit_ts = self.reserve_timestamp()?;
+        states.insert(commit_ts, (Instant::now(), WriteTimestampState::Pending));
+        Ok(commit_ts)
+    }
+
+    /// Settle a reservation made by `reserve_commit_timestamp`.
+    ///
+    /// Retires the start slot and marks the reserved commit timestamp
+    /// `Committed`, then advances the read frontier over both. Must only
+    /// be called after WAL durability and storage finalization succeeded.
+    /// Tolerates missing slots (restart re-drives) by treating them as
+    /// already settled instead of failing the commit.
+    pub fn publish_reserved_commit(&self, start_ts: Timestamp, commit_ts: Timestamp) {
+        let _guard = self.write_lock.lock();
+        let mut states = self.write_states.lock();
+        if let Some((_, entry)) = states.get_mut(&start_ts) {
+            if *entry == WriteTimestampState::Pending {
+                *entry = WriteTimestampState::Committed;
+                let _ = self.snapshot_tracker.release_snapshot(start_ts);
+                self.write_pending.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        if let Some((_, entry)) = states.get_mut(&commit_ts) {
+            if *entry == WriteTimestampState::Pending {
+                *entry = WriteTimestampState::Committed;
+            }
+        } else {
+            states.insert(commit_ts, (Instant::now(), WriteTimestampState::Committed));
+        }
+        self.advance_read_frontier(&mut states);
+        drop(states);
+        self.write_condvar.notify_all();
     }
 
     fn finish_write_timestamp(&self, ts: Timestamp, state: WriteTimestampState) {
@@ -795,5 +870,73 @@ mod tests {
         let ages = vm.pending_write_ages();
         assert_eq!(ages.len(), 1);
         assert_eq!(ages[0].0, second);
+    }
+
+    #[test]
+    fn test_reserve_publish_split_keeps_frontier_gated() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        let second = vm
+            .acquire_insert_timestamp()
+            .expect("second write timestamp");
+
+        // Reserving exposes the exact commit timestamp to certification
+        // while the frontier stays gated behind both pending slots.
+        let commit_ts = vm.reserve_commit_timestamp(second).expect("reserve");
+        assert!(commit_ts > second);
+        assert_eq!(vm.read_timestamp(), first - 1);
+
+        // Publishing settles both slots at once, ordered by commit time.
+        // The frontier still waits behind the first pending write.
+        vm.publish_reserved_commit(second, commit_ts);
+        assert_eq!(vm.read_timestamp(), first - 1);
+
+        vm.commit_write_timestamp(first);
+        assert_eq!(vm.read_timestamp(), commit_ts);
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_reserve_refuses_dead_start_slot() {
+        let vm = VersionManager::new();
+        let start = vm.acquire_insert_timestamp().expect("write timestamp");
+        vm.abort_write_timestamp(start);
+        assert!(matches!(
+            vm.reserve_commit_timestamp(start),
+            Err(VersionManagerError::InvalidTimestamp(_))
+        ));
+    }
+
+    #[test]
+    fn test_clear_drains_snapshot_tracker() {
+        let vm = VersionManager::new();
+        let _ = vm.acquire_read_timestamp().expect("read timestamp");
+        assert_eq!(vm.snapshot_tracker().active_count(), 1);
+
+        vm.clear();
+        assert_eq!(vm.snapshot_tracker().active_count(), 0);
+        assert_eq!(
+            vm.snapshot_tracker().min_active_snapshot(),
+            crate::mvcc_watermarks::NO_ACTIVE_SNAPSHOT
+        );
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_init_ts_drains_snapshot_tracker() {
+        let vm = VersionManager::new();
+        let _ = vm.acquire_read_timestamp().expect("read timestamp");
+        assert_ne!(
+            vm.snapshot_tracker().min_active_snapshot(),
+            crate::mvcc_watermarks::NO_ACTIVE_SNAPSHOT
+        );
+        vm.init_ts(100);
+        assert_eq!(
+            vm.snapshot_tracker().min_active_snapshot(),
+            crate::mvcc_watermarks::NO_ACTIVE_SNAPSHOT
+        );
+        assert_eq!(vm.read_timestamp(), 100);
     }
 }

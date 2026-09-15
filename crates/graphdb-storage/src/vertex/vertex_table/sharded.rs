@@ -1208,10 +1208,7 @@ mod tests {
 
         table.unregister_snapshot_by_timestamp(100).unwrap();
         assert_eq!(table.active_snapshot_count(), 0);
-        assert_eq!(
-            table.min_active_snapshot_ts(),
-            crate::vertex::MAX_TIMESTAMP
-        );
+        assert_eq!(table.min_active_snapshot_ts(), crate::vertex::MAX_TIMESTAMP);
 
         table.unregister_snapshot(second).unwrap();
         assert_eq!(table.active_snapshot_count(), 0);

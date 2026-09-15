@@ -106,6 +106,12 @@ fn build_index_scan_plan(
         .read()
         .operation_context()
         .map(|context| context.read_timestamp)
+        // Context-less handles (tests, admin tools on quiescent stores)
+        // read the latest committed baseline. Production scans always
+        // carry a bound operation context with a pinned snapshot; a
+        // context-less scan on a store with in-flight writers could
+        // observe uncommitted versions, so new call sites must bind a
+        // context instead of relying on this fallback.
         .unwrap_or(MAX_TIMESTAMP);
 
     let partition_id_range = partition_range;
