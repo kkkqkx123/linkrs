@@ -28,33 +28,39 @@ impl EdgeStore {
         reserve_ratio: f32,
     ) -> usize {
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
-        let removed_out = self.out_csr.compact_with_ts_reporting(
-            cutoff,
-            reserve_ratio,
-            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-        );
-        let removed_in = self.in_csr.compact_with_ts_reporting(
-            cutoff,
-            reserve_ratio,
-            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-        );
-        removed_out + removed_in
+        let mut removed_edges = std::collections::HashSet::new();
+        self.out_csr
+            .compact_with_ts_reporting(cutoff, reserve_ratio, &mut |edge_id, delete_ts| {
+                removed_edges.insert(edge_id);
+                self.mvcc.record_deletion(edge_id, delete_ts);
+            });
+        self.in_csr
+            .compact_with_ts_reporting(cutoff, reserve_ratio, &mut |edge_id, delete_ts| {
+                removed_edges.insert(edge_id);
+                self.mvcc.record_deletion(edge_id, delete_ts);
+            });
+        removed_edges.len()
     }
 
-    /// Returns number of edges removed.
+    /// Returns number of distinct edges physically removed.
+    ///
+    /// Each edge is stored in both the out and in CSR, so the per-CSR removal
+    /// counts are summed by edge identity rather than added directly; counting
+    /// both would double-report every removed edge.
     pub fn compact_csr_only(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
         let cutoff = self.mvcc.min_active_snapshot_ts;
-        let removed_out = self.out_csr.compact_with_ts_reporting(
-            cutoff,
-            reserve_ratio,
-            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-        );
-        let removed_in = self.in_csr.compact_with_ts_reporting(
-            cutoff,
-            reserve_ratio,
-            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-        );
-        removed_out + removed_in
+        let mut removed_edges = std::collections::HashSet::new();
+        self.out_csr
+            .compact_with_ts_reporting(cutoff, reserve_ratio, &mut |edge_id, delete_ts| {
+                removed_edges.insert(edge_id);
+                self.mvcc.record_deletion(edge_id, delete_ts);
+            });
+        self.in_csr
+            .compact_with_ts_reporting(cutoff, reserve_ratio, &mut |edge_id, delete_ts| {
+                removed_edges.insert(edge_id);
+                self.mvcc.record_deletion(edge_id, delete_ts);
+            });
+        removed_edges.len()
     }
 
     /// Compact the single-segment CSR if fragmentation exceeds threshold.
@@ -143,11 +149,14 @@ impl EdgeStore {
 
     /// Get deletion statistics for the single-segment table.
     pub fn deletion_stats(&self) -> DeletionStats {
-        let mut stats = DeletionStats::default();
-        stats.total_live_edges = self.out_csr.edge_count();
-        stats.total_deleted_edges = self.mvcc.tombstones.len() as u64;
-        stats.oldest_deletion_ts = self.mvcc.tombstones.values().copied().min();
-        stats.newest_deletion_ts = self.mvcc.tombstones.values().copied().max();
-        stats
+        let tombstone_ts = self.mvcc.tombstones.values().copied();
+        let oldest = tombstone_ts.clone().min();
+        let newest = tombstone_ts.max();
+        DeletionStats {
+            total_live_edges: self.out_csr.edge_count(),
+            total_deleted_edges: self.mvcc.tombstones.len() as u64,
+            oldest_deletion_ts: oldest,
+            newest_deletion_ts: newest,
+        }
     }
 }

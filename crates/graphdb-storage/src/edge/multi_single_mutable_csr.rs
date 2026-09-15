@@ -437,15 +437,6 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
             .find(|nbr| nbr.edge_id == edge_id)
             .map(|nbr| nbr.create_ts)
     }
-
-    fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
-        let map: std::collections::HashMap<EdgeId, Timestamp> = iter.collect();
-        for nbr in self.edges.iter_mut() {
-            if let Some(&ts) = map.get(&nbr.edge_id) {
-                nbr.create_ts = ts;
-            }
-        }
-    }
 }
 
 impl MultiSingleMutableCsr {

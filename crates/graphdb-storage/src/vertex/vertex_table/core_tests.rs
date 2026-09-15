@@ -1010,3 +1010,88 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(0)));
 }
+
+#[test]
+fn test_partial_compact_preserves_unmoved_rows() {
+    // Regression test: `IdIndexer::compact` only reports moved rows, but the
+    // coordinator must carry over every live row. Unmoved rows (old == new)
+    // used to vanish from timestamps and columns after a partial compact.
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+    for (key, name) in [
+        ("v0", "Alice"),
+        ("v1", "Bob"),
+        ("v2", "Carol"),
+        ("v3", "Dave"),
+        ("v4", "Eve"),
+    ] {
+        table
+            .insert(key, &[("name".to_string(), Value::string(name))], 100)
+            .unwrap();
+    }
+    table.delete("v1", 200).unwrap();
+    table.delete("v3", 200).unwrap();
+
+    let (removed, _mapping) = table
+        .compact_with_ts_collect_mapping(300)
+        .expect("partial compact should succeed");
+    assert_eq!(removed.len(), 2);
+
+    for (key, name) in [("v0", "Alice"), ("v2", "Carol"), ("v4", "Eve")] {
+        let id = table
+            .get_internal_id(key, 300)
+            .unwrap_or_else(|| panic!("{} lost after partial compact", key));
+        let record = table
+            .get_by_internal_id(id, 300)
+            .unwrap_or_else(|| panic!("no record for {} after partial compact", key));
+        let got = record
+            .properties
+            .iter()
+            .find(|(n, _)| n == "name")
+            .map(|(_, v)| v.clone());
+        assert_eq!(got, Some(Value::string(name)), "property lost for {}", key);
+    }
+
+    if cfg!(debug_assertions) {
+        table.verify_invariants().unwrap();
+    }
+    assert_eq!(table.columns.row_count(), table.id_indexer.len());
+    assert_eq!(table.id_indexer.len(), table.timestamps.size());
+}
+
+#[test]
+fn test_compact_preserves_moved_row_history() {
+    // A row that moves during compaction must keep its before-image chain:
+    // historical snapshot reads have to see pre-update values afterwards.
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+    table
+        .insert("tmp", &[("name".to_string(), Value::string("Tmp"))], 100)
+        .unwrap();
+    table
+        .insert("v0", &[("name".to_string(), Value::string("Alice"))], 100)
+        .unwrap();
+    let v0 = table.get_internal_id("v0", 100).expect("v0 exists");
+    table
+        .update_property(v0, "name", &Value::string("Alice2"), 200)
+        .unwrap();
+    table.delete("tmp", 250).unwrap();
+
+    let (_, mapping) = table
+        .compact_with_ts_collect_mapping(300)
+        .expect("compact should succeed");
+    assert!(!mapping.is_empty(), "expected rows to move");
+
+    let id = table.get_internal_id("v0", 300).expect("v0 survives");
+    let name_at = |ts: Timestamp| {
+        table
+            .get_by_internal_id(id, ts)
+            .unwrap_or_else(|| panic!("no record for v0 at {}", ts))
+            .properties
+            .iter()
+            .find(|(n, _)| n == "name")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(name_at(150), Some(Value::string("Alice")));
+    assert_eq!(name_at(300), Some(Value::string("Alice2")));
+}

@@ -6,16 +6,14 @@ use crate::coordinator::SyncCoordinator;
 use crate::sqlite_outbox::SqliteOutbox;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use graphdb_metrics::StatsManager;
-#[cfg_attr(
-    not(any(feature = "fulltext", feature = "vector")),
-    allow(unused_variables)
-)]
 impl super::SyncManager {
     /// Admission lock for one index rebuild. The winner holds the guard for
     /// the whole rebuild; concurrent attempts fail fast with
     /// `SyncError::RebuildBusy` instead of interleaving generations on the
     /// same outbox `tag_index_id`.
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
     pub(crate) fn rebuild_lock_for(
         &self,
         target: &str,
@@ -73,6 +71,7 @@ impl super::SyncManager {
             .map(|coordinator| coordinator.fulltext_manager().clone())
     }
 
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
     pub(crate) fn stats_manager_opt(&self) -> Option<Arc<StatsManager>> {
         self.stats_manager.clone()
     }
@@ -94,6 +93,7 @@ impl super::SyncManager {
     /// first and then the vector coordinator, so operators poll a single
     /// endpoint instead of knowing which engine backs `(space, tag, field)`.
     /// Returns `None` when neither target has ever run a rebuild for the key.
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
     pub fn rebuild_progress(
         &self,
         space_id: u64,
@@ -115,29 +115,53 @@ impl super::SyncManager {
         None
     }
 
+    /// No rebuild engines are compiled in, so no progress can exist.
+    #[cfg(not(any(feature = "fulltext", feature = "vector")))]
+    pub fn rebuild_progress(
+        &self,
+        _space_id: u64,
+        _tag_name: &str,
+        _field_name: &str,
+    ) -> Option<graphdb_fulltext::RebuildProgress> {
+        None
+    }
+
     /// Fail non-terminal rebuild generations stranded by crashed attempts for
     /// every configured target, and collect fulltext rebuild scratch state.
     /// Idempotent; safe to run at startup before serving traffic. Missing
     /// targets count as zero instead of failing startup.
     pub async fn recover_stale_rebuilds(&self) -> Result<usize, SyncError> {
-        let mut failed = 0usize;
-        #[cfg(feature = "fulltext")]
-        {
-            match self.recover_stale_fulltext_rebuilds().await {
-                Ok(count) => failed += count,
-                Err(SyncError::PersistenceError(_)) => {}
-                Err(error) => return Err(error),
-            }
+        let fulltext_failed = self.recover_stale_fulltext_rebuilds_tolerant().await?;
+        let vector_failed = self.recover_stale_vector_rebuilds_tolerant().await?;
+        Ok(fulltext_failed + vector_failed)
+    }
+
+    #[cfg(feature = "fulltext")]
+    async fn recover_stale_fulltext_rebuilds_tolerant(&self) -> Result<usize, SyncError> {
+        match self.recover_stale_fulltext_rebuilds().await {
+            Ok(count) => Ok(count),
+            Err(SyncError::PersistenceError(_)) => Ok(0),
+            Err(error) => Err(error),
         }
-        #[cfg(feature = "vector")]
-        {
-            match self.recover_stale_vector_rebuilds().await {
-                Ok(count) => failed += count,
-                Err(SyncError::PersistenceError(_)) => {}
-                Err(error) => return Err(error),
-            }
+    }
+
+    #[cfg(not(feature = "fulltext"))]
+    async fn recover_stale_fulltext_rebuilds_tolerant(&self) -> Result<usize, SyncError> {
+        Ok(0)
+    }
+
+    #[cfg(feature = "vector")]
+    async fn recover_stale_vector_rebuilds_tolerant(&self) -> Result<usize, SyncError> {
+        match self.recover_stale_vector_rebuilds().await {
+            Ok(count) => Ok(count),
+            Err(SyncError::PersistenceError(_)) => Ok(0),
+            Err(error) => Err(error),
         }
-        Ok(failed)
+    }
+
+    #[cfg(not(feature = "vector"))]
+    async fn recover_stale_vector_rebuilds_tolerant(&self) -> Result<usize, SyncError> {
+        Ok(0)
     }
 
     /// Sync wrapper around [`SyncManager::recover_stale_rebuilds`] for

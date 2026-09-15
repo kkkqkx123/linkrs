@@ -577,42 +577,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_oldest_keeps_newest_value_within_horizon() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
-
-        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
-        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
-        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
-        col.set_versioned(0, Some(&Value::Int(4)), 40).unwrap();
-
-        // Fold to cap=2 with a horizon past the two oldest intervals. The
-        // folded range must resolve to the NEWEST retained value (not the
-        // oldest before-image the old implementation kept).
-        col.fold_oldest(0, 2, 25);
-        assert_eq!(
-            col.get_at_ts(0, 15),
-            Some(Value::Int(2)),
-            "folded range resolves to newer value"
-        );
-        assert_eq!(col.get_at_ts(0, 25), Some(Value::Int(2)));
-        assert_eq!(col.get_at_ts(0, 35), Some(Value::Int(3)));
-        assert_eq!(col.get(0), Some(Value::Int(4)));
-        assert_eq!(col.version_chain_len(0), 2, "chain reduced to cap");
-
-        // Horizon = MAX disables folding entirely (safe default).
-        col.set_versioned(0, Some(&Value::Int(5)), 50).unwrap();
-        col.set_versioned(0, Some(&Value::Int(6)), 60).unwrap();
-        let before = col.version_chain_len(0);
-        col.fold_oldest(0, 1, Timestamp::MAX);
-        assert_eq!(
-            col.version_chain_len(0),
-            before,
-            "MAX horizon must not fold"
-        );
-        assert_eq!(col.get_at_ts(0, 50), Some(Value::Int(5)), "history intact");
-    }
-
-    #[test]
     fn test_versioned_null_and_string_types() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, true);
 
@@ -818,5 +782,44 @@ mod tests {
         assert!(!store.collect_dirty_pages().is_empty());
         store.clear_dirty();
         assert!(store.collect_dirty_pages().is_empty());
+    }
+
+    #[test]
+    fn test_gc_versions_boundary_at_cutoff() {
+        // Entries ending exactly at the cutoff are no longer visible to any
+        // snapshot at/after it, so they are reclaimed; newer entries survive.
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
+
+        let removed = col.gc_versions(20);
+        assert_eq!(
+            removed, 1,
+            "entry [10,20) ends at the cutoff and is reclaimed"
+        );
+        assert_eq!(
+            col.get_at_ts(0, 15),
+            None,
+            "reclaimed history is unreadable"
+        );
+        assert_eq!(col.get_at_ts(0, 25), Some(Value::Int(2)));
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_gc_versions_at_max_keeps_single_baseline() {
+        // With no active snapshot the watermark is MAX: every before-image is
+        // unreachable, but one baseline entry is conservatively retained.
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
+
+        let removed = col.gc_versions(Timestamp::MAX);
+        assert_eq!(removed, 1, "one baseline entry is retained");
+        assert_eq!(col.version_chain_len(0), 1);
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+        assert_eq!(col.get_at_ts(0, Timestamp::MAX), Some(Value::Int(3)));
     }
 }

@@ -75,7 +75,17 @@ fn create_column_chunk(size: usize, num_cols: usize) -> DataChunk {
                 .collect(),
         );
     }
-    DataChunk::from_columns(columns, layout)
+    DataChunk::project_columns(columns, layout)
+}
+
+/// Materialize owned `Value` columns for every slot, mirroring the old
+/// columnar materialization edge (typed layout when available, row-major
+/// clone otherwise).
+fn materialize_columns(chunk: &mut DataChunk) -> Vec<Vec<Value>> {
+    chunk.build_typed_columns(true);
+    (0..chunk.num_columns())
+        .filter_map(|slot| chunk.get_column(slot))
+        .collect()
 }
 
 // ───────────────────────── Gate 1: HashJoin build ─────────────────────────
@@ -83,8 +93,7 @@ fn create_column_chunk(size: usize, num_cols: usize) -> DataChunk {
 /// Current operator pattern (hash_join.rs build loop): key from materialized
 /// columns, row cloned twice (bucket + all_right_rows).
 fn hash_join_build_rows(chunk: &mut DataChunk) -> usize {
-    chunk.materialize_columns();
-    let cols = chunk.columns.as_deref().unwrap();
+    let cols = materialize_columns(chunk);
     let mut build_side_hash: HashMap<JoinKeyValue, Vec<Vec<Value>>> = HashMap::new();
     let mut all_right_rows: Vec<Vec<Value>> = Vec::new();
     for (row_idx, row) in chunk.rows.iter().enumerate() {
@@ -95,32 +104,29 @@ fn hash_join_build_rows(chunk: &mut DataChunk) -> usize {
     build_side_hash.len() + all_right_rows.len()
 }
 
-/// Columnar candidate mirroring `HashJoinBuildSide::insert_chunk`: rows are
-/// transposed via `materialize_columns`, the key → row index map is built, and
-/// the chunk columns are moved into the accumulation store (extended across
-/// chunks). The target is pre-seeded with one prior chunk so the measured
-/// path is the cross-chunk `extend` (per-value copy), not just the
-/// first-chunk move.
+/// Columnar candidate mirroring `HashJoinBuildSide::insert_chunk`: columns are
+/// materialized, the key → row index map is built, and the materialized
+/// columns are moved into the accumulation store (extended across chunks).
+/// The target is pre-seeded with one prior chunk so the measured path is the
+/// cross-chunk `extend` (per-value copy), not just the first-chunk move.
 fn hash_join_build_columns(
     chunk: &mut DataChunk,
     target: &mut Vec<Vec<Value>>,
     base: usize,
 ) -> usize {
-    chunk.materialize_columns();
-    let cols = chunk.columns.as_deref().unwrap();
+    let cols = materialize_columns(chunk);
     let mut build_index: HashMap<JoinKeyValue, Vec<u32>> = HashMap::new();
-    for (row_idx, _) in cols[0].iter().enumerate() {
-        let key = JoinKeyValue::from(cols[0][row_idx].clone());
+    for (row_idx, key) in cols[0].iter().enumerate() {
+        let key = JoinKeyValue::from(key.clone());
         build_index
             .entry(key)
             .or_default()
             .push((base + row_idx) as u32);
     }
-    let chunk_cols = chunk.columns.take().unwrap();
     if target.is_empty() {
-        *target = chunk_cols;
+        *target = cols;
     } else {
-        for (t, s) in target.iter_mut().zip(chunk_cols) {
+        for (t, s) in target.iter_mut().zip(cols) {
             t.extend(s);
         }
     }
@@ -132,8 +138,7 @@ fn hash_join_build_columns(
 /// insert, matching the operator's steady-state build.
 fn seed_build_target(size: usize) -> (DataChunk, Vec<Vec<Value>>) {
     let mut first = create_row_chunk(size, 4);
-    first.materialize_columns();
-    let target = first.columns.take().unwrap();
+    let target = materialize_columns(&mut first);
     (create_row_chunk(size, 4), target)
 }
 
@@ -253,8 +258,7 @@ fn bench_group_by(c: &mut Criterion) {
 /// Baseline: columnar input (storage batch output) transposed into rows,
 /// then grouped via per-group row collection (current group path).
 fn scan_group_transpose(chunk: &mut DataChunk, key_col: usize, value_col: usize) -> (usize, f64) {
-    chunk.materialize_columns();
-    let cols = chunk.columns.clone().unwrap();
+    let cols = materialize_columns(chunk);
     let num_rows = cols[0].len();
     let mut rows: Vec<Vec<Value>> = Vec::with_capacity(num_rows);
     for row_idx in 0..num_rows {
@@ -283,7 +287,7 @@ fn scan_group_transpose(chunk: &mut DataChunk, key_col: usize, value_col: usize)
 /// Candidate: storage columns fed directly into accumulators; rows never
 /// materialized.
 fn scan_group_columns(chunk: &mut DataChunk, key_col: usize, value_col: usize) -> (usize, f64) {
-    let cols = chunk.columns.as_deref().unwrap();
+    let cols = materialize_columns(chunk);
     let mut acc_map: HashMap<Value, AggregateAccumulator> = HashMap::new();
     let mut sum = 0.0;
     for (row_idx, _) in cols[0].iter().enumerate() {

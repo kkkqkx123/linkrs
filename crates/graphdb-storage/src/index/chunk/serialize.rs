@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const CHUNK_MAGIC: [u8; 4] = *b"CHNK";
-const CHUNK_VERSION: u32 = 1;
+const CHUNK_VERSION: u32 = 2;
 const CHIX_MAGIC: [u8; 4] = *b"CHIX";
 const CHIX_VERSION: u32 = 1;
 
@@ -29,12 +29,6 @@ pub(crate) fn serialize_chunk<W: Write>(writer: &mut W, chunk: &Chunk) -> std::i
         if let Some(deleted_ts) = record.deleted_ts {
             writer.write_all(&[1u8])?;
             writer.write_all(&deleted_ts.to_le_bytes())?;
-        } else {
-            writer.write_all(&[0u8])?;
-        }
-        if let Some(entity_version) = record.entity_version {
-            writer.write_all(&[1u8])?;
-            writer.write_all(&entity_version.to_le_bytes())?;
         } else {
             writer.write_all(&[0u8])?;
         }
@@ -77,12 +71,6 @@ fn serialize_chunk_raw<W: Write>(writer: &mut W, chunk: &Chunk) -> std::io::Resu
         if let Some(deleted_ts) = record.deleted_ts {
             writer.write_all(&[1u8])?;
             writer.write_all(&deleted_ts.to_le_bytes())?;
-        } else {
-            writer.write_all(&[0u8])?;
-        }
-        if let Some(entity_version) = record.entity_version {
-            writer.write_all(&[1u8])?;
-            writer.write_all(&entity_version.to_le_bytes())?;
         } else {
             writer.write_all(&[0u8])?;
         }
@@ -176,16 +164,6 @@ pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chun
                 None
             };
 
-            let mut has_ev = [0u8; 1];
-            crc_reader.read_exact(&mut has_ev)?;
-            let entity_version = if has_ev[0] == 1 {
-                let mut buf = [0u8; 8];
-                crc_reader.read_exact(&mut buf)?;
-                Some(u64::from_le_bytes(buf))
-            } else {
-                None
-            };
-
             let mut num_inc_bytes = [0u8; 4];
             crc_reader.read_exact(&mut num_inc_bytes)?;
             let num_included = u32::from_le_bytes(num_inc_bytes) as usize;
@@ -218,7 +196,6 @@ pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chun
                 IndexRecord {
                     created_ts,
                     deleted_ts,
-                    entity_version,
                     included_columns: Some(included_columns),
                     entity_ref,
                 },

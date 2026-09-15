@@ -1,4 +1,4 @@
-use graphdb_core::types::{Timestamp, TransactionId};
+use graphdb_core::types::Timestamp;
 use graphdb_core::Value;
 
 use super::Column;
@@ -30,8 +30,6 @@ pub struct VersionEntry {
 #[derive(Debug, Clone, Default)]
 pub struct RowVisibility {
     create_ts: Vec<Timestamp>,
-    commit_ts: Vec<Timestamp>,
-    pending_owner: Vec<Option<TransactionId>>,
     len: usize,
 }
 
@@ -39,8 +37,6 @@ impl RowVisibility {
     pub fn new() -> Self {
         Self {
             create_ts: Vec::new(),
-            commit_ts: Vec::new(),
-            pending_owner: Vec::new(),
             len: 0,
         }
     }
@@ -49,8 +45,6 @@ impl RowVisibility {
     pub fn mark_created(&mut self, row_idx: usize, ts: Timestamp) {
         self.ensure_len(row_idx + 1);
         self.create_ts[row_idx] = ts;
-        self.commit_ts[row_idx] = ts;
-        self.pending_owner[row_idx] = None;
         if row_idx + 1 > self.len {
             self.len = row_idx + 1;
         }
@@ -63,8 +57,6 @@ impl RowVisibility {
     pub fn ensure_len(&mut self, n: usize) {
         if self.create_ts.len() < n {
             self.create_ts.resize(n, 0);
-            self.commit_ts.resize(n, 0);
-            self.pending_owner.resize(n, None);
         }
         if self.len < n {
             self.len = n;
@@ -73,21 +65,15 @@ impl RowVisibility {
 
     pub fn reserve(&mut self, additional: usize) {
         self.create_ts.reserve(additional);
-        self.commit_ts.reserve(additional);
-        self.pending_owner.reserve(additional);
     }
 
     pub fn resize(&mut self, new_len: usize) {
         self.create_ts.resize(new_len, 0);
-        self.commit_ts.resize(new_len, 0);
-        self.pending_owner.resize(new_len, None);
         self.len = new_len;
     }
 
     pub fn clear(&mut self) {
         self.create_ts.clear();
-        self.commit_ts.clear();
-        self.pending_owner.clear();
         self.len = 0;
     }
 
@@ -97,8 +83,6 @@ impl RowVisibility {
 
     pub fn memory_usage(&self) -> usize {
         self.create_ts.len() * std::mem::size_of::<Timestamp>()
-            + self.commit_ts.len() * std::mem::size_of::<Timestamp>()
-            + self.pending_owner.len() * std::mem::size_of::<Option<TransactionId>>()
     }
 }
 
@@ -186,7 +170,7 @@ impl Column {
     /// Uses the unified `Visibility` helper so column and edge layers share the
     /// same snapshot visibility semantics.
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
-        let start_ts = self.visibility.commit_ts.get(row_idx).copied().unwrap_or(0);
+        let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
         if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
             // Chunk-routed base read: overlay first, then encoded base.
             return self.get(row_idx);
@@ -292,30 +276,40 @@ impl Column {
         removed
     }
 
-    /// Snapshot the MVCC metadata of `from` into `to` (used by table
-    /// compaction to preserve version history when rows are remapped).
-    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
-        if from >= self.len() {
-            return;
-        }
+    /// Copy the MVCC row state (creation timestamp + before-image chain)
+    /// from another column's row into this column's row.
+    ///
+    /// Unlike `set`, this preserves history: used when rows move between
+    /// stores (e.g. table compaction rebuilds into fresh columns) so
+    /// snapshot reads stay intact after the remap. Lazily allocates the
+    /// destination chain only when the source actually retains history.
+    pub(crate) fn clone_row_state_from(&mut self, src: &Column, from: usize, to: usize) {
+        let src_create = src.visibility.create_ts().get(from).copied();
+        let src_has_chains = src.with_version_chains_read(|chains| chains.is_some());
+        let src_chain =
+            src.with_version_chains_read(|chains| chains.and_then(|c| c.get(from)).cloned());
         self.ensure_row_meta(to + 1);
-        self.with_version_chains_write(|chains| {
-            if let Some(chains) = chains.as_mut() {
-                if from < chains.len() && to < chains.len() {
-                    chains[to] = chains[from].clone();
-                }
+        if let Some(create_ts) = src_create {
+            if to < self.visibility.create_ts.len() {
+                self.visibility.create_ts[to] = create_ts;
             }
-        });
-        if from < self.visibility.create_ts.len() && to < self.visibility.create_ts.len() {
-            let create = self.visibility.create_ts[from];
-            let commit = self.visibility.commit_ts[from];
-            let owner = self.visibility.pending_owner[from];
-            self.visibility.create_ts[to] = create;
-            self.visibility.commit_ts[to] = commit;
-            self.visibility.pending_owner[to] = owner;
+        }
+        if src_has_chains {
+            self.with_version_chains_write(|dst| {
+                if dst.is_none() {
+                    *dst = Some(vec![Vec::new(); to + 1]);
+                }
+                if let Some(vecs) = dst.as_mut() {
+                    if to >= vecs.len() {
+                        vecs.resize(to + 1, Vec::new());
+                    }
+                    vecs[to] = src_chain.clone().unwrap_or_default();
+                }
+            });
         }
     }
 
+    #[cfg(test)]
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
         self.with_version_chains_read(|chains| {
             chains
@@ -366,66 +360,6 @@ impl Column {
                 memory_bytes,
             }
         })
-    }
-
-    pub fn fold_oldest(&mut self, row_idx: usize, cap: usize, horizon: Timestamp) {
-        if cap == 0 {
-            return;
-        }
-        self.with_version_chains_write(|chains| {
-            let Some(chains) = chains.as_mut() else {
-                return;
-            };
-            let Some(chain) = chains.get_mut(row_idx) else {
-                return;
-            };
-            if chain.len() <= cap {
-                return;
-            }
-            // Fold from the oldest end: while over capacity and the oldest
-            // retained entry is fully older than the retention horizon (i.e. no
-            // active snapshot can still read it), merge it into its successor —
-            // keeping the NEWER value while extending the successor's range
-            // backward over the expired one. This preserves the most recent
-            // history instead of keeping the older value.
-            // Timestamp::MAX disables folding entirely (safe default).
-            let mut entries: Vec<VersionEntry> = std::mem::take(chain);
-            let mut fold_count = 0usize;
-            while entries.len() - fold_count > cap
-                && fold_count + 1 < entries.len()
-                && horizon != Timestamp::MAX
-                && entries[fold_count].end_ts <= horizon
-            {
-                if entries[fold_count + 1].start_ts > entries[fold_count].start_ts {
-                    entries[fold_count + 1].start_ts = entries[fold_count].start_ts;
-                }
-                fold_count += 1;
-            }
-            if fold_count > 0 {
-                entries.drain(..fold_count);
-            }
-            *chain = entries;
-        });
-    }
-
-    pub fn clear_row_version_chains(&mut self, row_idx: usize) {
-        self.with_version_chains_write(|chains| {
-            if let Some(chains) = chains.as_mut() {
-                if row_idx < chains.len() {
-                    chains[row_idx].clear();
-                }
-            }
-        });
-        if row_idx < self.visibility.create_ts.len() {
-            self.visibility.create_ts[row_idx] = 0;
-            self.visibility.commit_ts[row_idx] = 0;
-            self.visibility.pending_owner[row_idx] = None;
-        }
-    }
-
-    /// Optional accessor for lazy-allocated chains.
-    pub fn version_chains_opt(&self) -> Option<&Vec<Vec<VersionEntry>>> {
-        self.version_chains.as_ref()
     }
 
     /// Execute a closure with read-only access to the version chains.

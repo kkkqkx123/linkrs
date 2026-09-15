@@ -110,12 +110,6 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Look up the creation timestamp for an edge.
     fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp>;
-
-    /// Rebuild the inline `create_ts` field on each Nbr from an external source.
-    ///
-    /// Called after deserialization to restore creation timestamps that are
-    /// not persisted in the CSR dump format.
-    fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>);
 }
 
 #[cfg(test)]

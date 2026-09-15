@@ -163,7 +163,7 @@ impl IndexCursor for EdgeIndexCursor {
             if self
                 .stale_checker
                 .as_ref()
-                .is_some_and(|checker| !checker(&entity_ref, entry.entity_version))
+                .is_some_and(|checker| !checker(&entity_ref))
             {
                 self.stale_skipped += 1;
                 continue;

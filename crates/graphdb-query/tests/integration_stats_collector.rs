@@ -30,11 +30,14 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
     }
 
     {
-        let mut writer = raw.bind_operation_context(StorageOperationContext::transaction(
-            TransactionId::from(1),
-            10,
-            false,
-        ));
+        let mut writer =
+            raw.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+                TransactionId::from(1),
+                10,
+                Some(10),
+                false,
+                false,
+            ));
         for i in 1..=200i64 {
             writer
                 .insert_vertex(

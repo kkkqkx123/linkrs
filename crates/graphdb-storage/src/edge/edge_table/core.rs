@@ -939,7 +939,7 @@ impl EdgeStore {
         false
     }
 
-    pub fn needs_background_freeze(&self) -> bool {
+    pub fn needs_background_maintenance(&self) -> bool {
         self.config.max_mutable_csr_bytes > 0
             && self.estimate_memory_usage() > self.config.max_mutable_csr_bytes
     }

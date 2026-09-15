@@ -27,13 +27,6 @@ use graphdb_core::{StorageError, StorageResult, Value};
 #[derive(Debug, Clone)]
 pub struct VertexTableConfig {
     pub initial_capacity: usize,
-    /// Maximum version chain length per row before folding oldest entries.
-    /// Set to 0 to disable folding (unlimited chain growth).
-    pub version_chain_cap: usize,
-    /// Retention horizon for version chain folding. Entries fully older than
-    /// this timestamp may be folded while keeping the newest value. Use
-    /// `Timestamp::MAX` to disable lossy folding (the safe default).
-    pub retention_horizon: Timestamp,
     /// Payload size above which strings spill to the per-column overflow
     /// file. `usize::MAX` disables overflow routing (inline storage).
     pub string_overflow_threshold: usize,
@@ -45,8 +38,6 @@ impl Default for VertexTableConfig {
     fn default() -> Self {
         Self {
             initial_capacity: 4096,
-            version_chain_cap: 64,
-            retention_horizon: Timestamp::MAX,
             string_overflow_threshold: crate::vertex::column::overflow::DEFAULT_OVERFLOW_THRESHOLD,
             chunk_capacity: crate::vertex::column::chunk::DEFAULT_CHUNK_ROWS,
         }
@@ -91,13 +82,14 @@ pub struct VertexTable {
     /// Rows per chunk for chunk-local encodings (applied when columns are
     /// created).
     pub(super) chunk_capacity: usize,
-    /// Maximum version chain length per row before folding oldest entries.
-    pub(super) version_chain_cap: usize,
-    /// Retention horizon for version chain folding.
-    pub(super) retention_horizon: Timestamp,
 }
 
 impl VertexTable {
+    /// Per-row version-chain length above which `gc` emits a pressure
+    /// warning. Chains grow without bound while the GC watermark is pinned,
+    /// so crossing this threshold points at a stuck snapshot, not a hot row.
+    const VERSION_CHAIN_PRESSURE_WARN_LEN: usize = 1024;
+
     pub fn with_config(
         label: LabelId,
         label_name: String,
@@ -150,8 +142,6 @@ impl VertexTable {
             encoding_selector: EncodingSelector::default(),
             string_overflow_threshold: config.string_overflow_threshold,
             chunk_capacity: config.chunk_capacity,
-            version_chain_cap: config.version_chain_cap,
-            retention_horizon: config.retention_horizon,
         }
     }
 
@@ -217,15 +207,6 @@ impl VertexTable {
             self.timestamps.insert(internal_id, ts);
             self.columns
                 .set_versioned(internal_id as usize, &converted, ts)?;
-            if self.version_chain_cap != 0 && !converted.is_empty() {
-                let names: Vec<String> = converted.iter().map(|(n, _)| n.clone()).collect();
-                self.columns.fold_oldest_for_row_filtered(
-                    internal_id as usize,
-                    self.version_chain_cap,
-                    self.retention_horizon,
-                    &names,
-                );
-            }
             return Ok(internal_id);
         }
 
@@ -233,15 +214,6 @@ impl VertexTable {
         self.timestamps.insert(internal_id, ts);
         self.columns
             .set_versioned(internal_id as usize, &converted, ts)?;
-        if self.version_chain_cap != 0 && !converted.is_empty() {
-            let names: Vec<String> = converted.iter().map(|(n, _)| n.clone()).collect();
-            self.columns.fold_oldest_for_row_filtered(
-                internal_id as usize,
-                self.version_chain_cap,
-                self.retention_horizon,
-                &names,
-            );
-        }
 
         Ok(internal_id)
     }
@@ -432,15 +404,6 @@ impl VertexTable {
             Some(&converted_value),
             ts,
         )?;
-        if self.version_chain_cap != 0 {
-            if let Some(col) = self.columns.get_column_mut(col_name) {
-                col.fold_oldest(
-                    internal_id as usize,
-                    self.version_chain_cap,
-                    self.retention_horizon,
-                );
-            }
-        }
         Ok(())
     }
 
@@ -475,13 +438,6 @@ impl VertexTable {
             .get_column_by_id_mut(col_id)
             .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
         col.set_versioned(internal_id as usize, Some(&converted_value), ts)?;
-        if self.version_chain_cap != 0 {
-            col.fold_oldest(
-                internal_id as usize,
-                self.version_chain_cap,
-                self.retention_horizon,
-            );
-        }
         Ok(())
     }
 
@@ -851,13 +807,27 @@ impl VertexTable {
         let version_removed = self.columns.gc_versions(min_ts);
         let version_stats = self.columns.version_chain_stats();
         log::trace!(
-            "vertex gc version stats: total_rows={} total_entries={} max_len={} memory_bytes={} removed={}",
+            "vertex gc version stats: total_rows={} total_entries={} max_len={} avg_len={:.2} memory_bytes={} removed={}",
             version_stats.total_rows,
             version_stats.total_entries,
             version_stats.max_len,
+            version_stats.avg_len,
             version_stats.memory_bytes,
             version_removed
         );
+        // Version chains are watermark-collected only: a long-lived snapshot
+        // pins every chain, so an abnormally long chain almost always means
+        // a stuck snapshot rather than a hot row. Surface it loudly instead
+        // of growing silently.
+        if version_stats.max_len > Self::VERSION_CHAIN_PRESSURE_WARN_LEN {
+            log::warn!(
+                "vertex table '{}' has a version chain of length {} (min_active_snapshot_ts={}); \
+                 a pinned snapshot may be blocking garbage collection",
+                self.label_name,
+                version_stats.max_len,
+                min_ts,
+            );
+        }
 
         // Collect all vertices deleted before min_ts
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(min_ts).collect();

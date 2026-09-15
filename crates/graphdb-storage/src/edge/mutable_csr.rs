@@ -1587,24 +1587,6 @@ impl MutableCsrTrait for MutableCsr {
     fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
         MutableCsr::create_ts_of(self, edge_id)
     }
-
-    fn rebuild_create_ts(&mut self, iter: impl Iterator<Item = (EdgeId, Timestamp)>) {
-        let mut map: std::collections::HashMap<EdgeId, Timestamp> = iter.collect();
-        for nbr in self.nbr_list.iter_mut() {
-            if let Some(ts) = map.remove(&nbr.edge_id) {
-                nbr.create_ts = ts;
-            }
-        }
-        for (_, chunks) in self.overflow_chunks.iter_mut() {
-            for chunk in chunks.iter_mut() {
-                for nbr in chunk.iter_mut() {
-                    if let Some(ts) = map.remove(&nbr.edge_id) {
-                        nbr.create_ts = ts;
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

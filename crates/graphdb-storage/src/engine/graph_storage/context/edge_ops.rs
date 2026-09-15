@@ -74,7 +74,7 @@ impl GraphStorageContext {
         // Lazily register snapshot for this edge partition if needed
         self.ensure_edge_snapshot_registered(key);
         let stats_manager = self.persistent.stats_manager.clone();
-        let freeze_requested = self.persistent.data_store.with_edge_partition_mut(
+        let maintenance_requested = self.persistent.data_store.with_edge_partition_mut(
             key,
             template_key,
             |template| {
@@ -95,10 +95,10 @@ impl GraphStorageContext {
                     params.properties,
                     params.ts,
                 )?;
-                Ok(edge_table.needs_background_freeze())
+                Ok(edge_table.needs_background_maintenance())
             },
         )?;
-        if freeze_requested {
+        if maintenance_requested {
             self.schedule_background_maintenance();
         }
         self.mark_edge_modified(params.edge_label);

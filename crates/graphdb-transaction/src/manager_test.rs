@@ -702,7 +702,7 @@ fn test_read_committed_refreshes_statement_snapshot() {
     let initial = manager
         .get_context(reader)
         .expect("reader context should exist")
-        .effective_snapshot_timestamp();
+        .effective_read_timestamp();
 
     let writer = manager
         .begin_insert_transaction(TransactionOptions::default())
@@ -714,7 +714,7 @@ fn test_read_committed_refreshes_statement_snapshot() {
     let (context, statement_start) = manager
         .begin_statement(reader)
         .expect("reader statement should begin");
-    assert!(context.effective_snapshot_timestamp() > initial);
+    assert!(context.effective_read_timestamp() > initial);
     manager
         .finish_statement(&context, statement_start)
         .expect("reader statement should finish");

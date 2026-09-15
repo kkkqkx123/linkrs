@@ -706,7 +706,7 @@ impl TransactionManager {
         if context.isolation_level == IsolationLevel::ReadCommitted {
             let committed = self.version_manager.read_timestamp();
             let snapshot = committed.max(context.timestamp());
-            context.set_snapshot_timestamp(snapshot);
+            context.set_refreshed_read_ts(snapshot);
         }
         let start = context.begin_statement()?;
         self.stats.begin_statement();
@@ -728,7 +728,7 @@ impl TransactionManager {
         context.check_timeouts()?;
         if context.isolation_level == IsolationLevel::ReadCommitted {
             let committed = self.version_manager.read_timestamp();
-            context.set_snapshot_timestamp(committed.max(context.timestamp()));
+            context.set_refreshed_read_ts(committed.max(context.timestamp()));
         }
         Ok(context)
     }
@@ -774,7 +774,7 @@ impl TransactionManager {
         let recorder: Arc<dyn TransactionMutationRecorder> = context.clone();
         Ok(TransactionExecution::new(
             txn_id,
-            context.effective_snapshot_timestamp(),
+            context.effective_read_timestamp(),
             if context.read_only {
                 None
             } else {

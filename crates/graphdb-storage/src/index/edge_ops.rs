@@ -163,8 +163,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
                 } else {
                     IndexRecord::new(write_ts)
-                }
-                .with_entity_version(write_ts);
+                };
                 if let Some(entity) = edge_entity_ref(edge_src, edge_dst, edge_type, ranking) {
                     entry = entry.with_entity_ref(entity);
                 }

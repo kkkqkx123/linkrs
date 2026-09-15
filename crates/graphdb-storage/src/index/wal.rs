@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::Path;
 
 const WAL_MAGIC: [u8; 4] = *b"INDW";
-const WAL_VERSION: u32 = 1;
+const WAL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub(crate) enum WalEntry {
@@ -45,12 +45,6 @@ impl WalEntry {
                 if let Some(deleted_ts) = record.deleted_ts {
                     writer.write_all(&[1u8])?;
                     writer.write_all(&deleted_ts.to_le_bytes())?;
-                } else {
-                    writer.write_all(&[0u8])?;
-                }
-                if let Some(entity_version) = record.entity_version {
-                    writer.write_all(&[1u8])?;
-                    writer.write_all(&entity_version.to_le_bytes())?;
                 } else {
                     writer.write_all(&[0u8])?;
                 }
@@ -120,16 +114,6 @@ impl WalEntry {
                     None
                 };
 
-                let mut has_ev = [0u8; 1];
-                reader.read_exact(&mut has_ev)?;
-                let entity_version = if has_ev[0] == 1 {
-                    let mut ev_bytes = [0u8; 8];
-                    reader.read_exact(&mut ev_bytes)?;
-                    Some(u64::from_le_bytes(ev_bytes))
-                } else {
-                    None
-                };
-
                 let mut num_included_bytes = [0u8; 4];
                 reader.read_exact(&mut num_included_bytes)?;
                 let num_included = u32::from_le_bytes(num_included_bytes) as usize;
@@ -165,7 +149,6 @@ impl WalEntry {
                     record: IndexRecord {
                         created_ts,
                         deleted_ts,
-                        entity_version,
                         included_columns: Some(included_columns),
                         entity_ref,
                     },
@@ -287,9 +270,8 @@ mod tests {
 
     #[test]
     fn serialize_insert_roundtrip() {
-        let record = IndexRecord::new(100)
-            .with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42)))
-            .with_entity_version(50);
+        let record =
+            IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42)));
         let entry = WalEntry::Insert {
             is_forward: true,
             key: vec![1, 2, 3, 4],
@@ -310,7 +292,6 @@ mod tests {
                 assert!(is_forward);
                 assert_eq!(key, vec![1, 2, 3, 4]);
                 assert_eq!(record.created_ts, 100);
-                assert_eq!(record.entity_version, Some(50));
             }
             _ => panic!("Expected Insert entry"),
         }

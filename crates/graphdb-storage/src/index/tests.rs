@@ -700,9 +700,7 @@ fn wal_recovers_data_after_checkpoint() {
 
     forward.insert(
         vec![1, 2, 3],
-        IndexRecord::new(100)
-            .with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42)))
-            .with_entity_version(50),
+        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42))),
     );
     reverse.insert(
         vec![4, 5, 6],

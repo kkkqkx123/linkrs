@@ -95,8 +95,9 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
         .expect("acquire timestamp");
     let txid = TransactionId::from(tx_seq);
 
-    let mut txn =
-        storage.bind_operation_context(StorageOperationContext::transaction(txid, ts, false));
+    let mut txn = storage.bind_operation_context(
+        StorageOperationContext::transaction_with_timestamps(txid, ts, Some(ts), false, false),
+    );
 
     let edges: Vec<Edge> = (0..edge_count)
         .map(|i| Edge {

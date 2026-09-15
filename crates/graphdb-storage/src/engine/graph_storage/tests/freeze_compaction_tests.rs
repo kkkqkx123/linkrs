@@ -384,4 +384,31 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
             "edge {src}->{dst} lost after auto vertex compaction remap"
         );
     }
+
+    // Every surviving vertex keeps its properties through the remap. This
+    // must cover all survivors (not a sample): rows whose internal ids did
+    // not move are absent from the partial id mapping and used to be
+    // dropped by the remap.
+    let survivors: Vec<i64> = (1..=100i64).filter(|id| *id % 2 == 1 || *id > 80).collect();
+    assert_eq!(survivors.len(), 60);
+    for id in survivors {
+        let vertex = storage
+            .get_vertex("test_space", &VertexId::from_int64(id))
+            .unwrap()
+            .unwrap_or_else(|| panic!("vertex v{id} lost after vertex compaction remap"));
+        assert_eq!(
+            vertex.properties.get("name"),
+            Some(&Value::string(format!("v{id}"))),
+            "vertex v{id} property corrupted by remap"
+        );
+    }
+    for id in [2i64, 40, 80] {
+        assert!(
+            storage
+                .get_vertex("test_space", &VertexId::from_int64(id))
+                .unwrap()
+                .is_none(),
+            "deleted vertex v{id} resurrected by remap"
+        );
+    }
 }

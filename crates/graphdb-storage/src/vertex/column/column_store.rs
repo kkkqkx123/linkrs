@@ -410,34 +410,15 @@ impl ColumnStore {
         removed
     }
 
-    /// Fold oldest entries only for the specified columns.
-    /// This reduces write amplification when only a subset of columns was updated.
-    pub fn fold_oldest_for_row_filtered(
-        &mut self,
-        row_idx: usize,
-        cap: usize,
-        horizon: Timestamp,
-        names: &[String],
-    ) {
-        if cap == 0 || names.is_empty() {
-            return;
-        }
-        for name in names {
-            if let Some(col) = self.get_column_mut(name) {
-                if col.version_chains_opt().is_none() {
-                    continue;
-                }
-                col.fold_oldest(row_idx, cap, horizon);
+    /// Copy the MVCC row state (creation timestamp + before-image chain) of
+    /// every column from another store's row, used by table compaction to
+    /// preserve version history when rows move into a rebuilt store.
+    pub(crate) fn clone_row_state_from(&mut self, src: &ColumnStore, from: usize, to: usize) {
+        for dst_col in &mut self.columns {
+            let name = dst_col.name.clone();
+            if let Some(src_col) = src.get_column(&name) {
+                dst_col.clone_row_state_from(src_col, from, to);
             }
-        }
-    }
-
-    /// Copy the MVCC row state (current version timestamp + version chain)
-    /// from `from` to `to`, used by table compaction to preserve version
-    /// history when rows are remapped.
-    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
-        for col in &mut self.columns {
-            col.copy_row_state(from, to);
         }
     }
 

@@ -133,7 +133,7 @@ impl fmt::Debug for TransactionContext {
             .field("txn_type", &self.txn_type)
             .field("state", &self.state.load())
             .field("start_timestamp", &self.start_timestamp)
-            .field("refreshed_read_ts", &self.effective_snapshot_timestamp())
+            .field("refreshed_read_ts", &self.effective_read_timestamp())
             .field("read_only", &self.read_only)
             .field("auto_commit", &self.auto_commit)
             .field("isolation_level", &self.isolation_level)
@@ -350,8 +350,8 @@ impl TransactionContext {
         self.commit_timestamp.store(commit_ts, Ordering::Relaxed);
     }
 
-    /// Get the effective snapshot timestamp for reads
-    pub fn effective_snapshot_timestamp(&self) -> Timestamp {
+    /// Get the effective read timestamp for reads
+    pub fn effective_read_timestamp(&self) -> Timestamp {
         self.refreshed_read_ts
             .read()
             .map(|refreshed| refreshed.max(self.start_timestamp))
@@ -361,11 +361,6 @@ impl TransactionContext {
     /// Refresh the ReadCommitted statement snapshot
     pub fn set_refreshed_read_ts(&self, ts: Timestamp) {
         *self.refreshed_read_ts.write() = Some(ts);
-    }
-
-    /// Set the snapshot timestamp for statement refresh
-    pub fn set_snapshot_timestamp(&self, ts: Timestamp) {
-        self.set_refreshed_read_ts(ts);
     }
 
     /// Drain pending budget warnings queued during mutation recording.
@@ -810,7 +805,7 @@ impl TransactionContext {
             mutation_count: self.mutation_count.load(Ordering::Relaxed),
             modified_tables,
             savepoint_count,
-            read_timestamp: self.effective_snapshot_timestamp(),
+            read_timestamp: self.effective_read_timestamp(),
             write_timestamp: if self.read_only { 0 } else { self.timestamp() },
             owner: self.owner(),
             last_activity: self.last_activity.load().elapsed(),

@@ -229,11 +229,9 @@ impl HashJoinBuildSide {
         // reader becomes visible.
         chunk.take_selection();
         chunk.rows.clear();
-        if !typed_usable {
-            if typed.is_some() {
-                if let Some(stats) = &chunk.columnar_stats {
-                    stats.record_wasted_build();
-                }
+        if !typed_usable && typed.is_some() {
+            if let Some(stats) = &chunk.columnar_stats {
+                stats.record_wasted_build();
             }
         }
         Ok(())

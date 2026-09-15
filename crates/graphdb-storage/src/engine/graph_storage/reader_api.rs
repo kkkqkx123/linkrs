@@ -450,8 +450,8 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::index::types::StaleChecker> = Some(Arc::new(
-                move |entity_ref, _entity_version| match entity_ref {
+            let stale_checker: Option<crate::index::types::StaleChecker> =
+                Some(Arc::new(move |entity_ref| match entity_ref {
                     graphdb_core::wal::EntityRef::Vertex(vid) => {
                         reader::get_vertex(&ctx, &space_name, vid)
                             .ok()
@@ -459,8 +459,7 @@ impl StorageReader for GraphStorage {
                             .is_some()
                     }
                     graphdb_core::wal::EntityRef::Edge { .. } => true,
-                },
-            ));
+                }));
             let cursor = self
                 .ctx
                 .index_data_manager()
@@ -473,8 +472,8 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::index::types::StaleChecker> = Some(Arc::new(
-                move |entity_ref, _entity_version| match entity_ref {
+            let stale_checker: Option<crate::index::types::StaleChecker> =
+                Some(Arc::new(move |entity_ref| match entity_ref {
                     graphdb_core::wal::EntityRef::Vertex(vid) => {
                         reader::get_vertex(&ctx, &space_name, vid)
                             .ok()
@@ -482,8 +481,7 @@ impl StorageReader for GraphStorage {
                             .is_some()
                     }
                     graphdb_core::wal::EntityRef::Edge { .. } => true,
-                },
-            ));
+                }));
             let cursor = self
                 .ctx
                 .index_data_manager()

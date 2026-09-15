@@ -193,7 +193,6 @@ pub(crate) fn build_vertex_index_data(
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, &vid_value, &index.name)?;
 
             let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
-                .with_entity_version(snapshot_timestamp)
                 .with_entity_ref(EntityRef::Vertex(vertex.vid));
 
             forward.insert(logical_forward_key.0, entry.clone());
@@ -251,7 +250,6 @@ pub(crate) fn build_edge_index_data(
             )?;
 
             let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
-                .with_entity_version(snapshot_timestamp)
                 .with_entity_ref(edge_entity_ref(edge));
 
             forward.insert(logical_forward_key.0, entry.clone());

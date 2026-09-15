@@ -3,7 +3,7 @@ use graphdb_core::wal::EntityRef;
 use graphdb_core::Value;
 use std::sync::Arc;
 
-pub(crate) type StaleChecker = Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>;
+pub(crate) type StaleChecker = Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeIdentity<'a> {
@@ -42,7 +42,6 @@ pub(crate) struct IndexIdentity {
 pub struct IndexRecord {
     pub created_ts: Timestamp,
     pub deleted_ts: Option<Timestamp>,
-    pub entity_version: Option<Timestamp>,
     pub included_columns: Option<Vec<(String, Value)>>,
     pub entity_ref: Option<EntityRef>,
 }
@@ -52,7 +51,6 @@ impl IndexRecord {
         Self {
             created_ts,
             deleted_ts: None,
-            entity_version: None,
             included_columns: None,
             entity_ref: None,
         }
@@ -62,7 +60,6 @@ impl IndexRecord {
         Self {
             created_ts,
             deleted_ts: None,
-            entity_version: None,
             included_columns: Some(included_columns),
             entity_ref: None,
         }
@@ -70,11 +67,6 @@ impl IndexRecord {
 
     pub fn with_entity_ref(mut self, entity_ref: EntityRef) -> Self {
         self.entity_ref = Some(entity_ref);
-        self
-    }
-
-    pub fn with_entity_version(mut self, version: Timestamp) -> Self {
-        self.entity_version = Some(version);
         self
     }
 
@@ -142,13 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn index_record_with_entity_ref_and_version() {
+    fn index_record_with_entity_ref() {
         let entity = EntityRef::Vertex(Default::default());
-        let record = IndexRecord::new(10)
-            .with_entity_ref(entity.clone())
-            .with_entity_version(42);
+        let record = IndexRecord::new(10).with_entity_ref(entity.clone());
         assert_eq!(record.entity_ref, Some(entity));
-        assert_eq!(record.entity_version, Some(42));
     }
 
     #[test]

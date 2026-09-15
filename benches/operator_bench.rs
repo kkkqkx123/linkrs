@@ -181,7 +181,7 @@ fn bench_materialize_columns(c: &mut Criterion) {
             b.iter_batched(
                 || create_chunk(*chunk_size),
                 |mut chunk| {
-                    chunk.materialize_columns();
+                    chunk.build_typed_columns(true);
                 },
                 BatchSize::SmallInput,
             )
@@ -191,7 +191,7 @@ fn bench_materialize_columns(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let mut chunk = create_chunk(*chunk_size);
-                    chunk.materialize_columns();
+                    chunk.build_typed_columns(true);
                     chunk
                 },
                 |mut chunk| {

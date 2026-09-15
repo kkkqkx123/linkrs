@@ -147,8 +147,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
                 } else {
                     IndexRecord::new(write_ts)
-                }
-                .with_entity_version(write_ts);
+                };
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
                 }
@@ -166,8 +165,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
                 } else {
                     IndexRecord::new(write_ts)
-                }
-                .with_entity_version(write_ts);
+                };
                 entry.mark_deleted(write_ts);
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
@@ -186,8 +184,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
                 } else {
                     IndexRecord::new(write_ts)
-                }
-                .with_entity_version(write_ts);
+                };
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
                 }

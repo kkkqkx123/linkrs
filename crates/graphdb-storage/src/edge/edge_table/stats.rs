@@ -191,6 +191,6 @@ mod tests {
 
         let stats = table.deletion_stats();
         assert_eq!(stats.total_deleted_edges, 3);
-        assert!(stats.total_live_edges >= 0);
+        assert_eq!(stats.total_live_edges, 0);
     }
 }

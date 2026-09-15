@@ -22,6 +22,7 @@ mod types;
 pub(crate) use self::intents::format_vector_point_id;
 #[cfg(test)]
 pub(crate) use self::intents::payload_to_intent;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 pub(crate) use self::intents::stable_hash;
 pub use self::types::{
     EdgeProps, EdgeRef, IndexCreateRequest, OutboxBackpressureConfig, OutboxConsumerConfig,

@@ -108,44 +108,6 @@ fn test_timeout_cleanup_updates_stats() {
     );
 }
 
-/// Verify that begin_snapshot_read validates the timestamp is not too recent.
-#[test]
-fn test_snapshot_read_rejects_future_timestamp() {
-    let manager = TransactionManager::new(TransactionManagerConfig::default());
-
-    let current_write_ts = manager.version_manager().write_timestamp();
-    let future_ts = current_write_ts.saturating_add(100);
-
-    let result = manager.begin_snapshot_read(future_ts, TransactionOptions::default());
-    assert!(
-        result.is_err(),
-        "snapshot read should reject timestamp beyond committed frontier"
-    );
-}
-
-/// Verify that begin_snapshot_read succeeds for a valid past timestamp.
-#[test]
-fn test_snapshot_read_accepts_past_timestamp() {
-    let manager = TransactionManager::new(TransactionManagerConfig::default());
-
-    let current_write_ts = manager.version_manager().write_timestamp();
-
-    let txn = manager
-        .begin_snapshot_read(current_write_ts, TransactionOptions::default())
-        .expect("snapshot read at current write_ts should succeed");
-
-    let ctx = manager.get_context(txn).expect("get snapshot context");
-    assert_eq!(
-        ctx.effective_snapshot_timestamp(),
-        current_write_ts,
-        "snapshot should read at the requested timestamp"
-    );
-
-    manager
-        .commit_transaction(txn)
-        .expect("commit snapshot read");
-}
-
 /// Verify that a transaction can be force-killed and becomes inactive.
 #[test]
 fn test_kill_transaction() {

@@ -113,13 +113,25 @@ impl CompactionCoordinator {
     /// - Requires exclusive access (mut self on VertexTable)
     /// - Space is reclaimed eagerly (arrays truncated immediately)
     pub fn execute(&mut self, table: &mut VertexTable) -> StorageResult<()> {
+        // Capture the pre-compact live set first: `IdIndexer::compact`
+        // rewrites dense ids in place and only reports rows that moved, so
+        // unmoved rows (old == new) are absent from the returned mapping
+        // but must still be carried over below.
+        let old_live_ids: Vec<u32> = table.id_indexer.live_ids();
+
         // Step 1: Get authoritative mapping from id_indexer
         self.id_mapping = table.id_indexer.compact().unwrap_or_default();
         self.has_remapped = !self.id_mapping.is_empty();
 
         // Step 2 & 3: If remapping occurred, propagate to both structures
         if self.has_remapped {
-            self.propagate_remap(table)?;
+            // Build both replacements before swapping either in, so a
+            // mid-remap failure cannot leave timestamps and columns
+            // describing different id spaces.
+            let new_timestamps = self.build_remapped_timestamps(table, &old_live_ids);
+            let new_columns = self.build_remapped_columns(table, &old_live_ids)?;
+            table.timestamps = new_timestamps;
+            table.columns = new_columns;
         } else {
             // No remapping, but clean up any orphaned timestamps
             self.cleanup_orphaned_timestamps(table);
@@ -131,67 +143,65 @@ impl CompactionCoordinator {
         Ok(())
     }
 
-    /// Propagate the ID remapping to both timestamps and columns
+    /// Rebuild timestamp tracking for the post-compact id space.
     ///
-    /// This is an internal step that must happen atomically:
-    /// if timestamps remap fails, columns aren't remapped.
-    fn propagate_remap(&self, table: &mut VertexTable) -> StorageResult<()> {
-        // Order matters: columns might be more error-prone, so do timestamps first
-        self.remap_timestamps(table)?;
-        self.remap_columns(table)?;
-        Ok(())
-    }
+    /// Every previously live row is carried over at
+    /// `mapping.get(old).unwrap_or(old)`; only array indices change, all
+    /// start/end timestamps are preserved.
+    fn build_remapped_timestamps(
+        &self,
+        table: &VertexTable,
+        old_live_ids: &[u32],
+    ) -> super::super::VertexTimestamp {
+        let mut new_timestamps =
+            super::super::VertexTimestamp::with_capacity(table.id_indexer.len());
 
-    /// Apply ID mapping to timestamps
-    ///
-    /// This updates the MVCC visibility information to match the new IDs.
-    /// All start_ts and end_ts values are preserved; only the array indices change.
-    fn remap_timestamps(&self, table: &mut VertexTable) -> StorageResult<()> {
-        if self.id_mapping.is_empty() {
-            return Ok(());
-        }
-
-        let max_new_id = self.id_mapping.values().max().copied().unwrap_or(0) as usize;
-        let mut new_timestamps = super::super::VertexTimestamp::with_capacity(max_new_id + 1);
-
-        for (old_id, new_id) in &self.id_mapping {
-            if let Some(start_ts) = table.timestamps.get_start_ts(*old_id) {
-                new_timestamps.insert(*new_id, start_ts);
-                if let Some(end_ts) = table.timestamps.get_end_ts(*old_id) {
+        for &old_id in old_live_ids {
+            let new_id = self.id_mapping.get(&old_id).copied().unwrap_or(old_id);
+            if let Some(start_ts) = table.timestamps.get_start_ts(old_id) {
+                new_timestamps.insert(new_id, start_ts);
+                if let Some(end_ts) = table.timestamps.get_end_ts(old_id) {
                     if end_ts < crate::vertex::MAX_TIMESTAMP {
-                        new_timestamps.remove(*new_id, end_ts);
+                        new_timestamps.remove(new_id, end_ts);
                     }
                 }
             }
         }
 
-        table.timestamps = new_timestamps;
-        Ok(())
+        new_timestamps
     }
 
-    /// Apply ID mapping to columns
+    /// Rebuild column storage for the post-compact id space.
     ///
-    /// This moves all property data to new positions according to the mapping.
-    /// Column encodings are preserved; deferred encodings are applied separately.
-    fn remap_columns(&self, table: &mut VertexTable) -> StorageResult<()> {
-        if self.id_mapping.is_empty() {
-            return Ok(());
-        }
-
-        let max_old_id = self.id_mapping.keys().max().copied().unwrap_or(0) as usize;
-        if max_old_id >= table.columns.row_count() {
-            return Ok(());
-        }
-
+    /// Every previously live row is carried over (current values plus MVCC
+    /// row state, so snapshot reads stay intact after the remap). Fresh
+    /// columns inherit the table's storage tuning so post-compact writes
+    /// behave identically; learned chunk encodings are intentionally not
+    /// carried over and are re-learned on subsequent writes.
+    fn build_remapped_columns(
+        &self,
+        table: &VertexTable,
+        old_live_ids: &[u32],
+    ) -> StorageResult<super::super::ColumnStore> {
         let mut new_columns = super::super::ColumnStore::with_capacity(table.id_indexer.len());
         for prop in &table.schema.properties {
             new_columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
         }
+        for prop in &table.schema.properties {
+            if let (Some(src), Some(dst)) = (
+                table.columns.get_column(&prop.name),
+                new_columns.get_column_mut(&prop.name),
+            ) {
+                dst.set_chunk_capacity(src.chunk_capacity());
+                dst.set_overflow_threshold(table.string_overflow_threshold);
+            }
+        }
 
         // Batch copy: O(vertices) instead of O(vertices × properties)
-        for (old_id, new_id) in &self.id_mapping {
-            let old_idx = *old_id as usize;
-            let new_idx = *new_id as usize;
+        for &old_id in old_live_ids {
+            let old_idx = old_id as usize;
+            let new_id = self.id_mapping.get(&old_id).copied().unwrap_or(old_id);
+            let new_idx = new_id as usize;
 
             let values = table.columns.get(old_idx);
             let pairs: Vec<(String, graphdb_core::Value)> = values
@@ -202,13 +212,12 @@ impl CompactionCoordinator {
             if !pairs.is_empty() {
                 new_columns.set(new_idx, &pairs)?;
             }
-            // Preserve MVCC metadata (current-version start timestamp and the
+            // Preserve MVCC metadata (creation timestamp and the
             // before-image chain) so snapshot reads stay intact after remap.
-            new_columns.copy_row_state(old_idx, new_idx);
+            new_columns.clone_row_state_from(&table.columns, old_idx, new_idx);
         }
 
-        table.columns = new_columns;
-        Ok(())
+        Ok(new_columns)
     }
 
     /// Clean up timestamp entries that have no corresponding id_indexer entry

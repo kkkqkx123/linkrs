@@ -4,7 +4,7 @@ use super::*;
 use crate::outbox::OutboxPayload;
 use crate::types::ChangeType;
 use graphdb_core::types::{TransactionContextInfo, TransactionId};
-#[cfg(any(feature = "fulltext", feature = "vector"))]
+#[cfg(feature = "fulltext")]
 use graphdb_core::Value;
 pub(crate) fn payload_to_intent(
     txn_id: graphdb_core::types::TransactionId,
@@ -184,12 +184,8 @@ pub(crate) fn format_vector_point_id(
     let encoded = raw.replace('%', "%25").replace('#', "%23");
     format!("{}#{}#{}", encoded, tag, field)
 }
-#[cfg_attr(
-    not(any(feature = "fulltext", feature = "vector")),
-    allow(unused_variables)
-)]
 impl super::SyncManager {
-    #[allow(unused_mut)]
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
     fn delivery_target_names(&self) -> Vec<&'static str> {
         let mut targets = Vec::new();
         #[cfg(feature = "fulltext")]
@@ -201,6 +197,12 @@ impl super::SyncManager {
             targets.push("vector");
         }
         targets
+    }
+
+    /// No sync engines are compiled in, so there are no delivery targets.
+    #[cfg(not(any(feature = "fulltext", feature = "vector")))]
+    fn delivery_target_names(&self) -> Vec<&'static str> {
+        Vec::new()
     }
 
     fn payload_needs_vector(&self, payload: &OutboxPayload) -> bool {
