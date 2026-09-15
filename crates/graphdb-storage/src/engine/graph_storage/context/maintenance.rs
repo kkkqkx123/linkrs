@@ -28,9 +28,8 @@ impl GraphStorageContext {
         last_compacted_vertices.clear();
 
         // Old-to-new internal ID mappings produced by vertex compaction,
-        // keyed by vertex label. Propagated to edge tables and cold
-        // snapshots afterwards (edge rows/neighbors are per-label internal
-        // IDs).
+        // keyed by vertex label. Propagated to edge tables afterwards
+        // (edge rows/neighbors are per-label internal IDs).
         let mut vertex_mappings: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
 
         let vertex_labels = self
@@ -224,10 +223,10 @@ impl GraphStorageContext {
         if let Some(ref manager) = self.runtime.background_freeze_manager {
             let freeze_config = manager.get_config();
             log::debug!(
-                "Freeze config - strategy: {:?}, edge_threshold: {}, memory_threshold: {}MB",
-                freeze_config.strategy,
+                "Freeze config - edge_threshold: {}, memory_threshold: {}MB, deletion_threshold: {}",
                 freeze_config.delta_edge_threshold,
-                freeze_config.delta_memory_threshold_bytes / (1024 * 1024)
+                freeze_config.delta_memory_threshold_bytes / (1024 * 1024),
+                freeze_config.deletion_threshold,
             );
         }
 

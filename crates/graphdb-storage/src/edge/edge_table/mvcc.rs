@@ -10,14 +10,11 @@ use std::collections::HashMap;
 
 const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
-/// Per-edge creation, deletion, and committed-publish timestamps.
+/// Per-edge creation and deletion timestamps.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
     pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
-    /// Commit timestamp: equals `create_ts` at creation; used by
-    /// `is_alive_at` for visibility checks.
-    pub commit_ts: Timestamp,
 }
 
 impl EdgeTimestamps {
@@ -25,12 +22,11 @@ impl EdgeTimestamps {
         Self {
             create_ts,
             delete_ts: Timestamp::MAX,
-            commit_ts: create_ts,
         }
     }
 
     pub fn is_alive_at(&self, ts: Timestamp) -> bool {
-        crate::mvcc_visibility::Visibility::is_edge_visible(ts, self.commit_ts, self.delete_ts)
+        crate::mvcc_visibility::Visibility::is_edge_visible(ts, self.create_ts, self.delete_ts)
     }
 }
 
@@ -256,7 +252,7 @@ impl MVCCManager {
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
             if !crate::mvcc_visibility::Visibility::is_edge_visible(
                 ts,
-                ts_info.commit_ts,
+                ts_info.create_ts,
                 ts_info.delete_ts,
             ) {
                 return false;

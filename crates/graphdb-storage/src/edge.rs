@@ -49,7 +49,7 @@ use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
-pub use mutable_csr::{MutableCsr, MutableCsrIterator, MutableCsrRegion};
+pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use graphdb_core::types::INVALID_EDGE_ID;
@@ -220,8 +220,13 @@ impl EdgeSchema {
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).
 ///
-/// `create_ts` is the creation timestamp for MVCC visibility checks.
-/// `delete_ts` is the deletion timestamp (`Timestamp::MAX` means alive).
+/// `create_ts` is the creation timestamp kept as a physical replica for
+/// compaction and debugging. `delete_ts` is the deletion timestamp
+/// (`Timestamp::MAX` means alive), also maintained as physical state.
+///
+/// Visibility authority lives in `MVCCManager` (`edge_timestamps` plus the
+/// tombstone table): query paths must decide visibility through
+/// `is_edge_visible`, never by reading these row fields directly.
 ///
 /// Topology and properties are decoupled: the CSR entry carries only the
 /// topology (endpoint, rank, edge_id, timestamps). Edge properties are

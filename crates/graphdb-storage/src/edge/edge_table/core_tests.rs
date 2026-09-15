@@ -1,9 +1,9 @@
 use super::*;
-use crate::edge::edge_table::config::EdgeTableConfig;
+use crate::edge::edge_table::config::{AutoMaintenanceConfig, EdgeTableConfig};
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::{EdgeSchema, EdgeStrategy};
 use crate::types::StoragePropertyDef;
-use graphdb_core::types::{DataType, VertexId};
+use graphdb_core::types::{DataType, EdgeId, VertexId};
 use graphdb_core::Value;
 
 type EdgeTable = EdgeStore;
@@ -294,4 +294,71 @@ fn test_row_capacity_assertion_on_compaction() {
         "in CSR wasted memory {} exceeds lazy allocation tolerance",
         table.in_csr.wasted_bytes_estimate()
     );
+}
+
+#[test]
+fn test_auto_maintenance_serial_advances_without_progress() {
+    // Pinned watermark, tombstones above threshold, nothing reclaimable:
+    // the cooldown serial must still advance on every call so attempts stay
+    // rate-limited instead of rescanning the tombstone map on every write.
+    let schema = create_test_schema();
+    let config = EdgeTableConfig {
+        auto_maintenance: AutoMaintenanceConfig {
+            tombstone_gc_threshold: 1,
+            property_compact_ratio: 0.0,
+            gc_min_serial: 2,
+        },
+        ..EdgeTableConfig::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(0, 2, 0, &[], 100).unwrap();
+    table.delete_edge(0, 1, 0, 150).unwrap();
+    table.delete_edge(0, 2, 0, 150).unwrap();
+    assert_eq!(table.mvcc.total_tombstone_count(), 2);
+
+    // Pin the watermark below both deletions: no GC run can make progress.
+    table.mvcc.register_active_snapshot(100);
+    for _ in 0..5 {
+        table.maybe_run_auto_maintenance();
+    }
+    // Serial counts calls (2 inserts + 2 deletes + 5 explicit = 9);
+    // with the old stuck-counter logic it would still be 0.
+    assert_eq!(table.maintenance_serial, 9);
+    assert_eq!(table.mvcc.total_tombstone_count(), 2);
+
+    // Advancing the watermark past the deletions reclaims both tombstones.
+    table.mvcc.register_active_snapshot(200);
+    table.mvcc.unregister_active_snapshot(100);
+    table.mvcc.unregister_active_snapshot(200);
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+}
+
+#[test]
+fn test_csr_timestamps_agree_with_mvcc() {
+    // CSR row timestamps are physical replicas of the MVCC authority: every
+    // stored entry must carry the same create/delete timestamps in both
+    // CSRs and in `edge_timestamps`, plus a matching tombstone when deleted.
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(0, 2, 0, &[], 110).unwrap();
+    table.delete_edge(0, 1, 0, 150).unwrap();
+
+    for csr in [&table.out_csr, &table.in_csr] {
+        let mut seen = 0;
+        for (_src, nbr) in csr.iter_all() {
+            let ts = table
+                .mvcc
+                .edge_timestamps
+                .get(&nbr.edge_id)
+                .unwrap_or_else(|| panic!("mvcc record missing for {:?}", nbr.edge_id));
+            assert_eq!(nbr.create_ts, ts.create_ts);
+            assert_eq!(nbr.delete_ts, ts.delete_ts);
+            seen += 1;
+        }
+        assert_eq!(seen, 2);
+    }
+    assert_eq!(table.mvcc.tombstones.get(&EdgeId(0)), Some(&150));
+    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(1)));
 }

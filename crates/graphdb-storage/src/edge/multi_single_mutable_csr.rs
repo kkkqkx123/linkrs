@@ -430,13 +430,6 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         let counts_size = self.counts.len() * std::mem::size_of::<u32>();
         edges_size + counts_size + std::mem::size_of::<Self>()
     }
-
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.edges
-            .iter()
-            .find(|nbr| nbr.edge_id == edge_id)
-            .map(|nbr| nbr.create_ts)
-    }
 }
 
 impl MultiSingleMutableCsr {

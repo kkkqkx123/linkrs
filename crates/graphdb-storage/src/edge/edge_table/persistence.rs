@@ -73,7 +73,6 @@ pub fn flush_metadata(
         buf.extend_from_slice(&edge_id.0.to_le_bytes());
         buf.extend_from_slice(&ts.create_ts.to_le_bytes());
         buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
-        buf.extend_from_slice(&ts.commit_ts.to_le_bytes());
     }
 
     Ok(())
@@ -159,15 +158,11 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
             cursor.read_exact(&mut delete_ts_bytes)?;
             let create_ts = u64::from_le_bytes(create_ts_bytes);
             let delete_ts = u64::from_le_bytes(delete_ts_bytes);
-            let mut commit_ts_bytes = [0u8; 8];
-            cursor.read_exact(&mut commit_ts_bytes)?;
-            let commit_ts = u64::from_le_bytes(commit_ts_bytes);
             edge_timestamps.insert(
                 EdgeId(u64::from_le_bytes(edge_id_bytes)),
                 EdgeTimestamps {
                     create_ts,
                     delete_ts,
-                    commit_ts,
                 },
             );
         }
@@ -431,21 +426,20 @@ mod tests {
         let mut loaded = create_edge_table();
         loaded.load(temp_dir.path()).expect("load should succeed");
 
-        // edge_timestamps restored from metadata
+        // edge_timestamps restored from metadata: MVCCManager is the
+        // single visibility authority, so timestamps are asserted there
+        // rather than through CSR row replicas.
         assert!(loaded.mvcc.edge_timestamps.len() >= 3);
-
-        // CSR create_ts stored inline in Nbr entries after load
-        use crate::edge::csr_trait::MutableCsrTrait;
         assert_eq!(
-            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(0)),
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(0)),
             Some(100)
         );
         assert_eq!(
-            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(1)),
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(1)),
             Some(200)
         );
         assert_eq!(
-            loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(2)),
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(2)),
             Some(300)
         );
     }

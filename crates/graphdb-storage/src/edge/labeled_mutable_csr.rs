@@ -556,13 +556,6 @@ impl MutableCsrTrait for LabeledMutableCsr {
         let degrees_size = self.degrees.len() * std::mem::size_of::<u32>();
         nbr_size + sources_size + ranges_size + degrees_size + std::mem::size_of::<Self>()
     }
-
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.nbr_list
-            .iter()
-            .find(|nbr| nbr.edge_id == edge_id)
-            .map(|nbr| nbr.create_ts)
-    }
 }
 
 impl LabeledMutableCsr {

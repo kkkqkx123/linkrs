@@ -24,12 +24,10 @@ use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
 
 pub mod iter;
 pub mod overflow;
-pub mod region;
 pub mod serialization;
 
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
 pub use overflow::{OverflowIndex, OverflowIndexStats, OverflowStorage, SequentialRun};
-pub use region::MutableCsrRegion;
 pub(crate) use serialization::{read_nbr, write_nbr};
 
 use overflow::MAX_OVERFLOW_CHUNKS_PER_VERTEX;
@@ -284,180 +282,6 @@ impl MutableCsr {
         } else {
             self.overflow_live_sets.insert(vid, set);
         }
-    }
-
-    /// Compute per-region statistics for incremental freeze decisions.
-    ///
-    /// Each region covers `region_vertex_count` consecutive vertices. `edge_count`
-    /// counts only edges visible at `visible_ts` (create_ts <= visible_ts if Some,
-    /// otherwise all physical entries). `capacity` is the allocated slots in the
-    /// region (primary + overflow), `density = edge_count / capacity` (0 if empty).
-    pub fn regions_with_ts(
-        &self,
-        region_vertex_count: usize,
-        visible_ts: Option<Timestamp>,
-    ) -> Vec<MutableCsrRegion> {
-        if region_vertex_count == 0 {
-            return Vec::new();
-        }
-        let vc = self.vertex_capacity();
-        if vc == 0 {
-            return Vec::new();
-        }
-        let region_cnt = vc.div_ceil(region_vertex_count);
-        let mut out = Vec::with_capacity(region_cnt);
-        for rid in 0..region_cnt {
-            let start = (rid * region_vertex_count) as u32;
-            let end = ((rid + 1) * region_vertex_count).min(vc) as u32;
-            let mut edge_count = 0u32;
-            let mut deleted_count = 0u32;
-            let mut capacity = 0u32;
-            for vid in start..end {
-                let idx = vid as usize;
-                capacity += self.primary_capacities[idx];
-                let degree = self.degrees[idx] as usize;
-                let base = self.adj_offsets[idx] as usize;
-                for i in 0..degree {
-                    let nbr = &self.nbr_list[base + i];
-                    let visible = match visible_ts {
-                        Some(ts) => nbr.create_ts <= ts,
-                        None => true,
-                    };
-                    if visible {
-                        edge_count += 1;
-                        if nbr.delete_ts != Timestamp::MAX {
-                            deleted_count += 1;
-                        }
-                    }
-                }
-                if let Some(chunks) = self.overflow_chunks.get(&vid) {
-                    for chunk in chunks {
-                        capacity += chunk.capacity() as u32;
-                        for nbr in chunk {
-                            let visible = match visible_ts {
-                                Some(ts) => nbr.create_ts <= ts,
-                                None => true,
-                            };
-                            if visible {
-                                edge_count += 1;
-                                if nbr.delete_ts != Timestamp::MAX {
-                                    deleted_count += 1;
-                                }
-                            }
-                        }
-                    }
-                    // Each chunk already counted capacity, but we added per chunk capacity above; primary
-                    // overflow_chunks capacity counted correctly. Avoid double count of total_edge_capacity's
-                    // per-chunk allocation which is already included via chunk.capacity().
-                }
-            }
-            // Normalize capacity: if zero (no primary allocated) use vertex count * DEFAULT degree as logical capacity
-            let logical_capacity = if capacity == 0 {
-                (end - start) * DEFAULT_VERTEX_DEGREE as u32
-            } else {
-                capacity
-            };
-            let density = if logical_capacity == 0 {
-                0.0
-            } else {
-                edge_count as f32 / logical_capacity as f32
-            };
-            out.push(MutableCsrRegion {
-                region_id: rid as u32,
-                vertex_start: start,
-                vertex_end: end,
-                edge_count,
-                deleted_count,
-                capacity: logical_capacity,
-                density,
-            });
-        }
-        out
-    }
-
-    pub fn regions(&self, region_vertex_count: usize) -> Vec<MutableCsrRegion> {
-        self.regions_with_ts(region_vertex_count, None)
-    }
-
-    /// Raw insert without duplicate checks, preserving delete_ts.
-    fn insert_raw_nbr(&mut self, src_vid: u32, nbr: Nbr) {
-        let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() {
-            self.ensure_vertex_capacity(src_idx + 1);
-        }
-        if self.primary_capacities[src_idx] == 0 {
-            self.allocate_primary_block(src_idx);
-        }
-        let degree = self.degrees[src_idx] as usize;
-        if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
-            && degree < self.primary_capacities[src_idx] as usize
-        {
-            let base = self.adj_offsets[src_idx] as usize;
-            self.nbr_list[base + degree] = nbr;
-            self.degrees[src_idx] += 1;
-            if nbr.delete_ts == Timestamp::MAX {
-                self.edge_count.fetch_add(1, Ordering::Relaxed);
-            }
-            return;
-        }
-        // overflow path
-        let chunks = self.overflow_chunks.get_or_create(src_vid);
-        let needs_chunk = chunks
-            .last()
-            .is_none_or(|chunk| chunk.len() >= self.overflow_chunk_edges);
-        if needs_chunk {
-            chunks.push(Vec::with_capacity(self.overflow_chunk_edges));
-            self.total_edge_capacity = self
-                .total_edge_capacity
-                .saturating_add(self.overflow_chunk_edges);
-        }
-        if let Some(chunk) = chunks.last_mut() {
-            chunk.push(nbr);
-        }
-        if nbr.delete_ts == Timestamp::MAX {
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
-            self.track_overflow_live_insert(src_vid, nbr.endpoint, nbr.rank);
-        }
-    }
-
-    /// Drain entries belonging to the given region ids that are visible at `ts`,
-    /// and rebuild the delta to retain the remaining entries (including those
-    /// not yet visible at `ts`). Returns the drained entries for freezing.
-    /// The remaining delta is compacted in-place.
-    pub fn drain_regions(
-        &mut self,
-        region_ids: &std::collections::HashSet<u32>,
-        region_vertex_count: usize,
-        ts: Timestamp,
-    ) -> Vec<(u32, Nbr, Timestamp)> {
-        if region_ids.is_empty() || region_vertex_count == 0 {
-            return Vec::new();
-        }
-        let mut frozen = Vec::new();
-        let mut retained: Vec<(u32, Nbr, Timestamp)> = Vec::new();
-
-        for (src_vid, nbr) in self.iter_all() {
-            let src_u32 = src_vid.as_int64().unwrap_or(0) as u32;
-            let create_ts = nbr.create_ts;
-            let rid = (src_u32 as usize / region_vertex_count) as u32;
-            let visible = create_ts <= ts;
-            if visible && region_ids.contains(&rid) {
-                frozen.push((src_u32, nbr, create_ts));
-            } else {
-                retained.push((src_u32, nbr, create_ts));
-            }
-        }
-
-        if frozen.is_empty() {
-            return frozen;
-        }
-
-        self.clear();
-        // Rebuild retained entries preserving delete_ts and counts
-        for (src_u32, nbr, _create_ts) in retained {
-            self.insert_raw_nbr(src_u32, nbr);
-        }
-        frozen
     }
 
     /// Allocate the primary block of `DEFAULT_VERTEX_DEGREE` slots for a vertex
@@ -1204,8 +1028,9 @@ impl MutableCsr {
     /// Only entries whose deletion predates the active-snapshot cutoff are
     /// physically removed (`delete_ts < cutoff` with `cutoff <
     /// Timestamp::MAX`). With no active snapshot (`cutoff == MAX`) every
-    /// deleted entry is kept so time-travel queries before the deletion stay
-    /// possible; without that protection the deletion history would be lost.
+    /// deleted entry is kept so snapshot reads overlapping the compaction
+    /// stay consistent; without that protection a concurrent reader could
+    /// miss entries it should still observe.
     /// The `reserve_ratio` parameter reserves space for future edges.
     pub fn compact_with_ts(&mut self, cutoff: Timestamp, reserve_ratio: f32) -> usize {
         self.compact_with_ts_reporting(cutoff, reserve_ratio, &mut |_, _| {})
@@ -1316,151 +1141,10 @@ impl MutableCsr {
         removed_count
     }
 
-    /// Region-aware compact: only triggers a full rebuild when at least one
-    /// region contains reclaimable deletions (`delete_ts < cutoff`). Clean
-    /// regions are still rebuilt together (single flat CSR) but the method
-    /// avoids work entirely when no region is dirty.
-    pub fn compact_regions_with_ts_reporting(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        region_vertex_count: usize,
-    ) -> usize {
-        self.compact_regions_with_ts_reporting_calibrated(
-            cutoff,
-            reserve_ratio,
-            on_edge_removed,
-            region_vertex_count,
-            None,
-        )
-    }
-
-    /// Region-aware compact with calibrated deletion threshold.
-    ///
-    /// When `calibrated_deletion_ratio` is Some, a region is considered dirty
-    /// only when its deletion ratio meets the calibrated threshold; otherwise
-    /// any reclaimable deletion makes the region dirty.
-    pub fn compact_regions_with_ts_reporting_calibrated(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        region_vertex_count: usize,
-        calibrated_deletion_ratio: Option<f64>,
-    ) -> usize {
-        if region_vertex_count == 0 {
-            return self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
-        }
-        if cutoff == Timestamp::MAX {
-            return 0;
-        }
-        let vc = self.vertex_capacity();
-        if vc == 0 {
-            return 0;
-        }
-        let region_cnt = vc.div_ceil(region_vertex_count);
-        let mut dirty_regions = 0usize;
-        for rid in 0..region_cnt {
-            let start_v = rid * region_vertex_count;
-            let end_v = ((rid + 1) * region_vertex_count).min(vc);
-            let mut dirty = false;
-            if let Some(threshold) = calibrated_deletion_ratio {
-                let mut total_in_region = 0usize;
-                let mut deleted_in_region = 0usize;
-                for vid in start_v..end_v {
-                    let degree = self.degrees[vid] as usize;
-                    let off = self.adj_offsets[vid] as usize;
-                    for i in 0..degree {
-                        total_in_region += 1;
-                        let nbr = &self.nbr_list[off + i];
-                        if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                            deleted_in_region += 1;
-                        }
-                    }
-                    if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
-                        for chunk in chunks {
-                            for nbr in chunk {
-                                total_in_region += 1;
-                                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                                    deleted_in_region += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                if total_in_region > 0 {
-                    let ratio = deleted_in_region as f64 / total_in_region as f64;
-                    if ratio >= threshold {
-                        dirty = true;
-                    }
-                }
-            } else {
-                let mut has_reclaimable = false;
-                for vid in start_v..end_v {
-                    let degree = self.degrees[vid] as usize;
-                    let off = self.adj_offsets[vid] as usize;
-                    for i in 0..degree {
-                        let nbr = &self.nbr_list[off + i];
-                        if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                            has_reclaimable = true;
-                            break;
-                        }
-                    }
-                    if has_reclaimable {
-                        break;
-                    }
-                    if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
-                        for chunk in chunks {
-                            for nbr in chunk {
-                                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
-                                    has_reclaimable = true;
-                                    break;
-                                }
-                            }
-                            if has_reclaimable {
-                                break;
-                            }
-                        }
-                    }
-                    if has_reclaimable {
-                        break;
-                    }
-                }
-                dirty = has_reclaimable;
-            }
-            if dirty {
-                dirty_regions += 1;
-            }
-        }
-        if dirty_regions == 0 {
-            log::debug!(
-                "MutableCsr region-aware compact skipped: no dirty region (regions={}, cutoff={})",
-                region_cnt,
-                cutoff
-            );
-            return 0;
-        }
-        log::debug!(
-            "MutableCsr region-aware compact: {}/{} regions dirty, rebuilding",
-            dirty_regions,
-            region_cnt
-        );
-        self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
-    }
-
     /// Get used memory size (active edges only)
     pub fn used_memory_size(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
         active_edges * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
-    }
-
-    /// Look up the creation timestamp for an edge.
-    pub fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.nbr_list
-            .iter()
-            .find(|nbr| nbr.edge_id == edge_id)
-            .map(|nbr| nbr.create_ts)
     }
 
     /// Compute fragmentation ratio: nbr_list.len() / active_edges
@@ -1582,10 +1266,6 @@ impl MutableCsrTrait for MutableCsr {
 
     fn used_memory_size(&self) -> usize {
         MutableCsr::used_memory_size(self)
-    }
-
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        MutableCsr::create_ts_of(self, edge_id)
     }
 }
 
@@ -2124,56 +1804,5 @@ mod tests {
         csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
         assert!(csr.overflow_index().is_empty());
         assert_eq!(csr.overflow_index_stats().total_overflow_vertices, 0);
-    }
-
-    #[test]
-    fn test_mutable_csr_region_stats() {
-        let mut csr = MutableCsr::with_capacity(4096, 4096);
-        // Region 0: 10 edges dense, Region 1: 1 edge sparse, Region 2: empty
-        for i in 0..10 {
-            csr.insert_edge(0, VertexId::from_int64(i + 1), EdgeId(i as u64), 1)
-                .unwrap();
-        }
-        csr.insert_edge(2048, VertexId::from_int64(100), EdgeId(100), 1)
-            .unwrap();
-
-        let regions = csr.regions_with_ts(1024, Some(1));
-        assert_eq!(regions.len(), 4);
-        // Region 0 should have high edge count
-        assert_eq!(regions[0].vertex_start, 0);
-        assert_eq!(regions[0].edge_count, 10);
-        // Region 2 should be sparse (1 edge in 1024 vertices)
-        assert_eq!(regions[2].edge_count, 1);
-        // Density is computed from capacity; just ensure non-zero
-        assert!(regions[0].density >= 0.0);
-        assert!(regions[2].density >= 0.0);
-        // Region 1 empty
-        assert_eq!(regions[1].edge_count, 0);
-        assert_eq!(regions[3].edge_count, 0);
-    }
-
-    #[test]
-    fn test_drain_regions_retains_low_density() {
-        let mut csr = MutableCsr::with_capacity(4096, 4096);
-        // Fill region 0 dense (20 edges across vertex 0), region 1 sparse (1 edge)
-        for i in 0..20 {
-            csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i as u64), 10)
-                .unwrap();
-        }
-        csr.insert_edge(2048, VertexId::from_int64(999), EdgeId(1000), 10)
-            .unwrap();
-
-        assert_eq!(csr.edge_count(), 21);
-        let mut selected = std::collections::HashSet::new();
-        selected.insert(0); // freeze only region 0
-        let frozen = csr.drain_regions(&selected, 1024, 10);
-        assert_eq!(frozen.len(), 20);
-        assert_eq!(csr.edge_count(), 1);
-        // Remaining edge should be the sparse one in region 2 (vertex 2048)
-        let remaining = csr.edges_of(2048, 10);
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].edge_id, EdgeId(1000));
-        // Drained region 0 should be empty
-        assert!(csr.edges_of(0, 10).is_empty());
     }
 }

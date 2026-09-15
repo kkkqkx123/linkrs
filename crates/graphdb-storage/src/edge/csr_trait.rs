@@ -107,9 +107,6 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Return the approximate memory usage in bytes.
     fn used_memory_size(&self) -> usize;
-
-    /// Look up the creation timestamp for an edge.
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp>;
 }
 
 #[cfg(test)]

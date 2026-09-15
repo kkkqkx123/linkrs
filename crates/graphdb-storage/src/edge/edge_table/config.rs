@@ -24,9 +24,11 @@ pub struct AutoMaintenanceConfig {
     /// Run property compaction when deleted-but-not-reclaimed property rows
     /// exceed this ratio of total rows. Set to 0.0 to disable.
     pub property_compact_ratio: f32,
-    /// Minimum serial number between automatic GC runs. Each time GC runs
-    /// the serial is incremented; subsequent write-path calls skip GC until
-    /// the counter reaches this value again. Set to 0 to disable cooldown.
+    /// Write-path calls between automatic maintenance attempts while the GC
+    /// watermark is pinned. The counter advances on every write-path call so
+    /// the cadence cannot stick: a watermark advance always attempts
+    /// immediately, otherwise at most one attempt per this many calls.
+    /// Set to 0 to only attempt on watermark advances.
     pub gc_min_serial: u64,
 }
 

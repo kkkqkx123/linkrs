@@ -213,13 +213,15 @@ impl EdgeStore {
     }
 
     fn properties_for_edge(&self, edge_id: EdgeId, query_ts: Timestamp) -> Vec<(String, Value)> {
-        if let Some(props) = self.properties.get_by_edge_id(edge_id, query_ts) {
-            return props
-                .into_iter()
-                .filter_map(|(k, v)| v.map(|v| (k, v)))
-                .collect();
+        // MVCCManager is the single visibility authority. The CSR row
+        // timestamps are physical replicas kept in sync on the write path;
+        // they must not decide query visibility here.
+        if !self.mvcc.is_edge_visible(edge_id, query_ts) {
+            return Vec::new();
         }
-        Vec::new()
+        self.properties
+            .read_properties_by_edge_id(edge_id)
+            .unwrap_or_default()
     }
 
     pub fn insert_edge(
@@ -960,19 +962,23 @@ impl EdgeStore {
         if cfg.tombstone_gc_threshold == 0 {
             return 0;
         }
+        // The serial counts write-path calls and drives the cooldown below.
+        // It must advance on every call: gating attempts on a counter that
+        // only advances when work was found sticks on a multiple of
+        // `gc_min_serial`, turning the cooldown into a per-write full scan.
+        self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+        // Retry cadence while the watermark is pinned: at most one attempt
+        // per `gc_min_serial` calls. A watermark advance always attempts.
+        let cooldown_due =
+            cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial);
         let mut maintenance_ran = 0;
 
         // Tier 1: tombstone GC (rate-limited by serial counter).
         if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold {
             let bound = self.mvcc.min_active_snapshot_ts;
-            if bound < Timestamp::MAX
-                && (bound != self.last_gc_min_snapshot_ts
-                    || (cfg.gc_min_serial > 0
-                        && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
-            {
+            if bound < Timestamp::MAX && (bound != self.last_gc_min_snapshot_ts || cooldown_due) {
                 let cleaned = self.mvcc.gc_tombstones(bound);
                 self.last_gc_min_snapshot_ts = bound;
-                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 if cleaned > 0 {
                     maintenance_ran += 1;
                     log::debug!(
@@ -986,12 +992,18 @@ impl EdgeStore {
         }
 
         // Tier 2: property table compaction when the deleted-row ratio is high.
+        // Shares the cooldown above: the fragmentation scan walks every row,
+        // so it must not run on every write while the watermark is pinned.
+        // A disabled cooldown (`gc_min_serial == 0`) keeps the old
+        // check-on-every-call behavior.
         let bound = self.mvcc.min_active_snapshot_ts;
-        if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
+        if cfg.property_compact_ratio > 0.0
+            && bound != Timestamp::MAX
+            && (cooldown_due || cfg.gc_min_serial == 0)
+        {
             let prop_stats = self.properties.compaction_stats();
             if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
                 self.compact_properties(bound);
-                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 maintenance_ran += 1;
             }
         }
@@ -1012,18 +1024,20 @@ impl EdgeStore {
         if cfg.tombstone_gc_threshold == 0 {
             return 0;
         }
+        // Per-call serial; see `maybe_run_auto_maintenance` for why it must
+        // advance unconditionally.
+        self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+        let cooldown_due =
+            cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial);
         let mut maintenance_ran = 0;
         let bound = watermarks.safe_gc_timestamp_with_margin(margin);
 
         if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
             && bound < Timestamp::MAX
-            && (bound != self.last_gc_min_snapshot_ts
-                || (cfg.gc_min_serial > 0
-                    && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
+            && (bound != self.last_gc_min_snapshot_ts || cooldown_due)
         {
             let cleaned = self.mvcc.gc_tombstones(bound);
             self.last_gc_min_snapshot_ts = bound;
-            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
             if cleaned > 0 {
                 maintenance_ran += 1;
                 log::debug!(
@@ -1035,11 +1049,13 @@ impl EdgeStore {
             }
         }
 
-        if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
+        if cfg.property_compact_ratio > 0.0
+            && bound != Timestamp::MAX
+            && (cooldown_due || cfg.gc_min_serial == 0)
+        {
             let prop_stats = self.properties.compaction_stats();
             if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
                 self.compact_properties(bound);
-                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 maintenance_ran += 1;
             }
         }

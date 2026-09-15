@@ -1,7 +1,7 @@
 //! Freeze Statistics Collector
 //!
-//! Collects metrics about delta freezing operations and provides
-//! configuration for freeze decision-making.
+//! Collects metrics about single-segment CSR compaction ("freeze")
+//! operations and provides configuration for freeze decision-making.
 //!
 //! Does NOT execute freezing — that's handled by GraphStorageContext
 //! via trigger_background_freeze() method.
@@ -9,7 +9,7 @@
 //! ## Design
 //!
 //! BackgroundFreezeManager provides:
-//! - Decision support via FreezeDecisionEngine (strategy-based should_freeze)
+//! - Decision support via FreezeDecisionEngine (threshold-based should_freeze)
 //! - Statistics collection (record_freeze, record_delta_size)
 //!
 //! Actual freezing is triggered by:
@@ -26,9 +26,7 @@
 //! let input = FreezeDecisionInput {
 //!     delta_edge_count: table.delta_edge_count(),
 //!     delta_memory_bytes: table.used_memory_size() as u64,
-//!     segment_count: table.segment_count(),
-//!     oldest_segment_age: table.oldest_segment_age(),
-//!     deletion_ratio: table.deletion_ratio(),
+//!     deletion_ratio: table.deletion_stats().deletion_ratio(),
 //! };
 //!
 //! if manager.should_freeze_with_stats(&input) {
@@ -160,24 +158,26 @@ pub enum FreezeReason {
     None,
     EdgeCountExceeded,
     MemoryExceeded,
+    DeletionExceeded,
     Both,
 }
 
 /// Freeze statistics collector and decision maker
 ///
-/// Uses FreezeDecisionEngine for strategy-based decision making.
-/// Provides decision support and metrics collection for delta freezing operations.
+/// Uses FreezeDecisionEngine for threshold-based decision making.
+/// Provides decision support and metrics collection for single-segment
+/// CSR compaction ("freeze") operations.
 pub struct BackgroundFreezeManager {
-    /// Decision engine using enum dispatch (no trait overhead)
+    /// Decision engine (no trait overhead)
     decision_engine: FreezeDecisionEngine,
     /// Statistics (thread-safe for concurrent reads)
     stats: Arc<Mutex<FreezeStats>>,
 }
 
 impl BackgroundFreezeManager {
-    /// Create a new freeze manager from FreezeConfig (uses configured strategy)
+    /// Create a new freeze manager from FreezeConfig
     pub fn from_config(config: FreezeConfig) -> Self {
-        let decision_engine = FreezeDecisionEngine::new(config.strategy, config);
+        let decision_engine = FreezeDecisionEngine::new(config);
         Self {
             decision_engine,
             stats: Arc::new(Mutex::new(FreezeStats::default())),
@@ -195,12 +195,20 @@ impl BackgroundFreezeManager {
             input.delta_edge_count >= self.decision_engine.config.delta_edge_threshold;
         let memory_exceeded =
             input.delta_memory_bytes >= self.decision_engine.config.delta_memory_threshold_bytes;
+        let deletion_exceeded =
+            input.deletion_ratio >= self.decision_engine.config.deletion_threshold;
 
-        let freeze_reason = match (edge_exceeded, memory_exceeded) {
-            (true, true) => FreezeReason::Both,
-            (true, false) => FreezeReason::EdgeCountExceeded,
-            (false, true) => FreezeReason::MemoryExceeded,
-            (false, false) => FreezeReason::None,
+        // Deletion-driven compaction is the most informative signal: it is
+        // the only trigger that fires on churn rather than size.
+        let freeze_reason = if deletion_exceeded {
+            FreezeReason::DeletionExceeded
+        } else {
+            match (edge_exceeded, memory_exceeded) {
+                (true, true) => FreezeReason::Both,
+                (true, false) => FreezeReason::EdgeCountExceeded,
+                (false, true) => FreezeReason::MemoryExceeded,
+                (false, false) => FreezeReason::None,
+            }
         };
 
         FreezeDecision {
@@ -232,11 +240,6 @@ impl BackgroundFreezeManager {
         stats.current_delta_edges = delta_edges;
     }
 
-    /// Get strategy name
-    pub fn strategy_name(&self) -> &'static str {
-        self.decision_engine.strategy_name()
-    }
-
     /// Get freeze reason as string
     pub fn get_reason(&self, input: &FreezeDecisionInput) -> String {
         self.decision_engine.get_reason(input)
@@ -256,136 +259,78 @@ impl Default for BackgroundFreezeManager {
 
 #[cfg(test)]
 mod tests {
-    use super::super::config::FreezeStrategyType;
     use super::*;
-    use graphdb_core::types::Timestamp;
+
+    fn test_config() -> FreezeConfig {
+        FreezeConfig {
+            delta_edge_threshold: 100_000,
+            delta_memory_threshold_bytes: 256 * 1024 * 1024,
+            deletion_threshold: 0.5,
+        }
+    }
+
+    fn input(edges: u64, mem_mb: u64, deletion_ratio: f64) -> FreezeDecisionInput {
+        FreezeDecisionInput {
+            delta_edge_count: edges,
+            delta_memory_bytes: mem_mb * 1024 * 1024,
+            deletion_ratio,
+        }
+    }
 
     #[test]
     fn test_freeze_decision_below_both_thresholds() {
-        let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
-            delta_edge_threshold: 100_000,
-            delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
-            deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
-        };
-        let manager = BackgroundFreezeManager::from_config(config);
+        let manager = BackgroundFreezeManager::from_config(test_config());
 
-        let input = FreezeDecisionInput {
-            delta_edge_count: 50_000,
-            delta_memory_bytes: 100 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
-            deletion_ratio: 0.1,
-        };
-
-        let decision = manager.get_freeze_decision_with_stats(&input);
+        let decision = manager.get_freeze_decision_with_stats(&input(50_000, 100, 0.1));
         assert!(!decision.should_freeze);
         assert_eq!(decision.freeze_reason, FreezeReason::None);
     }
 
     #[test]
     fn test_freeze_decision_edge_count_exceeded() {
-        let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
-            delta_edge_threshold: 100_000,
-            delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
-            deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
-        };
-        let manager = BackgroundFreezeManager::from_config(config);
+        let manager = BackgroundFreezeManager::from_config(test_config());
 
-        let input = FreezeDecisionInput {
-            delta_edge_count: 150_000,
-            delta_memory_bytes: 100 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
-            deletion_ratio: 0.1,
-        };
-
-        let decision = manager.get_freeze_decision_with_stats(&input);
+        let decision = manager.get_freeze_decision_with_stats(&input(150_000, 100, 0.1));
         assert!(decision.should_freeze);
         assert_eq!(decision.freeze_reason, FreezeReason::EdgeCountExceeded);
     }
 
     #[test]
     fn test_freeze_decision_memory_exceeded() {
-        let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
-            delta_edge_threshold: 100_000,
-            delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
-            deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
-        };
-        let manager = BackgroundFreezeManager::from_config(config);
+        let manager = BackgroundFreezeManager::from_config(test_config());
 
-        let input = FreezeDecisionInput {
-            delta_edge_count: 50_000,
-            delta_memory_bytes: 300 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
-            deletion_ratio: 0.1,
-        };
-
-        let decision = manager.get_freeze_decision_with_stats(&input);
+        let decision = manager.get_freeze_decision_with_stats(&input(50_000, 300, 0.1));
         assert!(decision.should_freeze);
         assert_eq!(decision.freeze_reason, FreezeReason::MemoryExceeded);
     }
 
     #[test]
     fn test_freeze_decision_both_exceeded() {
-        let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
-            delta_edge_threshold: 100_000,
-            delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
-            deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
-        };
-        let manager = BackgroundFreezeManager::from_config(config);
+        let manager = BackgroundFreezeManager::from_config(test_config());
 
-        let input = FreezeDecisionInput {
-            delta_edge_count: 150_000,
-            delta_memory_bytes: 300 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
-            deletion_ratio: 0.1,
-        };
-
-        let decision = manager.get_freeze_decision_with_stats(&input);
+        let decision = manager.get_freeze_decision_with_stats(&input(150_000, 300, 0.1));
         assert!(decision.should_freeze);
         assert_eq!(decision.freeze_reason, FreezeReason::Both);
+    }
+
+    #[test]
+    fn test_freeze_decision_deletion_exceeded() {
+        let manager = BackgroundFreezeManager::from_config(test_config());
+
+        let decision = manager.get_freeze_decision_with_stats(&input(50_000, 100, 0.6));
+        assert!(decision.should_freeze);
+        assert_eq!(decision.freeze_reason, FreezeReason::DeletionExceeded);
     }
 
     #[test]
     fn test_should_freeze_with_stats_method() {
         let manager = BackgroundFreezeManager::default();
 
-        let input = FreezeDecisionInput {
-            delta_edge_count: 50_000,
-            delta_memory_bytes: 100 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
-            deletion_ratio: 0.1,
-        };
-        assert!(!manager.should_freeze_with_stats(&input));
+        assert!(!manager.should_freeze_with_stats(&input(50_000, 100, 0.1)));
 
-        let input2 = FreezeDecisionInput {
-            delta_edge_count: 150_000,
-            ..input
-        };
-        assert!(manager.should_freeze_with_stats(&input2));
+        // Default config is production_small: 100K edges / 256MB / 0.2 deletions.
+        assert!(manager.should_freeze_with_stats(&input(150_000, 100, 0.1)));
+        assert!(manager.should_freeze_with_stats(&input(50_000, 100, 0.3)));
     }
 
     #[test]
@@ -420,17 +365,7 @@ mod tests {
 
     #[test]
     fn test_manager_creation_and_stats() {
-        let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
-            delta_edge_threshold: 50_000,
-            delta_memory_threshold_bytes: 128 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
-            deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
-        };
-        let manager = BackgroundFreezeManager::from_config(config);
+        let manager = BackgroundFreezeManager::from_config(test_config());
 
         let stats = manager.get_stats();
         assert_eq!(stats.freeze_count, 0);

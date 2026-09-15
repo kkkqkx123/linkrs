@@ -405,16 +405,6 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Labeled(csr) => csr.used_memory_size(),
         }
     }
-
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        match self {
-            CsrVariant::None { .. } => None,
-            CsrVariant::Multiple(csr) => csr.create_ts_of(edge_id),
-            CsrVariant::Single(csr) => csr.create_ts_of(edge_id),
-            CsrVariant::MultiSingle(csr) => csr.create_ts_of(edge_id),
-            CsrVariant::Labeled(csr) => csr.create_ts_of(edge_id),
-        }
-    }
 }
 
 impl CsrVariant {
@@ -482,44 +472,6 @@ impl CsrVariant {
         }
     }
 
-    pub fn compact_regions_with_ts_reporting(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        region_vertex_count: usize,
-    ) -> usize {
-        match self {
-            CsrVariant::Multiple(csr) => csr.compact_regions_with_ts_reporting(
-                cutoff,
-                reserve_ratio,
-                on_edge_removed,
-                region_vertex_count,
-            ),
-            _ => self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed),
-        }
-    }
-
-    pub fn compact_regions_with_ts_reporting_calibrated(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        region_vertex_count: usize,
-        calibrated_deletion_ratio: Option<f64>,
-    ) -> usize {
-        match self {
-            CsrVariant::Multiple(csr) => csr.compact_regions_with_ts_reporting_calibrated(
-                cutoff,
-                reserve_ratio,
-                on_edge_removed,
-                region_vertex_count,
-                calibrated_deletion_ratio,
-            ),
-            _ => self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed),
-        }
-    }
-
     /// Rebuild overflow index for sequential detection (Multiple strategy only).
     pub fn rebuild_overflow_index(&mut self) {
         if let CsrVariant::Multiple(csr) = self {
@@ -532,38 +484,6 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => Some(csr.overflow_index_stats()),
             _ => None,
-        }
-    }
-
-    /// Per-region stats for incremental freeze (Multiple only).
-    pub fn regions_with_ts(
-        &self,
-        region_vertex_count: usize,
-        visible_ts: Option<Timestamp>,
-    ) -> Vec<super::mutable_csr::MutableCsrRegion> {
-        match self {
-            CsrVariant::Multiple(csr) => csr.regions_with_ts(region_vertex_count, visible_ts),
-            _ => Vec::new(),
-        }
-    }
-
-    pub fn regions(&self, region_vertex_count: usize) -> Vec<super::mutable_csr::MutableCsrRegion> {
-        match self {
-            CsrVariant::Multiple(csr) => csr.regions(region_vertex_count),
-            _ => Vec::new(),
-        }
-    }
-
-    /// Drain regions for incremental freeze (Multiple only).
-    pub fn drain_regions(
-        &mut self,
-        region_ids: &std::collections::HashSet<u32>,
-        region_vertex_count: usize,
-        ts: Timestamp,
-    ) -> Vec<(u32, super::Nbr, Timestamp)> {
-        match self {
-            CsrVariant::Multiple(csr) => csr.drain_regions(region_ids, region_vertex_count, ts),
-            _ => Vec::new(),
         }
     }
 }

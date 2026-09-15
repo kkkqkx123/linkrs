@@ -182,49 +182,22 @@ impl ResourceConfig {
     }
 }
 
-/// Freeze strategy type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FreezeStrategyType {
-    /// Conservative: freeze frequently but merge rarely
-    Conservative,
-    /// Adaptive: freeze with age-based merge
-    #[default]
-    Adaptive,
-    /// LSM tiered: freeze with LSM-style hierarchical merge
-    LSMTiered,
-}
-
-/// Unified Freeze Configuration
+/// Unified Freeze Configuration for single-segment CSR compaction.
 ///
-/// Consolidates all Freeze-related settings in one place:
-/// - Decision thresholds (BackgroundFreezeConfig)
-/// - Strategy selection
+/// Consolidates all freeze-related settings in one place. There are no
+/// segments: the mutable CSR size (edge count plus memory) and the deletion
+/// ratio drive compaction decisions.
 #[derive(Debug, Clone)]
 pub struct FreezeConfig {
-    /// Strategy type for Freeze operations
-    pub strategy: FreezeStrategyType,
-
     // ── Decision Thresholds ──
-    /// Freeze when mutable delta edges exceed this count
+    /// Freeze when mutable CSR edges exceed this count (out + in entries)
     pub delta_edge_threshold: u64,
-    /// Freeze when mutable delta memory exceeds this (in bytes)
+    /// Freeze when mutable CSR memory exceeds this (in bytes)
     pub delta_memory_threshold_bytes: u64,
-
-    // ── Merge Configuration ──
-    /// Maximum age (in timestamp units) before a segment should be merged
-    pub max_segment_age: Timestamp,
-    /// Deletion ratio threshold for merge priority (0.0-1.0)
+    /// Freeze when the tombstone deletion ratio reaches this (0.0-1.0), so
+    /// high-churn tables reclaim physical space without waiting for the
+    /// size thresholds above
     pub deletion_threshold: f64,
-
-    // ── Adaptive Strategy Parameters ──
-    /// Minimum segment count to trigger adaptive merge (configurable threshold)
-    pub adaptive_segment_threshold: usize,
-    /// Absolute segment count that forces freeze (independent of age/deletion)
-    pub adaptive_maximum_segments: usize,
-
-    // ── LSM Strategy Parameters ──
-    /// Segment count threshold for LSM pressure-based freezing
-    pub lsm_segment_pressure_threshold: usize,
 }
 
 impl FreezeConfig {
@@ -232,18 +205,12 @@ impl FreezeConfig {
     ///
     /// Suitable for: Development, testing, or when fresh data is critical
     /// - Small freeze threshold (50K edges)
-    /// - No merge after freeze
     /// - Very conservative memory usage
     pub fn development() -> Self {
         Self {
-            strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 50_000,
             delta_memory_threshold_bytes: 128 * 1024 * 1024, // 128MB
-            max_segment_age: Timestamp::MAX,                 // Never merge
             deletion_threshold: 0.5,
-            adaptive_segment_threshold: 20, // Low threshold for dev
-            adaptive_maximum_segments: 50,  // Force freeze if >50 segments
-            lsm_segment_pressure_threshold: 100, // Low threshold for dev
         }
     }
 
@@ -251,18 +218,12 @@ impl FreezeConfig {
     ///
     /// Suitable for: Small deployments, single-node systems
     /// - Moderate freeze threshold (100K edges)
-    /// - Adaptive merge with reasonable parameters
     /// - Balanced memory and performance
     pub fn production_small() -> Self {
         Self {
-            strategy: FreezeStrategyType::Adaptive,
             delta_edge_threshold: 100_000,
             delta_memory_threshold_bytes: 256 * 1024 * 1024, // 256MB
-            max_segment_age: 5000,
             deletion_threshold: 0.2,
-            adaptive_segment_threshold: 50, // More reasonable for small systems
-            adaptive_maximum_segments: 150, // Force freeze if >150 segments
-            lsm_segment_pressure_threshold: 150,
         }
     }
 
@@ -270,18 +231,12 @@ impl FreezeConfig {
     ///
     /// Suitable for: Large deployments, long-running systems
     /// - Large freeze threshold (500K edges)
-    /// - LSM tiered merge for long-term stability
     /// - Optimized for sustained high throughput
     pub fn production_large() -> Self {
         Self {
-            strategy: FreezeStrategyType::LSMTiered,
             delta_edge_threshold: 500_000,
             delta_memory_threshold_bytes: 1_000_000_000, // 1GB
-            max_segment_age: 1000,
             deletion_threshold: 0.3,
-            adaptive_segment_threshold: 100, // Higher threshold for large systems
-            adaptive_maximum_segments: 300,  // Force freeze if >300 segments
-            lsm_segment_pressure_threshold: 200, // LSM pressure at 200+ segments
         }
     }
 
@@ -291,7 +246,6 @@ impl FreezeConfig {
     /// - Thresholds are positive
     /// - Deletion ratio is in [0.0, 1.0]
     /// - Memory threshold is reasonable
-    /// - Adaptive/LSM thresholds are consistent
     pub fn validate(&self) -> Result<(), StorageError> {
         if self.delta_edge_threshold == 0 {
             return Err(StorageError::new(
@@ -315,52 +269,6 @@ impl FreezeConfig {
                     self.deletion_threshold
                 ),
             ));
-        }
-
-        // Validate new threshold fields
-        if self.adaptive_segment_threshold == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "adaptive_segment_threshold must be > 0",
-            ));
-        }
-
-        if self.adaptive_maximum_segments < self.adaptive_segment_threshold {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                format!(
-                    "adaptive_maximum_segments ({}) must be >= adaptive_segment_threshold ({})",
-                    self.adaptive_maximum_segments, self.adaptive_segment_threshold
-                ),
-            ));
-        }
-
-        if self.lsm_segment_pressure_threshold == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "lsm_segment_pressure_threshold must be > 0",
-            ));
-        }
-
-        // Strategy-specific validation
-        match self.strategy {
-            FreezeStrategyType::Conservative => {
-                // No additional checks needed
-            }
-            FreezeStrategyType::Adaptive => {
-                if self.max_segment_age == 0 {
-                    return Err(StorageError::new(
-                        StorageErrorKind::InvalidInput,
-                        "Adaptive strategy requires max_segment_age > 0",
-                    ));
-                }
-            }
-            FreezeStrategyType::LSMTiered => {
-                // LSM tiering works with any age value
-                if self.max_segment_age < 500 {
-                    log::warn!("LSM tiering with max_segment_age < 500 may cause excessive merges");
-                }
-            }
         }
 
         Ok(())
@@ -466,8 +374,8 @@ impl PropertyGraphConfig {
 
     /// Create a lightweight test configuration
     ///
-    /// Uses minimal cache (8MB), relaxed flush thresholds, and disables
-    /// adaptive merging to reduce resource usage in test environments.
+    /// Uses minimal cache (8MB) and relaxed flush thresholds to reduce
+    /// resource usage in test environments.
     pub fn test() -> Self {
         Self {
             enable_cache: true,
@@ -483,14 +391,9 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             freeze: FreezeConfig {
-                strategy: FreezeStrategyType::Conservative,
                 delta_edge_threshold: 5000,
                 delta_memory_threshold_bytes: 16 * 1024 * 1024,
-                max_segment_age: Timestamp::MAX,
                 deletion_threshold: 0.5,
-                adaptive_segment_threshold: 50,
-                adaptive_maximum_segments: 150,
-                lsm_segment_pressure_threshold: 100,
             },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
@@ -551,35 +454,25 @@ mod tests {
     #[test]
     fn test_freeze_config_development() {
         let config = FreezeConfig::development();
-        assert_eq!(config.strategy, FreezeStrategyType::Conservative);
         assert_eq!(config.delta_edge_threshold, 50_000);
         assert_eq!(config.delta_memory_threshold_bytes, 128 * 1024 * 1024);
-        assert!(config.max_segment_age > 1000); // Never merge
-        assert_eq!(config.adaptive_segment_threshold, 20);
-        assert_eq!(config.adaptive_maximum_segments, 50);
+        assert_eq!(config.deletion_threshold, 0.5);
     }
 
     #[test]
     fn test_freeze_config_production_small() {
         let config = FreezeConfig::production_small();
-        assert_eq!(config.strategy, FreezeStrategyType::Adaptive);
         assert_eq!(config.delta_edge_threshold, 100_000);
         assert_eq!(config.delta_memory_threshold_bytes, 256 * 1024 * 1024);
-        assert_eq!(config.max_segment_age, 5000);
-        assert_eq!(config.adaptive_segment_threshold, 50);
-        assert_eq!(config.adaptive_maximum_segments, 150);
+        assert_eq!(config.deletion_threshold, 0.2);
     }
 
     #[test]
     fn test_freeze_config_production_large() {
         let config = FreezeConfig::production_large();
-        assert_eq!(config.strategy, FreezeStrategyType::LSMTiered);
         assert_eq!(config.delta_edge_threshold, 500_000);
         assert_eq!(config.delta_memory_threshold_bytes, 1_000_000_000);
-        assert_eq!(config.max_segment_age, 1000);
-        assert_eq!(config.adaptive_segment_threshold, 100);
-        assert_eq!(config.adaptive_maximum_segments, 300);
-        assert_eq!(config.lsm_segment_pressure_threshold, 200);
+        assert_eq!(config.deletion_threshold, 0.3);
     }
 
     #[test]
@@ -625,21 +518,18 @@ mod tests {
     fn test_property_graph_config_development() {
         let config = PropertyGraphConfig::development();
         assert!(config.freeze.validate().is_ok());
-        assert_eq!(config.freeze.strategy, FreezeStrategyType::Conservative);
     }
 
     #[test]
     fn test_property_graph_config_production_small() {
         let config = PropertyGraphConfig::production_small();
         assert!(config.freeze.validate().is_ok());
-        assert_eq!(config.freeze.strategy, FreezeStrategyType::Adaptive);
     }
 
     #[test]
     fn test_property_graph_config_production_large() {
         let config = PropertyGraphConfig::production_large();
         assert!(config.freeze.validate().is_ok());
-        assert_eq!(config.freeze.strategy, FreezeStrategyType::LSMTiered);
     }
 
     #[test]

@@ -520,13 +520,6 @@ impl MutableCsrTrait for SingleMutableCsr {
     fn used_memory_size(&self) -> usize {
         SingleMutableCsr::used_memory_size(self)
     }
-
-    fn create_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        self.nbr_list
-            .iter()
-            .find(|n| n.edge_id == edge_id)
-            .map(|n| n.create_ts)
-    }
 }
 
 #[cfg(test)]

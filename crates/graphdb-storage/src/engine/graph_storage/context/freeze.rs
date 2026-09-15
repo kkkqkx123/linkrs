@@ -195,23 +195,28 @@ impl GraphStorageContext {
                 if let Some(ref manager) = self.runtime.background_freeze_manager {
                     manager.record_delta_size(delta_edges);
 
+                    let deletion_ratio = table.deletion_stats().deletion_ratio();
+                    // Skip healthy tables: a full CSR rebuild frees nothing
+                    // when there are no tombstones and fragmentation is low
+                    // (2.0 is the documented rebuild-worthy level).
+                    let needs_reclaim = table.deletion_stats().total_deleted_edges > 0
+                        || table.out_csr.fragmentation_ratio() >= 2.0
+                        || table.in_csr.fragmentation_ratio() >= 2.0;
+                    if !needs_reclaim {
+                        return Ok(());
+                    }
+
                     let input = crate::engine::config::FreezeDecisionInput {
                         delta_edge_count: delta_edges,
                         delta_memory_bytes: delta_memory,
-                        segment_count: 0,
-                        oldest_segment_age: 0,
-                        deletion_ratio: table.deletion_stats().deletion_ratio(),
+                        deletion_ratio,
                     };
 
                     if manager.should_freeze_with_stats(&input) {
                         let decision = manager.get_freeze_decision_with_stats(&input);
                         let mut t = totals.lock();
                         t.2.insert(decision.freeze_reason);
-                        log::debug!(
-                            "Freeze triggered ({} strategy): {}",
-                            manager.strategy_name(),
-                            decision.summary()
-                        );
+                        log::debug!("Freeze triggered: {}", decision.summary());
 
                         let reserve_ratio =
                             config.compute_reserve_ratio(table.edge_count() as usize, 0);
@@ -219,11 +224,7 @@ impl GraphStorageContext {
                         table.compact_properties(ts);
                         any_here = true;
                     } else if log::log_enabled!(log::Level::Debug) {
-                        log::debug!(
-                            "Skip freeze ({} strategy): {}",
-                            manager.strategy_name(),
-                            manager.get_reason(&input)
-                        );
+                        log::debug!("Skip freeze: {}", manager.get_reason(&input));
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
@@ -257,7 +258,7 @@ impl GraphStorageContext {
                 }
             }
 
-            if let Some(ref manager) = self.runtime.background_freeze_manager {
+            if self.runtime.background_freeze_manager.is_some() {
                 let reason_str = if freeze_reasons.is_empty() {
                     "none".to_string()
                 } else {
@@ -270,6 +271,9 @@ impl GraphStorageContext {
                             crate::engine::background_freeze::FreezeReason::MemoryExceeded => {
                                 "memory"
                             }
+                            crate::engine::background_freeze::FreezeReason::DeletionExceeded => {
+                                "deletions"
+                            }
                             crate::engine::background_freeze::FreezeReason::Both => "edges+memory",
                             crate::engine::background_freeze::FreezeReason::None => "none",
                         })
@@ -278,8 +282,7 @@ impl GraphStorageContext {
                 };
 
                 log::info!(
-                    "Background freeze ({} strategy): {} edges frozen (reason: {})",
-                    manager.strategy_name(),
+                    "Background freeze: {} edges frozen (reason: {})",
                     total_frozen,
                     reason_str
                 );
@@ -345,18 +348,12 @@ mod tests {
     #[test]
     fn test_background_freeze_manager_basics() {
         use crate::engine::background_freeze::BackgroundFreezeManager;
-        use crate::engine::config::{FreezeConfig, FreezeDecisionInput, FreezeStrategyType};
-        use graphdb_core::types::Timestamp;
+        use crate::engine::config::{FreezeConfig, FreezeDecisionInput};
 
         let config = FreezeConfig {
-            strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 1000,
             delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: Timestamp::MAX,
             deletion_threshold: 0.5,
-            adaptive_segment_threshold: 50,
-            adaptive_maximum_segments: 150,
-            lsm_segment_pressure_threshold: 200,
         };
         let manager = BackgroundFreezeManager::from_config(config);
 
@@ -364,8 +361,6 @@ mod tests {
         let input1 = FreezeDecisionInput {
             delta_edge_count: 500,
             delta_memory_bytes: 100 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
             deletion_ratio: 0.1,
         };
         assert!(!manager.should_freeze_with_stats(&input1));
@@ -386,11 +381,16 @@ mod tests {
         let input4 = FreezeDecisionInput {
             delta_edge_count: 500,
             delta_memory_bytes: 300 * 1024 * 1024,
-            segment_count: 50,
-            oldest_segment_age: 1000,
             deletion_ratio: 0.1,
         };
         assert!(manager.should_freeze_with_stats(&input4));
+
+        // Test should_freeze with deletion threshold exceeded
+        let input5 = FreezeDecisionInput {
+            deletion_ratio: 0.6,
+            ..input1
+        };
+        assert!(manager.should_freeze_with_stats(&input5));
 
         // Test record_freeze
         manager.record_freeze(100, 50);

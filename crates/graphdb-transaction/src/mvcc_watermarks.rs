@@ -80,6 +80,8 @@ impl MvccWatermarks {
     /// The returned value is exclusive: versions with `end_ts <= safe_gc_ts`
     /// are reclaimable.  Callers must apply any configured margin
     /// themselves so the policy is uniform across table types.
+    /// Individual layers may stay stricter (e.g. edge tombstones use `<`);
+    /// keeping more history than this bound is always safe.
     pub fn safe_gc_timestamp(&self) -> Timestamp {
         if self.oldest_active_snapshot == NO_ACTIVE_SNAPSHOT {
             self.last_published_commit

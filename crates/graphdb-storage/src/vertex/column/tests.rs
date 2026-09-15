@@ -822,4 +822,34 @@ mod tests {
         assert_eq!(col.get(0), Some(Value::Int(3)));
         assert_eq!(col.get_at_ts(0, Timestamp::MAX), Some(Value::Int(3)));
     }
+
+    #[test]
+    fn test_clone_row_state_preserves_history() {
+        // Row moves during vertex compaction must carry creation time and
+        // before-images so snapshot reads stay intact after the remap.
+        let mut src = Column::new("age".to_string(), 0, DataType::Int, true);
+        src.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        src.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+
+        let mut dst = Column::new("age".to_string(), 0, DataType::Int, true);
+        dst.set(5, Some(&Value::Int(2))).unwrap();
+        dst.clone_row_state_from(&src, 0, 5);
+
+        assert_eq!(dst.version_chain_len(5), 1);
+        assert_eq!(dst.get_at_ts(5, 15), Some(Value::Int(1)));
+        assert_eq!(dst.get_at_ts(5, 25), Some(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_clone_row_state_never_written_row() {
+        // Cloning a row that was never written must not fabricate history.
+        let mut src = Column::new("age".to_string(), 0, DataType::Int, true);
+        src.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+
+        let mut dst = Column::new("age".to_string(), 0, DataType::Int, true);
+        dst.clone_row_state_from(&src, 7, 3);
+
+        assert_eq!(dst.version_chain_len(3), 0);
+        assert_eq!(dst.get_at_ts(3, 100), None);
+    }
 }
