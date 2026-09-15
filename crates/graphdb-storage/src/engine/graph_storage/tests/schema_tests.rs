@@ -550,3 +550,36 @@ fn test_snapshot_admin_methods() {
         .expect("snapshot cleanup should succeed");
     assert_eq!(deleted, 0);
 }
+
+#[test]
+fn test_checkpoint_publishes_snapshot_watermark() {
+    let (temp_dir, mut storage) = create_persistent_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+
+    let stats = storage
+        .create_checkpoint()
+        .expect("checkpoint should succeed")
+        .expect("persistence should be enabled");
+    assert!(
+        stats.snapshot_timestamp > 0,
+        "checkpoint must record its MVCC snapshot timestamp"
+    );
+
+    // The published manifest carries the same snapshot plus a reclaim LSN,
+    // which is what watermark captures (and post-restart lazy loads) read.
+    let manager = graphdb_sync::checkpoint_manifest::CheckpointManifestManager::new(
+        temp_dir.path().join("checkpoint").join("manifests"),
+    );
+    let manifest = manager
+        .load_latest()
+        .expect("manifest load should succeed")
+        .expect("a checkpoint manifest should be published");
+    assert_eq!(manifest.snapshot_timestamp, Some(stats.snapshot_timestamp));
+    assert_ne!(
+        manifest.safe_lsn,
+        graphdb_core::types::CommitLsn::ZERO,
+        "a checkpoint over WAL writes must publish a reclaim LSN"
+    );
+}

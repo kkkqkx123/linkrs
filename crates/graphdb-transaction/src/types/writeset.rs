@@ -64,12 +64,11 @@ impl WriteSet {
 
     /// Whether this transaction locally wrote `vid` (insert/update/delete).
     ///
-    /// Read-your-own-writes primitive: snapshot reads at `start_timestamp`
-    /// cannot observe uncommitted data, so every read path that must observe
-    /// the transaction's own writes has to consult this set (or the mutation
-    /// journal) in addition to the snapshot. Storage and query executors must
-    /// merge locally covered entities on top of the snapshot result.
-    /// Prefer the context-level probes
+    /// Conflict-certification and debugging probe: a transaction observes its
+    /// own writes through the timestamp mechanism (its effective read stamp
+    /// is pinned at or past its write stamp), not by merging this set over
+    /// snapshot reads. Consult this set for commit certification, not as a
+    /// read-merge entry point. Prefer the context-level probes
     /// (`TransactionContext::has_local_vertex_write` /
     /// `has_local_edge_write`) at call sites so the contract has a single
     /// entry point.
@@ -79,8 +78,8 @@ impl WriteSet {
 
     /// Whether this transaction locally wrote `edge`.
     ///
-    /// Same read-your-own-writes contract as `covers_vertex`: callers merge
-    /// locally written edges over the snapshot scan.
+    /// Same certification-probe contract as `covers_vertex`: own writes are
+    /// visible via timestamps, this set feeds conflict detection.
     pub fn covers_edge(&self, edge: &EdgeIdentifier) -> bool {
         self.edges.contains(edge)
     }

@@ -295,6 +295,18 @@ impl ColumnStore {
             .collect()
     }
 
+    /// Start timestamps of the per-column versions covering `query_ts`.
+    ///
+    /// Internal companion of [`ColumnStore::get_at_ts`] for pending-aware
+    /// point lookups: when any covering stamp belongs to a foreign
+    /// uncommitted write the caller re-reads at `stamp - 1`.
+    pub fn picked_starts_at(&self, row_idx: usize, query_ts: Timestamp) -> Vec<Timestamp> {
+        self.columns
+            .iter()
+            .map(|col| col.start_ts_at(row_idx, query_ts))
+            .collect()
+    }
+
     /// Read only the requested columns for one row as visible at `query_ts`.
     pub fn get_projected_at_ts(
         &self,

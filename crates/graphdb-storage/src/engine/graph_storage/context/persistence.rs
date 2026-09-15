@@ -81,9 +81,7 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-                self.persistent.version_manager.clone(),
-            );
+            let gc = self.gc_coordinator();
             let wm = gc.capture_watermarks();
             let margin = self.persistent.config.gc_safety_margin;
             let edge_tables: Vec<(
@@ -274,9 +272,7 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-                self.persistent.version_manager.clone(),
-            );
+            let gc = self.gc_coordinator();
             let wm = gc.capture_watermarks();
             let margin = self.persistent.config.gc_safety_margin;
             let edge_tables: Vec<(

@@ -41,6 +41,10 @@ pub struct CheckpointStats {
     pub bytes_flushed: u64,
     pub wal_files_truncated: usize,
     pub trigger_reason: CheckpointTriggerReason,
+    /// MVCC snapshot timestamp the checkpoint flushed (the input timestamp).
+    /// Feeds the checkpoint watermark (`GcCoordinator`) so WAL-reclaim and
+    /// GC decisions can observe how fresh the last checkpoint is.
+    pub snapshot_timestamp: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -408,7 +412,16 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         self.fail_if_injected(
             crate::engine::persistence_coordinator::PersistenceFaultPoint::CheckpointVisibilityPublish,
         )?;
-        self.publish_checkpoint_manifest(&checkpoint, &data, &checkpoint_dir, wal_lsn)?;
+        match self.publish_checkpoint_manifest(&checkpoint, &data, &checkpoint_dir, wal_lsn) {
+            Ok((snapshot_ts, safe_lsn)) => {
+                // Refresh the checkpoint watermark observed by GC passes.
+                // In-memory only, so it cannot fail the checkpoint: the
+                // durable twin of the same values is the published manifest,
+                // which passes lazily reload after a restart.
+                self.refresh_checkpoint_watermark(snapshot_ts, safe_lsn);
+            }
+            Err(error) => return Err(error),
+        }
 
         {
             let mut cm = self.checkpoint_manager.write();
@@ -467,6 +480,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             bytes_flushed: data.data_size,
             wal_files_truncated: if safe_wal_lsn != Lsn::ZERO { 1 } else { 0 },
             trigger_reason,
+            snapshot_timestamp: timestamp,
         };
         *self.last_checkpoint_stats.write() = Some(stats.clone());
 
@@ -838,13 +852,20 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
 
     /// Publish a combined checkpoint manifest that atomically references the
     /// storage snapshot, outbox snapshot (if provided), and index manifests.
+    ///
+    /// Returns the published watermark pair `(snapshot_ts, safe_lsn)` so the
+    /// caller can refresh the checkpoint watermark observed by
+    /// `GcCoordinator`. The snapshot timestamp is the checkpoint input: the
+    /// storage checkpoint path is the authoritative producer of checkpoint
+    /// snapshots (the gated transaction-layer checkpoint transaction is a
+    /// separate path and is not consulted here).
     fn publish_checkpoint_manifest(
         &self,
         checkpoint: &graphdb_transaction::wal::Checkpoint,
         data: &CheckpointData,
         checkpoint_dir: &Path,
         wal_lsn: Lsn,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<(Timestamp, graphdb_core::types::CommitLsn)> {
         let storage_snapshot_ref = CheckpointManifest::storage_snapshot_from_directory(
             checkpoint_dir,
             checkpoint.seq,
@@ -893,6 +914,9 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             )
             .map_err(StorageError::db_error)?
         };
+        let manifest = manifest
+            .with_snapshot_timestamp(checkpoint.timestamp)
+            .map_err(StorageError::db_error)?;
 
         self.manifest_manager.publish(&manifest).map_err(|error| {
             StorageError::db_error(format!("Failed to publish manifest: {}", error))
@@ -904,7 +928,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             manifest.safe_lsn
         );
 
-        Ok(())
+        Ok((checkpoint.timestamp, manifest.safe_lsn))
     }
 
     fn collect_index_manifest_refs(root: &Path) -> StorageResult<Vec<IndexManifestRef>> {

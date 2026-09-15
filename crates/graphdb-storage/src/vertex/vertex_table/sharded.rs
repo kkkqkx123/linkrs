@@ -387,6 +387,18 @@ impl ShardedVertexTable {
         table.get_by_internal_id(local_id, ts)
     }
 
+    /// Row survival stamps for pending-aware rechecks (shard-decoded).
+    pub fn row_timestamps(&self, global_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_timestamps(local_id)
+    }
+
+    /// Per-column covering version stamps for pending-aware rechecks.
+    pub fn row_picked_starts(&self, global_id: u32, ts: Timestamp) -> Vec<Timestamp> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_picked_starts(local_id, ts)
+    }
+
     pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
         let idx = self.shard_index_by_str(external_id);
         let table = self.shards[idx].read();

@@ -55,6 +55,14 @@ pub struct CheckpointManifest {
     /// without reusing or skipping timestamps.
     #[serde(default)]
     pub max_commit_timestamp: u64,
+    /// MVCC snapshot timestamp whose committed data this checkpoint flushed.
+    /// New alongside the `max_commit_timestamp` fix (which used to carry the
+    /// storage LSN at a different scale): readers must use this field for
+    /// watermark purposes and never interpret the LSN-smelling value in old
+    /// files as a timestamp. `None` for manifests written before the field
+    /// existed (read-tolerated, never backfilled with old logic).
+    #[serde(default)]
+    pub snapshot_timestamp: Option<u64>,
     /// Schema catalog version at checkpoint time.
     #[serde(default)]
     pub schema_catalog_version: u64,
@@ -127,7 +135,7 @@ pub struct IndexManifestRef {
 
 impl CheckpointManifest {
     /// Current manifest format version
-    pub const CURRENT_FORMAT_VERSION: u32 = 4;
+    pub const CURRENT_FORMAT_VERSION: u32 = 5;
 
     /// Build a storage reference from a fully materialized checkpoint
     /// directory. The file list is part of the combined manifest so recovery
@@ -233,6 +241,7 @@ impl CheckpointManifest {
             outbox_snapshot,
             index_manifests,
             max_commit_timestamp: storage_lsn.get(),
+            snapshot_timestamp: None,
             schema_catalog_version: 0,
             sequence_version: 0,
             manifest_checksum: 0,
@@ -240,6 +249,20 @@ impl CheckpointManifest {
 
         manifest.manifest_checksum = manifest.compute_checksum()?;
         Ok(manifest)
+    }
+
+    /// Record the MVCC snapshot timestamp this checkpoint flushed.
+    ///
+    /// Fixes the `max_commit_timestamp` scale misplacement (it used to carry
+    /// the storage LSN) and carries the true input snapshot in the new
+    /// `snapshot_timestamp` field. Recomputes the checksum so the manifest
+    /// stays verifiable. Call at the storage checkpoint path with the input
+    /// snapshot timestamp right before publishing.
+    pub fn with_snapshot_timestamp(mut self, snapshot_ts: u64) -> Result<Self, String> {
+        self.max_commit_timestamp = snapshot_ts;
+        self.snapshot_timestamp = Some(snapshot_ts);
+        self.manifest_checksum = self.compute_checksum()?;
+        Ok(self)
     }
 
     /// Compute checksum of the manifest (excluding the checksum field itself)
@@ -821,5 +844,40 @@ mod tests {
         // Corrupt the manifest
         manifest.checkpoint_id = 999;
         assert!(!manifest.verify_checksum().expect("checksum should compute"));
+    }
+
+    #[test]
+    fn test_snapshot_timestamp_fix_and_roundtrip() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_ref = create_test_storage_snapshot_ref(temp_dir.path());
+
+        // Plain construction keeps the legacy shape (no snapshot field).
+        let legacy = CheckpointManifest::new(
+            1,
+            CommitLsn::new(100),
+            storage_ref.clone(),
+            None,
+            Vec::new(),
+        )
+        .expect("checkpoint manifest should be created");
+        assert_eq!(legacy.snapshot_timestamp, None);
+
+        // The checkpoint path stamps the true input snapshot, fixing the
+        // LSN-scale misplacement, and the stamped manifest round-trips with
+        // a valid checksum.
+        let stamped =
+            CheckpointManifest::new(1, CommitLsn::new(100), storage_ref, None, Vec::new())
+                .expect("checkpoint manifest should be created")
+                .with_snapshot_timestamp(40)
+                .expect("snapshot stamp should apply");
+        assert_eq!(stamped.max_commit_timestamp, 40);
+        assert_eq!(stamped.snapshot_timestamp, Some(40));
+        assert!(stamped.validate().is_ok());
+
+        let path = temp_dir.path().join("stamped.postcard");
+        stamped.save_atomic(&path).unwrap();
+        let loaded = CheckpointManifest::load(&path).unwrap();
+        assert_eq!(loaded.snapshot_timestamp, Some(40));
+        assert_eq!(loaded.max_commit_timestamp, 40);
     }
 }

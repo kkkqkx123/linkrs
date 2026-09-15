@@ -136,6 +136,8 @@ impl CacheManager {
         external_id: String,
         properties: Vec<(String, graphdb_core::Value)>,
         ts: Timestamp,
+        create_ts: Timestamp,
+        column_starts: Vec<Timestamp>,
     ) {
         if let Some(ref rc) = self.record_cache {
             let key = VertexCacheKey::new(label, internal_id);
@@ -144,6 +146,8 @@ impl CacheManager {
                 external_id,
                 properties,
                 cached_at_ts: ts,
+                create_ts,
+                column_starts,
                 generation: 0,
             };
             rc.insert_vertex(key, cached);

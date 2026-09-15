@@ -41,6 +41,7 @@ use crate::engine::snapshot_manager::SnapshotManager;
 use crate::engine::WalManager;
 use crate::index::shard_runtime::IndexBarrierRegistry;
 use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
+use graphdb_core::types::{CommitLsn, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::wal::{CheckpointManager, Lsn, WalConfig};
 
@@ -119,6 +120,11 @@ pub struct PersistenceCoordinator {
     pub(crate) fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
     pub(crate) outbox_frontier_provider: RwLock<Option<OutboxFrontierProvider>>,
     storage_callbacks: Arc<EventSubscriptions<StorageEvent>>,
+    /// Latest published checkpoint watermark: MVCC snapshot timestamp plus
+    /// WAL reclaim LSN. Written once per checkpoint completion, read by GC
+    /// passes; a restart starts empty and self-heals via lazy manifest load
+    /// in `GcCoordinator`.
+    checkpoint_watermark: RwLock<(Option<Timestamp>, CommitLsn)>,
 }
 
 impl PersistenceCoordinator {
@@ -206,6 +212,7 @@ impl PersistenceCoordinator {
             fault_points: Arc::new(RwLock::new(HashSet::new())),
             outbox_frontier_provider: RwLock::new(None),
             storage_callbacks: Arc::new(EventSubscriptions::new()),
+            checkpoint_watermark: RwLock::new((None, CommitLsn::ZERO)),
         })
     }
 
@@ -253,6 +260,23 @@ impl PersistenceCoordinator {
     /// Notify observers that WAL was truncated (call after `WalManager::truncate`).
     pub fn notify_wal_truncated(&self, up_to_lsn: u64) {
         self.emit_storage_event(StorageEvent::WalTruncated { up_to_lsn });
+    }
+
+    /// Refresh entry for the checkpoint watermark (explicit setter).
+    ///
+    /// Called once by the checkpoint completion path after the manifest is
+    /// published. In-memory only and infallible, so it can never fail the
+    /// checkpoint it reports on. GC passes read the cell through
+    /// [`Self::checkpoint_watermark`]; after a restart the cell starts empty
+    /// and `GcCoordinator` self-heals with one lazy manifest load.
+    pub(crate) fn refresh_checkpoint_watermark(&self, snapshot: Timestamp, reclaim_lsn: CommitLsn) {
+        *self.checkpoint_watermark.write() = (Some(snapshot), reclaim_lsn);
+    }
+
+    /// Latest published checkpoint watermark, if any checkpoint completed in
+    /// this process lifetime.
+    pub(crate) fn checkpoint_watermark(&self) -> (Option<Timestamp>, CommitLsn) {
+        *self.checkpoint_watermark.read()
     }
 
     /// Notify observers that a GC pass reclaimed entries.

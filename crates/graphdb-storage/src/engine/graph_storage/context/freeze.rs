@@ -64,9 +64,7 @@ impl GraphStorageContext {
     /// maintenance (tombstone GC, property compaction).
     /// Captures watermarks once and shares across all sub-passes.
     pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
-        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-            self.persistent.version_manager.clone(),
-        );
+        let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
         if let Err(e) = self.maybe_auto_compact_vertices_with_watermarks(&wm) {
             log::warn!("Automatic vertex compaction failed: {}", e);
@@ -155,9 +153,7 @@ impl GraphStorageContext {
     }
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
-        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-            self.persistent.version_manager.clone(),
-        );
+        let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
         self.trigger_background_freeze_with_watermarks(&wm)
     }

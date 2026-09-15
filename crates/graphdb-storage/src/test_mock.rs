@@ -742,4 +742,31 @@ mod snapshot_tests {
             .expect("auto-commit storage has a snapshot");
         assert_eq!(handle.ts, 1);
     }
+
+    #[test]
+    fn explicit_write_context_reports_read_timestamp() {
+        use graphdb_core::types::TransactionId;
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        // A read-committed statement refresh moves the read stamp past the
+        // write stamp; the handle must report the stamp storage actually
+        // reads at, otherwise the query layer misfires snapshot-consistency
+        // errors on multi-statement write transactions.
+        let bound = storage.bind_operation_context(StorageOperationContext {
+            transaction_id: Some(TransactionId::from(7)),
+            read_timestamp: 43,
+            write_timestamp: Some(42),
+            read_only: false,
+            auto_commit: false,
+            mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
+        });
+        let handle = bound
+            .snapshot_handle()
+            .expect("bound storage has a snapshot");
+        assert_eq!(handle.ts, 43);
+    }
 }

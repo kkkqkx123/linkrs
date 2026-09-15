@@ -141,9 +141,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let gc = crate::engine::gc_coordinator::GcCoordinator::new(
-            self.persistent.version_manager.clone(),
-        );
+        let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
         // One watermark capture shared by every sub-system below, margin
         // applied. `ts` is the separate caller-provided compaction timestamp

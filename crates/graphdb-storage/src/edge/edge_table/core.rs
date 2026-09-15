@@ -297,8 +297,11 @@ impl EdgeStore {
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
         if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
-            self.properties.remove_edge_mapping(edge_id);
+            if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+                self.properties.release_row(row);
+            }
             self.mvcc.remove_edge_timestamps(edge_id);
+            self.debug_assert_copies_consistent(edge_id);
             return Err(e);
         }
 
@@ -309,11 +312,14 @@ impl EdgeStore {
             if !self.out_csr.remove_edge(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
-            self.properties.remove_edge_mapping(edge_id);
+            if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+                self.properties.release_row(row);
+            }
             let _ = self.properties.mark_deleted(edge_id, ts);
             // Remove the centralized MVCC creation record so the failed edge
             // does not survive as a phantom entry in timestamp lookups.
             self.mvcc.remove_edge_timestamps(edge_id);
+            self.debug_assert_copies_consistent(edge_id);
             return Err(e);
         }
 
@@ -327,6 +333,7 @@ impl EdgeStore {
         // Check write backpressure after successful insertion
         self.check_and_apply_write_backpressure(ts);
         self.maybe_run_auto_maintenance();
+        self.debug_assert_copies_consistent(edge_id);
 
         Ok(())
     }
@@ -374,10 +381,76 @@ impl EdgeStore {
             let _ = self.properties.mark_deleted(edge_id, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
+            self.debug_assert_copies_consistent(edge_id);
             return Ok(true);
         }
 
         Ok(false)
+    }
+
+    /// Physically erase an edge inserted by an uncommitted transaction.
+    ///
+    /// Insert-undo path: unlike a user delete (logical deletion through
+    /// `delete_edge`), aborting an insert must leave no trace in any of the
+    /// three copies — otherwise the aborted edge would stay visible inside
+    /// its snapshot window and leave a permanent tombstone. Every step
+    /// tolerates absence, so replaying the undo (abort re-drive, WAL
+    /// recovery re-application) is idempotent.
+    pub fn erase_edge(&mut self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> bool {
+        let Some(edge_id) = self.edge_id_of(src, dst, rank, ts) else {
+            return false;
+        };
+        let properties = self
+            .properties
+            .read_properties_by_edge_id(edge_id)
+            .unwrap_or_default();
+        self.out_csr.remove_edge(src, edge_id);
+        self.in_csr.remove_edge(dst, edge_id);
+        if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+            self.properties.release_row(row);
+        }
+        self.mvcc.remove_edge_timestamps(edge_id);
+        self.mvcc.remove_deletion(edge_id);
+        if let Some(ref mut index) = self.property_index {
+            for (prop_name, prop_value) in &properties {
+                let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
+            }
+        }
+        self.debug_assert_copies_consistent(edge_id);
+        true
+    }
+
+    /// Debug-only cross-copy consistency check for one edge.
+    ///
+    /// Release builds skip the whole body (zero overhead): every arm is a
+    /// `debug_assert`. Tombstone presence must agree with the authoritative
+    /// `edge_timestamps` deletion stamp in both directions, and a property
+    /// row mapping must never outlive its authority entry (orphan row).
+    /// Called on insert success, delete success and delete-rollback success.
+    fn debug_assert_copies_consistent(&self, edge_id: EdgeId) {
+        debug_assert!(
+            !self.mvcc.tombstones.contains_key(&edge_id)
+                || self
+                    .mvcc
+                    .edge_timestamps
+                    .get(&edge_id)
+                    .is_some_and(|ts| ts.delete_ts != Timestamp::MAX),
+            "tombstone without authoritative deletion stamp"
+        );
+        debug_assert!(
+            !self
+                .mvcc
+                .edge_timestamps
+                .get(&edge_id)
+                .is_some_and(|ts| ts.delete_ts != Timestamp::MAX)
+                || self.mvcc.tombstones.contains_key(&edge_id),
+            "authoritative deletion without tombstone entry"
+        );
+        debug_assert!(
+            self.properties.get_row_for_edge(edge_id).is_none()
+                || self.mvcc.edge_timestamps.contains_key(&edge_id),
+            "property row mapping without authority entry"
+        );
     }
 
     fn update_property_index_on_delete(
@@ -459,6 +532,16 @@ impl EdgeStore {
                 }
                 self.mvcc.remove_deletion(nbr.edge_id);
                 let _ = self.properties.revert_deletion_for_edge(nbr.edge_id);
+                // Restore the property-index entries the delete path
+                // removed, mirroring the slow path below.
+                let restored = self.properties_for_edge(nbr.edge_id, ts);
+                if let Some(ref mut index) = self.property_index {
+                    for (prop_name, prop_value) in restored {
+                        let _ =
+                            index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
+                    }
+                }
+                self.debug_assert_copies_consistent(nbr.edge_id);
             }
             return Ok(true);
         }
@@ -500,7 +583,23 @@ impl EdgeStore {
                 let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
             }
         }
+        self.debug_assert_copies_consistent(edge_id);
         Ok(true)
+    }
+
+    /// Resolve the edge id for `(src, dst, rank)` without decoding properties.
+    ///
+    /// Operation-layer point lookups use it to recheck the fetched record
+    /// through the pending-aware gate
+    /// (`MVCCManager::is_edge_visible_with_gate`).
+    pub fn edge_id_of(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeId> {
+        if !self.is_open {
+            return None;
+        }
+        let dst_key = Self::edge_endpoint_key(dst, rank);
+        self.out_csr
+            .get_edge(src, dst_key, ts)
+            .map(|nbr| nbr.edge_id)
     }
 
     pub fn get_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeRecord> {
@@ -1266,8 +1365,53 @@ impl EdgeStore {
                 .unwrap_or(0);
             self.next_edge_id = EdgeId(max_id);
         }
+        let (orphan_mappings, orphan_csr_rows, tombstone_mismatches) =
+            self.loaded_copy_mismatches();
+        if orphan_mappings + orphan_csr_rows + tombstone_mismatches > 0 {
+            log::warn!(
+                "edge table {} loaded with copy mismatches: \
+                 orphan property mappings={}, orphan CSR rows={}, \
+                 tombstone/authority mismatches={} (warn-only, no fail)",
+                self.label_name,
+                orphan_mappings,
+                orphan_csr_rows,
+                tombstone_mismatches,
+            );
+        }
         self.is_open = true;
         Ok(())
+    }
+
+    /// Warn-only cross-copy audit used by [`EdgeStore::load`].
+    ///
+    /// Returns `(orphan property mappings, orphan CSR rows, tombstone /
+    /// authority mismatches)`. Tombstones are rebuilt from the authority
+    /// table on load, so a nonzero mismatch count signals file corruption or
+    /// a write-path regression; callers log it and keep serving.
+    pub fn loaded_copy_mismatches(&self) -> (usize, usize, usize) {
+        let orphan_mappings = self
+            .properties
+            .edge_ids()
+            .filter(|edge_id| !self.mvcc.edge_timestamps.contains_key(edge_id))
+            .count();
+        let mut orphan_csr_rows = 0;
+        for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
+            if !self.mvcc.edge_timestamps.contains_key(&nbr.edge_id) {
+                orphan_csr_rows += 1;
+            }
+        }
+        let tombstone_mismatches = self
+            .mvcc
+            .tombstones
+            .iter()
+            .filter(|(edge_id, delete_ts)| {
+                self.mvcc
+                    .edge_timestamps
+                    .get(edge_id)
+                    .map_or(true, |ts| ts.delete_ts != **delete_ts)
+            })
+            .count();
+        (orphan_mappings, orphan_csr_rows, tombstone_mismatches)
     }
 }
 

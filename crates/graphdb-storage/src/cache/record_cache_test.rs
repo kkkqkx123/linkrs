@@ -15,6 +15,8 @@ fn test_vertex_cache_basic() {
         properties: vec![("name".to_string(), Value::string("Alice"))],
         cached_at_ts: 0,
         generation: 0,
+        create_ts: 0,
+        column_starts: Vec::new(),
     };
 
     cache.insert_vertex(key, vertex);
@@ -35,6 +37,8 @@ fn test_cache_remove() {
         properties: vec![],
         cached_at_ts: 0,
         generation: 0,
+        create_ts: 0,
+        column_starts: Vec::new(),
     };
 
     cache.insert_vertex(key, vertex);
@@ -56,6 +60,8 @@ fn test_cache_clear() {
             properties: vec![],
             cached_at_ts: 0,
             generation: 0,
+            create_ts: 0,
+            column_starts: Vec::new(),
         };
         cache.insert_vertex(key, vertex);
     }
@@ -125,6 +131,8 @@ fn test_cache_config_with_ttl() {
         properties: vec![],
         cached_at_ts: 0,
         generation: 0,
+        create_ts: 0,
+        column_starts: Vec::new(),
     };
     cache.insert_vertex(key, vertex);
 
@@ -201,6 +209,8 @@ fn test_invalidate_by_label() {
             properties: vec![],
             cached_at_ts: 0,
             generation: 0,
+            create_ts: 0,
+            column_starts: Vec::new(),
         },
     );
     cache.insert_vertex(
@@ -211,6 +221,8 @@ fn test_invalidate_by_label() {
             properties: vec![],
             cached_at_ts: 0,
             generation: 0,
+            create_ts: 0,
+            column_starts: Vec::new(),
         },
     );
     cache.insert_id_index(1, "user_001", 100, 0);
@@ -259,6 +271,8 @@ fn test_vertex_cache_is_forward_compatible() {
         properties: vec![],
         cached_at_ts: 100,
         generation: 0,
+        create_ts: 0,
+        column_starts: Vec::new(),
     };
     cache.insert_vertex(key, vertex);
 
@@ -284,6 +298,8 @@ fn test_vertex_cache_point_invalidation_is_precise() {
                 properties: vec![],
                 cached_at_ts: 100,
                 generation: 0,
+                create_ts: 0,
+                column_starts: Vec::new(),
             },
         );
     }
@@ -327,6 +343,8 @@ fn test_concurrent_cache_access() {
                     properties: vec![],
                     cached_at_ts: 0,
                     generation: 0,
+                    create_ts: 0,
+                    column_starts: Vec::new(),
                 };
                 cache.insert_vertex(key, vertex);
                 let _ = cache.get_vertex(&key, 0);
@@ -351,6 +369,8 @@ fn test_estimated_size_accuracy() {
         ],
         cached_at_ts: 0,
         generation: 0,
+        create_ts: 0,
+        column_starts: Vec::new(),
     };
 
     let estimated = vertex.estimated_size();
@@ -386,6 +406,8 @@ fn test_memory_weighted_eviction() {
             properties: vec![("data".to_string(), Value::string("x".repeat(50)))],
             cached_at_ts: 0,
             generation: 0,
+            create_ts: 0,
+            column_starts: Vec::new(),
         };
         cache.insert_vertex(key, vertex);
     }
@@ -416,6 +438,8 @@ fn test_memory_overflow_eviction() {
             properties: vec![("data".to_string(), Value::string("x".repeat(100)))],
             cached_at_ts: 0,
             generation: 0,
+            create_ts: 0,
+            column_starts: Vec::new(),
         };
         cache.insert_vertex(key, vertex);
     }

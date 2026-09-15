@@ -391,6 +391,26 @@ impl GraphStorageContext {
         ts >= self.persistent.version_manager.read_timestamp()
     }
 
+    /// Build the per-pass GC coordinator with checkpoint bounds attached.
+    ///
+    /// Fresh checkpoint values come from the persistence watermark cell;
+    /// after a restart the cell starts empty and the coordinator self-heals
+    /// with one lazy manifest load per capture (see `GcCoordinator`).
+    pub(crate) fn gc_coordinator(&self) -> crate::engine::gc_coordinator::GcCoordinator {
+        let mut gc = crate::engine::gc_coordinator::GcCoordinator::new(
+            self.persistent.version_manager.clone(),
+        );
+        if let Some(persistence) = self.persistent.persistence.as_ref() {
+            let guard = persistence.read();
+            gc = gc.with_manifest_dir(guard.checkpoint_dir().join("manifests"));
+            let (snapshot, reclaim_lsn) = guard.checkpoint_watermark();
+            if let Some(snapshot) = snapshot {
+                gc.refresh_checkpoint_watermark(snapshot, reclaim_lsn);
+            }
+        }
+        gc
+    }
+
     pub(crate) fn ensure_vertex_snapshot_registered(
         &self,
         label: LabelId,

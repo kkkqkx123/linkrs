@@ -1,11 +1,280 @@
-use crate::vertex::VertexRecord;
+use crate::mvcc_visibility::PendingGate;
+use crate::vertex::{ShardedVertexTable, VertexRecord};
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::sync::atomic::Ordering;
 
 use super::GraphStorageContext;
 
+/// External vertex reference for point lookups.
+#[derive(Clone, Copy)]
+enum ExternalRef<'a> {
+    Str(&'a str),
+    I64(i64),
+}
+
+impl<'a> ExternalRef<'a> {
+    fn raw_internal_id(&self, table: &ShardedVertexTable) -> Option<u32> {
+        match *self {
+            ExternalRef::Str(id) => table.get_internal_id_raw(id),
+            ExternalRef::I64(id) => table.get_internal_id_by_i64_raw(id),
+        }
+    }
+
+    fn versioned_internal_id(&self, table: &ShardedVertexTable, ts: Timestamp) -> Option<u32> {
+        match *self {
+            ExternalRef::Str(id) => table.get_internal_id(id, ts),
+            ExternalRef::I64(id) => table.get_internal_id_by_i64(id, ts),
+        }
+    }
+
+    fn cache_key(&self) -> String {
+        match *self {
+            ExternalRef::Str(id) => id.to_string(),
+            ExternalRef::I64(id) => id.to_string(),
+        }
+    }
+}
+
 impl GraphStorageContext {
+    fn pending_gate(&self) -> PendingGate<'_> {
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
+        PendingGate::new(&self.persistent.version_manager, own_write)
+    }
+
+    /// Pending-aware point-record resolution on one table, lock-free inside.
+    ///
+    /// Reads through the plain predicate, then rechecks the surviving row
+    /// stamps through the slot-state gate: a creation stamp owned by a
+    /// foreign uncommitted transaction hides the row, a foreign pending
+    /// deletion is ignored by re-reading below it, and a column value whose
+    /// covering version stamp is foreign-pending falls back to `stamp - 1`.
+    /// Covering stamps are monotone decreasing across retries, so the loop
+    /// terminates. Returns the record with the fences describing the version
+    /// actually read (creation stamp, per-column covering stamps, read ts).
+    /// Scan-class paths keep the plain predicate (follow-up).
+    fn resolve_on_table(
+        table: &ShardedVertexTable,
+        internal_id: u32,
+        ts: Timestamp,
+        gate: &PendingGate<'_>,
+    ) -> Option<(VertexRecord, Timestamp, Vec<Timestamp>, Timestamp)> {
+        let mut cur = ts;
+        loop {
+            let record = table.get_by_internal_id(internal_id, cur);
+            let survival = table.row_timestamps(internal_id);
+            match (record, survival) {
+                (Some(record), Some((create_ts, delete_ts))) => {
+                    if !gate.is_row_visible(cur, create_ts, delete_ts) {
+                        return None;
+                    }
+                    let starts = table.row_picked_starts(internal_id, cur);
+                    match starts
+                        .iter()
+                        .filter(|stamp| gate.is_foreign_pending(cur, **stamp))
+                        .min()
+                    {
+                        Some(0) | None => return Some((record, create_ts, starts, cur)),
+                        Some(stamp) => {
+                            cur = stamp.saturating_sub(1);
+                            continue;
+                        }
+                    }
+                }
+                (Some(_), None) => return None,
+                (None, Some((create_ts, delete_ts))) => {
+                    if gate.is_create_visible(cur, create_ts) {
+                        if let Some(delete_ts) = delete_ts {
+                            if delete_ts <= cur
+                                && gate.is_foreign_pending(cur, delete_ts)
+                                && delete_ts > 0
+                            {
+                                cur = delete_ts - 1;
+                                continue;
+                            }
+                        }
+                    }
+                    return None;
+                }
+                (None, None) => return None,
+            }
+        }
+    }
+
+    /// Resolve an external id with ID-index revalidation.
+    ///
+    /// A cached mapping is accepted only when the table still maps the
+    /// external id to the same internal id (covers GC-remap and
+    /// delete/recreate races); otherwise the version-aware lookup runs and
+    /// reseeds the cache. Cache entries are owned clones, so the cache lock
+    /// is never held while taking a table lock — no lock-order inversion
+    /// (verified: no cache path reaches back into table locks; write paths
+    /// invalidate after releasing table locks, i.e. the same table→cache
+    /// order used here).
+    fn resolve_internal_id_rechecked(
+        &self,
+        table: &ShardedVertexTable,
+        label: LabelId,
+        external: ExternalRef<'_>,
+        ts: Timestamp,
+    ) -> Option<u32> {
+        if let Some(cached) =
+            self.persistent
+                .cache_manager
+                .get_cached_vertex_id(label, &external.cache_key(), ts)
+        {
+            if external.raw_internal_id(table) == Some(cached) {
+                return Some(cached);
+            }
+        }
+        let id = external.versioned_internal_id(table, ts)?;
+        self.persistent
+            .cache_manager
+            .cache_vertex_id(label, &external.cache_key(), id, ts);
+        Some(id)
+    }
+
+    /// Revalidate a record-cache hit against live storage fences.
+    ///
+    /// Accepts the cached record only when the row is still alive at `ts`,
+    /// its creation stamp matches the seed fence, and the per-column
+    /// covering stamps match (no property write landed between seed and
+    /// query). Anything else is a miss.
+    fn rechecked_cached_record(
+        &self,
+        table: &ShardedVertexTable,
+        label: LabelId,
+        internal_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        let cached = self
+            .persistent
+            .cache_manager
+            .get_cached_vertex(label, internal_id, ts)?;
+        let (create_ts, delete_ts) = table.row_timestamps(internal_id)?;
+        if create_ts != cached.create_ts {
+            return None;
+        }
+        if create_ts > ts || delete_ts.is_some_and(|end| ts >= end) {
+            return None;
+        }
+        if table.row_picked_starts(internal_id, ts) != cached.column_starts {
+            return None;
+        }
+        Some(VertexRecord {
+            internal_id: cached.internal_id,
+            vid: cached
+                .external_id
+                .parse::<i64>()
+                .map(graphdb_core::types::VertexId::from_int64)
+                .unwrap_or_else(|_| {
+                    graphdb_core::types::VertexId::from_string(&cached.external_id)
+                }),
+            properties: cached.properties,
+        })
+    }
+
+    /// Full point lookup by external id: revalidated ID resolve, revalidated
+    /// record hit, pending-aware miss read with conditional seeding.
+    ///
+    /// The whole path runs in one catalog scope; the seed publishes the
+    /// record reread together with its fences only when that version is
+    /// still current (live, same creation stamp, no newer column version),
+    /// so a commit landing between read and seed turns into a skipped seed
+    /// instead of a poisoned entry.
+    fn get_full_record(
+        &self,
+        label: LabelId,
+        external: ExternalRef<'_>,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        self.ensure_vertex_snapshot_registered(label);
+        let gate = self.pending_gate();
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            let table = tables.get(&label)?;
+            let internal_id = self.resolve_internal_id_rechecked(table, label, external, ts)?;
+            if self.record_cache_eligible(ts) {
+                if let Some(hit) = self.rechecked_cached_record(table, label, internal_id, ts) {
+                    return Some(hit);
+                }
+            }
+            let (record, create_ts, starts, read_ts) =
+                Self::resolve_on_table(table, internal_id, ts, &gate)?;
+            if self.record_cache_eligible(ts) {
+                let (live_create, live_delete) = table.row_timestamps(internal_id)?;
+                if live_create == create_ts
+                    && live_delete.is_none()
+                    && table.row_picked_starts(internal_id, Timestamp::MAX) == starts
+                {
+                    self.persistent.cache_manager.cache_vertex(
+                        label,
+                        internal_id,
+                        external.cache_key(),
+                        record.properties.clone(),
+                        read_ts,
+                        create_ts,
+                        starts,
+                    );
+                }
+            }
+            Some(record)
+        })
+    }
+
+    /// Full point lookup by internal id, with the same hit revalidation and
+    /// conditional seeding as [`Self::get_full_record`].
+    fn get_full_record_by_internal_id(
+        &self,
+        label: LabelId,
+        internal_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        self.ensure_vertex_snapshot_registered(label);
+        let gate = self.pending_gate();
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            let table = tables.get(&label)?;
+            if self.record_cache_eligible(ts) {
+                if let Some(hit) = self.rechecked_cached_record(table, label, internal_id, ts) {
+                    return Some(hit);
+                }
+            }
+            let (record, create_ts, starts, read_ts) =
+                Self::resolve_on_table(table, internal_id, ts, &gate)?;
+            if self.record_cache_eligible(ts) {
+                let (live_create, live_delete) = table.row_timestamps(internal_id)?;
+                if live_create == create_ts
+                    && live_delete.is_none()
+                    && table.row_picked_starts(internal_id, Timestamp::MAX) == starts
+                {
+                    let external_id = table
+                        .get_external_id(internal_id, ts)
+                        .map(|key| key.to_string())
+                        .unwrap_or_default();
+                    if !external_id.is_empty() {
+                        self.persistent.cache_manager.cache_vertex_id(
+                            label,
+                            &external_id,
+                            internal_id,
+                            ts,
+                        );
+                        self.persistent.cache_manager.cache_vertex(
+                            label,
+                            internal_id,
+                            external_id,
+                            record.properties.clone(),
+                            read_ts,
+                            create_ts,
+                            starts,
+                        );
+                    }
+                }
+            }
+            Some(record)
+        })
+    }
     pub fn insert_vertex(
         &self,
         label: LabelId,
@@ -100,61 +369,7 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
-
-        let internal_id = self
-            .persistent
-            .cache_manager
-            .get_cached_vertex_id(label, external_id, ts)
-            .or_else(|| {
-                let id = self
-                    .persistent
-                    .data_store
-                    .with_vertex_tables(|vertex_tables| {
-                        vertex_tables.get(&label)?.get_internal_id(external_id, ts)
-                    });
-                if let Some(id) = id {
-                    self.persistent
-                        .cache_manager
-                        .cache_vertex_id(label, external_id, id, ts);
-                }
-                id
-            })?;
-
-        if let Some(cached) = self
-            .record_cache_eligible(ts)
-            .then(|| {
-                self.persistent
-                    .cache_manager
-                    .get_cached_vertex(label, internal_id, ts)
-            })
-            .flatten()
-        {
-            return Some(VertexRecord {
-                internal_id: cached.internal_id,
-                vid: cached
-                    .external_id
-                    .parse::<i64>()
-                    .map(graphdb_core::types::VertexId::from_int64)
-                    .unwrap_or_else(|_| {
-                        graphdb_core::types::VertexId::from_string(&cached.external_id)
-                    }),
-                properties: cached.properties,
-            });
-        }
-
-        let record = self.read_record(label, internal_id, None, ts)?;
-
-        if self.record_cache_eligible(ts) {
-            self.persistent.cache_manager.cache_vertex(
-                label,
-                internal_id,
-                external_id.to_string(),
-                record.properties.clone(),
-                ts,
-            );
-        }
-
-        Some(record)
+        self.get_full_record(label, ExternalRef::Str(external_id), ts)
     }
 
     /// Read a vertex record by internal ID, optionally restricted to a
@@ -183,6 +398,9 @@ impl GraphStorageContext {
 
     /// Fetch a vertex restricted to the given property projection, skipping
     /// the full-record cache so partial results never replace cached vertices.
+    ///
+    /// Follow-up: projection reads still use the plain timestamp predicate;
+    /// wire them through the pending-aware gate like the full-record funnels.
     pub fn get_vertex_projected(
         &self,
         label: LabelId,
@@ -194,24 +412,14 @@ impl GraphStorageContext {
             return None;
         }
 
-        let internal_id = self
-            .persistent
-            .cache_manager
-            .get_cached_vertex_id(label, external_id, ts)
-            .or_else(|| {
-                let id = self
-                    .persistent
-                    .data_store
-                    .with_vertex_tables(|vertex_tables| {
-                        vertex_tables.get(&label)?.get_internal_id(external_id, ts)
-                    });
-                if let Some(id) = id {
-                    self.persistent
-                        .cache_manager
-                        .cache_vertex_id(label, external_id, id, ts);
-                }
-                id
-            })?;
+        // ID-index hits are mapping-revalidated; the record itself still
+        // uses the plain timestamp predicate (follow-up: pending-aware
+        // gate for projection reads).
+        self.ensure_vertex_snapshot_registered(label);
+        let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
+            let table = tables.get(&label)?;
+            self.resolve_internal_id_rechecked(table, label, ExternalRef::Str(external_id), ts)
+        })?;
 
         self.read_record(label, internal_id, Some(projection), ts)
     }
@@ -223,31 +431,18 @@ impl GraphStorageContext {
         projection: &[String],
         ts: Timestamp,
     ) -> Option<VertexRecord> {
+        // ID-index hits are mapping-revalidated; the record itself still
+        // uses the plain timestamp predicate (follow-up: pending-aware
+        // gate for projection reads).
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
 
-        let external_id_str = external_id.to_string();
-        let internal_id = self
-            .persistent
-            .cache_manager
-            .get_cached_vertex_id(label, &external_id_str, ts)
-            .or_else(|| {
-                let id = self
-                    .persistent
-                    .data_store
-                    .with_vertex_tables(|vertex_tables| {
-                        vertex_tables
-                            .get(&label)?
-                            .get_internal_id_by_i64(external_id, ts)
-                    });
-                if let Some(id) = id {
-                    self.persistent
-                        .cache_manager
-                        .cache_vertex_id(label, &external_id_str, id, ts);
-                }
-                id
-            })?;
+        self.ensure_vertex_snapshot_registered(label);
+        let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
+            let table = tables.get(&label)?;
+            self.resolve_internal_id_rechecked(table, label, ExternalRef::I64(external_id), ts)
+        })?;
 
         self.read_record(label, internal_id, Some(projection), ts)
     }
@@ -262,66 +457,7 @@ impl GraphStorageContext {
             return None;
         }
 
-        // Lazily register the statement snapshot for this label.
-        self.ensure_vertex_snapshot_registered(label);
-
-        let external_id_str = external_id.to_string();
-        let internal_id = self
-            .persistent
-            .cache_manager
-            .get_cached_vertex_id(label, &external_id_str, ts)
-            .or_else(|| {
-                let id = self
-                    .persistent
-                    .data_store
-                    .with_vertex_tables(|vertex_tables| {
-                        vertex_tables
-                            .get(&label)?
-                            .get_internal_id_by_i64(external_id, ts)
-                    });
-                if let Some(id) = id {
-                    self.persistent
-                        .cache_manager
-                        .cache_vertex_id(label, &external_id_str, id, ts);
-                }
-                id
-            })?;
-
-        if let Some(cached) = self
-            .record_cache_eligible(ts)
-            .then(|| {
-                self.persistent
-                    .cache_manager
-                    .get_cached_vertex(label, internal_id, ts)
-            })
-            .flatten()
-        {
-            return Some(VertexRecord {
-                internal_id: cached.internal_id,
-                vid: graphdb_core::types::VertexId::from_int64(external_id),
-                properties: cached.properties,
-            });
-        }
-
-        let record = self.persistent.data_store.with_vertex_tables(
-            |vertex_tables| -> Option<VertexRecord> {
-                vertex_tables
-                    .get(&label)?
-                    .get_by_internal_id(internal_id, ts)
-            },
-        )?;
-
-        if self.record_cache_eligible(ts) {
-            self.persistent.cache_manager.cache_vertex(
-                label,
-                internal_id,
-                external_id_str,
-                record.properties.clone(),
-                ts,
-            );
-        }
-
-        Some(record)
+        self.get_full_record(label, ExternalRef::I64(external_id), ts)
     }
 
     pub fn get_vertex_by_internal_id(
@@ -334,67 +470,7 @@ impl GraphStorageContext {
             return None;
         }
 
-        // Lazily register snapshot for this vertex label if needed
-        self.ensure_vertex_snapshot_registered(label);
-
-        if let Some(cached) = self
-            .record_cache_eligible(ts)
-            .then(|| {
-                self.persistent
-                    .cache_manager
-                    .get_cached_vertex(label, internal_id, ts)
-            })
-            .flatten()
-        {
-            return Some(VertexRecord {
-                internal_id: cached.internal_id,
-                vid: cached
-                    .external_id
-                    .parse::<i64>()
-                    .map(graphdb_core::types::VertexId::from_int64)
-                    .unwrap_or_else(|_| {
-                        graphdb_core::types::VertexId::from_string(&cached.external_id)
-                    }),
-                properties: cached.properties,
-            });
-        }
-
-        let record = self.persistent.data_store.with_vertex_tables(
-            |vertex_tables| -> Option<VertexRecord> {
-                vertex_tables
-                    .get(&label)?
-                    .get_by_internal_id(internal_id, ts)
-            },
-        )?;
-
-        let external_id = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| -> Option<String> {
-                vertex_tables
-                    .get(&label)
-                    .and_then(|table| table.get_external_id(internal_id, ts))
-                    .map(|k| k.to_string())
-            })
-            .unwrap_or_default();
-
-        if !external_id.is_empty() {
-            self.persistent
-                .cache_manager
-                .cache_vertex_id(label, &external_id, internal_id, ts);
-        }
-
-        if self.record_cache_eligible(ts) {
-            self.persistent.cache_manager.cache_vertex(
-                label,
-                internal_id,
-                external_id,
-                record.properties.clone(),
-                ts,
-            );
-        }
-
-        Some(record)
+        self.get_full_record_by_internal_id(label, internal_id, ts)
     }
 
     pub fn get_external_id(
@@ -677,5 +753,423 @@ impl GraphStorageContext {
         self.mark_vertex_modified(label);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod revalidation_tests {
+    use super::*;
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+
+    fn setup_ctx() -> (GraphStorageContext, LabelId) {
+        let ctx = GraphStorageContext::new();
+        let label = ctx
+            .create_vertex_type(
+                "Person",
+                vec![StoragePropertyDef::new(
+                    "name".to_string(),
+                    DataType::String,
+                )],
+                "name",
+            )
+            .expect("create vertex type");
+        (ctx, label)
+    }
+
+    fn insert_person(
+        ctx: &GraphStorageContext,
+        label: LabelId,
+        name: &str,
+        value: &str,
+        ts: Timestamp,
+    ) {
+        ctx.insert_vertex(
+            label,
+            name,
+            &[("name".to_string(), Value::string(value))],
+            ts,
+        )
+        .expect("insert vertex");
+    }
+
+    fn read_name(ctx: &GraphStorageContext, label: LabelId, name: &str, ts: Timestamp) -> Value {
+        ctx.get_vertex(label, name, ts)
+            .expect("vertex must be visible")
+            .properties
+            .iter()
+            .find(|(k, _)| k == "name")
+            .map(|(_, v)| v.clone())
+            .expect("name property must be present")
+    }
+
+    fn internal_id_of(ctx: &GraphStorageContext, label: LabelId, name: &str, ts: Timestamp) -> u32 {
+        ctx.persistent
+            .data_store
+            .with_vertex_tables(|tables| {
+                tables.get(&label).and_then(|t| t.get_internal_id(name, ts))
+            })
+            .expect("internal id resolves")
+    }
+
+    #[test]
+    fn stale_id_mapping_is_rejected_and_reseeded() {
+        let (ctx, label) = setup_ctx();
+        insert_person(&ctx, label, "alice", "A", 10);
+        let real_id = internal_id_of(&ctx, label, "alice", 10);
+        assert!(ctx.get_vertex(label, "alice", 10).is_some());
+
+        // Poison the ID-index cache the way a racy seed after a GC remap
+        // would: the mapping no longer matches the table.
+        ctx.persistent
+            .cache_manager
+            .cache_vertex_id(label, "alice", real_id + 1000, 10);
+        let record = ctx
+            .get_vertex(label, "alice", 10)
+            .expect("revalidation must fall back to the version-aware mapping");
+        assert_eq!(record.internal_id, real_id);
+        // The fresh mapping reseeds the cache.
+        assert_eq!(
+            ctx.persistent
+                .cache_manager
+                .get_cached_vertex_id(label, "alice", 10),
+            Some(real_id)
+        );
+    }
+
+    #[test]
+    fn stale_record_fence_returns_fresh_value() {
+        let (ctx, label) = setup_ctx();
+        insert_person(&ctx, label, "alice", "A", 10);
+        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
+        let internal_id = internal_id_of(&ctx, label, "alice", 10);
+        let seeded = ctx
+            .persistent
+            .cache_manager
+            .get_cached_vertex(label, internal_id, 10)
+            .expect("seeded entry");
+        assert_eq!(seeded.create_ts, 10);
+
+        // Concurrent commit lands after the seed (write path invalidates).
+        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), 20)
+            .expect("update");
+
+        // A racy seed publishes the pre-commit value after the invalidation.
+        ctx.persistent.cache_manager.cache_vertex(
+            label,
+            internal_id,
+            "alice".to_string(),
+            seeded.properties.clone(),
+            10,
+            seeded.create_ts,
+            seeded.column_starts.clone(),
+        );
+
+        // Hit revalidation must observe the drifted column fence and serve B.
+        assert_eq!(read_name(&ctx, label, "alice", 20), Value::string("B"));
+    }
+
+    #[test]
+    fn historical_read_does_not_poison_future_readers() {
+        let (ctx, label) = setup_ctx();
+        insert_person(&ctx, label, "alice", "A", 10);
+        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
+        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), 20)
+            .expect("update");
+
+        // The historical snapshot still reads A, but its version is no
+        // longer current so the seed must be skipped.
+        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
+        let internal_id = internal_id_of(&ctx, label, "alice", 20);
+        assert!(
+            ctx.persistent
+                .cache_manager
+                .get_cached_vertex(label, internal_id, 20)
+                .is_none(),
+            "stale version must not be seeded"
+        );
+        assert_eq!(read_name(&ctx, label, "alice", 20), Value::string("B"));
+    }
+
+    #[test]
+    fn concurrent_read_write_mix_stays_fresh() {
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        let (ctx, label) = setup_ctx();
+        insert_person(&ctx, label, "key", "v0", 100);
+        let done = Arc::new(AtomicBool::new(false));
+
+        let writer_ctx = ctx.clone();
+        let writer_done = done.clone();
+        let writer = std::thread::spawn(move || {
+            for i in 1..=50u64 {
+                writer_ctx
+                    .update_vertex_property(
+                        label,
+                        "key",
+                        "name",
+                        &Value::string(format!("v{i}")),
+                        100 + i,
+                    )
+                    .expect("writer update");
+            }
+            writer_done.store(true, AtomicOrdering::Release);
+        });
+
+        let mut readers = Vec::new();
+        for _ in 0..3 {
+            let reader_ctx = ctx.clone();
+            let reader_done = done.clone();
+            readers.push(std::thread::spawn(move || {
+                let mut iterations = 0;
+                while !reader_done.load(AtomicOrdering::Acquire) || iterations < 20 {
+                    let record = reader_ctx
+                        .get_vertex(label, "key", 1000)
+                        .expect("concurrent read must succeed");
+                    let name = record
+                        .properties
+                        .iter()
+                        .find(|(k, _)| k == "name")
+                        .map(|(_, v)| v.clone())
+                        .expect("name property must be present");
+                    let stale = (0..=50u64).all(|i| name != Value::string(format!("v{i}")));
+                    assert!(!stale, "no torn values under concurrency");
+                    iterations += 1;
+                    if iterations > 500 {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        writer.join().expect("writer");
+        for reader in readers {
+            reader.join().expect("reader");
+        }
+        assert_eq!(read_name(&ctx, label, "key", 1000), Value::string("v50"));
+    }
+}
+
+#[cfg(test)]
+mod pending_visibility_tests {
+    use super::*;
+    use crate::engine::{EdgeOperationParams, InsertEdgeParams};
+    use crate::types::StoragePropertyDef;
+    use crate::StorageOperationContext;
+    use graphdb_core::types::{DataType, TransactionId};
+
+    fn setup_ctx() -> (GraphStorageContext, LabelId) {
+        let ctx = GraphStorageContext::new();
+        let label = ctx
+            .create_vertex_type(
+                "Person",
+                vec![StoragePropertyDef::new(
+                    "name".to_string(),
+                    DataType::String,
+                )],
+                "name",
+            )
+            .expect("create vertex type");
+        (ctx, label)
+    }
+
+    fn bound_writer(
+        ctx: &GraphStorageContext,
+        txn: u64,
+        read_ts: Timestamp,
+        write_ts: Timestamp,
+    ) -> GraphStorageContext {
+        ctx.with_operation_context(StorageOperationContext::transaction_with_timestamps(
+            TransactionId::from(txn),
+            read_ts,
+            Some(write_ts),
+            false,
+            false,
+        ))
+    }
+
+    #[test]
+    fn own_write_visible_point_and_projection() {
+        let (ctx, label) = setup_ctx();
+        let vm = ctx.persistent.version_manager.clone();
+        let start = vm.acquire_insert_timestamp().expect("start txn");
+
+        ctx.insert_vertex(
+            label,
+            "alice",
+            &[("name".to_string(), Value::string("A"))],
+            start,
+        )
+        .expect("insert own write");
+
+        let bound = bound_writer(&ctx, 1, start, start);
+        let record = bound
+            .get_vertex(label, "alice", start)
+            .expect("own write visible to point lookup");
+        assert_eq!(
+            record
+                .properties
+                .iter()
+                .find(|(k, _)| k == "name")
+                .map(|(_, v)| v),
+            Some(&Value::string("A"))
+        );
+        let projected = bound
+            .get_vertex_projected(label, "alice", &["name".to_string()], start)
+            .expect("own write visible to projection");
+        assert_eq!(
+            projected
+                .properties
+                .iter()
+                .find(|(k, _)| k == "name")
+                .map(|(_, v)| v),
+            Some(&Value::string("A"))
+        );
+        vm.commit_write_timestamp(start);
+    }
+
+    #[test]
+    fn concurrent_write_transactions_hide_each_other_pending_writes() {
+        let (ctx, label) = setup_ctx();
+        let vm = ctx.persistent.version_manager.clone();
+        let first = vm.acquire_insert_timestamp().expect("first txn");
+        ctx.insert_vertex(
+            label,
+            "alice",
+            &[("name".to_string(), Value::string("A"))],
+            first,
+        )
+        .expect("first txn writes");
+
+        let second = vm.acquire_insert_timestamp().expect("second txn");
+        let bound_second = bound_writer(&ctx, 2, second, second);
+        assert!(
+            bound_second.get_vertex(label, "alice", second).is_none(),
+            "concurrent writer must not observe the foreign uncommitted row"
+        );
+
+        // After the first transaction commits, the same snapshot observes it:
+        // the committed stamp is at or below the advanced frontier.
+        vm.commit_write_timestamp(first);
+        assert!(
+            bound_second.get_vertex(label, "alice", second).is_some(),
+            "committed row becomes visible to the peer snapshot"
+        );
+
+        // A fresh snapshot after both settle observes the row as well.
+        vm.abort_write_timestamp(second);
+        let frontier = vm.read_timestamp();
+        let bound_read =
+            ctx.with_operation_context(StorageOperationContext::transaction_with_timestamps(
+                TransactionId::from(3),
+                frontier,
+                None,
+                true,
+                false,
+            ));
+        assert!(
+            bound_read.get_vertex(label, "alice", frontier).is_some(),
+            "row stays visible across frontier advance"
+        );
+    }
+
+    #[test]
+    fn own_edge_write_visible_point_and_traversal() {
+        use crate::edge::EdgeStrategy;
+
+        let ctx = GraphStorageContext::new();
+        let src_label = ctx
+            .create_vertex_type(
+                "Person",
+                vec![StoragePropertyDef::new(
+                    "name".to_string(),
+                    DataType::String,
+                )],
+                "name",
+            )
+            .expect("src label");
+        let dst_label = ctx
+            .create_vertex_type(
+                "City",
+                vec![StoragePropertyDef::new(
+                    "name".to_string(),
+                    DataType::String,
+                )],
+                "name",
+            )
+            .expect("dst label");
+        let edge_label = ctx
+            .create_edge_type(
+                "LIVES_IN",
+                src_label,
+                dst_label,
+                vec![],
+                EdgeStrategy::Multiple,
+                EdgeStrategy::Multiple,
+            )
+            .expect("edge type");
+
+        let vm = ctx.persistent.version_manager.clone();
+        let start = vm.acquire_insert_timestamp().expect("start txn");
+        ctx.insert_vertex_by_i64(
+            src_label,
+            1,
+            &[("name".to_string(), Value::string("A"))],
+            start,
+        )
+        .expect("src vertex");
+        ctx.insert_vertex_by_i64(
+            dst_label,
+            2,
+            &[("name".to_string(), Value::string("B"))],
+            start,
+        )
+        .expect("dst vertex");
+        ctx.insert_edge(InsertEdgeParams {
+            edge_label,
+            src_label,
+            src_id: VertexId::from_int64(1),
+            dst_label,
+            dst_id: VertexId::from_int64(2),
+            rank: 0,
+            properties: &[],
+            ts: start,
+        })
+        .expect("own edge write");
+
+        let bound = bound_writer(&ctx, 1, start, start);
+        let params = EdgeOperationParams {
+            edge_label,
+            src_label,
+            src_id: VertexId::from_int64(1),
+            dst_label,
+            dst_id: VertexId::from_int64(2),
+            rank: 0,
+        };
+        assert!(
+            bound.get_edge(&params, start).is_some(),
+            "own edge write visible to point lookup"
+        );
+        let neighbors = bound
+            .out_edges(
+                edge_label,
+                src_label,
+                dst_label,
+                VertexId::from_int64(1),
+                start,
+            )
+            .expect("traversal resolves");
+        assert_eq!(neighbors.len(), 1);
+
+        // A concurrent writer still pending must not observe the edge.
+        let peer = vm.acquire_insert_timestamp().expect("peer txn");
+        let bound_peer = bound_writer(&ctx, 2, peer, peer);
+        assert!(
+            bound_peer.get_edge(&params, peer).is_none(),
+            "concurrent writer must not observe the foreign uncommitted edge"
+        );
+        vm.commit_write_timestamp(start);
+        vm.abort_write_timestamp(peer);
     }
 }

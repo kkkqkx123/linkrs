@@ -40,6 +40,15 @@ pub struct CachedVertex {
     pub external_id: String,
     pub properties: Vec<(String, Value)>,
     pub cached_at_ts: Timestamp,
+    /// Row creation stamp observed when the entry was seeded. Hit
+    /// revalidation rejects the entry when the live row's creation stamp
+    /// drifted (delete/recreate, GC remap) instead of serving a stale row.
+    pub create_ts: Timestamp,
+    /// Per-column covering version stamps observed at seed time. Hit
+    /// revalidation compares them against the stamps covering the query
+    /// timestamp so a concurrent property write between seed and hit turns
+    /// the hit into a miss instead of serving the pre-write value.
+    pub column_starts: Vec<Timestamp>,
     /// Cache-internal invalidation generation of the owning label, assigned
     /// by `RecordCache` on insert. Not meaningful to storage consumers.
     pub generation: u32,
@@ -62,6 +71,7 @@ impl CachedVertex {
         let mut size = std::mem::size_of::<Self>();
 
         size += self.external_id.capacity();
+        size += self.column_starts.len() * std::mem::size_of::<Timestamp>();
 
         for (name, value) in &self.properties {
             size += name.capacity();

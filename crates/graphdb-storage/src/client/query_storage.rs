@@ -19,11 +19,15 @@ pub trait QueryStorage:
     /// Snapshot handle bound to this storage handle, when the handle is
     /// bound to an operation context with a pinned read/write snapshot.
     ///
-    /// Read-only statement contexts pin a fixed read timestamp; auto-commit
-    /// write contexts pin their write timestamp. Unbound handles (raw global
-    /// storage) return `None`. This lets the query layer observe which
-    /// snapshot a per-query bound handle reads at, without reaching into the
-    /// storage internals.
+    /// Always reports the operation context's read timestamp: storage reads
+    /// execute at the read timestamp, so reporting it tells the truth about
+    /// the observed snapshot. (Write contexts additionally pin a write
+    /// timestamp for visibility ordering, but reads never execute at it;
+    /// reporting it here made read-committed statements look inconsistent
+    /// after a statement refresh moved the read stamp past the write stamp.)
+    /// Unbound handles (raw global storage) return `None`. This lets the
+    /// query layer observe which snapshot a per-query bound handle reads at,
+    /// without reaching into the storage internals.
     ///
     /// When the operation context already registered per-table MVCC snapshot
     /// handles, the first one is preferred (it carries the storage's own
@@ -31,7 +35,7 @@ pub trait QueryStorage:
     /// is synthesized from the pinned timestamp (`id = 0`).
     fn snapshot_handle(&self) -> Option<SnapshotHandle> {
         let context = self.operation_context()?;
-        let ts = context.snapshot_timestamp()?;
+        let ts = context.read_timestamp;
         Some(
             context
                 .mvcc_vertex_snapshot_handles

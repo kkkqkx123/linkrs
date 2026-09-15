@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::engine::resource_budget::MemoryAccounting;
 use graphdb_core::types::Timestamp;
-use graphdb_metrics::CacheStats;
 
 use super::buffer_pool::BufferPool;
 use super::config::*;
@@ -29,8 +28,6 @@ pub struct RecordCache {
     vertex_pool: Arc<BufferPool<VertexCacheKey, CachedVertex>>,
     id_index_pool: Arc<BufferPool<IdIndexCacheKey, IdIndexCacheValue>>,
     config: RecordCacheConfig,
-    vertex_stats: Arc<CacheStats>,
-    id_index_stats: Arc<CacheStats>,
     label_generations: parking_lot::RwLock<HashMap<u32, u32>>,
 }
 
@@ -46,8 +43,6 @@ impl std::fmt::Debug for RecordCache {
             .field("config", &self.config)
             .field("vertex_count", &self.vertex_pool.len())
             .field("id_index_count", &self.id_index_pool.len())
-            .field("vertex_stats", &self.vertex_stats)
-            .field("id_index_stats", &self.id_index_stats)
             .finish()
     }
 }
@@ -80,9 +75,6 @@ impl RecordCache {
         let vertex_memory = base_vertex_memory.saturating_sub(high_priority_extra);
         let id_index_memory = base_id_index_memory + high_priority_extra;
 
-        let vertex_stats = Arc::new(CacheStats::new());
-        let id_index_stats = Arc::new(CacheStats::new());
-
         let vertex_pool = Arc::new(BufferPool::new(vertex_memory));
         let id_index_pool = Arc::new(BufferPool::new(id_index_memory));
         vertex_pool.set_ttl(config.ttl);
@@ -94,8 +86,6 @@ impl RecordCache {
             vertex_pool,
             id_index_pool,
             config,
-            vertex_stats,
-            id_index_stats,
             label_generations: parking_lot::RwLock::new(HashMap::new()),
         }
     }
@@ -149,13 +139,9 @@ impl RecordCache {
                 if cached.item.cached_at_ts <= query_ts
                     && cached.item.generation == self.label_generation(label_id) =>
             {
-                self.id_index_stats.record_hit();
                 Some(cached.item.internal_id)
             }
-            _ => {
-                self.id_index_stats.record_miss();
-                None
-            }
+            _ => None,
         }
     }
 
@@ -174,14 +160,12 @@ impl RecordCache {
         };
         self.id_index_pool
             .insert(key, value, std::mem::size_of::<IdIndexCacheValue>());
-        self.id_index_stats.record_insertion();
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
         let key = IdIndexCacheKey::new(label_id, external_id.to_string());
         // O(1) point invalidation: each key maps to at most one entry.
         self.id_index_pool.remove(&key);
-        self.id_index_stats.record_invalidation();
     }
 
     // ==================== Vertex Operations ====================
@@ -197,13 +181,9 @@ impl RecordCache {
                 if cached.item.cached_at_ts <= query_ts
                     && cached.item.generation == self.label_generation(key.label_id) =>
             {
-                self.vertex_stats.record_hit();
                 Some(cached.item.clone())
             }
-            _ => {
-                self.vertex_stats.record_miss();
-                None
-            }
+            _ => None,
         }
     }
 
@@ -212,13 +192,11 @@ impl RecordCache {
         vertex.generation = self.label_generation(key.label_id);
         let size = vertex.estimated_size() as usize;
         self.vertex_pool.insert(key, vertex, size);
-        self.vertex_stats.record_insertion();
     }
 
     pub fn remove_vertex(&self, key: &VertexCacheKey) {
         // O(1) point invalidation: each key maps to at most one entry.
         self.vertex_pool.remove(key);
-        self.vertex_stats.record_invalidation();
     }
 
     // ==================== Invalidation ====================
@@ -228,7 +206,6 @@ impl RecordCache {
     /// and reclaimed lazily by capacity eviction.
     pub fn invalidate_vertices_by_label(&self, label_id: u32) {
         self.bump_label_generation(label_id);
-        self.vertex_stats.record_invalidation();
     }
 
     /// Invalidate all ID index entries for a given label.
@@ -236,15 +213,12 @@ impl RecordCache {
     /// and reclaimed lazily by capacity eviction.
     pub fn invalidate_id_indexes_by_label(&self, label_id: u32) {
         self.bump_label_generation(label_id);
-        self.id_index_stats.record_invalidation();
     }
 
     pub fn clear(&self) {
         self.vertex_pool.clear();
         self.id_index_pool.clear();
         self.label_generations.write().clear();
-        self.vertex_stats.record_invalidation();
-        self.id_index_stats.record_invalidation();
     }
 
     pub fn stats(&self) -> RecordCacheStats {

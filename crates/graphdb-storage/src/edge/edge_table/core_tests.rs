@@ -371,3 +371,104 @@ fn test_csr_timestamps_agree_with_mvcc() {
     assert_eq!(table.mvcc.tombstones.get(&EdgeId(0)), Some(&150));
     assert!(!table.mvcc.tombstones.contains_key(&EdgeId(1)));
 }
+
+#[test]
+fn test_failed_insert_leaves_no_orphan_copies() {
+    // In-direction strategy None forces the in-CSR leg to fail after the
+    // out-CSR leg and the property row succeeded: the rollback must release
+    // the property row for reuse and drop the authority entry.
+    let mut schema = create_test_schema();
+    schema.ie_strategy = EdgeStrategy::None;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let rows_before = table.properties.row_count();
+    let result = table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100);
+    assert!(result.is_err());
+    assert_eq!(table.properties.row_count(), rows_before);
+    assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
+    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(0)));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_revert_delete_fast_path_restores_property_index() {
+    use graphdb_core::value::ordered_codec::OrderedCodec;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.enable_property_index(1024).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table
+        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .unwrap());
+
+    // The fast path must restore index entries like the slow path: at least
+    // one live (non-deleted) record for the edge must be present.
+    let codec = OrderedCodec::new();
+    let lower = codec.encode(&Value::Double(0.0)).unwrap();
+    let hits = table.lookup_edges_by_property_range("weight", &lower, &Vec::new());
+    assert!(!hits.is_empty());
+    let index = table.property_index.as_ref().expect("index enabled");
+    let records = index.lookup("weight", &lower, &Vec::new());
+    assert!(records
+        .iter()
+        .any(|(key, record)| { *key == (0, 1, 0) && record.deleted_ts.is_none() }));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_valid_edge_ids_survive_tombstone_gc() {
+    // Tombstone-GC must not resurrect deleted edges: after the tombstone is
+    // reclaimed, the authoritative visibility still excludes the edge from
+    // the valid set, so its property row stays reclaimable.
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 1);
+    // Visibility is unchanged by tombstone reclamation (authority first).
+    assert!(!table.mvcc.is_edge_visible(EdgeId(0), 250));
+    assert!(table.mvcc.is_edge_visible(EdgeId(1), 250));
+    table.compact_properties(250);
+    assert_eq!(table.properties.row_count(), 1);
+    assert!(table.get_edge(0, 2, 0, 250).is_some());
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_erase_edge_removes_all_copies_idempotently() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.erase_edge(0, 1, 0, 100));
+    assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
+    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(0)));
+    assert!(table.properties.get_row_for_edge(EdgeId(0)).is_none());
+    assert!(table.get_edge(0, 1, 0, 100).is_none());
+    // Replay is idempotent: the second erase finds nothing but still succeeds.
+    assert!(!table.erase_edge(0, 1, 0, 100));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_loaded_copy_mismatches_detect_orphans() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    // Simulate a write-path regression that drops the authority entry.
+    table.mvcc.edge_timestamps.remove(&EdgeId(0));
+    let (mappings, csr_rows, _) = table.loaded_copy_mismatches();
+    assert!(mappings >= 1);
+    assert!(csr_rows >= 1);
+}

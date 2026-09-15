@@ -6,6 +6,11 @@
 //!
 //! This implementation uses `Column` (continuous arrays) instead of
 //! `HashMap<u32, Value>` for cache-friendly scans and lower memory overhead.
+//!
+//! Authority order for edge liveness (see `edge_table::mvcc`):
+//! `edge_timestamps` first, the tombstone table second, these CSR row stamps
+//! only as a physical projection. Row stamps are kept in sync on the write
+//! path but must never decide query visibility alone.
 
 use std::collections::{HashMap, HashSet};
 
@@ -177,13 +182,42 @@ impl CsrWithProperties {
             // before-image through the column version chain.
             // (`set_versioned` grows the column itself; pre-sizing here
             // would record a spurious [0, create_ts) baseline entry.)
-            if let Some((_, v)) = values.iter().find(|(k, _)| k == &schema.name) {
-                col.set_versioned(row_idx, Some(v), create_ts)?;
+            let write = if let Some((_, v)) = values.iter().find(|(k, _)| k == &schema.name) {
+                col.set_versioned(row_idx, Some(v), create_ts)
             } else {
-                let _ = col.set_versioned(row_idx, None, create_ts);
+                col.set_versioned(row_idx, None, create_ts)
+            };
+            if let Err(error) = write {
+                // A failed insert must leave no orphan row behind: clear the
+                // stamp (reclaim skips `create_ts == 0`) and return the slot
+                // to the free list for reuse.
+                self.release_row(row_idx);
+                return Err(error);
             }
         }
         Ok(row_idx)
+    }
+
+    /// Release a row back to the free list without leaving an orphan.
+    ///
+    /// Clears the visibility stamp so the slot is skipped by reads and GC
+    /// scans, drops the edge mapping if still present, and queues the slot
+    /// for reuse. Reused slots are fully overwritten by `allocate_row`.
+    /// Idempotent: releasing an already-free or out-of-range row is a no-op.
+    pub fn release_row(&mut self, row_idx: usize) {
+        if row_idx < self.visibility.len()
+            && (self.visibility[row_idx].create_ts != 0
+                || self.visibility[row_idx].delete_ts.is_some())
+        {
+            self.visibility[row_idx].create_ts = 0;
+            self.visibility[row_idx].delete_ts = None;
+            self.row_count = self.row_count.saturating_sub(1);
+        }
+        self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
+        let slot = row_idx as u32;
+        if !self.free_list.contains(&slot) {
+            self.free_list.push(slot);
+        }
     }
 
     /// Insert an edge's properties at the CSR position for `src`.

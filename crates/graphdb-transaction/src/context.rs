@@ -867,10 +867,11 @@ impl TransactionContext {
         self.write_set.lock().record_index_resource(resource);
     }
 
-    /// Read-your-own-writes probe: whether this transaction locally wrote
-    /// `vid`. Snapshot reads at the transaction's own timestamp cannot
-    /// observe uncommitted data, so executors must merge locally covered
-    /// entities over the snapshot result (see `WriteSet::covers_vertex`).
+    /// Conflict-certification probe: whether this transaction locally wrote
+    /// `vid`. Own writes are visible through timestamps (the effective read
+    /// stamp never trails the write stamp); this probe feeds commit
+    /// certification and debugging assertions, not read merging
+    /// (see `WriteSet::covers_vertex`).
     pub fn has_local_vertex_write(&self, vid: &VertexId) -> bool {
         self.write_set.lock().covers_vertex(vid)
     }

@@ -375,6 +375,7 @@ mod tests {
                 bytes_flushed: 100,
                 wal_files_truncated: 1,
                 trigger_reason: reason,
+                snapshot_timestamp: 0,
             })
         });
         let mut scheduler = CheckpointScheduler::new(
@@ -443,6 +444,7 @@ mod tests {
                     bytes_flushed: 10,
                     wal_files_truncated: 1,
                     trigger_reason: CheckpointTriggerReason::Explicit,
+                    snapshot_timestamp: 0,
                 })
             }
         });

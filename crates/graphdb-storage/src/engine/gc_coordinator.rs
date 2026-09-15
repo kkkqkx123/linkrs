@@ -1,7 +1,9 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use graphdb_core::types::CommitLsn;
 use graphdb_core::types::Timestamp;
+use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
 use graphdb_transaction::{MvccWatermarks, VersionManager};
 
 /// Diagnostic view over the current MVCC GC state.
@@ -38,6 +40,11 @@ pub struct GcCoordinator {
     config_margin: Timestamp,
     checkpoint_snapshot: Option<Timestamp>,
     wal_reclaim_lsn: Option<CommitLsn>,
+    /// Manifest directory for self-healing lazy loads. When the explicit
+    /// checkpoint fields above are empty (e.g. first pass after a restart),
+    /// the watermark is read once from the latest published manifest instead
+    /// of adding a cross-module call chain into the checkpoint publisher.
+    manifest_dir: Option<PathBuf>,
 }
 
 impl GcCoordinator {
@@ -47,6 +54,7 @@ impl GcCoordinator {
             config_margin: 1,
             checkpoint_snapshot: None,
             wal_reclaim_lsn: None,
+            manifest_dir: None,
         }
     }
 
@@ -55,12 +63,47 @@ impl GcCoordinator {
         self
     }
 
+    /// Builder wiring the manifest directory for self-healing lazy loads.
+    pub fn with_manifest_dir(mut self, dir: PathBuf) -> Self {
+        self.manifest_dir = Some(dir);
+        self
+    }
+
+    /// Explicit refresh entry for the checkpoint watermark.
+    ///
+    /// Checkpoint completion (via the persistence watermark cell) and GC
+    /// construction sites feed fresh values here; when never refreshed, the
+    /// capture below falls back to one lazy manifest load.
+    pub fn refresh_checkpoint_watermark(&mut self, snapshot: Timestamp, reclaim_lsn: CommitLsn) {
+        self.checkpoint_snapshot = Some(snapshot);
+        self.wal_reclaim_lsn = Some(reclaim_lsn);
+    }
+
     pub fn capture_watermarks(&self) -> MvccWatermarks {
-        MvccWatermarks::capture(
-            &self.version_manager,
-            self.checkpoint_snapshot,
-            self.wal_reclaim_lsn,
-        )
+        if self.checkpoint_snapshot.is_some() {
+            return MvccWatermarks::capture(
+                &self.version_manager,
+                self.checkpoint_snapshot,
+                self.wal_reclaim_lsn,
+            );
+        }
+        let (snapshot, reclaim) = self.load_checkpoint_watermark().unwrap_or((None, None));
+        MvccWatermarks::capture(&self.version_manager, snapshot, reclaim)
+    }
+
+    /// Best-effort lazy load of the checkpoint watermark from the latest
+    /// published manifest. Old manifests without a snapshot field yield
+    /// `None` (their LSN-scale commit stamp must never be mistaken for a
+    /// timestamp); any IO or parse failure degrades to no watermark with a
+    /// debug log, never an error.
+    fn load_checkpoint_watermark(&self) -> Option<(Option<Timestamp>, Option<CommitLsn>)> {
+        let dir = self.manifest_dir.as_ref()?;
+        let manifest = CheckpointManifestManager::new(dir).load_latest().ok()??;
+        let snapshot = manifest.snapshot_timestamp;
+        if snapshot.is_none() {
+            return None;
+        }
+        Some((snapshot, Some(manifest.safe_lsn)))
     }
 
     /// Safe GC timestamp for this pass, applying the configured margin.
@@ -109,6 +152,7 @@ impl GcCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphdb_sync::checkpoint_manifest::CheckpointManifest;
 
     #[test]
     fn test_wal_reclaim_gated_on_checkpoint_bounds() {
@@ -119,5 +163,45 @@ mod tests {
         let wm = coordinator.capture_watermarks();
         assert!(!wm.can_reclaim_wal());
         assert!(!wm.has_checkpoint_snapshot());
+    }
+
+    #[test]
+    fn test_checkpoint_refresh_enables_wal_reclaim() {
+        let vm = Arc::new(VersionManager::new());
+        let mut coordinator = GcCoordinator::new(vm);
+        assert!(!coordinator.capture_watermarks().can_reclaim_wal());
+        coordinator.refresh_checkpoint_watermark(42, CommitLsn::new(100));
+        let wm = coordinator.capture_watermarks();
+        assert!(wm.has_checkpoint_snapshot());
+        assert!(wm.can_reclaim_wal());
+        assert_eq!(wm.checkpoint_snapshot, Some(42));
+        assert_eq!(wm.wal_reclaim_lsn, CommitLsn::new(100));
+    }
+
+    #[test]
+    fn test_first_capture_after_restart_lazy_loads_manifest() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let manifest_dir = dir.path().join("manifests");
+        let manager = CheckpointManifestManager::new(&manifest_dir);
+        manager.init().expect("manifest dir init");
+        let storage_path = dir.path().join("checkpoint_1");
+        std::fs::create_dir_all(&storage_path).expect("snapshot dir");
+        let storage_ref =
+            CheckpointManifest::storage_snapshot_from_directory(&storage_path, 1, 0, 0)
+                .expect("storage snapshot ref");
+        let manifest =
+            CheckpointManifest::new(1, CommitLsn::new(500), storage_ref, None, Vec::new())
+                .expect("manifest")
+                .with_snapshot_timestamp(40)
+                .expect("snapshot stamp");
+        manager.publish(&manifest).expect("publish");
+
+        // A fresh coordinator (restart: watermark cell empty) heals from the
+        // manifest alone.
+        let vm = Arc::new(VersionManager::new());
+        let coordinator = GcCoordinator::new(vm).with_manifest_dir(manifest_dir);
+        let wm = coordinator.capture_watermarks();
+        assert_eq!(wm.checkpoint_snapshot, Some(40));
+        assert!(wm.can_reclaim_wal());
     }
 }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::edge::{EdgeRecord, Nbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::{EdgeOperationParams, InsertEdgeParams};
+use crate::mvcc_visibility::PendingGate;
 use crate::vertex::ShardedVertexTable;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
@@ -158,26 +159,142 @@ impl GraphStorageContext {
         // Lazily register snapshot for this edge partition if needed
         self.ensure_edge_snapshot_registered(key);
 
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables.get(&key).and_then(|arc| {
-                arc.read()
-                    .get_edge(src_internal, dst_internal, params.rank, ts)
-            })
-        })
+        // Pending-aware recheck of the point lookup: the plain timestamp
+        // predicate inside `get_edge` cannot see slot states, so a foreign
+        // uncommitted creation would leak (dirty read) and a foreign
+        // uncommitted deletion would hide a live edge. Recheck through the
+        // gate; a creation owned by a foreign pending transaction hides the
+        // edge, a foreign pending deletion is ignored by re-reading below it.
+        // Follow-up: scan-class funnels (`out_edges`/`in_edges`, iterators,
+        // CSR bulk reads) still use the plain predicate.
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
+        let gate = PendingGate::new(&self.persistent.version_manager, own_write);
+        let mut cur = ts;
+        loop {
+            let record = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).and_then(|arc| {
+                    arc.read()
+                        .get_edge(src_internal, dst_internal, params.rank, cur)
+                })
+            });
+            let edge_id = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).and_then(|arc| {
+                    arc.read()
+                        .edge_id_of(src_internal, dst_internal, params.rank, cur)
+                })
+            });
+            let Some(edge_id) = edge_id else {
+                return record;
+            };
+            let visible = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).map(|arc| {
+                    arc.read()
+                        .mvcc
+                        .is_edge_visible_with_gate(edge_id, cur, &gate)
+                })
+            });
+            if visible == Some(true) && record.is_some() {
+                return record;
+            }
+            if record.is_some() {
+                // Visible to the plain predicate but hidden through the
+                // gate: the creation stamp belongs to a foreign uncommitted
+                // transaction (dirty read filtered).
+                return None;
+            }
+            // No record: a foreign pending deletion may be hiding a live edge.
+            let delete_ts = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables
+                    .get(&key)
+                    .and_then(|arc| arc.read().mvcc.deletion_ts_of(edge_id))
+            });
+            if let Some(delete_ts) = delete_ts {
+                if delete_ts <= cur && gate.is_foreign_pending(cur, delete_ts) && delete_ts > 0 {
+                    cur = delete_ts - 1;
+                    continue;
+                }
+            }
+            return None;
+        }
     }
 
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {
         self.delete_edge_impl(params, None, None, ts)
     }
 
-    pub fn delete_edge_by_offset(
+    /// Physically erase an edge created by an uncommitted insert.
+    ///
+    /// Insert-undo entry point (see `UndoTarget::delete_edge`): aborts must
+    /// leave no trace in any of the three copies, unlike user deletes which
+    /// go through logical deletion. Missing endpoints, partitions or edges
+    /// report `Ok(false)` so undo replay stays idempotent.
+    pub fn erase_inserted_edge(
         &self,
         params: &EdgeOperationParams,
-        oe_offset: i32,
-        ie_offset: i32,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        self.delete_edge_impl(params, Some(oe_offset), Some(ie_offset), ts)
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        let resolved = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
+                let src_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.src_label,
+                    params.src_id,
+                    ts,
+                )
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
+                })?;
+                let dst_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.dst_label,
+                    params.dst_id,
+                    ts,
+                )
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
+                })?;
+                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    vertex_tables,
+                    src_id: &params.src_id,
+                    src_label: params.src_label,
+                    dst_id: &params.dst_id,
+                    dst_label: params.dst_label,
+                    edge_label: params.edge_label,
+                    ts,
+                });
+                Some((src_internal, dst_internal, key))
+            });
+        let Some((src_internal, dst_internal, key)) = resolved else {
+            return Ok(false);
+        };
+        if self
+            .persistent
+            .data_store
+            .try_get_edge_table_mut(&key)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let erased = self
+            .persistent
+            .data_store
+            .with_single_edge_table_mut(&key, |edge_table| {
+                Ok(edge_table.erase_edge(src_internal, dst_internal, params.rank, ts))
+            })?;
+        if erased {
+            self.mark_edge_modified(params.edge_label);
+        }
+        Ok(erased)
     }
 
     fn delete_edge_impl(

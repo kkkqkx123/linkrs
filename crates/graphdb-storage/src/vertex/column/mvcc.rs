@@ -224,6 +224,59 @@ impl Column {
         })
     }
 
+    /// Start timestamp of the version covering `query_ts` for a row.
+    ///
+    /// Internal companion of [`Column::get_at_ts`]: returns the stamp the
+    /// value read was written at (the current `create_ts` when the current
+    /// value covers `query_ts`, otherwise the covering before-image's
+    /// `start_ts`, else 0 when no version covers it). Pending-aware point
+    /// lookups use it to detect a value written by a foreign uncommitted
+    /// transaction and fall back to `stamp - 1`.
+    pub fn start_ts_at(&self, row_idx: usize, query_ts: Timestamp) -> Timestamp {
+        let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
+        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
+            return start_ts;
+        }
+        self.with_version_chains_read(|chains| {
+            chains
+                .and_then(|c| c.get(row_idx))
+                .and_then(|chain| {
+                    if chain.is_empty() {
+                        return None;
+                    }
+                    let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                        Ok(i) => i,
+                        Err(i) => {
+                            if i == 0 {
+                                return None;
+                            }
+                            i - 1
+                        }
+                    };
+                    let entry = &chain[idx];
+                    if crate::mvcc_visibility::Visibility::is_version_visible(
+                        query_ts,
+                        entry.start_ts,
+                        entry.end_ts,
+                    ) {
+                        return Some(entry.start_ts);
+                    }
+                    if idx + 1 < chain.len() {
+                        let nxt = &chain[idx + 1];
+                        if crate::mvcc_visibility::Visibility::is_version_visible(
+                            query_ts,
+                            nxt.start_ts,
+                            nxt.end_ts,
+                        ) {
+                            return Some(nxt.start_ts);
+                        }
+                    }
+                    None
+                })
+                .unwrap_or(0)
+        })
+    }
+
     /// Garbage-collect version-chain entries eligible under
     /// `Visibility::is_gc_eligible`, keeping one baseline entry when the
     /// retained chain would otherwise start after the cutoff.

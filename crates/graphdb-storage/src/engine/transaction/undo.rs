@@ -61,13 +61,12 @@ impl UndoTarget for GraphStorageContext {
             dst_id: edge.dst_vid,
             rank: edge.rank,
         };
-        self.delete_edge_by_offset(
-            &params,
-            edge_ctx.oe_offset,
-            edge_ctx.ie_offset,
-            edge_ctx.timestamp,
-        )
-        .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
+        // Insert-undo physically erases the uncommitted edge from all three
+        // copies: a logical delete would keep the aborted edge visible inside
+        // its snapshot window and leave a permanent tombstone. Replay is
+        // idempotent (missing edges report Ok(false)).
+        self.erase_inserted_edge(&params, edge_ctx.timestamp)
+            .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
         Ok(())
     }

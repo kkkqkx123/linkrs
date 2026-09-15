@@ -111,6 +111,21 @@ enum WriteTimestampState {
     Aborted,
 }
 
+/// Observable state of one write-timestamp slot.
+///
+/// `Vanished` covers every timestamp absent from the slot map: slots of
+/// long-committed writes are removed when the read frontier advances over a
+/// run of terminal slots, and read-only snapshots never own a write slot at
+/// all. Vanished slots carry no pending write, so visibility predicates can
+/// trust the plain timestamp comparison for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampSlot {
+    Pending,
+    Committed,
+    Aborted,
+    Vanished,
+}
+
 impl VersionManager {
     pub fn new() -> Self {
         Self::with_config(VersionManagerConfig::default())
@@ -522,6 +537,23 @@ impl VersionManager {
 
     pub fn pending_count(&self) -> i32 {
         self.read_pending.load(Ordering::Relaxed) + self.write_pending.load(Ordering::Relaxed)
+    }
+
+    /// Return the observable state of one write-timestamp slot.
+    ///
+    /// Read-only probe for pending-aware visibility: storage asks about the
+    /// creation/deletion stamp it just read and hides stamps owned by foreign
+    /// pending transactions. Absent slots report `Vanished`; they were either
+    /// reclaimed after the read frontier swallowed a run of terminal slots
+    /// (their data is undone or committed and the plain predicate applies) or
+    /// never owned a write slot at all.
+    pub fn timestamp_slot(&self, ts: Timestamp) -> TimestampSlot {
+        match self.write_states.lock().get(&ts).map(|(_, state)| *state) {
+            Some(WriteTimestampState::Pending) => TimestampSlot::Pending,
+            Some(WriteTimestampState::Committed) => TimestampSlot::Committed,
+            Some(WriteTimestampState::Aborted) => TimestampSlot::Aborted,
+            None => TimestampSlot::Vanished,
+        }
     }
 
     /// Ages of all currently `Pending` write timestamps.
@@ -938,5 +970,28 @@ mod tests {
             crate::mvcc_watermarks::NO_ACTIVE_SNAPSHOT
         );
         assert_eq!(vm.read_timestamp(), 100);
+    }
+
+    #[test]
+    fn test_timestamp_slot_lifecycle() {
+        use super::TimestampSlot;
+        let vm = VersionManager::new();
+        let first = vm.acquire_insert_timestamp().expect("first write");
+        let second = vm.acquire_insert_timestamp().expect("second write");
+        assert_eq!(vm.timestamp_slot(first), TimestampSlot::Pending);
+        assert_eq!(vm.timestamp_slot(second), TimestampSlot::Pending);
+
+        vm.abort_write_timestamp(second);
+        assert_eq!(vm.timestamp_slot(second), TimestampSlot::Aborted);
+
+        // Committing out of order cannot cross the still-pending first slot,
+        // so the aborted second slot stays observable until the frontier
+        // swallows the whole run.
+        vm.commit_write_timestamp(first);
+        assert_eq!(vm.timestamp_slot(first), TimestampSlot::Vanished);
+        assert_eq!(vm.timestamp_slot(second), TimestampSlot::Vanished);
+
+        // Never-allocated stamps carry no pending write either.
+        assert_eq!(vm.timestamp_slot(u64::MAX - 1), TimestampSlot::Vanished);
     }
 }

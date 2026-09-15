@@ -1,8 +1,10 @@
 //! MVCC and tombstone management: snapshot isolation and garbage collection.
 //!
-//! Single-segment edge tables keep one authoritative timestamp record per
-//! edge plus one authoritative tombstone table. All visibility decisions go
-//! through [`MVCCManager::is_edge_visible`].
+//! Authority order for edge liveness: `edge_timestamps` first, the tombstone
+//! table second, CSR row stamps and adjacency `Nbr` stamps only as physical
+//! projections. No read path may consult a single copy alone; every
+//! visibility decision goes through [`MVCCManager::is_edge_visible`] (or its
+//! pending-aware overload) so the copies cannot drift apart.
 
 use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
@@ -236,6 +238,39 @@ impl MVCCManager {
                 ts_info.delete_ts,
             ) {
                 return false;
+            }
+        }
+        !self.is_tombstoned(edge_id, ts)
+    }
+
+    /// Pending-aware overload of [`Self::is_edge_visible`].
+    ///
+    /// Same authority order, but creation/deletion stamps owned by foreign
+    /// uncommitted transactions are filtered through `gate`: a foreign
+    /// pending creation hides the edge, a foreign pending deletion (in
+    /// either the authoritative stamps or a tombstone-only entry) is
+    /// ignored. The original function is retained for bare-table callers
+    /// without a transaction slot view. Follow-up: scan-class funnels
+    /// (iterators, CSR bulk reads) still use the plain predicate.
+    pub fn is_edge_visible_with_gate(
+        &self,
+        edge_id: EdgeId,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> bool {
+        if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
+            if !gate.is_edge_visible(ts, ts_info.create_ts, ts_info.delete_ts) {
+                return false;
+            }
+            if ts_info.delete_ts != Timestamp::MAX
+                && ts_info.delete_ts <= ts
+                && gate.is_foreign_pending(ts, ts_info.delete_ts)
+            {
+                return true;
+            }
+        } else if let Some(delete_ts) = self.tombstones.get(&edge_id) {
+            if *delete_ts <= ts && gate.is_foreign_pending(ts, *delete_ts) {
+                return true;
             }
         }
         !self.is_tombstoned(edge_id, ts)

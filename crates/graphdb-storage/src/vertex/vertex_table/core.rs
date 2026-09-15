@@ -203,6 +203,25 @@ impl VertexTable {
         self.get_projected_by_internal_id(internal_id, ts, None)
     }
 
+    /// Row survival stamps for pending-aware rechecks.
+    ///
+    /// Returns `(create_ts, delete_ts)` with `None` for a live row. `None`
+    /// (unknown row) lets the caller fall back to the plain predicate result.
+    pub fn row_timestamps(&self, internal_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
+        let create_ts = self.timestamps.get_start_ts(internal_id)?;
+        Some((create_ts, self.timestamps.get_end_ts(internal_id)))
+    }
+
+    /// Per-column covering version stamps for pending-aware rechecks.
+    ///
+    /// Companion of the column values read by
+    /// [`VertexTable::get_projected_by_internal_id`]: when any covering stamp
+    /// belongs to a foreign uncommitted write the caller re-reads at
+    /// `stamp - 1`.
+    pub fn row_picked_starts(&self, internal_id: u32, ts: Timestamp) -> Vec<Timestamp> {
+        self.columns.picked_starts_at(internal_id as usize, ts)
+    }
+
     /// Live internal IDs (excludes vertices deleted at or before `ts`-visible
     /// state), in allocation order. Used by lazy paginated scans.
     pub fn live_ids(&self) -> Vec<u32> {

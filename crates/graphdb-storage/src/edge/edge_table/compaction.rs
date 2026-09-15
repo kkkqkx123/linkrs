@@ -84,7 +84,10 @@ impl EdgeStore {
     pub fn compact_properties(&mut self, bound: Timestamp) {
         let mut valid_edge_ids = std::collections::HashSet::new();
         for (edge_id, _pos) in self.properties.edge_mappings() {
-            if !self.mvcc.is_tombstoned(*edge_id, bound) {
+            // Authoritative visibility, not the tombstone table alone: a
+            // tombstone reclaimed by an earlier GC round must not resurrect
+            // its edge as live here.
+            if self.mvcc.is_edge_visible(*edge_id, bound) {
                 valid_edge_ids.insert(*edge_id);
             }
         }
