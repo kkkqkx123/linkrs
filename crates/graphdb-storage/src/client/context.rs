@@ -65,26 +65,6 @@ impl Clone for StorageOperationContext {
 }
 
 impl StorageOperationContext {
-    pub fn transaction(
-        transaction_id: TransactionId,
-        timestamp: Timestamp,
-        read_only: bool,
-    ) -> Self {
-        Self {
-            transaction_id: Some(transaction_id),
-            read_timestamp: timestamp,
-            write_timestamp: (!read_only).then_some(timestamp),
-            read_only,
-            auto_commit: false,
-            mutation_recorder: None,
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            auto_commit_group_start: None,
-        }
-    }
-
     pub fn transaction_with_timestamps(
         transaction_id: TransactionId,
         read_timestamp: Timestamp,

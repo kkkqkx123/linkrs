@@ -22,8 +22,7 @@ pub trait MutableCsrTrait: CsrBase {
     ///
     /// Topology and properties are decoupled: the CSR stores only the
     /// topology (neighbor, edge_id, timestamps). Properties are stored
-    /// separately indexed by `EdgeId` or by CSR position for frozen
-    /// segments.
+    /// separately indexed by `EdgeId`.
     ///
     /// Returns `Ok(())` on success, or an error explaining why insertion failed:
     ///

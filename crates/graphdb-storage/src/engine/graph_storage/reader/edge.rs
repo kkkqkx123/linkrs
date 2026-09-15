@@ -11,7 +11,6 @@ use crate::engine::params::EdgeOperationParams;
 use graphdb_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
-use crate::engine::graph_storage::reader::cold::*;
 use crate::engine::graph_storage::reader::utils::*;
 
 pub(crate) fn get_edge(
@@ -96,29 +95,6 @@ fn get_edge_impl(
         let edge =
             edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
         return Ok(Some(edge));
-    }
-
-    // Fallback: check cold snapshots if hot missed
-    if ts >= snapshot_min_ts(ctx, edge_label_id) {
-        if let Some((snapshot, nbr, src_internal, dst_internal_vid)) = query_cold_edge(
-            ctx,
-            edge_label_id,
-            *src,
-            *dst,
-            src_label_id,
-            dst_label_id,
-            ts,
-        ) {
-            let record = snapshot.nbr_to_edge_record(
-                &nbr,
-                VertexId::from_int64(src_internal as i64),
-                dst_internal_vid,
-            );
-            let edge = edge_record_to_edge_with_projection(
-                &record, edge_type, &src_str, &dst_str, projection,
-            );
-            return Ok(Some(edge));
-        }
     }
 
     Ok(None)
@@ -266,19 +242,6 @@ pub(crate) fn get_node_edges(
                 }
             }
         }
-
-        // Append cold snapshot edges for this edge type
-        append_cold_node_edges(
-            ctx,
-            &mut edges,
-            edge_label_id,
-            edge_type_name,
-            node_id,
-            src_label_id,
-            dst_label_id,
-            direction,
-            ts,
-        )?;
     }
 
     Ok(edges)
@@ -288,9 +251,8 @@ pub(crate) fn get_node_edges(
 /// (`id_only`/`count_only`).
 ///
 /// Resolves the edge-type schema once for the whole batch and reads MVCC
-/// neighbors directly from the CSR (skipping `EdgeRecord` materialization and
-/// per-edge property decoding).  Cold snapshots are merged with the same
-/// `(neighbor_internal, rank)` dedup as [`get_node_edges`].  Returns the
+/// neighbors directly from the single-segment CSR (skipping `EdgeRecord`
+/// materialization and per-edge property decoding). Returns the
 /// external destination/source `VertexId` per input source, in input order.
 pub(crate) fn neighbor_dst_ids_batch(
     ctx: &GraphStorageContext,
@@ -318,30 +280,14 @@ pub(crate) fn neighbor_dst_ids_batch(
     }
 
     let mut results = Vec::with_capacity(src_ids.len());
-    let has_cold = !ctx.cold_snapshots().read().is_empty();
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
         let mut neighbors: Vec<VertexId> = Vec::new();
-        // Dedup is only required to merge cold snapshots against hot data;
-        // without cold snapshots each edge is returned at most once by the
-        // merged CSR path, so the set is skipped entirely.
-        let mut seen: Option<HashSet<(u32, u32, i64)>> = has_cold.then(HashSet::new);
         for (edge_label_id, src_label_id, dst_label_id) in &resolved {
             append_hot_neighbors(
                 ctx,
                 &mut neighbors,
-                seen.as_mut(),
-                src_id,
-                *edge_label_id,
-                *src_label_id,
-                *dst_label_id,
-                direction,
-                ts,
-            );
-            append_cold_neighbors(
-                ctx,
-                &mut neighbors,
-                seen.as_mut(),
+                None,
                 src_id,
                 *edge_label_id,
                 *src_label_id,
@@ -355,9 +301,8 @@ pub(crate) fn neighbor_dst_ids_batch(
     Ok(results)
 }
 
-/// Batch out-degree read for count-only expand tails.  Counts distinct edges
-/// (`(neighbor_internal, rank)` deduped across hot and cold) per source, with
-/// the schema resolved once for the whole batch.
+/// Batch out-degree read for count-only expand tails. Counts distinct edges
+/// per source with the schema resolved once for the whole batch.
 pub(crate) fn out_degree_batch(
     ctx: &GraphStorageContext,
     space: &str,
@@ -398,16 +343,6 @@ pub(crate) fn out_degree_batch(
                 direction,
                 ts,
             );
-            count_cold_neighbors(
-                ctx,
-                &mut seen,
-                src_id,
-                *edge_label_id,
-                *src_label_id,
-                *dst_label_id,
-                direction,
-                ts,
-            );
         }
         results.push(seen.len());
     }
@@ -415,9 +350,7 @@ pub(crate) fn out_degree_batch(
 }
 
 /// Append hot-CSR neighbors of `src_id` (direction-dependent endpoint) to
-/// `neighbors`, deduped by the full `(src_internal, dst_internal, rank)` edge
-/// identity (matching [`get_node_edges`] semantics).  When `seen` is `None`
-/// (no cold snapshots to merge) every edge is accepted.
+/// `neighbors`. Single-segment CSR yields each edge at most once.
 #[allow(clippy::too_many_arguments)]
 fn append_hot_neighbors(
     ctx: &GraphStorageContext,
@@ -640,7 +573,7 @@ pub(crate) fn scan_edges_by_type(
             ctx.data_store().with_edge_tables(|edge_tables| {
                 edge_tables
                     .iter()
-                    .filter(|(_, arc)| arc.read().0.label() == edge_label_id)
+                    .filter(|(_, arc)| arc.read().label() == edge_label_id)
                     .map(|(key, arc)| (*key, arc.clone()))
                     .collect()
             });
@@ -656,7 +589,7 @@ pub(crate) fn scan_edges_by_type(
             .par_iter()
             .map(|(_key, arc)| {
                 let guard = arc.read();
-                let mut iter = guard.0.iter(ts);
+                let mut iter = guard.iter(ts);
                 let mut partition_edges = Vec::new();
                 loop {
                     let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
@@ -667,8 +600,8 @@ pub(crate) fn scan_edges_by_type(
                         let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
                         let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
-                        let tbl_src = guard.0.src_label();
-                        let tbl_dst = guard.0.dst_label();
+                        let tbl_src = guard.src_label();
+                        let tbl_dst = guard.dst_label();
 
                         let src_external = if tbl_src != 0 {
                             ctx.get_external_id(tbl_src, src_internal, ts)
@@ -703,8 +636,7 @@ pub(crate) fn scan_edges_by_type(
             })
             .collect();
 
-        let mut edges: Vec<Edge> = per_partition.into_iter().flatten().collect();
-        edges = append_cold_scan_edges(ctx, edges, edge_label_id, edge_type, 0, 0, ts);
+        let edges: Vec<Edge> = per_partition.into_iter().flatten().collect();
         return Ok(edges);
     }
 
@@ -717,7 +649,7 @@ pub(crate) fn scan_edges_by_type(
         ctx.data_store().with_edge_tables(|edge_tables| {
             if let Some(arc) = edge_tables.get(&key) {
                 let guard = arc.read();
-                let mut iter = guard.0.iter(ts);
+                let mut iter = guard.iter(ts);
                 loop {
                     let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
                     if batch.is_empty() {
@@ -762,16 +694,6 @@ pub(crate) fn scan_edges_by_type(
             }
         });
     }
-
-    edges = append_cold_scan_edges(
-        ctx,
-        edges,
-        edge_label_id,
-        edge_type,
-        src_label_id,
-        dst_label_id,
-        ts,
-    );
     Ok(edges)
 }
 
@@ -824,8 +746,6 @@ pub(crate) fn count_edges_by_type(
 
     let edge_label_id = edge_info.edge_type_id;
 
-    let ts = ctx.get_read_timestamp();
-
     let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
         Some(id) => id,
         None => return Ok(0),
@@ -863,20 +783,7 @@ pub(crate) fn count_edges_by_type(
             .unwrap_or(0)
     };
 
-    let cold_count = ctx
-        .cold_snapshots()
-        .read()
-        .get(&edge_label_id)
-        .map(|snapshots| {
-            snapshots
-                .iter()
-                .filter(|s| ts >= s.snapshot_ts())
-                .map(|s| s.edge_count())
-                .sum::<u64>()
-        })
-        .unwrap_or(0);
-
-    Ok(hot_count + cold_count)
+    Ok(hot_count)
 }
 
 pub(crate) fn scan_all_edges(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Edge>> {
@@ -940,27 +847,6 @@ pub(crate) fn get_edge_with_schema(
     ) {
         let data = serialize_properties(&record.properties);
         return Ok(Some((edge_info, data)));
-    }
-
-    // Fallback: check cold snapshots if hot missed
-    if ts >= snapshot_min_ts(ctx, edge_label_id) {
-        if let Some((snapshot, nbr, src_internal, dst_internal_vid)) = query_cold_edge(
-            ctx,
-            edge_label_id,
-            src_vid,
-            dst_vid,
-            src_label_id,
-            dst_label_id,
-            ts,
-        ) {
-            let record = snapshot.nbr_to_edge_record(
-                &nbr,
-                VertexId::from_int64(src_internal as i64),
-                dst_internal_vid,
-            );
-            let data = serialize_properties(&record.properties);
-            return Ok(Some((edge_info, data)));
-        }
     }
 
     Ok(None)

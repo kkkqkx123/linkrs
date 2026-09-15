@@ -1,36 +1,26 @@
-//! Core EdgeTable operations: CRUD, properties, queries, and compaction.
+//! Core EdgeStore operations: CRUD, properties, queries, and compaction.
 //!
-//! Provides fundamental edge table functionality including insertion, deletion,
-//! querying, property management, and basic maintenance operations.
+//! Single-segment edge table: one mutable CSR per direction plus centralized
+//! row-level timestamps. There are no frozen segments, no merges, and no
+//! cross-segment deduplication.
 
-use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
-use super::calibrator::{CalibratedThreshold, CalibratorTree, DensityStats};
-use super::free_space::SegmentFreeList;
+use super::super::{CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::mvcc::MVCCManager;
-use super::residency::GLOBAL_ACCESS_CLOCK;
-use super::segment::{CsrSegment, SegmentVersion};
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::CsrWithProperties;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType};
 use crate::types::{PropertyId, StoragePropertyDef};
-use graphdb_core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByOffsetParams};
 pub use super::iterator::EdgeTableScanIterator;
 
-/// Borrowed context for segment-based edge lookups.
-struct SegmentLookup<'a> {
-    segments: &'a [CsrSegment],
-    segment_index: &'a [(Timestamp, usize)],
-    sparse_index: Option<&'a HashMap<u32, Vec<usize>>>,
-}
-
-/// TimeTravel edge store: multi-segment CSR with freeze/merge/MVCC (full history).
-pub struct TimeTravelEdgeStore {
+/// Single-segment edge store: one CSR per direction with MVCC row timestamps.
+pub struct EdgeStore {
     pub label: LabelId,
     pub label_name: String,
     pub src_label: LabelId,
@@ -38,17 +28,6 @@ pub struct TimeTravelEdgeStore {
     pub schema: EdgeSchema,
     pub out_csr: CsrVariant,
     pub in_csr: CsrVariant,
-    pub out_segments: Vec<CsrSegment>,
-    pub in_segments: Vec<CsrSegment>,
-    /// Reusable CSR allocations retired from out-direction segments.
-    pub out_free_space: SegmentFreeList,
-    /// Reusable CSR allocations retired from in-direction segments.
-    pub in_free_space: SegmentFreeList,
-    /// Segment index for fast time-based lookup: (create_ts_min, segment_idx in out_segments)
-    /// Sorted by create_ts_min, enables binary search to skip irrelevant segments
-    pub out_segment_index: Vec<(Timestamp, usize)>,
-    /// Segment index for in_segments: (create_ts_min, segment_idx in in_segments)
-    pub in_segment_index: Vec<(Timestamp, usize)>,
     pub mvcc: MVCCManager,
     pub properties: CsrWithProperties,
     pub is_open: bool,
@@ -61,21 +40,6 @@ pub struct TimeTravelEdgeStore {
     /// Invalidated whenever schema changes.
     pub property_index_cache: HashMap<String, usize>,
 
-    /// Sparse vertex index for out-direction segments.
-    /// Maps source vertex ID → list of segment indices that contain edges for that vertex.
-    /// Enables skipping segments that don't contain the queried vertex during traversal.
-    pub sparse_vertex_index_out: HashMap<u32, Vec<usize>>,
-    /// Sparse vertex index for in-direction segments.
-    pub sparse_vertex_index_in: HashMap<u32, Vec<usize>>,
-
-    /// Pre-merged CSR of all out-direction segments for ts=MAX queries.
-    /// Built lazily when a current-time query arrives and invalidated on freeze/merge.
-    pub current_snapshot_out: Option<Csr>,
-    /// Pre-merged CSR of all in-direction segments for ts=MAX queries.
-    pub current_snapshot_in: Option<Csr>,
-    /// Whether the current snapshots need to be rebuilt.
-    pub snapshot_dirty: bool,
-
     /// Edge property index for efficient property-based filtering.
     /// When set, insert/delete operations automatically maintain the index.
     pub property_index: Option<EdgePropertyIndex>,
@@ -86,12 +50,27 @@ pub struct TimeTravelEdgeStore {
     /// Snapshot timestamp used by the last automatic GC run. Used to avoid
     /// re-running GC when `min_active_snapshot_ts` has not advanced.
     pub last_gc_min_snapshot_ts: Timestamp,
-
-    /// Calibrator tree for density-aware compaction thresholds.
-    pub calibrator: CalibratorTree,
 }
 
-impl TimeTravelEdgeStore {
+impl std::fmt::Debug for EdgeStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeStore")
+            .field("label", &self.label)
+            .field("label_name", &self.label_name)
+            .field("out_csr", &self.out_csr)
+            .field("in_csr", &self.in_csr)
+            .field("is_open", &self.is_open)
+            .field("next_edge_id", &self.next_edge_id)
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+impl EdgeStore {
+    pub fn new(schema: EdgeSchema) -> StorageResult<Self> {
+        Self::with_config(schema, EdgeTableConfig::default())
+    }
+
     pub fn with_config(schema: EdgeSchema, config: EdgeTableConfig) -> StorageResult<Self> {
         schema.validate()?;
 
@@ -123,8 +102,7 @@ impl TimeTravelEdgeStore {
                     .nullable(p.nullable)
             })
             .collect();
-        let mut properties = CsrWithProperties::new(config.initial_vertex_capacity, prop_schemas);
-        properties.set_version_chain_cap(config.version_chain_cap);
+        let properties = CsrWithProperties::new(config.initial_vertex_capacity, prop_schemas);
 
         let label_id = schema.label_id;
         let label_name = schema.label_name.clone();
@@ -140,24 +118,6 @@ impl TimeTravelEdgeStore {
             property_index_cache.insert(prop.name.clone(), idx);
         }
 
-        let mut calibrator_config = config.calibrator.clone();
-        // Sync base deletion ratio with auto_maintenance threshold when explicitly set
-        if config.auto_maintenance.deletion_compact_ratio > 0.0 {
-            calibrator_config.base_deletion_ratio = config.auto_maintenance.deletion_compact_ratio;
-        }
-        // Initial region count from vertex capacity.
-        let initial_region_count = if config.region_vertex_count > 0 {
-            config
-                .initial_vertex_capacity
-                .div_ceil(config.region_vertex_count)
-        } else {
-            0
-        };
-        let calibrator = if initial_region_count > 0 {
-            CalibratorTree::with_region_count(initial_region_count, calibrator_config)
-        } else {
-            CalibratorTree::new(calibrator_config)
-        };
         Ok(Self {
             label: label_id,
             label_name,
@@ -166,12 +126,6 @@ impl TimeTravelEdgeStore {
             schema,
             out_csr,
             in_csr,
-            out_segments: Vec::new(),
-            in_segments: Vec::new(),
-            out_free_space: SegmentFreeList::new(),
-            in_free_space: SegmentFreeList::new(),
-            out_segment_index: Vec::new(),
-            in_segment_index: Vec::new(),
             mvcc: MVCCManager::new(),
             properties,
             is_open: true,
@@ -180,15 +134,9 @@ impl TimeTravelEdgeStore {
             stats_manager: None,
             version_history,
             property_index_cache,
-            sparse_vertex_index_out: HashMap::new(),
-            sparse_vertex_index_in: HashMap::new(),
-            current_snapshot_out: None,
-            current_snapshot_in: None,
-            snapshot_dirty: true,
             property_index: None,
             maintenance_serial: 0,
             last_gc_min_snapshot_ts: 0,
-            calibrator,
         })
     }
 
@@ -225,296 +173,26 @@ impl TimeTravelEdgeStore {
         self.stats_manager = Some(stats);
     }
 
-    // ── Calibrator accessors and helpers ──
-
-    pub fn calibrator(&self) -> &CalibratorTree {
-        &self.calibrator
-    }
-
-    pub fn calibrator_mut(&mut self) -> &mut CalibratorTree {
-        &mut self.calibrator
-    }
-
-    pub fn calibrated_threshold(&self) -> CalibratedThreshold {
-        self.calibrator.calibrated_threshold()
-    }
-
-    /// Update calibrator density stats from current segment region metadata.
-    pub fn update_calibrator_from_segments(&mut self) {
-        let region_n = self.config.region_vertex_count;
-        if region_n == 0 {
-            return;
-        }
-        let vc = self
-            .out_segments
-            .iter()
-            .map(|s| s.csr.read().vertex_capacity())
-            .max()
-            .unwrap_or(self.out_csr.vertex_capacity());
-        let region_count = if vc == 0 { 0 } else { vc.div_ceil(region_n) };
-        if region_count == 0 {
-            return;
-        }
-        self.calibrator.ensure_region_count(region_count);
-        // Aggregate across all out segments per region.
-        let mut agg: std::collections::HashMap<u32, DensityStats> =
-            std::collections::HashMap::new();
-        for seg in &self.out_segments {
-            for meta in &seg.regions {
-                let entry = agg.entry(meta.region_id).or_default();
-                entry.edge_count += meta.edge_count as u64;
-                entry.deleted_count += meta.deleted_count as u64;
-                entry.fragmented_capacity += meta.estimated_bytes as u64;
-                entry.last_compact_ts = entry
-                    .last_compact_ts
-                    .max(meta.deletion_info.all_deleted_before(0) as u64);
-            }
-        }
-        // Also account for in_segments for completeness (in-direction calibrator could be separate,
-        // but we share a single tree for out-direction as primary).
-        for (rid, stats) in agg {
-            self.calibrator.update_region_stats(rid, stats);
-        }
-    }
-
-    pub fn record_region_access(&self, vid: u32) {
-        let region_n = self.config.region_vertex_count;
-        if region_n == 0 {
-            return;
-        }
-        let rid = (vid as usize / region_n) as u32;
-        self.calibrator.record_access(rid);
-    }
-
-    pub fn set_calibrator_memory_pressure(&mut self, ratio: f64) {
-        self.calibrator.set_memory_pressure(ratio);
-    }
-
-    fn base_get_edge(
-        &self,
-        lookup: SegmentLookup<'_>,
-        src: u32,
-        dst: VertexId,
-        ts: Timestamp,
-    ) -> Option<Nbr> {
-        // Build relevant segment set for sparse index filtering
-        let relevant_set: Option<std::collections::HashSet<usize>> = lookup
-            .sparse_index
-            .and_then(|idx| idx.get(&src))
-            .map(|indices| indices.iter().copied().collect());
-
-        // Binary search to find earliest relevant segment (create_ts_min <= ts)
-        let max_index_pos = if !lookup.segment_index.is_empty() {
-            match lookup
-                .segment_index
-                .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
-            {
-                Ok(pos) | Err(pos) => pos.saturating_sub(1),
-            }
-        } else {
-            lookup.segments.len().saturating_sub(1)
-        };
-
-        let mut candidates: Vec<usize> = Vec::new();
-        if !lookup.segment_index.is_empty() {
-            for item in lookup.segment_index.iter().take(max_index_pos + 1) {
-                candidates.push(item.1);
-            }
-        } else {
-            candidates = (0..lookup.segments.len()).rev().collect();
-        }
-        candidates.sort_by(|a, b| b.cmp(a));
-
-        for forward_idx in candidates {
-            let segment = &lookup.segments[forward_idx];
-
-            // Sparse vertex index skip
-            if let Some(ref set) = relevant_set {
-                if !set.contains(&forward_idx) {
-                    continue;
-                }
-            }
-            if segment.create_ts_min > ts {
-                continue;
-            }
-
-            if segment.deletion_info.all_deleted_before(ts)
-                && segment
-                    .deletion_info
-                    .all_edges_deleted(segment.csr.read().edge_count())
-            {
-                continue;
-            }
-
-            if segment.is_evicted() {
-                let _ = segment.reload_from_spill();
-            }
-            segment.record_access(GLOBAL_ACCESS_CLOCK.tick());
-
-            let positioned_edges = segment
-                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
-                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
-
-            for (position, edge) in positioned_edges {
-                if edge.to_vertex_id() == dst && edge.timestamp <= ts {
-                    let edge_id = segment.recover_edge_id(&edge, position);
-                    if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge_id);
-                        nbr.create_ts = edge.timestamp;
-                        return Some(nbr);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn base_edges_of(&self, lookup: SegmentLookup<'_>, src: u32, ts: Timestamp) -> Vec<Nbr> {
-        let mut edges = Vec::new();
-
-        // Build a set of segment indices that contain this vertex (for O(1) lookup)
-        let relevant_set: Option<std::collections::HashSet<usize>> = lookup
-            .sparse_index
-            .and_then(|idx| idx.get(&src))
-            .map(|indices| indices.iter().copied().collect());
-
-        // Binary search on segment index to find the earliest relevant segment.
-        // Index is sorted by create_ts_min descending; find the last position
-        // where create_ts_min <= ts, then iterate from the end of the index
-        // (newest segment) up to that position.
-        let max_index_pos = if !lookup.segment_index.is_empty() {
-            match lookup
-                .segment_index
-                .binary_search_by(|probe| probe.0.cmp(&ts).then(std::cmp::Ordering::Greater))
-            {
-                Ok(pos) | Err(pos) => {
-                    // pos is the first element with create_ts_min > ts.
-                    // We want elements 0..pos (create_ts_min <= ts).
-                    pos.saturating_sub(1)
-                }
-            }
-        } else {
-            // No index: fall back to scanning all segments.
-            lookup.segments.len().saturating_sub(1)
-        };
-
-        // Collect relevant segment indices from the index (those with
-        // create_ts_min <= ts), in newest-first order.
-        let mut candidates: Vec<usize> = Vec::new();
-        if !lookup.segment_index.is_empty() {
-            for item in lookup.segment_index.iter().take(max_index_pos + 1) {
-                candidates.push(item.1);
-            }
-        } else {
-            candidates = (0..lookup.segments.len()).rev().collect();
-        }
-        // candidates is in descending index order (newest first), which is
-        // the correct traversal order.
-        candidates.sort_by(|a, b| b.cmp(a));
-
-        for forward_idx in candidates {
-            let segment = &lookup.segments[forward_idx];
-
-            // Sparse vertex index skip: if this segment does NOT contain the vertex, skip
-            if let Some(ref set) = relevant_set {
-                if !set.contains(&forward_idx) {
-                    continue;
-                }
-            }
-
-            if segment.create_ts_min > ts {
-                continue;
-            }
-
-            // Skip segments where every edge has been deleted at or before the
-            // query timestamp (no edge can be visible). Both conditions are
-            // required: all known deletions predate the query AND the
-            // deleted count covers the whole segment. all_deleted_before
-            // alone is not sufficient, a partially deleted segment still
-            // holds live edges.
-            if segment.deletion_info.all_deleted_before(ts)
-                && segment
-                    .deletion_info
-                    .all_edges_deleted(segment.csr.read().edge_count())
-            {
-                continue;
-            }
-
-            // Ensure segment data is resident (reload from spill if evicted)
-            if segment.is_evicted() {
-                let _ = segment.reload_from_spill();
-            }
-            segment.record_access(GLOBAL_ACCESS_CLOCK.tick());
-
-            // Optimistic read with RwLock fallback
-            let positioned_edges = segment
-                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
-                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
-
-            for (position, edge) in positioned_edges {
-                if edge.timestamp <= ts {
-                    let edge_id = segment.recover_edge_id(&edge, position);
-                    if !self.mvcc.is_tombstoned(edge_id, ts) {
-                        let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge_id);
-                        nbr.create_ts = edge.timestamp;
-                        edges.push(nbr);
-                    }
-                }
-            }
-        }
-
-        edges
-    }
-
-    fn merged_edges_of(
-        &self,
-        delta: &CsrVariant,
-        lookup: SegmentLookup<'_>,
-        src: u32,
-        ts: Timestamp,
-    ) -> Vec<Nbr> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-
-        if let Some(iter) = delta.iter_edges_of(src, ts) {
-            for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                    result.push(*nbr);
-                }
-            }
-        } else {
-            for nbr in delta.edges_of(src, ts) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                    result.push(nbr);
-                }
-            }
-        }
-
-        for nbr in self.base_edges_of(lookup, src, ts) {
-            if seen.insert(nbr.edge_id) {
-                result.push(nbr);
-            }
-        }
-
-        result
-    }
-
     fn merged_get_edge(
         &self,
-        delta: &CsrVariant,
-        lookup: SegmentLookup<'_>,
+        csr: &CsrVariant,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
     ) -> Option<Nbr> {
-        if let Some(nbr) = delta.get_edge(src, dst, ts) {
-            if !self.mvcc.is_tombstoned(nbr.edge_id, ts) {
-                return Some(nbr);
-            }
+        let nbr = csr.get_edge(src, dst, ts)?;
+        if self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+            Some(nbr)
+        } else {
+            None
         }
+    }
 
-        self.base_get_edge(lookup, src, dst, ts)
+    fn merged_edges_of(&self, csr: &CsrVariant, src: u32, ts: Timestamp) -> Vec<Nbr> {
+        csr.edges_of(src, ts)
+            .into_iter()
+            .filter(|nbr| self.mvcc.is_edge_visible(nbr.edge_id, ts))
+            .collect()
     }
 
     pub(crate) fn edge_record_from_nbr(
@@ -544,48 +222,6 @@ impl TimeTravelEdgeStore {
         Vec::new()
     }
 
-    pub fn validate_segment_integrity(&self) -> usize {
-        let mut valid_count = 0;
-
-        for segment in &self.out_segments {
-            if segment.version.validate(segment) {
-                valid_count += 1;
-            }
-        }
-
-        for segment in &self.in_segments {
-            if segment.version.validate(segment) {
-                valid_count += 1;
-            }
-        }
-
-        valid_count
-    }
-
-    pub fn segment_versions(&self) -> Vec<(usize, u32)> {
-        let mut versions = Vec::new();
-
-        for (idx, seg) in self.out_segments.iter().enumerate() {
-            versions.push((idx, seg.version.checksum));
-        }
-
-        for (idx, seg) in self.in_segments.iter().enumerate() {
-            versions.push((idx + 1000, seg.version.checksum));
-        }
-
-        versions
-    }
-
-    pub fn update_segment_checksums(&mut self) {
-        for segment in &mut self.out_segments {
-            segment.version.checksum = SegmentVersion::compute_checksum(segment);
-        }
-
-        for segment in &mut self.in_segments {
-            segment.version.checksum = SegmentVersion::compute_checksum(segment);
-        }
-    }
-
     pub fn insert_edge(
         &mut self,
         src: u32,
@@ -598,7 +234,9 @@ impl TimeTravelEdgeStore {
             return Err(StorageError::storage_not_open());
         }
 
-        if self.schema.oe_strategy == super::super::EdgeStrategy::None {
+        if self.schema.oe_strategy == super::super::EdgeStrategy::Multiple {
+            // Multiple-edge strategy always stores out edges; no extra check.
+        } else if self.schema.oe_strategy == super::super::EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
                 "Cannot insert edge: out-edge strategy is None".to_string(),
             ));
@@ -631,10 +269,7 @@ impl TimeTravelEdgeStore {
             )));
         }
 
-        // Record edge creation in the centralized MVCC store. The inline
-        // timestamps in Nbr drive CSR-local filtering, while transaction
-        // isolation comes from the global write-timestamp frontier: readers
-        // capture a committed snapshot before this `ts` is published.
+        // Record edge creation in the centralized MVCC store.
         self.mvcc.record_creation(edge_id, ts);
 
         // Insert property rows and the out-direction CSR entry. Each fallible
@@ -677,19 +312,6 @@ impl TimeTravelEdgeStore {
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in &converted_values {
                 let _ = index.insert(prop_name, prop_value, src, dst, rank, self.label, ts);
-            }
-        }
-
-        // Ensure calibrator covers new vertex capacity
-        if self.config.region_vertex_count > 0 {
-            let region_n = self.config.region_vertex_count;
-            let vc = self
-                .out_csr
-                .vertex_capacity()
-                .max(self.in_csr.vertex_capacity());
-            let rc = if vc == 0 { 0 } else { vc.div_ceil(region_n) };
-            if rc > self.calibrator.region_count() {
-                self.calibrator.ensure_region_count(rc);
             }
         }
 
@@ -740,30 +362,6 @@ impl TimeTravelEdgeStore {
 
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
-            let _ = self.properties.mark_deleted(edge_id, ts);
-            self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
-            self.maybe_run_auto_maintenance();
-            return Ok(true);
-        }
-
-        if let Some(nbr) = self.base_get_edge(
-            SegmentLookup {
-                segments: &self.out_segments,
-                segment_index: &self.out_segment_index,
-                sparse_index: Some(&self.sparse_vertex_index_out),
-            },
-            src,
-            dst_key,
-            ts,
-        ) {
-            let edge_id = nbr.edge_id;
-            self.mvcc.record_deletion(edge_id, ts);
-            self.decrement_segment_live_count(edge_id);
-            // Invalidate the cached current snapshot: it still contains this
-            // edge and is only rebuilt lazily on the next maintenance pass.
-            self.snapshot_dirty = true;
-            // Mark the property record deleted so it can be reclaimed by
-            // compact_properties (it filters via mvcc.is_tombstoned).
             let _ = self.properties.mark_deleted(edge_id, ts);
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             self.maybe_run_auto_maintenance();
@@ -856,31 +454,38 @@ impl TimeTravelEdgeStore {
             return Ok(true);
         }
 
-        // Segment-path undo: a frozen-segment deletion recorded an MVCC
-        // tombstone plus a property-row mark (no CSR entry to revert). Undo it
-        // by removing the tombstone and restoring the property row.
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        let Some(nbr) = self.segment_find_edge_any(src, dst_key) else {
+        // Fallback undo for deletions recorded without usable CSR offsets:
+        // locate the edge among all physically present entries, verify this
+        // undo owns the deletion, then revert both CSR sides by edge id.
+        let Some(edge_id) = self
+            .out_csr
+            .iter_all()
+            .filter_map(|(row, nbr)| {
+                let row_u32 = row.as_int64().unwrap_or(-1);
+                if row_u32 == src as i64 && nbr.endpoint == dst && nbr.rank == rank {
+                    Some(nbr.edge_id)
+                } else {
+                    None
+                }
+            })
+            .next()
+        else {
             return Ok(false);
         };
-        // Only revert our own deletion: the tombstone must not be newer than
-        // this undo point.
-        match self.mvcc.delete_ts_of(nbr.edge_id) {
-            Some(delete_ts) if delete_ts <= ts => {}
+        match self.mvcc.tombstones.get(&edge_id) {
+            Some(delete_ts) if *delete_ts <= ts => {}
             _ => return Ok(false),
         }
-        self.mvcc.remove_deletion(nbr.edge_id);
-        self.increment_segment_live_count(nbr.edge_id);
-        // Restore edge visibility in the centralized MVCC store.
-        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&nbr.edge_id) {
+        if !self.out_csr.revert_delete_by_edge_id(src, edge_id, ts) {
+            return Ok(false);
+        }
+        self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        self.mvcc.remove_deletion(edge_id);
+        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
             ts_info.delete_ts = Timestamp::MAX;
         }
-        // The cached current snapshot still excludes this edge; rebuild lazily.
-        self.snapshot_dirty = true;
-        let _ = self.properties.revert_deletion_for_edge(nbr.edge_id);
-        // Re-index the restored properties when the property index is active
-        // (the delete path removed them).
-        let restored = self.properties_for_edge(nbr.edge_id, ts);
+        let _ = self.properties.revert_deletion_for_edge(edge_id);
+        let restored = self.properties_for_edge(edge_id, ts);
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in restored {
                 let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
@@ -889,48 +494,13 @@ impl TimeTravelEdgeStore {
         Ok(true)
     }
 
-    /// Locate an edge in the frozen segments ignoring MVCC tombstones.
-    ///
-    /// Unlike [`Self::base_get_edge`] this returns entries whose deletion is
-    /// already recorded — exactly what the segment-path delete undo needs.
-    fn segment_find_edge_any(&self, src: u32, dst: VertexId) -> Option<Nbr> {
-        for segment in self.out_segments.iter() {
-            if segment.is_evicted() {
-                let _ = segment.reload_from_spill();
-            }
-            let positioned_edges = segment
-                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
-                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
-            for (position, edge) in positioned_edges {
-                if edge.to_vertex_id() == dst {
-                    let edge_id = segment.recover_edge_id(&edge, position);
-                    let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge_id);
-                    nbr.create_ts = edge.timestamp;
-                    return Some(nbr);
-                }
-            }
-        }
-        None
-    }
-
     pub fn get_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeRecord> {
         if !self.is_open {
             return None;
         }
-        self.record_region_access(src);
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge(
-            &self.out_csr,
-            SegmentLookup {
-                segments: &self.out_segments,
-                segment_index: &self.out_segment_index,
-                sparse_index: Some(&self.sparse_vertex_index_out),
-            },
-            src,
-            dst_key,
-            ts,
-        )?;
+        let nbr = self.merged_get_edge(&self.out_csr, src, dst_key, ts)?;
         let properties = self.properties_for_edge(nbr.edge_id, ts);
 
         Some(EdgeRecord {
@@ -964,25 +534,10 @@ impl TimeTravelEdgeStore {
             .collect()
     }
 
-    /// Raw out-edge neighbors of `src` (MVCC-merged, snapshot-consistent) with
-    /// no property decoding.  Destination endpoint is encoded in `nbr.neighbor`.
+    /// Raw out-edge neighbors of `src` (MVCC-filtered, snapshot-consistent)
+    /// with no property decoding.
     pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
-        self.record_region_access(src);
-        if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some() {
-            // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
-            self.merged_edges_of_current(&self.out_csr, src)
-        } else {
-            self.merged_edges_of(
-                &self.out_csr,
-                SegmentLookup {
-                    segments: &self.out_segments,
-                    segment_index: &self.out_segment_index,
-                    sparse_index: Some(&self.sparse_vertex_index_out),
-                },
-                src,
-                ts,
-            )
-        }
+        self.merged_edges_of(&self.out_csr, src, ts)
     }
 
     pub fn in_edges(&self, dst: u32, ts: Timestamp) -> Vec<EdgeRecord> {
@@ -1008,48 +563,23 @@ impl TimeTravelEdgeStore {
             .collect()
     }
 
-    /// Raw in-edge neighbors of `dst` (MVCC-merged, snapshot-consistent) with
-    /// no property decoding.  Source endpoint is encoded in `nbr.neighbor`.
+    /// Raw in-edge neighbors of `dst` (MVCC-filtered, snapshot-consistent)
+    /// with no property decoding.
     pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
-        self.record_region_access(dst);
-        if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
-            self.merged_edges_of_current_in(&self.in_csr, dst)
-        } else {
-            self.merged_edges_of(
-                &self.in_csr,
-                SegmentLookup {
-                    segments: &self.in_segments,
-                    segment_index: &self.in_segment_index,
-                    sparse_index: Some(&self.sparse_vertex_index_in),
-                },
-                dst,
-                ts,
-            )
-        }
+        self.merged_edges_of(&self.in_csr, dst, ts)
     }
 
     pub fn has_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> bool {
         if !self.is_open {
             return false;
         }
-        self.record_region_access(src);
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        self.merged_get_edge(
-            &self.out_csr,
-            SegmentLookup {
-                segments: &self.out_segments,
-                segment_index: &self.out_segment_index,
-                sparse_index: Some(&self.sparse_vertex_index_out),
-            },
-            src,
-            dst_key,
-            ts,
-        )
-        .is_some()
+        self.merged_get_edge(&self.out_csr, src, dst_key, ts)
+            .is_some()
     }
 
     pub fn edge_count(&self) -> u64 {
-        self.out_csr.edge_count() + self.out_segments.iter().map(|s| s.live_count).sum::<u64>()
+        self.out_csr.edge_count()
     }
 
     pub fn delta_edge_count(&self) -> u64 {
@@ -1235,17 +765,7 @@ impl TimeTravelEdgeStore {
             .ok_or_else(|| StorageError::column_not_found(prop_name.to_string()))?;
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        if let Some(nbr) = self.merged_get_edge(
-            &self.out_csr,
-            SegmentLookup {
-                segments: &self.out_segments,
-                segment_index: &self.out_segment_index,
-                sparse_index: Some(&self.sparse_vertex_index_out),
-            },
-            src,
-            dst_key,
-            ts,
-        ) {
+        if let Some(nbr) = self.merged_get_edge(&self.out_csr, src, dst_key, ts) {
             self.properties
                 .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
                 .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
@@ -1265,17 +785,7 @@ impl TimeTravelEdgeStore {
         }
 
         let dst_key = Self::edge_endpoint_key(params.dst, params.rank);
-        if let Some(nbr) = self.merged_get_edge(
-            &self.out_csr,
-            SegmentLookup {
-                segments: &self.out_segments,
-                segment_index: &self.out_segment_index,
-                sparse_index: Some(&self.sparse_vertex_index_out),
-            },
-            params.src,
-            dst_key,
-            params.ts,
-        ) {
+        if let Some(nbr) = self.merged_get_edge(&self.out_csr, params.src, dst_key, params.ts) {
             self.properties
                 .set_property_by_id_for_edge(
                     nbr.edge_id,
@@ -1288,17 +798,8 @@ impl TimeTravelEdgeStore {
                 })?;
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
-            if let Some(ie_nbr) = self.merged_get_edge(
-                &self.in_csr,
-                SegmentLookup {
-                    segments: &self.in_segments,
-                    segment_index: &self.in_segment_index,
-                    sparse_index: Some(&self.sparse_vertex_index_in),
-                },
-                params.dst,
-                src_key,
-                params.ts,
-            ) {
+            if let Some(ie_nbr) = self.merged_get_edge(&self.in_csr, params.dst, src_key, params.ts)
+            {
                 if nbr.edge_id != ie_nbr.edge_id {
                     return Err(StorageError::data_corruption(format!(
                         "edge_id mismatch: out_csr={}, in_csr={} at edge ({}, {})",
@@ -1374,16 +875,6 @@ impl TimeTravelEdgeStore {
 
         total += self.out_csr.used_memory_size();
         total += self.in_csr.used_memory_size();
-        total += self
-            .out_segments
-            .iter()
-            .map(|segment| segment.csr.read().used_memory_size())
-            .sum::<usize>();
-        total += self
-            .in_segments
-            .iter()
-            .map(|segment| segment.csr.read().used_memory_size())
-            .sum::<usize>();
         total += self.mvcc.total_tombstone_count() * std::mem::size_of::<(EdgeId, Timestamp)>();
         total += self.mvcc.edge_timestamps.len()
             * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<super::mvcc::EdgeTimestamps>());
@@ -1407,7 +898,6 @@ impl TimeTravelEdgeStore {
     }
 
     /// Estimate memory usage based on edge count and CSR strategy.
-    /// This provides a more accurate estimate than used_memory_size() for freeze decisions.
     pub fn estimate_memory_usage(&self) -> usize {
         let out_edges = self.out_csr.edge_count() as usize;
         let in_edges = self.in_csr.edge_count() as usize;
@@ -1427,206 +917,6 @@ impl TimeTravelEdgeStore {
         }
 
         estimated
-    }
-
-    /// Decrement `live_count` of the segment containing `edge_id`.
-    ///
-    /// Called after `mvcc.record_deletion` to maintain O(1) edge counting.
-    /// Scans segments newest-first (same order as `base_get_edge`) to find
-    /// the segment; once found the scan terminates.
-    fn decrement_segment_live_count(&mut self, edge_id: EdgeId) {
-        for segment in self.out_segments.iter_mut().rev() {
-            if segment.is_evicted() {
-                let _ = segment.reload_from_spill();
-            }
-            let csr = segment.csr.read();
-            for (_, nbr) in csr.iter() {
-                if nbr.edge_id == edge_id {
-                    drop(csr);
-                    segment.live_count = segment.live_count.saturating_sub(1);
-                    return;
-                }
-            }
-        }
-    }
-
-    /// Increment `live_count` of the segment containing `edge_id`.
-    ///
-    /// Called when a post-freeze deletion tombstone is removed (rollback) to
-    /// keep `live_count` consistent.
-    fn increment_segment_live_count(&mut self, edge_id: EdgeId) {
-        for segment in self.out_segments.iter_mut().rev() {
-            if segment.is_evicted() {
-                let _ = segment.reload_from_spill();
-            }
-            let csr = segment.csr.read();
-            for (_, nbr) in csr.iter() {
-                if nbr.edge_id == edge_id {
-                    drop(csr);
-                    segment.live_count += 1;
-                    return;
-                }
-            }
-        }
-    }
-
-    // ── Sparse vertex index methods ──
-
-    /// Rebuild sparse vertex indices from scratch for both directions.
-    /// Scans all segments to identify which vertices have edges in each segment.
-    pub fn rebuild_sparse_vertex_indices(&mut self) {
-        self.sparse_vertex_index_out.clear();
-        for (seg_idx, seg) in self.out_segments.iter().enumerate() {
-            let csr = seg.csr.read();
-            for (src_vid, _) in csr.iter() {
-                if let Some(vid) = src_vid.as_int64() {
-                    self.sparse_vertex_index_out
-                        .entry(vid as u32)
-                        .or_default()
-                        .push(seg_idx);
-                }
-            }
-        }
-        // Deduplicate segment indices per vertex
-        for indices in self.sparse_vertex_index_out.values_mut() {
-            indices.sort_unstable();
-            indices.dedup();
-        }
-
-        self.sparse_vertex_index_in.clear();
-        for (seg_idx, seg) in self.in_segments.iter().enumerate() {
-            let csr = seg.csr.read();
-            for (src_vid, _) in csr.iter() {
-                if let Some(vid) = src_vid.as_int64() {
-                    self.sparse_vertex_index_in
-                        .entry(vid as u32)
-                        .or_default()
-                        .push(seg_idx);
-                }
-            }
-        }
-        for indices in self.sparse_vertex_index_in.values_mut() {
-            indices.sort_unstable();
-            indices.dedup();
-        }
-    }
-
-    // ── Current snapshot methods ──
-
-    /// Rebuild current snapshots from segments (eager rebuild).
-    /// Called after freeze or merge operations when segments have changed.
-    /// Rebuilds both out and in direction snapshots.
-    pub fn rebuild_current_snapshot(&mut self) {
-        // Build snapshot for out direction
-        if !self.out_segments.is_empty() {
-            use super::snapshot::SnapshotBuilder;
-            let ts = Timestamp::MAX;
-            let mut builder = SnapshotBuilder::new();
-            for segment in self.out_segments.iter().rev() {
-                builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
-            }
-            let edges = builder.edges();
-            let vertex_capacity = self.out_csr.vertex_capacity();
-            if let Ok(csr) = SnapshotBuilder::build_csr(edges, vertex_capacity) {
-                self.current_snapshot_out = Some(csr);
-            }
-        } else {
-            self.current_snapshot_out = None;
-        }
-
-        // Build snapshot for in direction
-        if !self.in_segments.is_empty() {
-            use super::snapshot::SnapshotBuilder;
-            let ts = Timestamp::MAX;
-            let mut builder = SnapshotBuilder::new();
-            for segment in self.in_segments.iter().rev() {
-                builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
-            }
-            let edges = builder.edges();
-            let vertex_capacity = self.in_csr.vertex_capacity();
-            if let Ok(csr) = SnapshotBuilder::build_csr(edges, vertex_capacity) {
-                self.current_snapshot_in = Some(csr);
-            }
-        } else {
-            self.current_snapshot_in = None;
-        }
-
-        self.snapshot_dirty = false;
-    }
-
-    /// Fast path for out_edges at ts=MAX: use current snapshot + mutable CSR,
-    /// avoiding per-segment iteration.
-    fn merged_edges_of_current(&self, delta: &CsrVariant, src: u32) -> Vec<Nbr> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-
-        // 1. From mutable CSR
-        if let Some(iter) = delta.iter_edges_of(src, Timestamp::MAX) {
-            for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
-                {
-                    result.push(*nbr);
-                }
-            }
-        } else {
-            for nbr in delta.edges_of(src, Timestamp::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
-                {
-                    result.push(nbr);
-                }
-            }
-        }
-
-        // 2. From current snapshot (pre-merged segments, single CSR lookup)
-        if let Some(ref snapshot) = self.current_snapshot_out {
-            for edge in snapshot.edges_of(src).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
-                    && seen.insert(edge.edge_id)
-                {
-                    let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
-                    nbr.create_ts = edge.timestamp;
-                    result.push(nbr);
-                }
-            }
-        }
-
-        result
-    }
-
-    /// Fast path for in_edges at ts=MAX.
-    fn merged_edges_of_current_in(&self, delta: &CsrVariant, dst: u32) -> Vec<Nbr> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-
-        if let Some(iter) = delta.iter_edges_of(dst, Timestamp::MAX) {
-            for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
-                {
-                    result.push(*nbr);
-                }
-            }
-        } else {
-            for nbr in delta.edges_of(dst, Timestamp::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
-                {
-                    result.push(nbr);
-                }
-            }
-        }
-
-        if let Some(ref snapshot) = self.current_snapshot_in {
-            for edge in snapshot.edges_of(dst).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
-                    && seen.insert(edge.edge_id)
-                {
-                    let mut nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
-                    nbr.create_ts = edge.timestamp;
-                    result.push(nbr);
-                }
-            }
-        }
-
-        result
     }
 
     /// Record mutable CSR pressure without performing maintenance on the write path.
@@ -1663,21 +953,18 @@ impl TimeTravelEdgeStore {
     /// - tombstone GC when the total tombstone count exceeds the threshold
     ///   (rate-limited by `gc_min_serial` to bound write-path latency)
     /// - property compaction when the deleted-row ratio is high
-    /// - delta freeze when the mutable CSR exceeds its memory cap
     ///
-    /// Returns the number of edges removed (0 if no maintenance ran).
+    /// Returns the number of maintenance passes that actually ran.
     pub fn maybe_run_auto_maintenance(&mut self) -> usize {
         let cfg = self.config.auto_maintenance;
-        if cfg.tombstone_gc_threshold == 0 && cfg.max_delta_memory_bytes == 0 {
+        if cfg.tombstone_gc_threshold == 0 {
             return 0;
         }
         let mut maintenance_ran = 0;
 
         // Tier 1: tombstone GC (rate-limited by serial counter).
-        if cfg.tombstone_gc_threshold > 0
-            && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
-        {
-            let bound = self.mvcc.effective_retention_bound();
+        if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold {
+            let bound = self.mvcc.min_active_snapshot_ts;
             if bound < Timestamp::MAX
                 && (bound != self.last_gc_min_snapshot_ts
                     || (cfg.gc_min_serial > 0
@@ -1699,79 +986,13 @@ impl TimeTravelEdgeStore {
         }
 
         // Tier 2: property table compaction when the deleted-row ratio is high.
-        // Only runs under a bounded retention horizon: compaction reclaims
-        // version chains older than the bound, so without a bounded horizon
-        // there is no known safe retention boundary (ad-hoc time-travel reads
-        // may still need the history).
-        let bound = self.mvcc.effective_retention_bound();
+        let bound = self.mvcc.min_active_snapshot_ts;
         if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
             let prop_stats = self.properties.compaction_stats();
             if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
                 self.compact_properties(bound);
                 self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 maintenance_ran += 1;
-            }
-        }
-
-        // Tier 3: freeze delta when it exceeds its own memory cap (or the
-        // global cap, whichever is lower).
-        let freeze_cap = if cfg.max_delta_memory_bytes > 0 {
-            cfg.max_delta_memory_bytes
-        } else {
-            self.config.max_mutable_csr_bytes
-        };
-        if freeze_cap > 0 && self.estimate_memory_usage() > freeze_cap {
-            self.freeze_csr_only(Timestamp::MAX);
-            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-            maintenance_ran += 1;
-        }
-
-        // Tier 4: PhysicalDeletion merge when the tombstone pressure on frozen
-        // segments is high. Edges are physically dropped only when a bounded
-        // `min_active_snapshot_ts` exists (no snapshot can observe them);
-        // without snapshots the merge keeps every edge.
-        // Use calibrated threshold when calibrator has data, else fall back to static config.
-        if cfg.deletion_compact_ratio > 0.0 {
-            let del_stats = self.deletion_stats();
-            let density = if del_stats.total_frozen_edges == 0 {
-                0.0
-            } else {
-                self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
-            };
-            // Update calibrator memory pressure estimate from current usage.
-            if self.config.max_mutable_csr_bytes > 0 {
-                let pressure = (self.estimate_memory_usage() as f64
-                    / self.config.max_mutable_csr_bytes as f64)
-                    .clamp(0.0, 1.0);
-                self.calibrator.set_memory_pressure(pressure);
-            }
-            let effective_ratio = if self.calibrator.region_count() > 0 {
-                self.calibrated_threshold().effective_deletion_ratio()
-            } else {
-                cfg.deletion_compact_ratio
-            };
-            if density >= effective_ratio {
-                let bound = self.mvcc.effective_retention_bound();
-                let merge_threshold = CompactConfig::default()
-                    .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
-                let result = self.merge_segments_with_config_and_deletion_filter(
-                    self.config.segment_merge_threshold as Timestamp,
-                    merge_threshold,
-                    if bound < Timestamp::MAX {
-                        Some(bound)
-                    } else {
-                        None
-                    },
-                );
-                if result.segments_reduced > 0 {
-                    self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-                    maintenance_ran += 1;
-                    log::debug!(
-                        "Auto-maintenance physical merge reduced segments by {} (density={:.2})",
-                        result.segments_reduced,
-                        density
-                    );
-                }
             }
         }
 
@@ -1787,23 +1008,14 @@ impl TimeTravelEdgeStore {
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
     ) -> usize {
-        self.maybe_run_auto_maintenance_inner(watermarks, margin)
-    }
-
-    fn maybe_run_auto_maintenance_inner(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
         let cfg = self.config.auto_maintenance;
-        if cfg.tombstone_gc_threshold == 0 && cfg.max_delta_memory_bytes == 0 {
+        if cfg.tombstone_gc_threshold == 0 {
             return 0;
         }
         let mut maintenance_ran = 0;
         let bound = watermarks.safe_gc_timestamp_with_margin(margin);
 
-        if cfg.tombstone_gc_threshold > 0
-            && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
+        if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
             && bound < Timestamp::MAX
             && (bound != self.last_gc_min_snapshot_ts
                 || (cfg.gc_min_serial > 0
@@ -1832,59 +1044,6 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        let freeze_cap = if cfg.max_delta_memory_bytes > 0 {
-            cfg.max_delta_memory_bytes
-        } else {
-            self.config.max_mutable_csr_bytes
-        };
-        if freeze_cap > 0 && self.estimate_memory_usage() > freeze_cap {
-            self.freeze_csr_only(Timestamp::MAX);
-            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-            maintenance_ran += 1;
-        }
-
-        if cfg.deletion_compact_ratio > 0.0 {
-            let del_stats = self.deletion_stats();
-            let density = if del_stats.total_frozen_edges == 0 {
-                0.0
-            } else {
-                self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
-            };
-            if self.config.max_mutable_csr_bytes > 0 {
-                let pressure = (self.estimate_memory_usage() as f64
-                    / self.config.max_mutable_csr_bytes as f64)
-                    .clamp(0.0, 1.0);
-                self.calibrator.set_memory_pressure(pressure);
-            }
-            let effective_ratio = if self.calibrator.region_count() > 0 {
-                self.calibrated_threshold().effective_deletion_ratio()
-            } else {
-                cfg.deletion_compact_ratio
-            };
-            if density >= effective_ratio {
-                let merge_threshold = CompactConfig::default()
-                    .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
-                let result = self.merge_segments_with_config_and_deletion_filter(
-                    self.config.segment_merge_threshold as Timestamp,
-                    merge_threshold,
-                    if bound < Timestamp::MAX {
-                        Some(bound)
-                    } else {
-                        None
-                    },
-                );
-                if result.segments_reduced > 0 {
-                    self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-                    maintenance_ran += 1;
-                    log::debug!(
-                        "Auto-maintenance physical merge reduced segments by {} (density={:.2})",
-                        result.segments_reduced,
-                        density
-                    );
-                }
-            }
-        }
-
         maintenance_ran
     }
 
@@ -1899,8 +1058,8 @@ impl TimeTravelEdgeStore {
     /// Build the property index by scanning all edges.
     pub(crate) fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         let mut index = EdgePropertyIndex::new(pool_capacity);
-        // MAX_TIMESTAMP (not INVALID_TIMESTAMP) satisfies `create_ts <= ts < delete_ts`
-        // for live edges, so all non-tombstoned edges are scanned.
+        // MAX_TIMESTAMP satisfies `create_ts <= ts < delete_ts` for live
+        // edges, so all non-tombstoned edges are scanned.
         let all_ts = graphdb_core::types::MAX_TIMESTAMP;
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
@@ -1948,6 +1107,194 @@ impl TimeTravelEdgeStore {
             .into_iter()
             .map(|((src, dst, rank), _record)| (src, dst, rank))
             .collect()
+    }
+
+    pub fn flush<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+        compression: crate::compression::CompressionType,
+    ) -> StorageResult<()> {
+        use std::fs;
+        let path = path.as_ref();
+        fs::create_dir_all(path)?;
+        crate::compression::cleanup_shadow_files(path)?;
+
+        let crate::compression::CompressionType::Zstd { level } = compression;
+        let page_size = crate::compression::DEFAULT_PAGE_SIZE;
+
+        let mut meta_payload = Vec::new();
+        crate::persistence::write_header_to(
+            &mut meta_payload,
+            crate::persistence::section::EDGE_META,
+        )
+        .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
+
+        super::persistence::flush_metadata(
+            &mut meta_payload,
+            self.label,
+            self.src_label,
+            self.dst_label,
+            &self.label_name,
+            self.is_open,
+            &self.schema,
+            self.next_edge_id,
+            &self.mvcc.edge_timestamps,
+        )?;
+        super::persistence::write_pages_to_file(
+            &path.join("meta.bin"),
+            &meta_payload,
+            page_size,
+            level,
+            1,
+        )?;
+
+        let mut out_csr_payload = Vec::new();
+        super::persistence::serialize_csr(
+            &self.out_csr,
+            crate::persistence::section::EDGE_OUT_CSR,
+            &mut out_csr_payload,
+        )?;
+        let out_edge_count = self.out_csr.edge_count() as u32;
+        super::persistence::write_pages_to_file(
+            &path.join("out_csr.bin"),
+            &out_csr_payload,
+            page_size,
+            level,
+            out_edge_count,
+        )?;
+
+        let mut in_csr_payload = Vec::new();
+        super::persistence::serialize_csr(
+            &self.in_csr,
+            crate::persistence::section::EDGE_IN_CSR,
+            &mut in_csr_payload,
+        )?;
+        let in_edge_count = self.in_csr.edge_count() as u32;
+        super::persistence::write_pages_to_file(
+            &path.join("in_csr.bin"),
+            &in_csr_payload,
+            page_size,
+            level,
+            in_edge_count,
+        )?;
+
+        let mut props_payload = Vec::new();
+        super::persistence::serialize_csr_properties(&mut self.properties, &mut props_payload)?;
+        let edge_count = self.next_edge_id.0 as u32;
+        super::persistence::write_pages_to_file(
+            &path.join("properties.bin"),
+            &props_payload,
+            page_size,
+            level,
+            edge_count,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> StorageResult<()> {
+        use std::io::Read;
+        let path = path.as_ref();
+
+        let meta_path = path.join("meta.bin");
+        let (meta_data, _meta_rows) = super::persistence::read_pages_from_file(&meta_path)?;
+        let mut meta_cursor = &meta_data[..];
+        let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
+        meta_cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+            if sid != crate::persistence::section::EDGE_META {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in edge meta: expected {:#06x}, got {:#06x}",
+                    crate::persistence::section::EDGE_META,
+                    sid
+                )));
+            }
+        }
+
+        let mut version_bytes = [0u8; 4];
+        meta_cursor.read_exact(&mut version_bytes)?;
+        let version = u32::from_le_bytes(version_bytes);
+        if version != super::persistence::EDGE_META_VERSION {
+            return Err(StorageError::deserialize_error(format!(
+                "unsupported edge meta version: {}",
+                version
+            )));
+        }
+
+        let meta = super::persistence::load_metadata(&mut meta_cursor)?;
+
+        self.label = meta.label;
+        self.src_label = meta.src_label;
+        self.dst_label = meta.dst_label;
+        self.label_name = meta.label_name;
+        self.is_open = meta.is_open;
+        self.set_schema(meta.schema);
+        self.next_edge_id = meta.next_edge_id;
+        self.mvcc.edge_timestamps = meta.edge_timestamps;
+        // The tombstone table is rebuilt from persisted deletion timestamps;
+        // the GC watermark itself is runtime-only.
+        self.mvcc.tombstones.clear();
+        for (edge_id, ts) in self.mvcc.edge_timestamps.iter() {
+            if ts.delete_ts != Timestamp::MAX {
+                self.mvcc.tombstones.insert(*edge_id, ts.delete_ts);
+            }
+        }
+        self.mvcc.min_active_snapshot_ts = Timestamp::MAX;
+        self.mvcc.active_snapshots.clear();
+
+        let out_csr_path = path.join("out_csr.bin");
+        super::persistence::load_csr(&out_csr_path, &mut self.out_csr)?;
+
+        let in_csr_path = path.join("in_csr.bin");
+        super::persistence::load_csr(&in_csr_path, &mut self.in_csr)?;
+
+        let props_path = path.join("properties.bin");
+        self.properties = {
+            let p = super::persistence::load_csr_properties(&props_path)?;
+            let mut new_props = p;
+            // Rebuild columns to match current schema if needed
+            let current_schema_names: std::collections::HashSet<_> =
+                self.schema.properties.iter().map(|p| &p.name).collect();
+            let existing_names: std::collections::HashSet<_> = new_props
+                .property_schema()
+                .iter()
+                .map(|s| &s.name)
+                .collect();
+            if current_schema_names != existing_names {
+                // Schema mismatch: rebuild from schema
+                let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
+                    .schema
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        crate::edge::property_schema::PropertySchema::new(
+                            p.name.clone(),
+                            i as i32,
+                            p.data_type.clone(),
+                        )
+                        .nullable(p.nullable)
+                    })
+                    .collect();
+                new_props =
+                    crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
+            }
+            new_props
+        };
+
+        if self.next_edge_id.0 == 0 {
+            let max_id = self
+                .out_csr
+                .iter_all()
+                .map(|(_, nbr)| nbr.edge_id.0 + 1)
+                .max()
+                .unwrap_or(0);
+            self.next_edge_id = EdgeId(max_id);
+        }
+        self.is_open = true;
+        Ok(())
     }
 }
 

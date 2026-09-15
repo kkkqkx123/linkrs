@@ -1,14 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use crate::cursor::{EdgeCursor, ScanOptions};
-use crate::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::Nbr;
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::endpoint_label_id;
-use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, StorageError, StorageResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -29,21 +29,15 @@ struct TargetDef {
 #[derive(Clone, Debug)]
 enum TablePhase {
     Mutable,
-    Segment(usize),
     Done,
 }
 
 #[derive(Clone, Debug)]
 struct TableScanState {
     phase: TablePhase,
-    /// Number of valid (non-tombstoned) edges already consumed from
-    /// the mutable CSR.
+    /// Number of edges already consumed from the single-segment CSR
+    /// (valid + tombstoned), used to resume across batches.
     mutable_consumed: usize,
-    /// Number of raw edges (valid + tombstoned) already consumed from
-    /// the current segment's CsrIterator.
-    seg_raw_consumed: usize,
-    /// Edge IDs already emitted from this table (dedup across phases).
-    seen: HashSet<EdgeId>,
 }
 
 impl TableScanState {
@@ -51,8 +45,6 @@ impl TableScanState {
         Self {
             phase: TablePhase::Mutable,
             mutable_consumed: 0,
-            seg_raw_consumed: 0,
-            seen: HashSet::new(),
         }
     }
 }
@@ -192,7 +184,7 @@ impl EdgeCursor for GraphEdgeCursor {
                     }
                 };
                 let guard = arc.read();
-                let store = &guard.0;
+                let store: &EdgeStore = &guard;
 
                 match table_state.phase {
                     TablePhase::Mutable => {
@@ -213,28 +205,6 @@ impl EdgeCursor for GraphEdgeCursor {
                             batch: &mut candidates,
                             batch_size,
                         });
-                    }
-                    TablePhase::Segment(seg_idx) => {
-                        scan_segments(
-                            ScanArgs {
-                                ctx,
-                                store,
-                                target,
-                                td,
-                                ts,
-                                src_id_range,
-                                projection,
-                                predicate,
-                                predicate_columns,
-                                limit,
-                                emitted,
-                                offset_remaining,
-                                state: table_state,
-                                batch: &mut candidates,
-                                batch_size,
-                            },
-                            seg_idx,
-                        );
                     }
                     TablePhase::Done => {
                         *table_idx += 1;
@@ -258,7 +228,7 @@ impl EdgeCursor for GraphEdgeCursor {
 
 struct ScanArgs<'a> {
     ctx: &'a GraphStorageContext,
-    store: &'a TimeTravelEdgeStore,
+    store: &'a EdgeStore,
     target: &'a TargetDef,
     td: &'a TableDef,
     ts: Timestamp,
@@ -286,7 +256,7 @@ fn scan_mutable(args: ScanArgs) {
         match iter.next() {
             Some(_) => remaining -= 1,
             None => {
-                args.state.phase = TablePhase::Segment(0);
+                args.state.phase = TablePhase::Done;
                 return;
             }
         }
@@ -294,10 +264,7 @@ fn scan_mutable(args: ScanArgs) {
 
     for (src_vid, nbr) in iter {
         args.state.mutable_consumed += 1;
-        if args.store.mvcc.is_tombstoned(nbr.edge_id, args.ts) {
-            continue;
-        }
-        if !args.state.seen.insert(nbr.edge_id) {
+        if !args.store.mvcc.is_edge_visible(nbr.edge_id, args.ts) {
             continue;
         }
         if let Some(ref r) = *args.src_id_range {
@@ -316,6 +283,7 @@ fn scan_mutable(args: ScanArgs) {
         let mut properties = decode_edge_properties(
             args.store,
             nbr.edge_id,
+            args.ts,
             args.projection,
             args.predicate_columns,
         );
@@ -351,101 +319,7 @@ fn scan_mutable(args: ScanArgs) {
         }
     }
 
-    args.state.phase = TablePhase::Segment(0);
-}
-
-fn scan_segments(args: ScanArgs, seg_idx: usize) {
-    let seg_count = args.store.out_segments.len();
-    if seg_idx >= seg_count {
-        args.state.phase = TablePhase::Done;
-        return;
-    }
-
-    let segment = &args.store.out_segments[seg_count - 1 - seg_idx];
-    let csr = segment.csr.read();
-    let edges: Vec<_> = csr.iter().collect();
-    let mut iter = edges.iter();
-
-    let mut skip = args.state.seg_raw_consumed;
-    while skip > 0 {
-        if iter.next().is_none() {
-            args.state.phase = TablePhase::Done;
-            return;
-        }
-        skip -= 1;
-    }
-
-    for (src_vid, edge) in &mut iter {
-        args.state.seg_raw_consumed += 1;
-
-        if edge.timestamp > args.ts {
-            continue;
-        }
-        if args.store.mvcc.is_tombstoned(edge.edge_id, args.ts) {
-            continue;
-        }
-        if !args.state.seen.insert(edge.edge_id) {
-            continue;
-        }
-        if let Some(ref r) = *args.src_id_range {
-            let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
-            let src_ext =
-                resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, src_vid, args.ts);
-            let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
-            if src_int < r.start || src_int >= r.end {
-                continue;
-            }
-        }
-
-        let nbr = Nbr::new(edge.endpoint, edge.rank, edge.edge_id);
-
-        // Same decode-once / pre-filter discipline as the mutable scan.
-        let mut properties = decode_edge_properties(
-            args.store,
-            edge.edge_id,
-            args.projection,
-            args.predicate_columns,
-        );
-        if !args
-            .predicate
-            .iter()
-            .all(|p| p.matches(properties.as_slice()))
-        {
-            continue;
-        }
-        trim_to_projection(&mut properties, args.projection);
-
-        if *args.offset_remaining > 0 {
-            *args.offset_remaining -= 1;
-            continue;
-        }
-
-        let edge = build_edge_candidate(EdgeBuildArgs {
-            target: args.target,
-            td: args.td,
-            src_vid,
-            nbr,
-            props: properties,
-        });
-
-        args.batch.push(edge);
-        *args.emitted += 1;
-
-        if args.batch.len() >= args.batch_size {
-            return;
-        }
-        if args.limit.is_some_and(|l| *args.emitted >= l) {
-            return;
-        }
-    }
-
-    let next = seg_idx + 1;
-    if next >= seg_count {
-        args.state.phase = TablePhase::Done;
-    } else {
-        args.state.phase = TablePhase::Segment(next);
-        args.state.seg_raw_consumed = 0;
-    }
+    args.state.phase = TablePhase::Done;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,12 +391,13 @@ fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Tim
 /// Decode edge properties keeping projected columns plus any extra columns
 /// required by pushed scan predicates.
 fn decode_edge_properties(
-    store: &TimeTravelEdgeStore,
+    store: &EdgeStore,
     edge_id: graphdb_core::types::EdgeId,
+    ts: Timestamp,
     projection: &Option<Vec<String>>,
     predicate_columns: &[String],
 ) -> Vec<(String, Value)> {
-    let props_opt = store.properties.get_by_edge_id(edge_id, u64::MAX);
+    let props_opt = store.properties.get_by_edge_id(edge_id, ts);
     props_opt
         .map(|props| {
             props
@@ -642,4 +517,14 @@ fn build_target(
         edge_type_name: edge_type.to_string(),
         tables,
     })
+}
+
+/// Open a hot single-segment edge scan cursor.
+pub(crate) fn create_edge_cursor(
+    ctx: Arc<GraphStorageContext>,
+    space: &str,
+    options: &ScanOptions,
+) -> StorageResult<Box<dyn EdgeCursor>> {
+    let cursor = GraphEdgeCursor::new(ctx, space, options)?;
+    Ok(Box::new(cursor))
 }

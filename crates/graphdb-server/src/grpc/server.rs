@@ -1148,23 +1148,6 @@ pub async fn run_server<
             .max_encoding_message_size(grpc_cfg.max_response_size),
     );
 
-    // The cold snapshot share stays on the same port: chunked streaming keeps
-    // each message within the shared size limit, and a single listener avoids
-    // extra ops cost for single-node deployments. Split to a dedicated port
-    // only when replication needs network isolation or independent QoS.
-    let router = if let Some(dir) = app_state.server.get_storage().read().cold_snapshot_dir() {
-        tracing::info!("Cold snapshot gRPC share serving from {}", dir.display());
-        router.add_service(
-            crate::grpc::proto::coldsnapshot::cold_snapshot_service_server::ColdSnapshotServiceServer::new(
-                crate::grpc::ColdSnapshotServer::new(dir),
-            )
-            .max_decoding_message_size(grpc_cfg.max_request_size)
-            .max_encoding_message_size(grpc_cfg.max_response_size),
-        )
-    } else {
-        router
-    };
-
     router.serve(addr).await?;
 
     Ok(())

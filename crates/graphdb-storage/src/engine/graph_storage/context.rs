@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::cold::ColdSnapshot;
 use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::config::PropertyGraphConfig;
 use crate::engine::data_store::GraphDataStore;
@@ -114,8 +112,6 @@ struct GraphStorageRuntime {
     background_freeze_running: Arc<AtomicBool>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
-    /// Wall-clock time of the last write per edge label, for cold-tier idle checks
-    last_edge_write: Arc<Mutex<HashMap<LabelId, std::time::Instant>>>,
     /// Last index-GC pass time, for throttling opportunistic GC.
     last_index_gc: Arc<Mutex<Option<std::time::Instant>>>,
 }
@@ -163,7 +159,6 @@ impl GraphStorageRuntime {
             )),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
             last_auto_compact: Arc::new(Mutex::new(None)),
-            last_edge_write: Arc::new(Mutex::new(HashMap::new())),
             last_index_gc: Arc::new(Mutex::new(None)),
         }
     }
@@ -190,7 +185,6 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_edge_write: self.last_edge_write.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }
     }
@@ -216,7 +210,6 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_edge_write: self.last_edge_write.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }
     }
@@ -230,7 +223,6 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_edge_write: self.last_edge_write.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }
     }
@@ -297,9 +289,6 @@ impl GraphStorageRuntime {
     }
 }
 
-/// Per-edge-label list of registered cold snapshots, oldest first.
-pub(crate) type ColdSnapshotMap = HashMap<LabelId, Vec<Arc<ColdSnapshot>>>;
-
 #[derive(Clone)]
 pub struct GraphStorageContext {
     persistent: GraphStoragePersistent,
@@ -319,9 +308,6 @@ pub struct GraphStorageContext {
     /// therefore skips per-statement snapshot unregistration and never
     /// releases the window's write gate.
     auto_commit_window: Option<Arc<AutoCommitBatchWindow>>,
-    /// Read-only cold snapshots indexed by edge label ID, newest last.
-    /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
-    cold_snapshots: Arc<RwLock<ColdSnapshotMap>>,
     checkpoint_scheduler:
         Arc<Mutex<Option<crate::engine::persistence_coordinator::CheckpointScheduler>>>,
 }
@@ -332,7 +318,6 @@ pub struct GraphStorageContext {
 
 mod accessors;
 mod cache_index;
-mod cold_tier;
 mod edge_ops;
 mod freeze;
 pub(crate) mod helpers;
@@ -342,8 +327,6 @@ mod persistence;
 mod query;
 mod schema;
 mod vertex_ops;
-
-pub use cache_index::ExportedEdgeSnapshotRecord;
 
 impl std::fmt::Debug for GraphStorageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -365,7 +348,6 @@ impl GraphStorageContext {
             write_gate_lease: None,
             auto_commit_undo: None,
             auto_commit_window: None,
-            cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
         })
     }
@@ -441,8 +423,11 @@ impl GraphStorageContext {
 
     /// Lazily register an edge partition snapshot if not already registered.
     ///
-    /// Supports both auto-commit write contexts (write timestamp) and
-    /// read-only statement contexts (read timestamp).
+    /// The single-segment edge table needs no per-partition snapshot pin:
+    /// this only tracks statement partition membership so finalize can
+    /// release the statement scope. Supports both auto-commit write
+    /// contexts (write timestamp) and read-only statement contexts (read
+    /// timestamp).
     pub(crate) fn ensure_edge_snapshot_registered(
         &self,
         edge_key: crate::engine::data_store::EdgeTableKey,
@@ -461,37 +446,25 @@ impl GraphStorageContext {
         }
 
         // Register snapshot for this edge partition
-        let Some(timestamp) = operation.snapshot_timestamp() else {
+        let Some(_timestamp) = operation.snapshot_timestamp() else {
             return false;
         };
 
-        let edge_tables = self
-            .persistent
-            .data_store
-            .with_edge_tables(|tables| tables.get(&edge_key).cloned());
-
-        if let Some(edge_table) = edge_tables {
-            edge_table.write().register_snapshot(timestamp);
-
-            // Store the edge key in the registered set (using write lock)
-            {
-                let mut registered = operation.registered_edge_partitions.write();
-                registered.insert(edge_key);
-            }
-
-            // Batch windows own the snapshot lifecycle: record the
-            // registration for window-level unregistration at finalize.
-            if let Some(window) = &self.auto_commit_window {
-                window
-                    .registered_edge_snapshots
-                    .lock()
-                    .push((edge_key, timestamp));
-            }
-
-            true
-        } else {
-            false
+        {
+            let mut registered = operation.registered_edge_partitions.write();
+            registered.insert(edge_key);
         }
+
+        // Batch windows own the snapshot lifecycle: record the
+        // registration for window-level unregistration at finalize.
+        if let Some(window) = &self.auto_commit_window {
+            window
+                .registered_edge_snapshots
+                .lock()
+                .push((edge_key, operation.snapshot_timestamp().unwrap_or(0)));
+        }
+
+        true
     }
 }
 

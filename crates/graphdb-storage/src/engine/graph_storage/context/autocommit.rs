@@ -363,19 +363,10 @@ impl AutoCommitBatchWindow {
             }
         }
 
-        let edge_registrations = std::mem::take(&mut *self.registered_edge_snapshots.lock());
-        if !edge_registrations.is_empty() {
-            let edge_tables = self
-                .base_ctx
-                .persistent
-                .data_store
-                .with_edge_tables(|tables| tables.clone());
-            for (key, ts) in edge_registrations {
-                if let Some(edge_table) = edge_tables.get(&key) {
-                    edge_table.write().unregister_snapshot(ts);
-                }
-            }
-        }
+        // Edge partitions need no per-table unregistration on the
+        // single-segment store; dropping the recorded keys releases the
+        // statement scope.
+        let _edge_registrations = std::mem::take(&mut *self.registered_edge_snapshots.lock());
     }
 }
 

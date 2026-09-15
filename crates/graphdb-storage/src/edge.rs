@@ -5,11 +5,10 @@
 //! ## Components
 //!
 //! - `MutableCsr`: Mutable CSR supporting dynamic edge operations
-//! - `Csr`: Read-only immutable CSR for frozen segments and snapshots
 //! - `SingleMutableCsr`: Optimized mutable CSR for single-edge scenarios
 //! - `CsrVariant`: Enum wrapper for runtime CSR selection (mutable variants only)
 //! - `CsrWithProperties`: Ladybug-style columnar property storage
-//! - `EdgeTable`: Edge table combining out/in CSRs and property storage
+//! - `EdgeStore`: Single-segment edge table combining out/in CSRs and property storage
 //!
 //! ## CSR Type Selection
 //!
@@ -27,7 +26,6 @@
 //! | `None` | - | No edges stored | - |
 
 pub mod bloom_filter;
-pub mod csr;
 pub mod csr_trait;
 pub mod csr_variant;
 pub mod csr_with_properties;
@@ -40,12 +38,10 @@ pub mod property_schema;
 pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
-pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
-pub use edge_table::snapshot::ExportedEdgeSnapshot;
 pub use edge_table::EdgeStore;
 pub use fragmentation_stats::FragmentationStats;
 pub use graphdb_core::types::EdgeStrategy;
@@ -229,9 +225,8 @@ impl EdgeSchema {
 ///
 /// Topology and properties are decoupled: the CSR entry carries only the
 /// topology (endpoint, rank, edge_id, timestamps). Edge properties are
-/// stored in a separate columnar store indexed by `EdgeId` (or by CSR
-/// position for frozen segments) — no `prop_offset` indirection is stored
-/// per edge.
+/// stored in a separate columnar store indexed by `EdgeId` — no
+/// `prop_offset` indirection is stored per edge.
 ///
 /// Use [`Nbr::to_vertex_id`] to reconstruct the full `VertexId` at the API boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,43 +298,6 @@ impl Nbr {
     #[inline]
     pub fn decode_endpoint(&self) -> (VertexId, i64) {
         (self.to_vertex_id(), self.rank)
-    }
-}
-
-/// Compact immutable CSR edge entry (frozen segments).
-///
-/// Like [`Nbr`], stores the neighbor as a packed `(endpoint: u32, rank: i64)`
-/// pair. The `timestamp` field records the creation timestamp (used for
-/// time-travel queries on frozen CSR data).
-///
-/// Topology and properties are decoupled: properties are retrieved via
-/// `EdgeId` lookup or CSR position, not from an inline `prop_offset`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImmutableNbr {
-    pub endpoint: u32,
-    pub rank: i64,
-    pub edge_id: EdgeId,
-    pub timestamp: Timestamp,
-}
-
-impl ImmutableNbr {
-    pub fn new(endpoint: u32, rank: i64, edge_id: EdgeId) -> Self {
-        Self::with_timestamp(endpoint, rank, edge_id, 0)
-    }
-
-    pub fn with_timestamp(endpoint: u32, rank: i64, edge_id: EdgeId, timestamp: Timestamp) -> Self {
-        Self {
-            endpoint,
-            rank,
-            edge_id,
-            timestamp,
-        }
-    }
-
-    /// Reconstruct the full `VertexId` from the packed `(endpoint, rank)` pair.
-    #[inline]
-    pub fn to_vertex_id(&self) -> VertexId {
-        VertexId::edge_endpoint_key(self.endpoint, self.rank)
     }
 }
 

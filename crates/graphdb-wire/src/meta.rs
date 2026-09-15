@@ -177,45 +177,6 @@ pub struct DatabaseStatistics {
     pub avg_latency_ms: f64,
 }
 
-// ── Cold snapshots ────────────────────────────────────────────────────────
-
-/// Metadata describing one registered cold snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColdSnapshotInfo {
-    pub label: u32,
-    #[serde(default)]
-    pub label_name: String,
-    #[serde(default)]
-    pub snapshot_ts: u64,
-    #[serde(default)]
-    pub edge_count: u64,
-    #[serde(default)]
-    pub file_path: String,
-    #[serde(default)]
-    pub file_size: u64,
-    #[serde(default)]
-    pub checksum: u32,
-}
-
-/// Load cold snapshot request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoadSnapshotRequest {
-    pub path: String,
-}
-
-/// Export cold snapshot request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportSnapshotRequest {
-    pub label: u32,
-    pub path: String,
-}
-
-/// Merge cold snapshots request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MergeSnapshotsRequest {
-    pub labels: Vec<u32>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,31 +210,6 @@ mod tests {
         assert!(back.read_only);
         assert!(back.timeout_seconds.is_none());
         assert!(back.isolation_level.is_none());
-    }
-
-    #[test]
-    fn cold_snapshot_info_roundtrip() {
-        let info = ColdSnapshotInfo {
-            label: 1,
-            label_name: "person".to_string(),
-            snapshot_ts: 100,
-            edge_count: 5,
-            file_path: "/tmp/x.lkcs".to_string(),
-            file_size: 1024,
-            checksum: 0xDEAD,
-        };
-        let json = serde_json::to_string(&info).unwrap();
-        let back: ColdSnapshotInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.label, 1);
-        assert_eq!(back.edge_count, 5);
-        assert_eq!(back.checksum, 0xDEAD);
-    }
-
-    #[test]
-    fn cold_snapshot_info_missing_fields_default() {
-        let back: ColdSnapshotInfo = serde_json::from_str(r#"{"label": 3}"#).unwrap();
-        assert_eq!(back.label, 3);
-        assert_eq!(back.edge_count, 0);
     }
 
     #[test]
@@ -319,21 +255,6 @@ mod tests {
         let back: QueryStatistics = serde_json::from_str(&json).unwrap();
         assert_eq!(back.total_queries, 10);
         assert_eq!(back.query_types.match_queries, 4);
-    }
-
-    #[test]
-    fn snapshot_requests_roundtrip() {
-        let load = LoadSnapshotRequest {
-            path: "/tmp/a.lkcs".to_string(),
-        };
-        let back: LoadSnapshotRequest =
-            serde_json::from_str(&serde_json::to_string(&load).unwrap()).unwrap();
-        assert_eq!(back.path, "/tmp/a.lkcs");
-
-        let merge = MergeSnapshotsRequest { labels: vec![1, 2] };
-        let back: MergeSnapshotsRequest =
-            serde_json::from_str(&serde_json::to_string(&merge).unwrap()).unwrap();
-        assert_eq!(back.labels, vec![1, 2]);
     }
 
     #[test]

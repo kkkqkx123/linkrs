@@ -8,17 +8,15 @@ pub(crate) mod storage_client;
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::engine::background_freeze::FreezeStats;
-use crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::schema::{LabelVersionHistory, PropertyChange};
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
 use graphdb_core::types::TransactionId;
 use graphdb_core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
-    PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+    PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
-use std::path::Path;
 use std::sync::Arc;
 
 pub use catalog_store::CatalogStore;
@@ -32,12 +30,11 @@ pub use storage_client::StorageClient;
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
 
-    /// Monotonic physical layout version of the vertex/edge segment layout.
+    /// Monotonic physical layout version of the vertex/edge layout.
     ///
-    /// Bumped on segment allocation, merge, compaction, eviction, restore,
-    /// and cold-snapshot load/merge. `0` means the implementation does not
-    /// track a layout version (default) — consumers then cannot use it to
-    /// invalidate cached plans.
+    /// Bumped on compaction, restore, and remap. `0` means the
+    /// implementation does not track a layout version (default) —
+    /// consumers then cannot use it to invalidate cached plans.
     fn layout_version(&self) -> u64 {
         0
     }
@@ -138,8 +135,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     /// Lightweight batch neighbor read used by de-materialized expand hops
     /// (`id_only`/`count_only`).  Resolves the edge-type schema once for the
     /// batch and reads MVCC neighbors directly from the CSR, skipping
-    /// `EdgeRecord` materialization and per-edge property decoding.  Cold
-    /// snapshots are merged with the same dedup semantics as [`get_node_edges`].
+    /// `EdgeRecord` materialization and per-edge property decoding.
     ///
     /// Returns the external neighbor `VertexId`s per input source id, in input
     /// order.
@@ -152,7 +148,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<Vec<VertexId>>, StorageError>;
 
     /// Batch out-degree read for count-only expand tails.  Counts distinct
-    /// edges (deduped across hot and cold) per source id, in input order.
+    /// edges per source id, in input order.
     fn out_degree_batch(
         &self,
         space: &str,
@@ -769,50 +765,10 @@ pub trait StorageGcOps: Send + Sync + std::fmt::Debug {
     fn stop_index_gc(&self);
 }
 
-/// Snapshot export and background freeze operations.
+/// Background freeze operations.
 pub trait StorageSnapshotOps: Send + Sync + std::fmt::Debug {
-    fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>>;
     fn get_freeze_stats(&self) -> Option<FreezeStats>;
     fn trigger_background_freeze(&self) -> StorageResult<()>;
-
-    // ── ColdSnapshot management ──
-
-    /// List all registered cold snapshots with their metadata.
-    fn list_cold_snapshots(&self) -> StorageResult<Vec<ColdSnapshotInfo>>;
-
-    /// Register a cold snapshot from a `.lkcs` file.
-    fn load_cold_snapshot(&self, path: &Path) -> StorageResult<ColdSnapshotInfo>;
-
-    /// Drop all cold snapshots of an edge label from the registry. The
-    /// underlying `.lkcs` files are left untouched.
-    fn remove_cold_snapshot(&self, label: LabelId) -> StorageResult<()>;
-
-    /// Re-export the most recent cold snapshot of `label` to `path`.
-    fn export_cold_snapshot(&self, label: LabelId, path: &Path) -> StorageResult<ColdSnapshotInfo>;
-
-    /// Consolidate every registered version of each given label into a
-    /// single snapshot at the newest timestamp, replacing the label's shelf.
-    /// Returns the merged snapshots' metadata.
-    fn merge_cold_snapshots(&self, labels: &[LabelId]) -> StorageResult<Vec<ColdSnapshotInfo>>;
-
-    /// Resolve the directory that cold snapshots are served from, when the
-    /// engine is configured with one. Used to expose `.lkcs` files over the
-    /// gRPC snapshot share.
-    fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf> {
-        None
-    }
-}
-
-/// Metadata describing one registered cold snapshot.
-#[derive(Debug, Clone)]
-pub struct ColdSnapshotInfo {
-    pub label: LabelId,
-    pub label_name: String,
-    pub snapshot_ts: Timestamp,
-    pub edge_count: u64,
-    pub file_path: String,
-    pub file_size: u64,
-    pub checksum: u32,
 }
 
 /// Storing statistical information

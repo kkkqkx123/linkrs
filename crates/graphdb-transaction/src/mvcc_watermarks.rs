@@ -39,10 +39,6 @@ pub struct MvccWatermarks {
     /// have been incorporated into a checkpoint and can be reclaimed.
     /// `CommitLsn::ZERO` disables WAL reclaim until a checkpoint publishes.
     pub wal_reclaim_lsn: CommitLsn,
-    /// Retention frontier configured on the VersionManager. Values older than
-    /// this remain reclaimable even if they predate `oldest_active_snapshot`;
-    /// they bound history that must stay open for explicit time-travel reads.
-    pub retention_frontier: Timestamp,
 }
 
 impl MvccWatermarks {
@@ -57,20 +53,17 @@ impl MvccWatermarks {
     ) -> Self {
         let oldest_active_snapshot = version_manager.snapshot_tracker().cleanup_threshold();
         let last_published_commit = version_manager.read_timestamp();
-        let retention_frontier = version_manager.retention_frontier();
         Self {
             oldest_active_snapshot,
             last_published_commit,
             checkpoint_snapshot,
             wal_reclaim_lsn: wal_reclaim_lsn.unwrap_or(CommitLsn::ZERO),
-            retention_frontier,
         }
     }
 
     pub fn from_parts(
         oldest_active_snapshot: Timestamp,
         last_published_commit: Timestamp,
-        retention_frontier: Timestamp,
         checkpoint_snapshot: Option<Timestamp>,
         wal_reclaim_lsn: CommitLsn,
     ) -> Self {
@@ -79,7 +72,6 @@ impl MvccWatermarks {
             last_published_commit,
             checkpoint_snapshot,
             wal_reclaim_lsn,
-            retention_frontier,
         }
     }
 
@@ -89,15 +81,10 @@ impl MvccWatermarks {
     /// are reclaimable.  Callers must apply any configured margin
     /// themselves so the policy is uniform across table types.
     pub fn safe_gc_timestamp(&self) -> Timestamp {
-        let active_bound = if self.oldest_active_snapshot == NO_ACTIVE_SNAPSHOT {
+        if self.oldest_active_snapshot == NO_ACTIVE_SNAPSHOT {
             self.last_published_commit
         } else {
             self.oldest_active_snapshot
-        };
-        if self.retention_frontier == 0 {
-            active_bound
-        } else {
-            active_bound.min(self.retention_frontier)
         }
     }
 
@@ -141,7 +128,7 @@ pub fn capture_watermarks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc::{VersionManager, VersionManagerConfig};
+    use crate::mvcc::VersionManager;
 
     #[test]
     fn safe_gc_with_no_active_snapshot_uses_last_published() {
@@ -165,24 +152,8 @@ mod tests {
     }
 
     #[test]
-    fn safe_gc_respects_retention_frontier() {
-        let vm = VersionManager::with_config(
-            VersionManagerConfig::default().with_retention_frontier(10),
-        );
-        vm.init_ts(20);
-        // No active snapshot -> active_bound = 20, retention = 10 -> min = 10
-        let wm = MvccWatermarks::capture(&vm, None, None);
-        assert_eq!(wm.safe_gc_timestamp(), 10);
-        // Insert a snapshot at 15 -> active_bound = 15, retention = 10 -> min = 10
-        let snap = vm.acquire_read_timestamp_at(15).unwrap();
-        let wm2 = MvccWatermarks::capture(&vm, None, None);
-        assert_eq!(wm2.safe_gc_timestamp(), 10);
-        vm.release_read_timestamp_at(snap);
-    }
-
-    #[test]
     fn watermark_margin_applied() {
-        let wm = MvccWatermarks::from_parts(100, 100, 0, None, CommitLsn::ZERO);
+        let wm = MvccWatermarks::from_parts(100, 100, None, CommitLsn::ZERO);
         assert_eq!(wm.safe_gc_timestamp_with_margin(1), 99);
         assert_eq!(wm.safe_gc_timestamp_with_margin(200), 0);
     }
@@ -190,10 +161,10 @@ mod tests {
     #[test]
     fn wal_reclaim_requires_checkpoint() {
         let wm_no_cp =
-            MvccWatermarks::from_parts(NO_ACTIVE_SNAPSHOT, 10, 0, None, CommitLsn::new(100));
+            MvccWatermarks::from_parts(NO_ACTIVE_SNAPSHOT, 10, None, CommitLsn::new(100));
         assert!(!wm_no_cp.can_reclaim_wal());
         let wm_with_cp =
-            MvccWatermarks::from_parts(NO_ACTIVE_SNAPSHOT, 10, 0, Some(10), CommitLsn::new(100));
+            MvccWatermarks::from_parts(NO_ACTIVE_SNAPSHOT, 10, Some(10), CommitLsn::new(100));
         assert!(wm_with_cp.can_reclaim_wal());
     }
 }

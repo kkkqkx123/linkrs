@@ -9,11 +9,14 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
-        TransactionId::from(1),
-        10,
-        false,
-    ));
+    let mut writer =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            TransactionId::from(1),
+            10,
+            Some(10),
+            false,
+            false,
+        ));
     writer
         .insert_vertex(
             "test_space",
@@ -33,11 +36,15 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
     let handles: Vec<_> = (0..8)
         .map(|id| {
             let barrier = barrier.clone();
-            let bound = storage.bind_operation_context(StorageOperationContext::transaction(
-                TransactionId::from(id + 100),
-                10,
-                true,
-            ));
+            let bound = storage.bind_operation_context(
+                StorageOperationContext::transaction_with_timestamps(
+                    TransactionId::from(id + 100),
+                    10,
+                    None,
+                    true,
+                    false,
+                ),
+            );
             std::thread::spawn(move || {
                 barrier.wait();
                 let context = bound
@@ -67,11 +74,14 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let mut initial_writer = storage.bind_operation_context(StorageOperationContext::transaction(
-        TransactionId::from(1),
-        10,
-        false,
-    ));
+    let mut initial_writer =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            TransactionId::from(1),
+            10,
+            Some(10),
+            false,
+            false,
+        ));
     initial_writer
         .insert_vertex(
             "test_space",
@@ -82,20 +92,26 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
         )
         .expect("Failed to insert initial vertex");
 
-    let reader = storage.bind_operation_context(StorageOperationContext::transaction(
-        TransactionId::from(2),
-        10,
-        true,
-    ));
+    let reader =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            TransactionId::from(2),
+            10,
+            None,
+            true,
+            false,
+        ));
     let mut cursor = reader
         .create_vertex_cursor("test_space", &ScanOptions::default())
         .expect("Failed to create cursor");
 
-    let mut later_writer = storage.bind_operation_context(StorageOperationContext::transaction(
-        TransactionId::from(3),
-        20,
-        false,
-    ));
+    let mut later_writer =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            TransactionId::from(3),
+            20,
+            Some(20),
+            false,
+            false,
+        ));
     later_writer
         .insert_vertex(
             "test_space",
@@ -244,11 +260,14 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
 
     // Insert 200 vertices with ages 1..=200.  The snapshot should
     // capture the true global min/max regardless of any sample window.
-    let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
-        graphdb_core::types::TransactionId::from(1),
-        10,
-        false,
-    ));
+    let mut writer =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            graphdb_core::types::TransactionId::from(1),
+            10,
+            Some(10),
+            false,
+            false,
+        ));
     for i in 1..=200i64 {
         writer
             .insert_vertex(
@@ -305,11 +324,14 @@ fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
     // Insert two vertices and two edges.  The edge columnar store is
     // not populated until flush/compaction, so the snapshot should
     // gracefully return None rather than panicking.
-    let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
-        graphdb_core::types::TransactionId::from(1),
-        10,
-        false,
-    ));
+    let mut writer =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            graphdb_core::types::TransactionId::from(1),
+            10,
+            Some(10),
+            false,
+            false,
+        ));
     writer
         .insert_vertex(
             "test_space",

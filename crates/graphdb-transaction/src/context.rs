@@ -38,8 +38,8 @@ pub struct TransactionContext {
     /// Read visibility is ordered by this timestamp, never by
     /// `start_timestamp`: see `VersionManager::allocate_commit_timestamp`.
     commit_timestamp: AtomicU64,
-    /// Snapshot timestamp for time-travel reads (None = use start_timestamp)
-    snapshot_timestamp: RwLock<Option<Timestamp>>,
+    /// Snapshot timestamp for ReadCommitted statement refresh (None = use start_timestamp)
+    refreshed_read_ts: RwLock<Option<Timestamp>>,
     /// Start time (for timeout tracking)
     pub start_time: Instant,
     /// Timeout duration
@@ -133,7 +133,7 @@ impl fmt::Debug for TransactionContext {
             .field("txn_type", &self.txn_type)
             .field("state", &self.state.load())
             .field("start_timestamp", &self.start_timestamp)
-            .field("snapshot_timestamp", &self.effective_snapshot_timestamp())
+            .field("refreshed_read_ts", &self.effective_snapshot_timestamp())
             .field("read_only", &self.read_only)
             .field("auto_commit", &self.auto_commit)
             .field("isolation_level", &self.isolation_level)
@@ -211,7 +211,7 @@ impl TransactionContext {
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
             commit_timestamp: AtomicU64::new(0),
-            snapshot_timestamp: RwLock::new(None),
+            refreshed_read_ts: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: false,
@@ -267,7 +267,7 @@ impl TransactionContext {
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
             commit_timestamp: AtomicU64::new(0),
-            snapshot_timestamp: RwLock::new(None),
+            refreshed_read_ts: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: true,
@@ -352,14 +352,20 @@ impl TransactionContext {
 
     /// Get the effective snapshot timestamp for reads
     pub fn effective_snapshot_timestamp(&self) -> Timestamp {
-        self.snapshot_timestamp
+        self.refreshed_read_ts
             .read()
+            .map(|refreshed| refreshed.max(self.start_timestamp))
             .unwrap_or(self.start_timestamp)
     }
 
-    /// Set the snapshot timestamp for time-travel reads
+    /// Refresh the ReadCommitted statement snapshot
+    pub fn set_refreshed_read_ts(&self, ts: Timestamp) {
+        *self.refreshed_read_ts.write() = Some(ts);
+    }
+
+    /// Set the snapshot timestamp for statement refresh
     pub fn set_snapshot_timestamp(&self, ts: Timestamp) {
-        *self.snapshot_timestamp.write() = Some(ts);
+        self.set_refreshed_read_ts(ts);
     }
 
     /// Drain pending budget warnings queued during mutation recording.

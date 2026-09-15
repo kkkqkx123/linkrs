@@ -3,18 +3,17 @@ use graphdb_core::types::{CompactConfig, LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
     /// Compact deleted vertices and propagate old-to-new internal ID
-    /// mappings into edge tables and cold snapshots.
+    /// mappings into edge tables.
     ///
     /// Shared by manual compaction transactions and the background
     /// maintenance thread (auto-compaction). Deletes at or before `ts` are
     /// reclaimed; callers must pass a safe timestamp (e.g. the snapshot
-    /// tracker cleanup threshold) to preserve time-travel visibility.
+    /// tracker cleanup threshold) to preserve snapshot visibility.
     ///
     /// Returns the number of removed vertices. Compaction is an in-memory
     /// re-layout: it writes no WAL entries, and crash recovery replays
@@ -104,34 +103,6 @@ impl GraphStorageContext {
                 .map(|(key, _)| key)
                 .collect();
 
-            // Cold snapshots hold CSR rows/neighbors in the same internal ID
-            // spaces; remap in memory and rewrite the backing .lkcs file so
-            // queries stay consistent across reloads. The file is a
-            // rebuildable cache, so a persist failure only degrades to a
-            // stale file (logged, not fatal).
-            let mut cold_snapshots = self.cold_snapshots().write();
-            for snapshots in cold_snapshots.values_mut() {
-                for snapshot in snapshots.iter_mut() {
-                    let schema = snapshot.schema();
-                    let src_label = schema.src_label;
-                    let dst_label = schema.dst_label;
-                    let src_mapping = mapping_for(src_label);
-                    let dst_mapping = mapping_for(dst_label);
-                    if src_mapping.is_none() && dst_mapping.is_none() {
-                        continue;
-                    }
-                    Arc::make_mut(snapshot).remap_vertex_ids(src_mapping, dst_mapping)?;
-                    if let Err(e) = snapshot.persist() {
-                        log::warn!(
-                            "Failed to persist cold snapshot (label={}) after remap: {}",
-                            src_label,
-                            e
-                        );
-                    }
-                }
-            }
-            drop(cold_snapshots);
-
             log::info!(
                 "Propagated vertex compaction remap to {} edge table(s), {} compacted label(s)",
                 remapped_edge_keys.len(),
@@ -179,13 +150,9 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .for_all_edge_partitions_mut(|key, table| {
-                let removed = if config.enable_structure_compaction {
-                    table.compact_and_freeze(ts, config)
-                } else {
-                    table.freeze_csr_only(ts);
-                    table.compact_properties(ts);
-                    0
-                };
+                let reserve_ratio = config.compute_reserve_ratio(table.edge_count() as usize, 0);
+                let removed = table.compact_csr_only(ts, reserve_ratio);
+                table.compact_properties(cleanup_ts);
                 Ok((key, removed))
             })?;
 
@@ -222,12 +189,6 @@ impl GraphStorageContext {
 
         self.persistent.cache_manager.clear_cache();
 
-        if let Ok(freed) = self.trigger_segment_eviction() {
-            if freed > 0 {
-                log::info!("Segment eviction during maintenance freed {} bytes", freed);
-            }
-        }
-
         match self.trigger_background_freeze() {
             Ok(()) => {
                 if let Some(stats) = self.get_freeze_stats() {
@@ -243,77 +204,21 @@ impl GraphStorageContext {
             }
         }
 
-        let (adaptive_merged, lsm_merged) = self
-            .persistent
+        self.persistent
             .data_store
             .for_all_edge_partitions_mut(|_key, table| {
-                let mut adaptive_here = 0;
-                let mut lsm_here = 0;
-
-                if self.persistent.config.merge_config.enable_adaptive_merge {
-                    adaptive_here += table.merge_segments_adaptive(
-                        ts,
-                        self.persistent.config.merge_config.max_segment_age,
-                        self.persistent.config.merge_config.deletion_threshold,
-                        self.persistent.config.merge_config.max_segment_size_bytes,
-                    );
-                }
-                if self.persistent.config.merge_config.enable_lsm_tiering {
-                    lsm_here += table.merge_segments_lsm_tiered(ts);
-                }
-
-                let stats = table.merge_stats();
-                log::debug!(
-                    "Merge stats - segments: {}/{}, total_ops: {}, avg_segs_per_op: {:.1}, avg_edges_per_op: {:.0}, avg_time_ms: {:.2}, pressure: {}",
-                    stats.current_segment_count,
-                    stats.max_segment_count,
-                    stats.total_merge_operations,
-                    stats.avg_segments_per_merge(),
-                    stats.avg_edges_per_merge(),
-                    stats.avg_merge_time_ms(),
-                    stats.segment_count_pressure()
-                );
-
                 let del_stats = table.deletion_stats();
                 if del_stats.is_significant() {
                     log::debug!(
-                        "EdgeTable[{}] deletion stats: {:.1}% deleted ({} / {} frozen edges)",
+                        "EdgeTable[{}] deletion stats: {:.1}% deleted ({} / {} live edges)",
                         table.label(),
                         del_stats.deletion_percentage(),
                         del_stats.total_deleted_edges,
-                        del_stats.total_frozen_edges,
+                        del_stats.total_live_edges,
                     );
                 }
-
-                // Debug: Validate segment integrity
-                if log::log_enabled!(log::Level::Debug) {
-                    let valid_count = table.validate_segment_integrity();
-                    let total_segments = table.segment_versions().len();
-                    if valid_count != total_segments {
-                        log::warn!(
-                            "Segment integrity check: {}/{} segments valid",
-                            valid_count,
-                            total_segments
-                        );
-                    }
-                }
-                Ok((adaptive_here, lsm_here))
-            })?
-            .into_iter()
-            .fold((0, 0), |acc, res| (acc.0 + res.0, acc.1 + res.1));
-
-        if adaptive_merged > 0 {
-            log::info!(
-                "Adaptive merge during compaction: {} segments merged",
-                adaptive_merged
-            );
-        }
-        if lsm_merged > 0 {
-            log::info!(
-                "LSM tiered merge during compaction: {} segments merged",
-                lsm_merged
-            );
-        }
+                Ok(())
+            })?;
 
         // Log freeze configuration for monitoring
         if let Some(ref manager) = self.runtime.background_freeze_manager {
@@ -333,9 +238,9 @@ impl GraphStorageContext {
             cleanup_ts
         );
 
-        // Vertex/edge compaction, segment merges, and eviction all changed
-        // the physical layout: bump the monotonic layout version so cached
-        // plans that assumed the previous layout are invalidated.
+        // Vertex/edge compaction changed the physical layout: bump the
+        // monotonic layout version so cached plans that assumed the
+        // previous layout are invalidated.
         self.bump_layout_version();
 
         Ok(())

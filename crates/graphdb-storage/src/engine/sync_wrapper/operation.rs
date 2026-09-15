@@ -155,20 +155,10 @@ impl<S: crate::client::StorageClient + crate::client::StorageSnapshotOps + 'stat
     crate::client::StorageSnapshotOps for SyncWrapper<S>
 {
     forward_methods!(inner;
-        fn export_snapshot(&self, ts: graphdb_core::types::Timestamp) -> graphdb_core::StorageResult<Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
         fn get_freeze_stats(&self) -> Option<crate::engine::background_freeze::FreezeStats>;
     );
 
     forward_methods!(inner;
         fn trigger_background_freeze(&self) -> graphdb_core::StorageResult<()>;
-    );
-
-    forward_methods!(inner;
-        fn list_cold_snapshots(&self) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
-        fn load_cold_snapshot(&self, path: &std::path::Path) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo>;
-        fn remove_cold_snapshot(&self, label: graphdb_core::types::LabelId) -> graphdb_core::StorageResult<()>;
-        fn export_cold_snapshot(&self, label: graphdb_core::types::LabelId, path: &std::path::Path) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo>;
-        fn merge_cold_snapshots(&self, labels: &[graphdb_core::types::LabelId]) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
-        fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf>;
     );
 }

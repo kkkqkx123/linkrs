@@ -1,19 +1,7 @@
-use crate::engine::graph_storage::context::helpers;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::endpoint_label_id;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
-
-/// Resolve a VertexId to its internal u32 CSR index via vertex tables.
-pub(crate) fn vertex_id_to_internal(
-    ctx: &GraphStorageContext,
-    label: LabelId,
-    vid: &VertexId,
-    ts: Timestamp,
-) -> Option<u32> {
-    ctx.data_store()
-        .with_vertex_tables(|tables| helpers::resolve_internal_id(ctx, tables, label, *vid, ts))
-}
 
 pub(crate) fn vid_to_string(vid: &VertexId) -> String {
     if let Some(s) = vid.as_str() {
@@ -77,15 +65,6 @@ pub(crate) fn record_schema_read(ctx: &GraphStorageContext, space: &str) {
     if let Some(recorder) = ctx.mutation_recorder() {
         recorder.record_schema_read(space);
     }
-}
-
-/// Get the minimum snapshot timestamp for a cold snapshot, or u64::MAX if none.
-pub(crate) fn snapshot_min_ts(ctx: &GraphStorageContext, label: LabelId) -> Timestamp {
-    ctx.cold_snapshots()
-        .read()
-        .get(&label)
-        .and_then(|snapshots| snapshots.iter().map(|s| s.snapshot_ts()).min())
-        .unwrap_or(u64::MAX)
 }
 
 /// Resolve an internal vertex-table id to its external `VertexId` without the

@@ -1,10 +1,7 @@
-use std::collections::HashSet;
-
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::edge_record_to_edge;
 use graphdb_core::{Edge, StorageResult, Value};
 
-use crate::engine::graph_storage::reader::cold::*;
 use crate::engine::graph_storage::reader::utils::*;
 
 /// Enable the per-table edge property index for `edge_type`.
@@ -24,11 +21,11 @@ pub(crate) fn enable_edge_property_index(
             .with_edge_tables(|tables| -> StorageResult<()> {
                 let matching: Vec<_> = tables
                     .values()
-                    .filter(|arc| arc.read().0.label() == edge_label)
+                    .filter(|arc| arc.read().label() == edge_label)
                     .cloned()
                     .collect();
                 for arc in matching {
-                    arc.write().0.enable_property_index(pool_capacity)?;
+                    arc.write().enable_property_index(pool_capacity)?;
                 }
                 Ok(())
             })?;
@@ -50,8 +47,8 @@ pub(crate) fn has_edge_property_index(
         Ok(ctx.data_store().with_edge_tables(|tables| {
             tables
                 .values()
-                .filter(|arc| arc.read().0.label() == edge_label)
-                .any(|arc| arc.read().0.has_property_index())
+                .filter(|arc| arc.read().label() == edge_label)
+                .any(|arc| arc.read().has_property_index())
         }))
     }
 }
@@ -71,9 +68,9 @@ pub(crate) fn disable_edge_property_index(
             .with_edge_tables(|tables| -> StorageResult<()> {
                 for arc in tables
                     .values()
-                    .filter(|arc| arc.read().0.label() == edge_label)
+                    .filter(|arc| arc.read().label() == edge_label)
                 {
-                    arc.write().0.disable_property_index();
+                    arc.write().disable_property_index();
                 }
                 Ok(())
             })?;
@@ -142,7 +139,7 @@ pub(crate) fn lookup_edges_by_property_range(
         ctx.data_store().with_edge_tables(|tables| {
             let matching: Vec<_> = tables
                 .values()
-                .filter(|arc| arc.read().0.label() == edge_label)
+                .filter(|arc| arc.read().label() == edge_label)
                 .cloned()
                 .collect();
             let mut records = Vec::new();
@@ -150,10 +147,9 @@ pub(crate) fn lookup_edges_by_property_range(
                 let table = arc.read();
                 records.extend(
                     table
-                        .0
                         .lookup_edges_by_property_range(prop_name, &value_lower, &value_upper)
                         .into_iter()
-                        .filter_map(|(src, dst, rank)| table.0.get_edge(src, dst, rank, ts)),
+                        .filter_map(|(src, dst, rank)| table.get_edge(src, dst, rank, ts)),
                 );
             }
             records
@@ -191,39 +187,6 @@ pub(crate) fn lookup_edges_by_property_range(
             &src_external,
             &dst_external,
         ));
-    }
-
-    // Cold snapshot property index: same encoded bounds as the hot index.
-    // Dedup happens in internal-ID space (the CSR row indices shared by the
-    // hot lookup records and the cold index entries).
-    let cold = ctx.cold_snapshots().read();
-    if let Some(snapshots) = cold.get(&edge_label) {
-        let mut seen: HashSet<(u32, u32, i64)> = records
-            .iter()
-            .map(|r| {
-                (
-                    r.src_vid.as_int64().unwrap_or(0) as u32,
-                    r.dst_vid.as_int64().unwrap_or(0) as u32,
-                    r.rank,
-                )
-            })
-            .collect();
-        for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
-            let Some(index) = snapshot.property_index() else {
-                continue;
-            };
-            if !index.has_property(prop_name) {
-                continue;
-            }
-            for entry in index.lookup(prop_name, &value_lower, &value_upper) {
-                let key = (entry.src_internal, entry.dst_internal, entry.rank);
-                if seen.insert(key) {
-                    edges.push(cold_index_entry_to_edge(
-                        ctx, snapshot, &entry, edge_type, src_label, dst_label, ts,
-                    ));
-                }
-            }
-        }
     }
 
     Ok(edges)

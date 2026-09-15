@@ -1,6 +1,5 @@
 //! Property Graph Configuration
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::compression::CompressionType;
@@ -195,40 +194,10 @@ pub enum FreezeStrategyType {
     LSMTiered,
 }
 
-/// Configuration for adaptive segment merging
-#[derive(Debug, Clone)]
-pub struct MergeConfig {
-    /// Enable adaptive merge during compaction
-    pub enable_adaptive_merge: bool,
-    /// Maximum age (in timestamp units) before a segment should be merged
-    /// 0 = never merge due to age, Timestamp::MAX = always merge
-    pub max_segment_age: Timestamp,
-    /// Deletion ratio threshold for merge priority (0.0-1.0)
-    /// Segments with deletion ratio > this threshold get higher merge priority
-    pub deletion_threshold: f64,
-    /// Maximum size for a single segment before forcing merge (in bytes)
-    pub max_segment_size_bytes: usize,
-    /// Enable LSM-style tiered merging (hierarchical levels)
-    pub enable_lsm_tiering: bool,
-}
-
-impl Default for MergeConfig {
-    fn default() -> Self {
-        Self {
-            enable_adaptive_merge: true,
-            max_segment_age: 1000, // Merge segments older than 1000 timestamp units
-            deletion_threshold: 0.3, // Prioritize segments with >30% deletions
-            max_segment_size_bytes: 8 * 1024 * 1024, // 8MB per direction
-            enable_lsm_tiering: false, // Disabled by default, can be enabled for long-running systems
-        }
-    }
-}
-
 /// Unified Freeze Configuration
 ///
 /// Consolidates all Freeze-related settings in one place:
 /// - Decision thresholds (BackgroundFreezeConfig)
-/// - Merge strategy and parameters (MergeConfig)
 /// - Strategy selection
 #[derive(Debug, Clone)]
 pub struct FreezeConfig {
@@ -404,114 +373,6 @@ impl Default for FreezeConfig {
     }
 }
 
-/// Automatic cold-hot tiering of edge data.
-///
-/// When enabled, edge tables that exceed `trigger_row_count` edges and have
-/// seen no writes for `trigger_idle_seconds` are exported to `.lkcs` files
-/// and the frozen rows are evicted from the hot store (except the
-/// `preserve_recent_edges` newest ones). An empty `snapshot_dir` falls back
-/// to `{db_root}/cold_snapshots`.
-#[derive(Debug, Clone)]
-pub struct ColdTierConfig {
-    pub enabled: bool,
-    /// Freeze a label when its total live edge count exceeds this.
-    pub trigger_row_count: u64,
-    /// Freeze only labels idle (no writes) for at least this many seconds.
-    pub trigger_idle_seconds: u64,
-    /// Maximum number of snapshots kept per label; the oldest are dropped.
-    pub max_cold_snapshots_per_label: usize,
-    /// Number of newest edges that stay in the hot store after a freeze.
-    pub preserve_recent_edges: u64,
-    /// Directory for `.lkcs` files. Empty = `{db_root}/cold_snapshots`.
-    pub snapshot_dir: PathBuf,
-}
-
-impl Default for ColdTierConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            trigger_row_count: 1_000_000,
-            trigger_idle_seconds: 3600,
-            max_cold_snapshots_per_label: 8,
-            preserve_recent_edges: 10_000,
-            snapshot_dir: PathBuf::new(),
-        }
-    }
-}
-
-impl ColdTierConfig {
-    pub fn validate(&self) -> Result<(), StorageError> {
-        if self.trigger_row_count == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "cold_tier trigger_row_count must be > 0",
-            ));
-        }
-        if self.max_cold_snapshots_per_label == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "cold_tier max_cold_snapshots_per_label must be > 0",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// LSM-style tiered storage levels for segments
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LSMSegmentLevel {
-    /// Level 0: Small segments from freeze (< 1MB)
-    L0,
-    /// Level 1: Medium segments (1-8MB)
-    L1,
-    /// Level 2: Large segments (8-32MB)
-    L2,
-    /// Level 3+: Very large segments (> 32MB)
-    L3Plus,
-}
-
-impl LSMSegmentLevel {
-    /// Get the size range for this level (min, max) in bytes
-    pub fn size_range(&self) -> (usize, usize) {
-        match self {
-            LSMSegmentLevel::L0 => (0, 1024 * 1024), // 0-1MB
-            LSMSegmentLevel::L1 => (1024 * 1024, 8 * 1024 * 1024), // 1-8MB
-            LSMSegmentLevel::L2 => (8 * 1024 * 1024, 32 * 1024 * 1024), // 8-32MB
-            LSMSegmentLevel::L3Plus => (32 * 1024 * 1024, usize::MAX), // 32MB+
-        }
-    }
-
-    /// Determine level for a given segment size
-    pub fn for_size(size: usize) -> Self {
-        match size {
-            0..=1_048_575 => LSMSegmentLevel::L0,
-            1_048_576..=8_388_607 => LSMSegmentLevel::L1,
-            8_388_608..=33_554_431 => LSMSegmentLevel::L2,
-            _ => LSMSegmentLevel::L3Plus,
-        }
-    }
-
-    /// Get merge target size for this level (where it should aim to stay below)
-    pub fn merge_target_size(&self) -> usize {
-        match self {
-            LSMSegmentLevel::L0 => 1024 * 1024,           // Target < 1MB
-            LSMSegmentLevel::L1 => 8 * 1024 * 1024,       // Target < 8MB
-            LSMSegmentLevel::L2 => 32 * 1024 * 1024,      // Target < 32MB
-            LSMSegmentLevel::L3Plus => 128 * 1024 * 1024, // Target < 128MB
-        }
-    }
-
-    /// Get number of segments that should trigger cross-level merge
-    pub fn merge_trigger_count(&self) -> usize {
-        match self {
-            LSMSegmentLevel::L0 => 4,     // Merge when 4+ L0 segments
-            LSMSegmentLevel::L1 => 3,     // Merge when 3+ L1 segments
-            LSMSegmentLevel::L2 => 2,     // Merge when 2+ L2 segments
-            LSMSegmentLevel::L3Plus => 2, // Merge when 2+ L3+ segments
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct PropertyGraphConfig {
     pub enable_cache: bool,
@@ -519,13 +380,10 @@ pub struct PropertyGraphConfig {
     pub flush_config: FlushConfig,
     pub resources: ResourceConfig,
     pub freeze: FreezeConfig,
-    pub merge_config: MergeConfig,
     /// Automatic background vertex compaction (ID hole reclamation)
     pub auto_compact: AutoCompactConfig,
     /// Hash partitions per vertex label table
     pub vertex_table_shards: usize,
-    /// Automatic cold-hot tiering of edge data
-    pub cold_tier: ColdTierConfig,
     /// Safety margin subtracted from the GC watermark timestamp.
     /// Higher values are more conservative (keep more history).
     pub gc_safety_margin: Timestamp,
@@ -539,10 +397,8 @@ impl Default for PropertyGraphConfig {
             flush_config: FlushConfig::default(),
             resources: ResourceConfig::default(),
             freeze: FreezeConfig::default(),
-            merge_config: MergeConfig::default(),
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
-            cold_tier: ColdTierConfig::default(),
             gc_safety_margin: 1,
         }
     }
@@ -564,14 +420,8 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             freeze: freeze.clone(),
-            merge_config: MergeConfig {
-                enable_adaptive_merge: false,
-                enable_lsm_tiering: false,
-                ..Default::default()
-            },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
-            cold_tier: ColdTierConfig::default(),
             gc_safety_margin: 1,
         }
     }
@@ -587,16 +437,8 @@ impl PropertyGraphConfig {
             flush_config: FlushConfig::default(),
             resources: ResourceConfig::default(),
             freeze: freeze.clone(),
-            merge_config: MergeConfig {
-                enable_adaptive_merge: true,
-                enable_lsm_tiering: false,
-                max_segment_age: freeze.max_segment_age,
-                deletion_threshold: freeze.deletion_threshold,
-                ..Default::default()
-            },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
-            cold_tier: ColdTierConfig::default(),
             gc_safety_margin: 1,
         }
     }
@@ -616,16 +458,8 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             freeze: freeze.clone(),
-            merge_config: MergeConfig {
-                enable_adaptive_merge: true,
-                enable_lsm_tiering: true,
-                max_segment_age: freeze.max_segment_age,
-                deletion_threshold: freeze.deletion_threshold,
-                ..Default::default()
-            },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
-            cold_tier: ColdTierConfig::default(),
             gc_safety_margin: 1,
         }
     }
@@ -658,15 +492,8 @@ impl PropertyGraphConfig {
                 adaptive_maximum_segments: 150,
                 lsm_segment_pressure_threshold: 100,
             },
-            merge_config: MergeConfig {
-                enable_adaptive_merge: false,
-                enable_lsm_tiering: false,
-                max_segment_age: Timestamp::MAX,
-                ..Default::default()
-            },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
-            cold_tier: ColdTierConfig::default(),
             gc_safety_margin: 1,
         }
     }
@@ -698,18 +525,6 @@ impl PropertyGraphConfig {
                 "flush_interval must be > 0",
             ));
         }
-        if !(0.0..=1.0).contains(&self.merge_config.deletion_threshold) {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "merge deletion_threshold must be in [0.0, 1.0]",
-            ));
-        }
-        if self.merge_config.max_segment_size_bytes == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "max_segment_size_bytes must be > 0",
-            ));
-        }
         self.freeze.validate()?;
         if !(0.0..=1.0).contains(&self.auto_compact.min_hole_ratio) {
             return Err(StorageError::new(
@@ -725,7 +540,6 @@ impl PropertyGraphConfig {
                 "vertex_table_shards must be a power of two in [1, 256]",
             ));
         }
-        self.cold_tier.validate()?;
         Ok(())
     }
 }
@@ -812,7 +626,6 @@ mod tests {
         let config = PropertyGraphConfig::development();
         assert!(config.freeze.validate().is_ok());
         assert_eq!(config.freeze.strategy, FreezeStrategyType::Conservative);
-        assert!(!config.merge_config.enable_adaptive_merge);
     }
 
     #[test]
@@ -820,8 +633,6 @@ mod tests {
         let config = PropertyGraphConfig::production_small();
         assert!(config.freeze.validate().is_ok());
         assert_eq!(config.freeze.strategy, FreezeStrategyType::Adaptive);
-        assert!(config.merge_config.enable_adaptive_merge);
-        assert!(!config.merge_config.enable_lsm_tiering);
     }
 
     #[test]
@@ -829,8 +640,6 @@ mod tests {
         let config = PropertyGraphConfig::production_large();
         assert!(config.freeze.validate().is_ok());
         assert_eq!(config.freeze.strategy, FreezeStrategyType::LSMTiered);
-        assert!(config.merge_config.enable_adaptive_merge);
-        assert!(config.merge_config.enable_lsm_tiering);
     }
 
     #[test]
@@ -850,30 +659,5 @@ mod tests {
             ..PropertyGraphConfig::default()
         };
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_lsm_segment_level_for_size() {
-        assert_eq!(LSMSegmentLevel::for_size(512 * 1024), LSMSegmentLevel::L0);
-        assert_eq!(
-            LSMSegmentLevel::for_size(4 * 1024 * 1024),
-            LSMSegmentLevel::L1
-        );
-        assert_eq!(
-            LSMSegmentLevel::for_size(16 * 1024 * 1024),
-            LSMSegmentLevel::L2
-        );
-        assert_eq!(
-            LSMSegmentLevel::for_size(64 * 1024 * 1024),
-            LSMSegmentLevel::L3Plus
-        );
-    }
-
-    #[test]
-    fn test_lsm_segment_level_merge_trigger_count() {
-        assert_eq!(LSMSegmentLevel::L0.merge_trigger_count(), 4);
-        assert_eq!(LSMSegmentLevel::L1.merge_trigger_count(), 3);
-        assert_eq!(LSMSegmentLevel::L2.merge_trigger_count(), 2);
-        assert_eq!(LSMSegmentLevel::L3Plus.merge_trigger_count(), 2);
     }
 }

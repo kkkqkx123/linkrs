@@ -1,12 +1,10 @@
-use std::collections::HashSet;
-
 use graphdb_core::types::Timestamp;
 
-use super::core::TimeTravelEdgeStore;
-use crate::edge::{EdgeRecord, Nbr};
+use super::core::EdgeStore;
+use crate::edge::EdgeRecord;
 
 pub struct EdgeTableScanIterator<'a> {
-    _table: &'a TimeTravelEdgeStore,
+    _table: &'a EdgeStore,
     records: std::vec::IntoIter<EdgeRecord>,
     /// Maximum number of records to return (None = unlimited)
     max_records: Option<usize>,
@@ -15,64 +13,29 @@ pub struct EdgeTableScanIterator<'a> {
 }
 
 impl<'a> EdgeTableScanIterator<'a> {
-    pub fn new(table: &'a TimeTravelEdgeStore, ts: Timestamp) -> Self {
+    pub fn new(table: &'a EdgeStore, ts: Timestamp) -> Self {
         Self::with_limit(table, ts, None)
     }
 
     /// Create a scan iterator with a maximum record limit
-    pub fn with_limit(
-        table: &'a TimeTravelEdgeStore,
-        ts: Timestamp,
-        max_records: Option<usize>,
-    ) -> Self {
-        let mut seen = HashSet::new();
+    pub fn with_limit(table: &'a EdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
+        // Single-segment scan: every live entry in the CSR is visited once,
+        // so no cross-segment deduplication is needed.
         let mut records = Vec::new();
 
         for (src_vid, nbr) in table.out_csr.iter(ts) {
-            if !table.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                records.push(table.edge_record_from_nbr(
-                    src_vid.as_int64().unwrap_or(0) as u32,
-                    nbr,
-                    ts,
-                ));
-
-                if let Some(max) = max_records {
-                    if records.len() >= max {
-                        break;
-                    }
-                }
+            if !table.mvcc.is_edge_visible(nbr.edge_id, ts) {
+                continue;
             }
-        }
+            records.push(table.edge_record_from_nbr(
+                src_vid.as_int64().unwrap_or(0) as u32,
+                nbr,
+                ts,
+            ));
 
-        if records.len() < max_records.unwrap_or(usize::MAX) {
-            for segment in table.out_segments.iter().rev() {
-                if segment.create_ts_min > ts {
-                    continue;
-                }
-
-                for (src_vid, edge) in segment.csr.read().iter() {
-                    if edge.timestamp <= ts
-                        && !table.mvcc.is_tombstoned(edge.edge_id, ts)
-                        && seen.insert(edge.edge_id)
-                    {
-                        records.push(table.edge_record_from_nbr(
-                            src_vid.as_int64().unwrap_or(0) as u32,
-                            Nbr::new(edge.endpoint, edge.rank, edge.edge_id),
-                            ts,
-                        ));
-
-                        if let Some(max) = max_records {
-                            if records.len() >= max {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if let Some(max) = max_records {
-                    if records.len() >= max {
-                        break;
-                    }
+            if let Some(max) = max_records {
+                if records.len() >= max {
+                    break;
                 }
             }
         }

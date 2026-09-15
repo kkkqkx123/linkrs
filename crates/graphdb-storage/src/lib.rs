@@ -1,6 +1,5 @@
 pub(crate) mod cache;
 pub(crate) mod client;
-pub mod cold;
 pub(crate) mod column_stats;
 pub(crate) mod compression;
 pub(crate) mod cursor;
@@ -31,8 +30,8 @@ mod test_mock;
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
-    CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
-    StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
+    CatalogStore, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
+    StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
     StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
     StorageSyncContextOps, StorageWriter,
@@ -43,7 +42,7 @@ pub use cursor::{
     PredicateRange, PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget,
     VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
-pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
+pub use engine::config::{PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};
 pub use engine::persistence_coordinator::{
     CatalogLockDiagnostic, CheckpointDiagnostics, CheckpointStats, GcEventSink, PersistenceConfig,
@@ -67,7 +66,6 @@ pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, 
 pub use stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
 pub use types::StoragePropertyDef;
 
-pub use cold::cold_snapshot::ColdSnapshot;
 pub use graphdb_core::StorageError;
 
 #[cfg(any(test, feature = "test-support"))]

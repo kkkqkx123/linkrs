@@ -16,7 +16,9 @@ pub use columnar_stats::{
     ColumnarStats, ColumnarStatsSnapshot, D1_EVAL_THRESHOLD, D1_TYPED_RATE_THRESHOLD,
     SELECTION_BOUNDARY_OPS,
 };
-pub use profile::{OperatorProfile, OperatorProfileKey, ProfileBoard, ProfileCollector, ProfileEntry};
+pub use profile::{
+    OperatorProfile, OperatorProfileKey, ProfileBoard, ProfileCollector, ProfileEntry,
+};
 pub use resources::{QueryFinishGuard, ResourceOwner};
 
 use std::collections::HashMap;

@@ -1,26 +1,16 @@
 //! MVCC and tombstone management: snapshot isolation and garbage collection.
 //!
-//! Provides multi-version concurrency control through active snapshot tracking,
-//! tombstone lifecycle management, and automatic garbage collection.
-//!
-//! Tombstone management uses a tiered approach:
-//! - Hot layer: recent deletions in main hashtable (fast path, LRU-like eviction)
-//! - Cold layer: older deletions preserved for snapshot isolation
-//!
-//! This reduces lookup overhead and memory fragmentation for large deletion sets.
+//! Single-segment edge tables keep one authoritative timestamp record per
+//! edge plus one authoritative tombstone table. All visibility decisions go
+//! through [`MVCCManager::is_edge_visible`].
 
-use super::super::bloom_filter::EdgeDeletionBloomFilter;
 use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
-const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
 const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
 /// Per-edge creation, deletion, and committed-publish timestamps.
-///
-/// Current edge scans rely on transaction timestamps and tombstone state for
-/// snapshot visibility. `commit_ts` equals `create_ts` at creation time.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
     pub create_ts: Timestamp,
@@ -44,39 +34,21 @@ impl EdgeTimestamps {
     }
 }
 
-/// MVCC and snapshot management for EdgeTable
+/// MVCC and snapshot management for the single-segment edge table.
 ///
-/// Single authoritative source for edge visibility. All MVCC decisions
-/// (CSR delta, frozen segments, property table) delegate to this manager.
+/// Single authoritative source for edge visibility. Tombstones are kept in
+/// one hot hash table; there is no cold tombstone layer.
 pub struct MVCCManager {
     /// Per-edge creation and deletion timestamps. Centralized MVCC state
-    /// that replaces inline timestamps in Nbr rows and CsrWithProperties visibility.
+    /// used as the single visibility authority.
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
-    /// Authoritative tombstone table (hot layer). Every deletion, regardless
-    /// of path (hot CSR inline delete, frozen segment, delta freeze, physical
-    /// compaction), is recorded here exactly once, keyed by edge id with the
-    /// earliest `delete_ts`.
+    /// Authoritative tombstone table. Every deletion is recorded here
+    /// exactly once, keyed by edge id with the earliest `delete_ts`.
     pub tombstones: HashMap<EdgeId, Timestamp>,
-    /// Cold layer: older tombstones beyond hot threshold, kept for snapshot isolation
-    /// Stored as Vec<(EdgeId, Timestamp)> to save memory and reduce lookup overhead
-    pub cold_tombstones: Vec<(EdgeId, Timestamp)>,
-    /// Bloom filter for cold-layer pre-filtering.
-    /// Provides O(1) probabilistic membership testing to skip binary search
-    /// on edge IDs definitely not in the cold tombstone set.
-    pub cold_bloom_filter: EdgeDeletionBloomFilter,
-    /// Minimum timestamp of all active snapshots
+    /// Minimum timestamp of all active snapshots.
     pub min_active_snapshot_ts: Timestamp,
-    /// Active snapshot timestamps and their reference count
+    /// Active snapshot timestamps and their reference count.
     pub active_snapshots: HashMap<Timestamp, usize>,
-    /// Operator-set retention floor for reclamation without active snapshots.
-    ///
-    /// `0` disables the floor (the default): history is kept until a snapshot
-    /// bounds it. A positive value acts as an explicit reclamation exit for
-    /// the no-snapshot steady state: deletions at or before this timestamp
-    /// become reclaimable exactly as if a snapshot existed at that point.
-    /// Runtime-only (not persisted); see [`Self::effective_retention_bound`].
-    pub retention_floor: Timestamp,
-    cold_gc_cursor: usize,
 }
 
 impl Default for MVCCManager {
@@ -85,81 +57,22 @@ impl Default for MVCCManager {
     }
 }
 
-const BLOOM_FILTER_CAPACITY: usize = 10_000;
-
 impl MVCCManager {
     /// Create a new MVCC manager
     pub fn new() -> Self {
         Self {
             edge_timestamps: HashMap::new(),
             tombstones: HashMap::new(),
-            cold_tombstones: Vec::new(),
-            cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
             min_active_snapshot_ts: Timestamp::MAX,
             active_snapshots: HashMap::new(),
-            retention_floor: 0,
-            cold_gc_cursor: 0,
         }
     }
 
-    /// Set the operator retention floor (`0` disables).
-    ///
-    /// The floor only takes effect when no active snapshot pins history;
-    /// registered snapshots always win (see [`Self::effective_retention_bound`]).
-    pub fn set_retention_floor(&mut self, floor: Timestamp) {
-        self.retention_floor = floor;
-    }
-
-    /// Oldest timestamp whose newer deletions are reclaimable.
-    ///
-    /// With active snapshots this is their minimum (deletions older than the
-    /// oldest snapshot cannot be observed by anyone). Without snapshots the
-    /// raw bound is `MAX` ("nothing pinned") which would block reclamation
-    /// forever; an operator-set retention floor then provides the bound.
-    pub fn effective_retention_bound(&self) -> Timestamp {
-        if self.min_active_snapshot_ts == Timestamp::MAX && self.retention_floor > 0 {
-            self.retention_floor
-        } else {
-            self.min_active_snapshot_ts
-        }
-    }
-
-    /// Check if an edge is tombstoned at a given timestamp
-    /// Uses hot-first lookup: checks the authoritative table first, then cold layer with binary search
+    /// Check if an edge is tombstoned at a given timestamp.
     pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        // Hot layer: fast path - O(1) average
-        if self
-            .tombstones
+        self.tombstones
             .get(&edge_id)
             .is_some_and(|delete_ts| *delete_ts <= ts)
-        {
-            return true;
-        }
-
-        // Cold layer: only checked if hot layer misses - O(log n) binary search
-        self.is_tombstoned_cold(edge_id, ts)
-    }
-
-    /// Check if an edge is tombstoned in cold layer using bloom filter + binary search.
-    ///
-    /// The bloom filter provides O(1) probabilistic pre-filtering:
-    /// - If bloom filter says "definitely not in set", skip binary search (saves O(log n))
-    /// - If bloom filter says "might be in set", fall through to binary search
-    ///
-    /// The cold layer is kept sorted by EdgeId for efficient lookups.
-    /// Returns true if the edge exists in cold layer with delete_ts <= ts.
-    fn is_tombstoned_cold(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        // Bloom filter pre-check: skip binary search if edge definitely not in cold set
-        if !self.cold_bloom_filter.might_contain(edge_id.0) {
-            return false;
-        }
-        match self
-            .cold_tombstones
-            .binary_search_by_key(&edge_id, |&(id, _)| id)
-        {
-            Ok(idx) => self.cold_tombstones[idx].1 <= ts,
-            Err(_) => false,
-        }
     }
 
     /// Unified watermark variant. Derives the safe cutoff from the single
@@ -179,9 +92,6 @@ impl MVCCManager {
     /// Removes tombstones with delete_ts < min_active_snapshot_ts.
     /// These tombstones cannot affect any active snapshot since all snapshots
     /// have ts >= min_active_snapshot_ts.
-    ///
-    /// Also manages hot/cold layer promotion: if hot layer exceeds threshold,
-    /// older entries are moved to cold layer (kept sorted by EdgeId for binary search).
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         self.gc_tombstones_batch(min_active_snapshot_ts, usize::MAX)
     }
@@ -196,7 +106,7 @@ impl MVCCManager {
         self.gc_tombstones_batch(safe, batch_size)
     }
 
-    /// Inspect at most `batch_size` tombstones and retain a cold-layer cursor.
+    /// Inspect at most `batch_size` tombstones.
     pub fn gc_tombstones_batch(
         &mut self,
         min_active_snapshot_ts: Timestamp,
@@ -205,66 +115,26 @@ impl MVCCManager {
         if batch_size == 0 {
             return 0;
         }
-
-        let mut remaining = batch_size;
-        let mut removed = 0;
-        let hot_keys: Vec<EdgeId> = self
+        let mut eligible: Vec<EdgeId> = self
             .tombstones
             .iter()
             .filter_map(|(edge_id, delete_ts)| {
                 (*delete_ts < min_active_snapshot_ts).then_some(*edge_id)
             })
-            .take(remaining)
             .collect();
-        remaining = remaining.saturating_sub(hot_keys.len());
-        let _ = remaining;
-        for edge_id in hot_keys {
+        eligible.truncate(batch_size);
+        let mut removed = 0;
+        for edge_id in eligible {
             if self.tombstones.remove(&edge_id).is_some() {
                 removed += 1;
             }
         }
-
-        let cold_before = self.cold_tombstones.len();
-        self.cold_tombstones
-            .retain(|&(_, ts)| ts >= min_active_snapshot_ts);
-        removed += cold_before - self.cold_tombstones.len();
-        self.cold_gc_cursor = 0;
-
-        // Tombstones is the single authoritative table; no mirrored layers
-        // remain to GC after the tombstone unification. `min_active_snapshot_ts`
-        // is maintained exclusively by snapshot register/unregister and the
-        // persistence load path — never from a GC argument, which may be an
-        // effective bound (e.g. retention floor) rather than the real minimum.
-
-        // If hot layer is too large, move old entries to cold layer
-        // Cold layer is kept sorted by EdgeId for efficient binary search
-        if self.tombstones.len() > HOT_TOMBSTONE_GC_THRESHOLD {
-            let mut to_move = Vec::new();
-            for (edge_id, ts) in self.tombstones.iter() {
-                to_move.push((*edge_id, *ts));
-            }
-            // Sort by EdgeId to maintain cold layer invariant for binary search
-            to_move.sort_by_key(|k| k.0);
-
-            let move_count =
-                ((to_move.len() as f64 * 0.3) as usize).min(DEFAULT_TOMBSTONE_GC_BATCH);
-            for (edge_id, ts) in to_move.iter().take(move_count) {
-                self.tombstones.remove(edge_id);
-                self.cold_tombstones.push((*edge_id, *ts));
-                self.cold_bloom_filter.insert(edge_id.0);
-            }
-
-            // Ensure cold layer remains sorted for binary search
-            self.cold_tombstones.sort_by_key(|k| k.0);
-        }
-
         removed
     }
 
     /// Register a new active snapshot at the given timestamp.
     ///
     /// This increments the reference count for the snapshot timestamp.
-    /// Must be called when a new snapshot is created.
     /// Uses incremental min maintenance to avoid O(n) scans.
     pub fn register_active_snapshot(&mut self, ts: Timestamp) {
         *self.active_snapshots.entry(ts).or_insert(0) += 1;
@@ -317,103 +187,41 @@ impl MVCCManager {
     }
 
     /// Get current tombstone statistics for observability.
-    ///
-    /// Counts both layers (hot + cold) so the metric reflects the true total
-    /// cost of deletion metadata.
     pub fn tombstone_stats(&self) -> TombstoneStats {
-        let hot_count = self.tombstones.len();
-        let cold_count = self.cold_tombstones.len();
-        let total_count = hot_count + cold_count;
-
-        let oldest = self
-            .tombstones
-            .values()
-            .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
-            .copied()
-            .min();
-
-        let newest = self
-            .tombstones
-            .values()
-            .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
-            .copied()
-            .max();
-
+        let count = self.tombstones.len();
+        let oldest = self.tombstones.values().copied().min();
+        let newest = self.tombstones.values().copied().max();
         TombstoneStats {
-            count: total_count,
-            memory_bytes: TombstoneStats::estimate_memory(hot_count)
-                + (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>())
-                + self.cold_bloom_filter.memory_bytes(),
+            count,
+            memory_bytes: TombstoneStats::estimate_memory(count),
             oldest_delete_ts: oldest,
             newest_delete_ts: newest,
         }
     }
 
-    /// Total count of deletions across all layers (for memory accounting).
+    /// Total count of deletions (for memory accounting).
     pub fn total_tombstone_count(&self) -> usize {
-        self.tombstones.len() + self.cold_tombstones.len()
-    }
-
-    /// Get the minimum active snapshot timestamp.
-    ///
-    /// This is the earliest timestamp at which any snapshot is currently active.
-    /// All tombstones with delete_ts < this value can be safely garbage collected.
-    /// Uses the cached value for O(1) access.
-    /// Earliest deletion timestamp of an edge across all layers, if any.
-    ///
-    /// Hot layer is checked first (O(1)), then the cold layer with a bloom
-    /// pre-filter plus binary search. Used by the merge path to decide whether
-    /// a per-edge deletion is still observable and to rebuild `DeletionInfo`
-    /// from the actual remaining deletions.
-    pub fn delete_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
-        let mut earliest: Option<Timestamp> = None;
-        if let Some(&delete_ts) = self.tombstones.get(&edge_id) {
-            earliest = Some(delete_ts);
-        }
-
-        if self.cold_bloom_filter.might_contain(edge_id.0) {
-            if let Ok(idx) = self
-                .cold_tombstones
-                .binary_search_by_key(&edge_id, |&(id, _)| id)
-            {
-                let cold_ts = self.cold_tombstones[idx].1;
-                earliest = Some(earliest.map_or(cold_ts, |ts| ts.min(cold_ts)));
-            }
-        }
-
-        earliest
+        self.tombstones.len()
     }
 
     /// Record a deletion in the authoritative tombstone table.
     ///
-    /// Single entry point for every deletion path (hot CSR inline delete,
-    /// frozen segment delete, delta freeze, physical compaction). Keeps the
-    /// earliest `delete_ts` when the same edge is recorded more than once: an
+    /// Single entry point for every deletion path. Keeps the earliest
+    /// `delete_ts` when the same edge is recorded more than once: an
     /// earlier deletion covers a wider query range and must win.
     pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
         let earliest = self
-            .delete_ts_of(edge_id)
-            .map_or(delete_ts, |ts| ts.min(delete_ts));
+            .tombstones
+            .get(&edge_id)
+            .map_or(delete_ts, |ts| (*ts).min(delete_ts));
         self.tombstones.insert(edge_id, earliest);
     }
 
-    /// Undo of [`Self::record_deletion`]: remove the tombstone for `edge_id`
-    /// from both layers. Used by the transaction undo path to revert a
-    /// segment-path edge deletion.
+    /// Undo of [`Self::record_deletion`]: remove the tombstone for `edge_id`.
     ///
     /// Returns true when a tombstone was present and removed.
     pub fn remove_deletion(&mut self, edge_id: EdgeId) -> bool {
-        let mut removed = self.tombstones.remove(&edge_id).is_some();
-        if self.cold_bloom_filter.might_contain(edge_id.0) {
-            if let Ok(idx) = self
-                .cold_tombstones
-                .binary_search_by_key(&edge_id, |&(id, _)| id)
-            {
-                self.cold_tombstones.remove(idx);
-                removed = true;
-            }
-        }
-        removed
+        self.tombstones.remove(&edge_id).is_some()
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -432,8 +240,7 @@ impl MVCCManager {
     }
 
     /// Record edge deletion (logical). Called on delete_edge to set the
-    /// edge's deletion timestamp. Also records the tombstone for frozen
-    /// segment visibility.
+    /// edge's deletion timestamp and record the tombstone.
     pub fn record_edge_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
         if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {
             ts.delete_ts = ts.delete_ts.min(delete_ts);
@@ -442,11 +249,10 @@ impl MVCCManager {
     }
 
     /// Check if an edge is visible at a given timestamp.
-    /// Combines creation/deletion timestamp check with tombstone check via the
-    /// unified `Visibility` helper.
-    /// This is the single entry point for all MVCC visibility decisions.
+    ///
+    /// This is the single entry point for all MVCC visibility decisions:
+    /// per-edge timestamps first, then the authoritative tombstone table.
     pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        // Check per-edge timestamps via unified visibility (uses commit_ts)
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
             if !crate::mvcc_visibility::Visibility::is_edge_visible(
                 ts,
@@ -456,7 +262,6 @@ impl MVCCManager {
                 return false;
             }
         }
-        // Also check tombstone layer (for frozen segments and promoted deletions)
         !self.is_tombstoned(edge_id, ts)
     }
 
@@ -478,16 +283,10 @@ impl MVCCManager {
         if let Some(ts) = self.edge_timestamps.get(&edge_id) {
             return ts.delete_ts != Timestamp::MAX;
         }
-        // Also check tombstone layers
         self.tombstones.contains_key(&edge_id)
-            || self.cold_bloom_filter.might_contain(edge_id.0)
-                && self
-                    .cold_tombstones
-                    .binary_search_by_key(&edge_id, |&(id, _)| id)
-                    .is_ok()
     }
 
-    /// Remove edge timestamps. Called during hard-delete or compaction cleanup.
+    /// Remove edge timestamps. Called during rollback of a failed insert.
     pub fn remove_edge_timestamps(&mut self, edge_id: EdgeId) {
         self.edge_timestamps.remove(&edge_id);
     }
@@ -497,12 +296,12 @@ impl MVCCManager {
 mod tests {
     use super::super::super::*;
     use super::*;
-    use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
-    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::core::EdgeStore;
     use graphdb_core::types::EdgeId;
     use graphdb_core::Value;
 
-    fn create_edge_table_with_props() -> TimeTravelEdgeStore {
+    fn create_edge_table_with_props() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -516,7 +315,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]
@@ -563,6 +362,22 @@ mod tests {
     }
 
     #[test]
+    fn test_gc_tombstones_boundary_is_exclusive() {
+        let mut manager = MVCCManager::new();
+        manager.tombstones.insert(EdgeId(0), 200);
+        manager.tombstones.insert(EdgeId(1), 201);
+
+        // A deletion exactly at the watermark is still observable there.
+        let removed = manager.gc_tombstones(200);
+        assert_eq!(removed, 0);
+        assert_eq!(manager.tombstones.len(), 2);
+
+        let removed = manager.gc_tombstones(201);
+        assert_eq!(removed, 1);
+        assert_eq!(manager.tombstones.len(), 1);
+    }
+
+    #[test]
     fn test_incremental_gc_never_exceeds_batch() {
         let mut manager = MVCCManager::new();
         for id in 0..100u64 {
@@ -601,8 +416,6 @@ mod tests {
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
             .unwrap();
 
-        table.freeze_csr_only(125);
-
         table.delete_edge(0, 1, 0, 150).unwrap();
 
         let stats_before = table.mvcc.tombstone_stats();
@@ -629,6 +442,17 @@ mod tests {
     }
 
     #[test]
+    fn test_visibility_uses_single_predicate() {
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        assert!(table.has_edge(0, 1, 0, 100));
+        assert!(!table.has_edge(0, 1, 0, 99));
+        assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+        assert!(table.has_edge(0, 1, 0, 149));
+        assert!(!table.has_edge(0, 1, 0, 150));
+    }
+
+    #[test]
     fn test_mvcc_metrics_gc_count() {
         let mut table = create_edge_table_with_props();
 
@@ -643,8 +467,6 @@ mod tests {
                 )
                 .unwrap();
         }
-
-        table.freeze_csr_only(5);
 
         table.delete_edge(0, 1, 0, 2).unwrap();
         table.delete_edge(0, 1, 1, 3).unwrap();
@@ -683,15 +505,11 @@ mod tests {
                 .unwrap();
         }
 
-        table.freeze_csr_only(5);
-
         table.delete_edge(0, 1, 0, 10).unwrap();
         table.delete_edge(0, 1, 1, 11).unwrap();
         table.delete_edge(0, 1, 2, 12).unwrap();
 
         let tom_stats = table.mvcc.tombstone_stats();
-        // Single-table counting: 3 segment deletions recorded once each in
-        // the authoritative tombstone table.
         assert_eq!(tom_stats.count, 3);
 
         stats_manager.record_tombstone_stats(
@@ -738,10 +556,6 @@ mod tests {
         assert_eq!(mvcc.tombstones.get(&EdgeId(7)), Some(&150));
         assert!(mvcc.is_tombstoned(EdgeId(7), 200));
         assert!(!mvcc.is_tombstoned(EdgeId(7), 100));
-
-        // delete_ts_of resolves the same value across layers.
-        assert_eq!(mvcc.delete_ts_of(EdgeId(7)), Some(150));
-        assert_eq!(mvcc.delete_ts_of(EdgeId(999)), None);
     }
 
     #[test]
@@ -759,129 +573,5 @@ mod tests {
         assert_eq!(mvcc.total_tombstone_count(), 1);
         assert!(mvcc.is_tombstoned(EdgeId(3), 200));
         assert!(!mvcc.is_tombstoned(EdgeId(3), 100));
-    }
-
-    #[test]
-    fn test_cold_layer_binary_search() {
-        let mut mvcc = MVCCManager::new();
-
-        // Add 100 tombstones to cold layer, sorted by EdgeId
-        for i in 0..100u64 {
-            mvcc.cold_tombstones.push((EdgeId(i), 100 + i));
-        }
-        mvcc.cold_tombstones.sort_by_key(|k| k.0);
-
-        // Rebuild bloom filter to match cold tombstones
-        mvcc.cold_bloom_filter.clear();
-        let new_capacity = (mvcc.cold_tombstones.len() * 2).max(10_000);
-        mvcc.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(new_capacity);
-        for &(edge_id, _) in &mvcc.cold_tombstones {
-            mvcc.cold_bloom_filter.insert(edge_id.0);
-        }
-
-        // Test binary search - all should be found
-        for i in 0..100 {
-            assert!(mvcc.is_tombstoned_cold(EdgeId(i as u64), Timestamp::MAX));
-        }
-
-        // Test edge cases
-        assert!(!mvcc.is_tombstoned_cold(EdgeId(200), Timestamp::MAX)); // Not in cold layer
-        assert!(!mvcc.is_tombstoned_cold(EdgeId(0), 50)); // Before delete_ts
-    }
-
-    #[test]
-    fn test_cold_layer_lookup_performance() {
-        let mut mvcc = MVCCManager::new();
-
-        // Add 100K tombstones to cold layer, simulating large delete set
-        for i in 0..100_000 {
-            mvcc.cold_tombstones
-                .push((EdgeId(i as u64), Timestamp::MAX - 1));
-        }
-        mvcc.cold_tombstones.sort_by_key(|k| k.0);
-
-        let start = std::time::Instant::now();
-        for i in 0..10_000 {
-            let idx = i * 10; // Sparse queries
-            let _ = mvcc.is_tombstoned(EdgeId(idx as u64), Timestamp::MAX);
-        }
-        let elapsed = start.elapsed();
-
-        // O(log n) should complete in microseconds for 10K queries over 100K items.
-        // Well under 100ms on a typical desktop.
-        log::debug!(
-            "cold layer lookup: 10K queries over 100K items in {:?}",
-            elapsed
-        );
-        assert!(
-            elapsed.as_millis() < 200,
-            "Binary search too slow: {:?} (expected <200ms for 10K queries over 100K items)",
-            elapsed
-        );
-    }
-
-    #[test]
-    fn test_hot_to_cold_promotion_maintains_sorted_order() {
-        let mut mvcc = MVCCManager::new();
-
-        // Fill hot layer to trigger promotion
-        // Use timestamps well above GC threshold to avoid premature cleanup
-        for i in 0..200_000u64 {
-            mvcc.tombstones.insert(EdgeId(i), 10_000 + (i % 1000));
-        }
-
-        assert!(mvcc.tombstones.len() > HOT_TOMBSTONE_GC_THRESHOLD);
-
-        // Trigger GC which promotes hot to cold
-        // Use min_ts that keeps most tombstones (allowing promotion to occur)
-        mvcc.gc_tombstones(9_500);
-
-        // Verify cold layer is sorted by EdgeId (required for binary search)
-        if mvcc.cold_tombstones.len() > 1 {
-            for i in 0..mvcc.cold_tombstones.len() - 1 {
-                assert!(
-                    mvcc.cold_tombstones[i].0 < mvcc.cold_tombstones[i + 1].0,
-                    "Cold layer not sorted at index {}",
-                    i
-                );
-            }
-        }
-
-        // Verify we can still use binary search after promotion
-        if !mvcc.cold_tombstones.is_empty() {
-            let first_edge_id = mvcc.cold_tombstones[0].0;
-            assert!(mvcc.is_tombstoned_cold(first_edge_id, Timestamp::MAX));
-        }
-    }
-
-    #[test]
-    fn test_hot_layer_with_cold_layer_integration() {
-        let mut mvcc = MVCCManager::new();
-
-        // Add to hot layer
-        mvcc.tombstones.insert(EdgeId(1), 100);
-        mvcc.tombstones.insert(EdgeId(2), 150);
-
-        // Add to cold layer (pre-sorted)
-        mvcc.cold_tombstones = vec![(EdgeId(10), 200), (EdgeId(20), 250)];
-
-        // Rebuild bloom filter to match cold tombstones
-        mvcc.cold_bloom_filter.clear();
-        mvcc.cold_bloom_filter =
-            EdgeDeletionBloomFilter::with_capacity(mvcc.cold_tombstones.len() * 2);
-        for &(edge_id, _) in &mvcc.cold_tombstones {
-            mvcc.cold_bloom_filter.insert(edge_id.0);
-        }
-
-        // Test queries across both layers
-        assert!(mvcc.is_tombstoned(EdgeId(1), Timestamp::MAX)); // Hot layer
-        assert!(mvcc.is_tombstoned(EdgeId(10), Timestamp::MAX)); // Cold layer via binary search
-        assert!(!mvcc.is_tombstoned(EdgeId(999), Timestamp::MAX)); // Neither layer
-
-        // Verify GC doesn't break cold layer sort
-        mvcc.gc_tombstones(120);
-        for i in 0..mvcc.cold_tombstones.len() - 1 {
-            assert!(mvcc.cold_tombstones[i].0 < mvcc.cold_tombstones[i + 1].0);
-        }
     }
 }

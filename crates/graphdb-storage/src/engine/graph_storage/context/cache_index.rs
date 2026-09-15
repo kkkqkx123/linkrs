@@ -1,4 +1,3 @@
-use crate::edge::ExportedEdgeSnapshot;
 use crate::index::traits::IndexGcOps;
 use crate::index::types::{EdgeIdentity, GcStats};
 use graphdb_core::metadata::IndexMetadataManager;
@@ -6,13 +5,6 @@ use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageResult, Value};
 
 use super::GraphStorageContext;
-
-pub struct ExportedEdgeSnapshotRecord {
-    pub src_label: LabelId,
-    pub dst_label: LabelId,
-    pub edge_label: LabelId,
-    pub snapshot: ExportedEdgeSnapshot,
-}
 
 impl GraphStorageContext {
     pub(crate) fn invalidate_vertex_cache(&self, label: LabelId) {
@@ -106,26 +98,5 @@ impl GraphStorageContext {
 
     pub(crate) fn gc_index_tombstones(&self, ts: Timestamp) -> StorageResult<GcStats> {
         self.persistent.index_data_manager.read().gc_tombstones(ts)
-    }
-
-    pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
-        self.persistent
-            .data_store
-            .for_all_edge_partitions_mut(|key, table| {
-                let snapshot = table.export_snapshot(ts)?;
-                log::debug!(
-                    "Exporting snapshot at ts={} for edge table {}/{}/{}",
-                    ts,
-                    key.src_label,
-                    key.dst_label,
-                    key.edge_label
-                );
-                Ok(ExportedEdgeSnapshotRecord {
-                    src_label: key.src_label,
-                    dst_label: key.dst_label,
-                    edge_label: key.edge_label,
-                    snapshot,
-                })
-            })
     }
 }

@@ -1,7 +1,7 @@
 //! Statistics structures for observability and monitoring.
 //!
-//! Provides statistics for tombstones, deletions, and merge operations
-//! to help track edge table behavior and performance.
+//! Provides statistics for tombstones and deletions to help track
+//! single-segment edge table behavior.
 
 use graphdb_core::types::Timestamp;
 
@@ -25,33 +25,29 @@ impl TombstoneStats {
     }
 }
 
-/// Statistics about deletions across all segments for observability.
+/// Statistics about deletions in the single CSR for observability.
 ///
-/// Tracks deletion patterns to help identify when segments have significant
-/// deletion activity, useful for deciding when to merge or gc segments.
+/// Tracks deletion patterns to help identify when the table has significant
+/// deletion activity, useful for deciding when to compact.
 #[derive(Debug, Clone, Default)]
 pub struct DeletionStats {
-    /// Total edges deleted across all segments
+    /// Total edges deleted and still tracked
     pub total_deleted_edges: u64,
-    /// Total edges frozen (for percentage calculation)
-    pub total_frozen_edges: u64,
-    /// Number of segments with some deletions
-    pub segments_with_deletions: usize,
-    /// Number of segments where all edges are deleted (complete deletion)
-    pub completely_deleted_segments: usize,
-    /// Oldest deletion timestamp across all segments
+    /// Total live edges (for percentage calculation)
+    pub total_live_edges: u64,
+    /// Oldest deletion timestamp
     pub oldest_deletion_ts: Option<Timestamp>,
-    /// Newest deletion timestamp across all segments
+    /// Newest deletion timestamp
     pub newest_deletion_ts: Option<Timestamp>,
 }
 
 impl DeletionStats {
     /// Get deletion percentage as a ratio (0.0 to 1.0)
     pub fn deletion_ratio(&self) -> f64 {
-        if self.total_frozen_edges == 0 {
+        if self.total_live_edges == 0 {
             0.0
         } else {
-            self.total_deleted_edges as f64 / self.total_frozen_edges as f64
+            self.total_deleted_edges as f64 / self.total_live_edges as f64
         }
     }
 
@@ -66,117 +62,17 @@ impl DeletionStats {
     }
 }
 
-/// Statistics about segment merge operations for observability and monitoring.
-///
-/// Tracks merge activity to understand segment consolidation patterns and
-/// evaluate merge strategy effectiveness.
-#[derive(Debug, Clone, Default)]
-pub struct MergeStats {
-    /// Total number of merge operations performed
-    pub total_merge_operations: u64,
-    /// Total number of segments merged (sum of all merge operations)
-    pub total_segments_merged: u64,
-    /// Total number of edges involved in merges
-    pub total_edges_merged: u64,
-    /// Total time spent on merge operations (milliseconds)
-    pub total_merge_time_ms: u64,
-    /// Current number of segments
-    pub current_segment_count: usize,
-    /// Maximum segment count reached
-    pub max_segment_count: usize,
-}
-
-impl MergeStats {
-    /// Get average merge time per operation (milliseconds)
-    pub fn avg_merge_time_ms(&self) -> f64 {
-        if self.total_merge_operations == 0 {
-            0.0
-        } else {
-            self.total_merge_time_ms as f64 / self.total_merge_operations as f64
-        }
-    }
-
-    /// Get average segments merged per operation
-    pub fn avg_segments_per_merge(&self) -> f64 {
-        if self.total_merge_operations == 0 {
-            0.0
-        } else {
-            self.total_segments_merged as f64 / self.total_merge_operations as f64
-        }
-    }
-
-    /// Get average edges merged per operation
-    pub fn avg_edges_per_merge(&self) -> f64 {
-        if self.total_merge_operations == 0 {
-            0.0
-        } else {
-            self.total_edges_merged as f64 / self.total_merge_operations as f64
-        }
-    }
-
-    /// Check if segment count is growing too fast (>80% of max)
-    pub fn segment_count_pressure(&self) -> bool {
-        if self.max_segment_count == 0 {
-            false
-        } else {
-            (self.current_segment_count as f64 / self.max_segment_count as f64) > 0.8
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MergeMetrics {
-    /// Number of segments before merge
-    pub segments_before: usize,
-    /// Number of segments after merge
-    pub segments_after: usize,
-    /// Total number of edges processed in merge
-    pub edges_merged: u64,
-    /// Time taken for merge operation (milliseconds)
-    pub duration_ms: u64,
-}
-
-impl MergeMetrics {
-    /// Log merge metrics with reduction ratio
-    pub fn log(&self) {
-        let reduction = if self.segments_before > 0 {
-            ((self.segments_before - self.segments_after) as f64 / self.segments_before as f64)
-                * 100.0
-        } else {
-            0.0
-        };
-        log::info!(
-            "[MergeMetrics] segments: {} → {} (-{:.1}%), edges: {}, duration: {}ms",
-            self.segments_before,
-            self.segments_after,
-            reduction,
-            self.edges_merged,
-            self.duration_ms
-        );
-    }
-}
-
-/// Helper structure for merge operation metrics
-pub struct DirectionMergeMetrics {
-    pub edges_processed: u64,
-}
-
-/// Result wrapper containing merge metrics and reduced count
-pub struct MergeMetricsResult {
-    pub metrics: MergeMetrics,
-    pub segments_reduced: usize,
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::super::{EdgeSchema, EdgeStrategy};
     use super::*;
-    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::core::EdgeStore;
     use crate::types::StoragePropertyDef;
     use graphdb_core::types::DataType;
     use graphdb_core::Value;
 
-    fn create_edge_table() -> TimeTravelEdgeStore {
+    fn create_edge_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -187,10 +83,10 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
-    fn create_edge_table_with_props() -> TimeTravelEdgeStore {
+    fn create_edge_table_with_props() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -204,7 +100,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]
@@ -215,7 +111,7 @@ mod tests {
         assert_eq!(stats.deletion_percentage(), 0.0);
         assert!(!stats.is_significant());
 
-        stats.total_frozen_edges = 100;
+        stats.total_live_edges = 100;
         stats.total_deleted_edges = 50;
         assert_eq!(stats.deletion_ratio(), 0.5);
         assert_eq!(stats.deletion_percentage(), 50.0);
@@ -240,8 +136,6 @@ mod tests {
         table
             .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 150)
             .unwrap();
-
-        table.freeze_csr_only(160);
 
         table.delete_edge(0, 1, 0, 200).unwrap();
         table.delete_edge(0, 2, 0, 250).unwrap();
@@ -273,44 +167,30 @@ mod tests {
 
         let stats = table.deletion_stats();
         assert_eq!(stats.total_deleted_edges, 0);
-        assert_eq!(stats.segments_with_deletions, 0);
-        assert_eq!(stats.completely_deleted_segments, 0);
         assert_eq!(stats.deletion_percentage(), 0.0);
-
-        table.freeze_csr_only(105);
-
-        let stats = table.deletion_stats();
-        assert_eq!(stats.total_frozen_edges, 10);
 
         table.delete_edge(0, 1, 0, 110).unwrap();
         table.delete_edge(0, 1, 1, 111).unwrap();
 
         let stats = table.deletion_stats();
-        assert_eq!(stats.total_deleted_edges, 0);
-
-        table.freeze_csr_only(115);
-
-        let stats = table.deletion_stats();
+        assert_eq!(stats.total_deleted_edges, 2);
         assert!(stats.deletion_percentage() >= 0.0);
     }
 
     #[test]
-    fn test_deletion_stats_complete_segment_deletion() {
+    fn test_deletion_stats_complete_table_deletion() {
         let mut table = create_edge_table();
 
         for i in 0..3 {
             table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
         }
 
-        table.freeze_csr_only(105);
-
         for i in 0..3 {
             table.delete_edge(0, 1, i as i64, 110).unwrap();
         }
 
-        table.freeze_csr_only(115);
-
         let stats = table.deletion_stats();
-        assert!(stats.total_frozen_edges > 0);
+        assert_eq!(stats.total_deleted_edges, 3);
+        assert!(stats.total_live_edges >= 0);
     }
 }

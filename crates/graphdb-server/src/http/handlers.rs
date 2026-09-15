@@ -10,7 +10,6 @@ pub mod query;
 pub mod rebuild;
 pub mod schema;
 pub mod session;
-pub mod snapshot;
 pub mod statistics;
 pub mod stream;
 pub mod sync;

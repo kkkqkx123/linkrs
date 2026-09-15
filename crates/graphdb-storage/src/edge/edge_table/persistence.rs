@@ -1,15 +1,20 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
-//! Handles flush (write) and load (read) operations with support for
-//! versioning and compression.
+//! Single-segment layout, version 1:
+//! - `meta.bin`: header + label ids + label name + schema + next edge id +
+//!   row-level edge timestamps (creation/deletion authority).
+//! - `out_csr.bin` / `in_csr.bin`: header + single `CsrVariant` dump.
+//! - `properties.bin`: current property values plus row visibility.
+//!
+//! Old multi-segment files are rejected: after the single CSR payload the
+//! loader errors on trailing bytes instead of interpreting segment blocks.
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
-use super::segment::{CsrSegment, DeletionInfo};
 use crate::edge::CsrWithProperties;
 use crate::edge::EdgeSchema;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
-use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::HashMap;
 use std::fs::File;
@@ -17,8 +22,6 @@ use std::io::Read;
 use std::path::Path;
 
 pub(crate) const EDGE_META_VERSION: u32 = 1;
-const EDGE_ID_STORAGE_MODE_DIRECT: u8 = 0;
-const EDGE_ID_STORAGE_MODE_SEPARATE: u8 = 1;
 
 /// Deserialized edge table metadata returned by [`load_metadata`].
 pub(crate) struct EdgeMetadata {
@@ -29,8 +32,6 @@ pub(crate) struct EdgeMetadata {
     pub is_open: bool,
     pub schema: EdgeSchema,
     pub next_edge_id: EdgeId,
-    pub tombstones: HashMap<EdgeId, Timestamp>,
-    pub min_snapshot_ts: Timestamp,
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
 }
 
@@ -45,8 +46,6 @@ pub fn flush_metadata(
     is_open: bool,
     schema: &EdgeSchema,
     next_edge_id: EdgeId,
-    tombstones: &HashMap<EdgeId, Timestamp>,
-    min_active_snapshot_ts: Timestamp,
     edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
@@ -68,14 +67,7 @@ pub fn flush_metadata(
     buf.extend_from_slice(schema_bytes);
 
     buf.extend_from_slice(&next_edge_id.0.to_le_bytes());
-    buf.extend_from_slice(&(tombstones.len() as u64).to_le_bytes());
-    for (edge_id, delete_ts) in tombstones {
-        buf.extend_from_slice(&edge_id.0.to_le_bytes());
-        buf.extend_from_slice(&delete_ts.to_le_bytes());
-    }
-    buf.extend_from_slice(&min_active_snapshot_ts.to_le_bytes());
 
-    // v2: edge_timestamps
     buf.extend_from_slice(&(edge_timestamps.len() as u64).to_le_bytes());
     for (edge_id, ts) in edge_timestamps {
         buf.extend_from_slice(&edge_id.0.to_le_bytes());
@@ -87,67 +79,14 @@ pub fn flush_metadata(
     Ok(())
 }
 
-/// Serialize CSR and segments to a buffer
-pub fn serialize_csr(
-    csr: &CsrVariant,
-    segments: &[CsrSegment],
-    section_id: u32,
-    buf: &mut Vec<u8>,
-) -> StorageResult<()> {
+/// Serialize one single-segment CSR to a buffer
+pub fn serialize_csr(csr: &CsrVariant, section_id: u32, buf: &mut Vec<u8>) -> StorageResult<()> {
     write_header_to(buf, section_id)
         .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
 
     let data = csr.dump();
     buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
     buf.extend_from_slice(&data);
-    buf.extend_from_slice(&(segments.len() as u64).to_le_bytes());
-
-    for segment in segments {
-        buf.extend_from_slice(&segment.create_ts_min.to_le_bytes());
-        buf.extend_from_slice(&segment.create_ts_max.to_le_bytes());
-        let (delete_ts_min, delete_ts_max) = segment.deletion_range();
-        buf.extend_from_slice(&delete_ts_min.to_le_bytes());
-        buf.extend_from_slice(&delete_ts_max.to_le_bytes());
-        let data = segment.csr.read().dump();
-        buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
-        buf.extend_from_slice(&data);
-
-        if let Some(edge_ids) = &segment.edge_ids {
-            buf.push(EDGE_ID_STORAGE_MODE_SEPARATE);
-            buf.extend_from_slice(&(edge_ids.len() as u64).to_le_bytes());
-            let mut edge_id_buffer = Vec::with_capacity(edge_ids.len() * 8);
-            for edge_id in edge_ids {
-                edge_id_buffer.extend_from_slice(&edge_id.to_le_bytes());
-            }
-            buf.extend_from_slice(&edge_id_buffer);
-        } else {
-            buf.push(EDGE_ID_STORAGE_MODE_DIRECT);
-        }
-
-        // Region metadata
-        const REGION_MAGIC: u32 = 0x5245474E; // 'REGN'
-        buf.extend_from_slice(&REGION_MAGIC.to_le_bytes());
-        buf.extend_from_slice(&(segment.region_vertex_count as u64).to_le_bytes());
-        buf.extend_from_slice(&(segment.regions.len() as u64).to_le_bytes());
-        for r in &segment.regions {
-            buf.extend_from_slice(&r.region_id.to_le_bytes());
-            buf.extend_from_slice(&r.vertex_start.to_le_bytes());
-            buf.extend_from_slice(&r.vertex_end.to_le_bytes());
-            buf.extend_from_slice(&r.edge_count.to_le_bytes());
-            buf.extend_from_slice(&r.deleted_count.to_le_bytes());
-            let (del_min, del_max) = match r.deletion_info {
-                super::segment::DeletionInfo::NoDeletes => (Timestamp::MAX, 0u64),
-                super::segment::DeletionInfo::HasDeletes {
-                    min_ts,
-                    max_ts,
-                    deleted_count: _,
-                } => (min_ts, max_ts),
-            };
-            buf.extend_from_slice(&del_min.to_le_bytes());
-            buf.extend_from_slice(&del_max.to_le_bytes());
-            buf.extend_from_slice(&(r.estimated_bytes as u64).to_le_bytes());
-        }
-    }
 
     Ok(())
 }
@@ -205,25 +144,6 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     cursor.read_exact(&mut next_edge_id_bytes)?;
     let next_edge_id = EdgeId(u64::from_le_bytes(next_edge_id_bytes));
 
-    let mut tombstone_count_bytes = [0u8; 8];
-    cursor.read_exact(&mut tombstone_count_bytes)?;
-    let tombstone_count = u64::from_le_bytes(tombstone_count_bytes) as usize;
-    let mut tombstones = HashMap::new();
-    for _ in 0..tombstone_count {
-        let mut edge_id_bytes = [0u8; 8];
-        cursor.read_exact(&mut edge_id_bytes)?;
-        let mut delete_ts_bytes = [0u8; 8];
-        cursor.read_exact(&mut delete_ts_bytes)?;
-        tombstones.insert(
-            EdgeId(u64::from_le_bytes(edge_id_bytes)),
-            u64::from_le_bytes(delete_ts_bytes),
-        );
-    }
-
-    let mut min_snapshot_ts_bytes = [0u8; 8];
-    cursor.read_exact(&mut min_snapshot_ts_bytes)?;
-    let min_active_snapshot_ts = u64::from_le_bytes(min_snapshot_ts_bytes);
-
     // edge_timestamps: creation + deletion timestamps per edge
     let edge_timestamps = if !cursor.is_empty() {
         let mut et_count_bytes = [0u8; 8];
@@ -239,14 +159,9 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
             cursor.read_exact(&mut delete_ts_bytes)?;
             let create_ts = u64::from_le_bytes(create_ts_bytes);
             let delete_ts = u64::from_le_bytes(delete_ts_bytes);
-            // commit_ts may not exist in older format; default to create_ts
-            let commit_ts = if cursor.len() >= 8 {
-                let mut commit_ts_bytes = [0u8; 8];
-                cursor.read_exact(&mut commit_ts_bytes)?;
-                u64::from_le_bytes(commit_ts_bytes)
-            } else {
-                create_ts
-            };
+            let mut commit_ts_bytes = [0u8; 8];
+            cursor.read_exact(&mut commit_ts_bytes)?;
+            let commit_ts = u64::from_le_bytes(commit_ts_bytes);
             edge_timestamps.insert(
                 EdgeId(u64::from_le_bytes(edge_id_bytes)),
                 EdgeTimestamps {
@@ -269,18 +184,13 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
         is_open,
         schema,
         next_edge_id,
-        tombstones,
-        min_snapshot_ts: min_active_snapshot_ts,
         edge_timestamps,
     })
 }
 
-/// Load CSR and segments from file
-pub fn load_csr(
-    path: &Path,
-    csr: &mut CsrVariant,
-    segments: &mut Vec<CsrSegment>,
-) -> StorageResult<()> {
+/// Load one single-segment CSR from file. Trailing bytes are rejected so old
+/// multi-segment payloads fail loudly instead of loading partially.
+pub fn load_csr(path: &Path, csr: &mut CsrVariant) -> StorageResult<()> {
     let (raw_data, total_rows) = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
@@ -306,160 +216,12 @@ pub fn load_csr(
     cursor.read_exact(&mut data)?;
 
     csr.load(&data)?;
-    segments.clear();
 
-    let mut segment_count_bytes = [0u8; 8];
-    cursor.read_exact(&mut segment_count_bytes)?;
-    let segment_count = u64::from_le_bytes(segment_count_bytes) as usize;
-
-    for _ in 0..segment_count {
-        let mut create_ts_min_bytes = [0u8; 8];
-        cursor.read_exact(&mut create_ts_min_bytes)?;
-        let create_ts_min = u64::from_le_bytes(create_ts_min_bytes);
-
-        let mut create_ts_max_bytes = [0u8; 8];
-        cursor.read_exact(&mut create_ts_max_bytes)?;
-        let create_ts_max = u64::from_le_bytes(create_ts_max_bytes);
-
-        let mut delete_ts_min_bytes = [0u8; 8];
-        cursor.read_exact(&mut delete_ts_min_bytes)?;
-        let delete_ts_min = u64::from_le_bytes(delete_ts_min_bytes);
-
-        let mut delete_ts_max_bytes = [0u8; 8];
-        cursor.read_exact(&mut delete_ts_max_bytes)?;
-        let delete_ts_max = u64::from_le_bytes(delete_ts_max_bytes);
-
-        let mut segment_len_bytes = [0u8; 8];
-        cursor.read_exact(&mut segment_len_bytes)?;
-        let segment_len = u64::from_le_bytes(segment_len_bytes) as usize;
-
-        let mut segment_data = vec![0u8; segment_len];
-        cursor.read_exact(&mut segment_data)?;
-
-        let mut segment_csr = super::super::Csr::new();
-        segment_csr.load(&segment_data)?;
-        let deletion_info = DeletionInfo::new(delete_ts_min, delete_ts_max);
-        let mut segment = CsrSegment::new(segment_csr, create_ts_min, create_ts_max, deletion_info);
-
-        if !cursor.is_empty() {
-            let mut mode_byte = [0u8; 1];
-            cursor.read_exact(&mut mode_byte)?;
-            match mode_byte[0] {
-                EDGE_ID_STORAGE_MODE_DIRECT => {}
-                EDGE_ID_STORAGE_MODE_SEPARATE => {
-                    if cursor.len() < 8 {
-                        return Err(StorageError::deserialize_error(
-                            "truncated edge_id count in segment".to_string(),
-                        ));
-                    }
-                    let mut edge_count_bytes = [0u8; 8];
-                    cursor.read_exact(&mut edge_count_bytes)?;
-                    let edge_count = u64::from_le_bytes(edge_count_bytes) as usize;
-
-                    let csr_edge_count = segment.csr.read().edge_count() as usize;
-                    if edge_count != csr_edge_count {
-                        return Err(StorageError::deserialize_error(format!(
-                            "edge_ids count mismatch: stored={}, csr={}",
-                            edge_count, csr_edge_count
-                        )));
-                    }
-
-                    if cursor.len() < edge_count * 8 {
-                        return Err(StorageError::deserialize_error(format!(
-                            "truncated edge_ids data: need {} bytes, have {}",
-                            edge_count * 8,
-                            cursor.len()
-                        )));
-                    }
-
-                    let mut edge_ids = Vec::with_capacity(edge_count);
-                    for _ in 0..edge_count {
-                        let mut edge_id_bytes = [0u8; 8];
-                        cursor.read_exact(&mut edge_id_bytes)?;
-                        edge_ids.push(EdgeId(u64::from_le_bytes(edge_id_bytes)));
-                    }
-                    segment.edge_ids = Some(edge_ids);
-                }
-                _ => {
-                    return Err(StorageError::deserialize_error(format!(
-                        "unknown edge_id storage mode: {}",
-                        mode_byte[0]
-                    )));
-                }
-            }
-        }
-
-        // Region metadata
-        {
-            const REGION_MAGIC: u32 = 0x5245474E;
-            let mut magic_bytes = [0u8; 4];
-            cursor.read_exact(&mut magic_bytes)?;
-            if u32::from_le_bytes(magic_bytes) != REGION_MAGIC {
-                return Err(StorageError::deserialize_error(format!(
-                    "invalid region magic: expected {:#010x}, got {:#010x}",
-                    REGION_MAGIC,
-                    u32::from_le_bytes(magic_bytes)
-                )));
-            }
-            if cursor.len() < 16 {
-                return Err(StorageError::deserialize_error(
-                    "truncated region header".to_string(),
-                ));
-            }
-            let mut rvc_bytes = [0u8; 8];
-            cursor.read_exact(&mut rvc_bytes)?;
-            let region_vertex_count = u64::from_le_bytes(rvc_bytes) as usize;
-            let mut rlen_bytes = [0u8; 8];
-            cursor.read_exact(&mut rlen_bytes)?;
-            let region_len = u64::from_le_bytes(rlen_bytes) as usize;
-            let mut regions = Vec::with_capacity(region_len);
-            for _ in 0..region_len {
-                if cursor.len() < 4 + 4 + 4 + 4 + 4 + 8 + 8 + 8 {
-                    return Err(StorageError::deserialize_error(
-                        "truncated region entry".to_string(),
-                    ));
-                }
-                let mut rid_bytes = [0u8; 4];
-                cursor.read_exact(&mut rid_bytes)?;
-                let region_id = u32::from_le_bytes(rid_bytes);
-                let mut vs_bytes = [0u8; 4];
-                cursor.read_exact(&mut vs_bytes)?;
-                let vertex_start = u32::from_le_bytes(vs_bytes);
-                let mut ve_bytes = [0u8; 4];
-                cursor.read_exact(&mut ve_bytes)?;
-                let vertex_end = u32::from_le_bytes(ve_bytes);
-                let mut ec_bytes = [0u8; 4];
-                cursor.read_exact(&mut ec_bytes)?;
-                let edge_count = u32::from_le_bytes(ec_bytes);
-                let mut dc_bytes = [0u8; 4];
-                cursor.read_exact(&mut dc_bytes)?;
-                let deleted_count = u32::from_le_bytes(dc_bytes);
-                let mut del_min_bytes = [0u8; 8];
-                cursor.read_exact(&mut del_min_bytes)?;
-                let del_min = u64::from_le_bytes(del_min_bytes);
-                let mut del_max_bytes = [0u8; 8];
-                cursor.read_exact(&mut del_max_bytes)?;
-                let del_max = u64::from_le_bytes(del_max_bytes);
-                let mut eb_bytes = [0u8; 8];
-                cursor.read_exact(&mut eb_bytes)?;
-                let estimated_bytes = u64::from_le_bytes(eb_bytes) as usize;
-                let deletion_info =
-                    super::segment::DeletionInfo::with_count(del_min, del_max, deleted_count);
-                regions.push(super::segment::RegionMeta {
-                    region_id,
-                    vertex_start,
-                    vertex_end,
-                    edge_count,
-                    deleted_count,
-                    deletion_info,
-                    estimated_bytes,
-                });
-            }
-            segment.region_vertex_count = region_vertex_count;
-            segment.regions = regions;
-        }
-
-        segments.push(segment);
+    if !cursor.is_empty() {
+        return Err(StorageError::deserialize_error(
+            "unexpected trailing data in edge CSR: old multi-segment format is not supported"
+                .to_string(),
+        ));
     }
 
     let loaded_edge_count = csr.edge_count() as u32;
@@ -494,7 +256,7 @@ pub fn load_csr_properties(path: &Path) -> StorageResult<CsrWithProperties> {
     let len = u64::from_le_bytes(len_bytes) as usize;
     let mut data = vec![0u8; len];
     cursor.read_exact(&mut data)?;
-    // Schema lives with TimeTravelEdgeStore, so decode the payload into a
+    // Schema lives with EdgeStore, so decode the payload into a
     // schemaless container here; the caller overlays the live schema after load.
     let mut properties = CsrWithProperties::new(1, Vec::new());
     properties.load(&data)?;
@@ -549,10 +311,11 @@ pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::super::super::*;
-    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::core::EdgeStore;
     use graphdb_core::Value;
 
-    fn create_edge_table() -> TimeTravelEdgeStore {
+    fn create_edge_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -566,26 +329,12 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]
     fn test_flush_load_roundtrip() {
-        let schema = super::super::super::EdgeSchema {
-            label_id: 0,
-            label_name: "knows".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Multiple,
-            schema_version: 1,
-        };
-        let mut table =
-            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table = create_edge_table();
 
         let ts = 100u64;
         table
@@ -607,21 +356,7 @@ mod tests {
             )
             .expect("flush should succeed");
 
-        let schema2 = super::super::super::EdgeSchema {
-            label_id: 0,
-            label_name: "knows".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Multiple,
-            schema_version: 1,
-        };
-        let mut loaded_table =
-            TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
+        let mut loaded_table = create_edge_table();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");
@@ -638,22 +373,8 @@ mod tests {
     }
 
     #[test]
-    fn test_flush_load_preserves_segments_and_tombstones() {
-        let schema = super::super::super::EdgeSchema {
-            label_id: 0,
-            label_name: "knows".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Multiple,
-            schema_version: 1,
-        };
-        let mut table =
-            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+    fn test_flush_load_preserves_deletions() {
+        let mut table = create_edge_table();
 
         table
             .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -661,7 +382,6 @@ mod tests {
         table
             .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 110)
             .unwrap();
-        table.freeze_csr_only(150);
         table.delete_edge(1, 2, 0, 200).unwrap();
 
         let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -673,53 +393,14 @@ mod tests {
             )
             .expect("flush should succeed");
 
-        let schema2 = super::super::super::EdgeSchema {
-            label_id: 0,
-            label_name: "knows".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Multiple,
-            schema_version: 1,
-        };
-        let mut loaded_table =
-            TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
+        let mut loaded_table = create_edge_table();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");
 
-        assert_eq!(loaded_table.out_segments.len(), 1);
-        assert_eq!(loaded_table.in_segments.len(), 1);
         assert!(loaded_table.has_edge(1, 2, 0, 150));
         assert!(!loaded_table.has_edge(1, 2, 0, 250));
         assert!(loaded_table.has_edge(1, 3, 0, 250));
-    }
-
-    #[test]
-    fn test_segment_size_estimation() {
-        let mut table = create_edge_table();
-
-        for i in 0..50u64 {
-            table
-                .insert_edge(
-                    (i % 10) as u32,
-                    (100 + i) as u32,
-                    0,
-                    &[("weight".to_string(), Value::Double(i as f64))],
-                    1000 + i,
-                )
-                .unwrap();
-        }
-
-        table.freeze_csr_only(1100);
-
-        let total_bytes = table.segments_total_bytes();
-        assert!(total_bytes > 0);
-        assert!(total_bytes >= 50 * 20);
     }
 
     #[test]
@@ -767,37 +448,5 @@ mod tests {
             loaded.out_csr.create_ts_of(graphdb_core::types::EdgeId(2)),
             Some(300)
         );
-    }
-
-    #[test]
-    fn test_flush_load_create_ts_used_by_freeze() {
-        let mut table = create_edge_table();
-
-        // Insert edges at different timestamps
-        table
-            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
-            .unwrap();
-        table
-            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
-            .unwrap();
-
-        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
-        table
-            .flush(
-                temp_dir.path(),
-                crate::compression::CompressionType::Zstd { level: 3 },
-            )
-            .expect("flush should succeed");
-
-        let mut loaded = create_edge_table();
-        loaded.load(temp_dir.path()).expect("load should succeed");
-
-        // Freeze at ts=150: only edge created at 100 should be included in segment
-        loaded.freeze_csr_only(150);
-
-        // After freeze, the segment should have correct create_ts_min
-        assert!(!loaded.out_segments.is_empty());
-        let seg = &loaded.out_segments[0];
-        assert_eq!(seg.create_ts_min, 100);
     }
 }

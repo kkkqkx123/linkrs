@@ -1,9 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
-use crate::cold::ColdSnapshot;
 use crate::engine::graph_storage::context::VertexIdDomainEvidence;
 use crate::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use graphdb_core::types::{LabelId, TableId, Timestamp};
@@ -316,24 +313,6 @@ impl GraphStorageContext {
                 let _ = vertex_table.unregister_snapshot_by_timestamp(timestamp);
             }
         }
-
-        let registered_edge_keys: Vec<crate::engine::data_store::EdgeTableKey> = {
-            let registered = operation.registered_edge_partitions.read();
-            registered.iter().cloned().collect()
-        };
-
-        if !registered_edge_keys.is_empty() {
-            let edge_tables: Vec<Arc<parking_lot::RwLock<crate::edge::EdgeStore>>> =
-                self.persistent.data_store.with_edge_tables(|tables| {
-                    registered_edge_keys
-                        .iter()
-                        .filter_map(|key| tables.get(key).cloned())
-                        .collect()
-                });
-            for edge_table in edge_tables {
-                edge_table.write().unregister_snapshot(timestamp);
-            }
-        }
     }
 
     pub fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
@@ -371,23 +350,9 @@ impl GraphStorageContext {
     }
 
     pub fn mark_edge_modified(&self, label: LabelId) {
-        self.runtime
-            .last_edge_write
-            .lock()
-            .insert(label, std::time::Instant::now());
         self.persistent
             .table_tracker
             .mark_modified(TableId::edge(label));
-    }
-
-    /// Seconds since the last write to `label`'s edge tables (wall clock).
-    /// Labels without any recorded write report `u64::MAX`.
-    pub(crate) fn edge_idle_seconds(&self, label: LabelId) -> u64 {
-        let last_write = self.runtime.last_edge_write.lock();
-        match last_write.get(&label) {
-            Some(instant) => instant.elapsed().as_secs(),
-            None => u64::MAX,
-        }
     }
 
     pub(crate) fn storage_size(&self) -> usize {
@@ -844,89 +809,10 @@ impl GraphStorageContext {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
 
-    pub fn cold_snapshots(&self) -> &Arc<RwLock<super::ColdSnapshotMap>> {
-        &self.cold_snapshots
-    }
-
-    /// Register a snapshot by label, keeping at most
-    /// `cold_tier.max_cold_snapshots_per_label` snapshots per label (oldest
-    /// dropped first).
-    pub fn load_cold_snapshot(&self, snapshot: ColdSnapshot) {
-        let label = snapshot.label();
-        let max_per_label = self
-            .persistent
-            .config
-            .cold_tier
-            .max_cold_snapshots_per_label;
-        let mut guard = self.cold_snapshots.write();
-        let snapshots = guard.entry(label).or_default();
-        snapshots.push(Arc::new(snapshot));
-        if max_per_label > 0 && snapshots.len() > max_per_label {
-            let excess = snapshots.len() - max_per_label;
-            snapshots.drain(..excess);
-        }
-    }
-
-    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<Vec<Arc<ColdSnapshot>>> {
-        self.cold_snapshots.write().remove(&label)
-    }
-
-    pub fn list_cold_snapshots(&self) -> Vec<LabelId> {
-        self.cold_snapshots
-            .read()
-            .iter()
-            .filter(|(_, snapshots)| !snapshots.is_empty())
-            .map(|(label, _)| *label)
-            .collect()
-    }
-
-    /// Derive a time-travel view over the currently registered snapshots:
-    /// a per-label shelf of immutable snapshots keyed by timestamp.
-    ///
-    /// The view is a lightweight copy of the registration (Arc clones only),
-    /// so callers may query it without holding the registry lock.
-    pub fn cold_time_machine(&self) -> crate::cold::ColdSnapshotTimeMachine {
-        let mut machine = crate::cold::ColdSnapshotTimeMachine::new();
-        let cold = self.cold_snapshots.read();
-        for snapshots in cold.values() {
-            for snapshot in snapshots {
-                machine.insert_arc(snapshot.clone());
-            }
-        }
-        machine
-    }
-
-    /// Most recent cold snapshot of `label` not newer than `ts`, using the
-    /// same timestamp routing as the query engine's cold fallback.
-    pub fn cold_snapshot_at(
-        &self,
-        label: LabelId,
-        ts: Timestamp,
-    ) -> Option<Arc<crate::cold::ColdSnapshot>> {
-        self.cold_time_machine().snapshot_at(label, ts)
-    }
-
-    /// Resolve the cold snapshot directory: `cold_tier.snapshot_dir` when
-    /// configured, else `{work_dir}/cold_snapshots`.
-    pub(crate) fn cold_snapshot_dir(&self) -> std::path::PathBuf {
-        let cfg_dir = &self.persistent.config.cold_tier.snapshot_dir;
-        if cfg_dir.as_os_str().is_empty() {
-            self.persistent
-                .layout
-                .work_dir()
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/linkrs_cold"))
-                .join("cold_snapshots")
-        } else {
-            cfg_dir.clone()
-        }
-    }
-
     // ── Layout version & vertex-id domain evidence ───────────────────────────
 
-    /// Monotonic physical layout version. Bumped on segment allocation,
-    /// merge, compaction, eviction, restore, and cold-snapshot load/merge so
-    /// consumers can detect stale plans.
+    /// Monotonic physical layout version. Bumped on compaction, restore, and
+    /// remap so consumers can detect stale plans.
     pub(crate) fn layout_version(&self) -> u64 {
         self.persistent.layout_version.get()
     }

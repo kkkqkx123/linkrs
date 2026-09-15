@@ -17,8 +17,8 @@ impl VertexTable {
     /// external keys and the old-to-new internal ID mapping.
     ///
     /// The mapping is required by callers that propagate the remap to
-    /// dependent row-indexed structures (edge CSR rows, frozen segments,
-    /// cold snapshots) so vertex references stay stable.
+    /// dependent row-indexed structures (edge CSR rows) so vertex references
+    /// stay stable.
     pub fn compact_with_ts_collect_mapping(
         &mut self,
         ts: graphdb_core::types::Timestamp,

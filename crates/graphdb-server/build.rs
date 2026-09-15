@@ -1,8 +1,7 @@
 // Compile-time protobuf code generation for the gRPC layer.
 //
 // Source contracts live in the workspace `proto/` directory:
-// - `graphdb.proto` for the client-facing GraphDB service,
-// - `cold_snapshot.proto` for node-to-node snapshot distribution.
+// - `graphdb.proto` for the client-facing GraphDB service.
 //
 // `tonic-build` regenerates the Rust bindings into OUT_DIR whenever a proto
 // changes; `crate::grpc::proto` pulls them in via `tonic::include_proto!`.
@@ -18,20 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|p| p.join("proto"))
             .ok_or("graphdb-server is expected under <workspace>/crates")?;
 
-        for file in ["graphdb.proto", "cold_snapshot.proto"] {
+        for file in ["graphdb.proto"] {
             println!("cargo:rerun-if-changed={}", proto_dir.join(file).display());
         }
 
         tonic_build::configure()
             .build_server(true)
             .build_client(true)
-            .compile_protos(
-                &[
-                    proto_dir.join("graphdb.proto"),
-                    proto_dir.join("cold_snapshot.proto"),
-                ],
-                &[proto_dir],
-            )?;
+            .compile_protos(&[proto_dir.join("graphdb.proto")], &[proto_dir])?;
     }
 
     Ok(())

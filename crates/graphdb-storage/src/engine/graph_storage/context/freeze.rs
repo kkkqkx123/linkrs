@@ -1,6 +1,5 @@
-use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::background_freeze::{FreezeGuard, FreezeStats};
-use graphdb_core::types::{AutoCompactConfig, CompactConfig, Timestamp};
+use graphdb_core::types::{AutoCompactConfig, CompactConfig};
 use graphdb_core::StorageResult;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -61,8 +60,8 @@ impl GraphStorageContext {
     }
 
     /// Run background maintenance synchronously: automatic vertex compaction
-    /// followed by the existing delta freeze pass, then per-table automatic
-    /// maintenance (tombstone GC, property compaction, delta freeze).
+    /// followed by single-segment edge compaction, then per-table automatic
+    /// maintenance (tombstone GC, property compaction).
     /// Captures watermarks once and shares across all sub-passes.
     pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
         let gc = crate::engine::gc_coordinator::GcCoordinator::new(
@@ -86,7 +85,7 @@ impl GraphStorageContext {
             .for_all_edge_partitions_mut(|_key, table| {
                 let ran = table.maybe_run_auto_maintenance_with_watermarks(wm, margin);
                 if ran > 0 && log::log_enabled!(log::Level::Debug) {
-                    let stats = table.tombstone_stats();
+                    let stats = table.mvcc.tombstone_stats();
                     log::debug!(
                         "Auto edge maintenance (watermark) ran {} passes on {} (tombstones={})",
                         ran,
@@ -96,24 +95,6 @@ impl GraphStorageContext {
                 }
                 Ok(())
             })?;
-        Ok(())
-    }
-
-    /// Set the operator retention floor on every edge partition.
-    ///
-    /// This is the reclamation exit for the no-snapshot steady state: with a
-    /// floor at `ts`, deletions at or before `ts` become reclaimable by the
-    /// regular maintenance pipeline exactly as if a snapshot existed at that
-    /// point. Registered snapshots always win — the floor only applies while
-    /// no snapshot pins history. A floor of `0` disables it again.
-    pub fn set_edge_retention_floor(&self, ts: Timestamp) -> StorageResult<()> {
-        self.persistent
-            .data_store
-            .for_all_edge_partitions_mut(|_key, table| {
-                table.set_retention_floor(ts);
-                Ok(())
-            })?;
-        log::info!("Edge retention floor set to {} on all partitions", ts);
         Ok(())
     }
 
@@ -188,10 +169,10 @@ impl GraphStorageContext {
         // Reserve ratio 0.5 doubles the compacted capacity (matches the
         // original 2.0 growth intent; 2.0 clamps to 1.0 inside
         // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
-        let config = CompactConfig::with_fixed_ratio(true, 0.5).enable_segment_merge(1000);
-        // Freeze incrementally up to the unified GC watermark so all table
-        // types in the same pass share the same cutoff and no prefix reclaim
-        // can change the cutoff for a later type in the same pass.
+        let config = CompactConfig::with_fixed_ratio(true, 0.5);
+        // Compact up to the unified GC watermark so all table types in the
+        // same pass share the same cutoff and no prefix reclaim can change
+        // the cutoff for a later type in the same pass.
         let ts = wm.safe_gc_timestamp();
 
         // Use FreezeGuard to manage freeze statistics
@@ -219,7 +200,7 @@ impl GraphStorageContext {
                         delta_memory_bytes: delta_memory,
                         segment_count: 0,
                         oldest_segment_age: 0,
-                        deletion_ratio: 0.0,
+                        deletion_ratio: table.deletion_stats().deletion_ratio(),
                     };
 
                     if manager.should_freeze_with_stats(&input) {
@@ -232,7 +213,10 @@ impl GraphStorageContext {
                             decision.summary()
                         );
 
-                        frozen_here = table.compact_and_freeze(ts, &config) as u64;
+                        let reserve_ratio =
+                            config.compute_reserve_ratio(table.edge_count() as usize, 0);
+                        frozen_here = table.compact_csr_only(ts, reserve_ratio) as u64;
+                        table.compact_properties(ts);
                         any_here = true;
                     } else if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
@@ -243,7 +227,10 @@ impl GraphStorageContext {
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
-                        frozen_here = table.compact_and_freeze(ts, &config) as u64;
+                        let reserve_ratio =
+                            config.compute_reserve_ratio(table.edge_count() as usize, 0);
+                        frozen_here = table.compact_csr_only(ts, reserve_ratio) as u64;
+                        table.compact_properties(ts);
                         any_here = true;
                     }
                 }
@@ -299,70 +286,7 @@ impl GraphStorageContext {
             }
         }
 
-        // Automatic cold-hot tiering after the delta-freeze pass so both
-        // freeze operations run serially under each table's write lock.
-        if let Err(err) = self.maybe_freeze_cold_tier() {
-            log::warn!("Cold-tier freeze evaluation failed: {}", err);
-        }
-
         Ok(())
-    }
-
-    /// Check if memory pressure exceeds the soft limit and evict cold segments if needed.
-    pub fn trigger_segment_eviction(&self) -> StorageResult<u64> {
-        let accounting = &self.persistent.resource_accounting;
-        let snapshot = accounting.snapshot();
-
-        if !snapshot.soft_limit_exceeded() {
-            return Ok(0);
-        }
-
-        let excess = snapshot
-            .total_current_bytes
-            .saturating_sub(snapshot.budget.soft_limit_bytes);
-        if excess == 0 {
-            return Ok(0);
-        }
-
-        let target_bytes = excess as usize;
-        let mut total_freed: u64 = 0;
-
-        let spill_dir = self.persistent.layout.spill_dir();
-        std::fs::create_dir_all(&spill_dir)?;
-
-        let engine = SegmentEvictionEngine::new(spill_dir);
-
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            for arc in edge_tables.values() {
-                if total_freed >= excess {
-                    break;
-                }
-                let remaining = excess - total_freed;
-                let table = arc.read();
-                match engine.evict_cold_segments(&table, remaining as usize) {
-                    Ok(freed) => total_freed += freed as u64,
-                    Err(e) => {
-                        log::warn!("Segment eviction failed for table: {}", e);
-                    }
-                }
-            }
-        });
-
-        if total_freed > 0 {
-            accounting.release(
-                crate::engine::resource_budget::MemoryCategory::Data,
-                total_freed,
-            );
-            log::info!(
-                "Segment eviction freed {} bytes (target: {} bytes)",
-                total_freed,
-                target_bytes
-            );
-            // Evicting cold segments changes the physical edge layout.
-            self.bump_layout_version();
-        }
-
-        Ok(total_freed)
     }
 }
 

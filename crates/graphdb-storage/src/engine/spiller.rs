@@ -1,15 +1,14 @@
 //! Disk spiller for query scratch space.
 //!
 //! When memory pressure exceeds the hard limit during query execution, the spiller
-//! evicts cold segments and/or cached data to temporary files, freeing physical
-//! memory and enabling the allocation to succeed on retry.
+//! force-evicts cached data to free physical memory and enabling the
+//! allocation to succeed on retry.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::engine::cache_manager::CacheManager;
 use crate::engine::data_store::GraphDataStore;
 use crate::engine::resource_budget::{MemoryAccounting, MemoryCategory, MemoryReservation};
@@ -26,8 +25,8 @@ pub struct SpillFile {
 /// Spill manager for query scratch data.
 ///
 /// When memory pressure exceeds the hard limit during `try_reserve`, the spiller
-/// evicts cold segments to temporary files and force-evicts cached data if needed,
-/// enabling graceful degradation instead of failing with `CapacityExceeded`.
+/// force-evicts cached data if needed, enabling graceful degradation instead
+/// of failing with `CapacityExceeded`.
 pub struct Spiller {
     spill_dir: PathBuf,
     accounting: Arc<MemoryAccounting>,
@@ -69,7 +68,7 @@ impl Spiller {
 
     /// Spill cold data to free memory.
     ///
-    /// Evicts cold segments first, then force-evicts from cache if still under pressure.
+    /// Force-evicts from cache when under pressure.
     /// Returns the number of bytes freed (0 if nothing could be spilled).
     pub fn spill_cold_data(&self, requested_bytes: u64) -> Option<u64> {
         if requested_bytes == 0 {
@@ -85,34 +84,7 @@ impl Spiller {
             return None;
         }
 
-        let engine = SegmentEvictionEngine::new(self.spill_dir.clone());
         let mut total_freed: u64 = 0;
-
-        self.data_store.with_edge_tables(|edge_tables| {
-            for arc in edge_tables.values() {
-                if total_freed >= requested_bytes {
-                    break;
-                }
-                let remaining = (requested_bytes - total_freed) as usize;
-                let table = arc.read();
-                match engine.evict_cold_segments(&table, remaining) {
-                    Ok(freed) => total_freed += freed as u64,
-                    Err(e) => {
-                        log::warn!("Segment eviction failed during spill: {}", e);
-                    }
-                }
-            }
-        });
-
-        if total_freed >= requested_bytes {
-            self.active_spills.write().push(SpillFile {
-                path: self.spill_dir.join("segment_eviction.spill"),
-                category: MemoryCategory::Data,
-                spilled_bytes: total_freed,
-            });
-            self.accounting.release(MemoryCategory::Data, total_freed);
-            return Some(total_freed);
-        }
 
         let snapshot = self.accounting.snapshot();
         let cache_bytes = snapshot.categories[MemoryCategory::Cache as usize].current_bytes;

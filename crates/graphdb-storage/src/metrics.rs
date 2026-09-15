@@ -346,56 +346,12 @@ where
 impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
     crate::client::StorageSnapshotOps for MetricsStorage<S>
 {
-    fn export_snapshot(
-        &self,
-        ts: graphdb_core::types::Timestamp,
-    ) -> graphdb_core::StorageResult<
-        Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>,
-    > {
-        self.inner.export_snapshot(ts)
-    }
-
     fn get_freeze_stats(&self) -> Option<crate::engine::background_freeze::FreezeStats> {
         self.inner.get_freeze_stats()
     }
 
     fn trigger_background_freeze(&self) -> graphdb_core::StorageResult<()> {
         self.inner.trigger_background_freeze()
-    }
-
-    fn list_cold_snapshots(
-        &self,
-    ) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
-        self.inner.list_cold_snapshots()
-    }
-
-    fn load_cold_snapshot(
-        &self,
-        path: &std::path::Path,
-    ) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo> {
-        self.inner.load_cold_snapshot(path)
-    }
-
-    fn remove_cold_snapshot(
-        &self,
-        label: graphdb_core::types::LabelId,
-    ) -> graphdb_core::StorageResult<()> {
-        self.inner.remove_cold_snapshot(label)
-    }
-
-    fn export_cold_snapshot(
-        &self,
-        label: graphdb_core::types::LabelId,
-        path: &std::path::Path,
-    ) -> graphdb_core::StorageResult<crate::client::ColdSnapshotInfo> {
-        self.inner.export_cold_snapshot(label, path)
-    }
-
-    fn merge_cold_snapshots(
-        &self,
-        labels: &[graphdb_core::types::LabelId],
-    ) -> graphdb_core::StorageResult<Vec<crate::client::ColdSnapshotInfo>> {
-        self.inner.merge_cold_snapshots(labels)
     }
 }
 

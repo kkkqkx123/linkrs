@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use crate::engine::background_freeze::BackgroundFreezeManager;
 use crate::engine::PersistenceConfig;
@@ -23,7 +22,6 @@ impl GraphStorageContext {
             write_gate_lease: None,
             auto_commit_undo: None,
             auto_commit_window: None,
-            cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
         }
         .with_default_index_gc()
@@ -47,7 +45,6 @@ impl GraphStorageContext {
                 write_gate_lease: None,
                 auto_commit_undo: None,
                 auto_commit_window: None,
-                cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
             }
             .with_default_index_gc();
@@ -116,7 +113,6 @@ impl GraphStorageContext {
             write_gate_lease: self.write_gate_lease.clone(),
             auto_commit_undo: self.auto_commit_undo.clone(),
             auto_commit_window: self.auto_commit_window.clone(),
-            cold_snapshots: self.cold_snapshots.clone(),
             checkpoint_scheduler: self.checkpoint_scheduler.clone(),
         }
     }

@@ -43,12 +43,6 @@ pub enum VersionManagerError {
 
     #[error("Timestamp space exhausted")]
     TimestampExhausted,
-
-    #[error("Timestamp {timestamp} is older than retention frontier {frontier}")]
-    TimestampBeforeRetention {
-        timestamp: Timestamp,
-        frontier: Timestamp,
-    },
 }
 
 pub type VersionManagerResult<T> = Result<T, VersionManagerError>;
@@ -57,9 +51,6 @@ pub type VersionManagerResult<T> = Result<T, VersionManagerError>;
 pub struct VersionManagerConfig {
     pub max_concurrent_reads: u32,
     pub wait_timeout: Duration,
-    /// The oldest timestamp that may be opened as a historical snapshot.
-    /// Zero disables the retention check.
-    pub retention_frontier: Timestamp,
     /// Minimum age of a `Pending` write timestamp before
     /// [`VersionManager::reap_expired_write_timestamps`] aborts it as stale.
     ///
@@ -73,7 +64,6 @@ impl Default for VersionManagerConfig {
         Self {
             max_concurrent_reads: 1000,
             wait_timeout: Duration::from_secs(5),
-            retention_frontier: 0,
             write_reap_timeout: Duration::from_secs(60),
         }
     }
@@ -86,11 +76,6 @@ impl VersionManagerConfig {
 
     pub fn with_max_concurrent_reads(mut self, max: u32) -> Self {
         self.max_concurrent_reads = max;
-        self
-    }
-
-    pub fn with_retention_frontier(mut self, timestamp: Timestamp) -> Self {
-        self.retention_frontier = timestamp;
         self
     }
 
@@ -117,7 +102,6 @@ pub struct VersionManager {
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
     write_states: Mutex<BTreeMap<Timestamp, (Instant, WriteTimestampState)>>,
-    retention_frontier: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +117,6 @@ impl VersionManager {
     }
 
     pub fn with_config(config: VersionManagerConfig) -> Self {
-        let retention_frontier = config.retention_frontier;
         Self {
             write_ts: AtomicU64::new(1),
             read_ts: AtomicU64::new(1),
@@ -146,7 +129,6 @@ impl VersionManager {
             config,
             snapshot_tracker: Arc::new(SnapshotTracker::new()),
             write_states: Mutex::new(BTreeMap::new()),
-            retention_frontier: AtomicU64::new(retention_frontier),
         }
     }
 
@@ -157,17 +139,6 @@ impl VersionManager {
         self.write_ts.store(ts, Ordering::Release);
         self.read_ts.store(ts, Ordering::Release);
         self.write_states.lock().clear();
-    }
-
-    /// Set the oldest timestamp that can be retained as a historical snapshot.
-    /// The frontier only moves forward.
-    pub fn set_retention_frontier(&self, timestamp: Timestamp) {
-        self.retention_frontier
-            .fetch_max(timestamp, Ordering::AcqRel);
-    }
-
-    pub fn retention_frontier(&self) -> Timestamp {
-        self.retention_frontier.load(Ordering::Acquire)
     }
 
     pub fn clear(&self) {
@@ -296,38 +267,6 @@ impl VersionManager {
                 return None;
             }
         }
-    }
-
-    /// Register a read at an already committed historical timestamp.
-    pub fn acquire_read_timestamp_at(
-        &self,
-        timestamp: Timestamp,
-    ) -> VersionManagerResult<Timestamp> {
-        if timestamp > self.read_timestamp() {
-            return Err(VersionManagerError::InvalidTimestamp(timestamp));
-        }
-        let retention_frontier = self.retention_frontier();
-        if retention_frontier != 0 && timestamp < retention_frontier {
-            return Err(VersionManagerError::TimestampBeforeRetention {
-                timestamp,
-                frontier: retention_frontier,
-            });
-        }
-        let guard = self.read_lock.lock();
-        let pending = self.read_pending.load(Ordering::Relaxed);
-        if pending < 0 || pending >= self.config.max_concurrent_reads as i32 {
-            drop(guard);
-            return Err(VersionManagerError::TooManyTransactions);
-        }
-        self.read_pending.fetch_add(1, Ordering::Relaxed);
-        if self.snapshot_tracker.add_snapshot(timestamp).is_err() {
-            self.read_pending.fetch_sub(1, Ordering::Relaxed);
-            self.read_condvar.notify_all();
-            drop(guard);
-            return Err(VersionManagerError::SnapshotTrackingFailed);
-        }
-        drop(guard);
-        Ok(timestamp)
     }
 
     pub fn release_read_timestamp(&self) {
@@ -507,18 +446,7 @@ impl VersionManager {
     }
 
     pub fn get_safe_gc_timestamp(&self) -> Timestamp {
-        let active = self.snapshot_tracker.min_active_snapshot();
-        let retention = self.retention_frontier();
-        if retention == 0 {
-            active
-        } else {
-            active.min(retention)
-        }
-    }
-
-    pub fn get_safe_gc_timestamp_with_margin(&self, margin: Timestamp) -> Timestamp {
-        let safe_ts = self.get_safe_gc_timestamp();
-        safe_ts.saturating_sub(margin)
+        self.snapshot_tracker.min_active_snapshot()
     }
 
     /// Get the snapshot tracker for explicit snapshot management
@@ -730,40 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn test_historical_read_tracks_requested_timestamp() {
-        let vm = Arc::new(VersionManager::new());
-        let write_timestamp = vm.acquire_insert_timestamp().expect("write timestamp");
-        vm.commit_write_timestamp(write_timestamp);
-
-        let timestamp = vm
-            .acquire_read_timestamp_at(write_timestamp)
-            .expect("historical timestamp");
-        assert_eq!(timestamp, write_timestamp);
-        assert_eq!(vm.snapshot_tracker().ref_count(timestamp), Some(1));
-
-        vm.release_read_timestamp_at(timestamp);
-        assert_eq!(vm.snapshot_tracker().ref_count(timestamp), None);
-    }
-
-    #[test]
-    fn test_historical_read_before_retention_is_rejected() {
-        let vm =
-            VersionManager::with_config(VersionManagerConfig::default().with_retention_frontier(3));
-        vm.init_ts(3);
-
-        let error = vm
-            .acquire_read_timestamp_at(2)
-            .expect_err("historical snapshots before retention must be rejected");
-        assert!(matches!(
-            error,
-            VersionManagerError::TimestampBeforeRetention {
-                timestamp: 2,
-                frontier: 3
-            }
-        ));
-    }
-
-    #[test]
     fn test_timestamp_exhaustion_is_reported() {
         let vm = VersionManager::new();
         vm.init_ts(Timestamp::MAX);
@@ -773,24 +667,6 @@ mod tests {
             Err(VersionManagerError::TimestampExhausted)
         ));
         assert_eq!(vm.pending_count(), 0);
-    }
-
-    #[test]
-    fn test_retention_frontier_limits_safe_gc_timestamp() {
-        let vm = VersionManager::with_config(
-            VersionManagerConfig::default().with_retention_frontier(10),
-        );
-        vm.init_ts(20);
-
-        assert_eq!(vm.get_safe_gc_timestamp(), 10);
-
-        let snapshot = vm
-            .acquire_read_timestamp_at(15)
-            .expect("snapshot inside retention should be accepted");
-        assert_eq!(vm.get_safe_gc_timestamp(), 10);
-
-        vm.release_read_timestamp_at(snapshot);
-        assert_eq!(vm.get_safe_gc_timestamp(), 10);
     }
 
     #[test]

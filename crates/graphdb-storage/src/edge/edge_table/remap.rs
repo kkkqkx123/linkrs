@@ -5,9 +5,9 @@
 //! as encoded `(internal_id, rank)` keys, so the old-to-new mapping must be
 //! propagated here or every edge reference to compacted vertices breaks.
 //!
-//! Rows and neighbors are rebuilt by reconstructing the CSR from all
-//! physically present entries (including tombstoned ones, preserving
-//! time-travel visibility). Rebuilding also truncates the row space to the
+//! Rows and neighbors are rebuilt by reconstructing the single-segment CSR
+//! from all physically present entries (including tombstoned ones, preserving
+//! snapshot visibility). Rebuilding also truncates the row space to the
 //! highest edge-bearing row plus one, reclaiming space left behind by deleted
 //! vertices (Ladybug `getMaxOffsetWithRels() + 1` semantics).
 //!
@@ -16,10 +16,9 @@
 //! `dst_label` space. Out rows and in neighbors live in the src space; in
 //! rows and out neighbors live in the dst space.
 
-use super::core::TimeTravelEdgeStore;
-use super::segment::CsrSegment;
+use super::core::EdgeStore;
 use crate::edge::csr_trait::MutableCsrTrait;
-use crate::edge::{Csr, CsrBase, CsrVariant, EdgeStrategy, Nbr};
+use crate::edge::{CsrBase, CsrVariant, EdgeStrategy, Nbr};
 use graphdb_core::types::{Timestamp, VertexId};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
@@ -27,10 +26,10 @@ use std::collections::HashMap;
 /// Translate an encoded `(endpoint_internal_id, rank)` neighbor key using the
 /// old-to-new internal ID mapping. Unmapped endpoints are returned unchanged.
 pub(crate) fn remap_endpoint_key(key: VertexId, mapping: Option<&HashMap<u32, u32>>) -> VertexId {
-    let (endpoint, rank) = TimeTravelEdgeStore::decode_edge_endpoint(key);
+    let (endpoint, rank) = EdgeStore::decode_edge_endpoint(key);
     match endpoint.as_int64() {
         Some(id) if id >= 0 => match mapping.and_then(|m| m.get(&(id as u32))).copied() {
-            Some(new_id) => TimeTravelEdgeStore::edge_endpoint_key(new_id, rank),
+            Some(new_id) => EdgeStore::edge_endpoint_key(new_id, rank),
             None => key,
         },
         _ => key,
@@ -44,10 +43,11 @@ fn remapped_row(id: u32, mapping: Option<&HashMap<u32, u32>>) -> u32 {
     }
 }
 
-/// Rebuild a mutable CSR with translated rows/neighbors and a truncated row
-/// space (max translated row + 1). Tombstoned entries are re-marked so
-/// historical visibility is preserved. An empty CSR is rebuilt with a single
-/// row: after a compaction remap the pre-compaction capacity must not linger.
+/// Rebuild a single-segment CSR with translated rows/neighbors and a
+/// truncated row space (max translated row + 1). Tombstoned entries are
+/// re-marked so snapshot visibility is preserved. An empty CSR is rebuilt
+/// with a single row: after a compaction remap the pre-compaction capacity
+/// must not linger.
 fn remap_variant(
     old: CsrVariant,
     row_mapping: Option<&HashMap<u32, u32>>,
@@ -97,57 +97,7 @@ fn remap_variant(
     Ok(csr)
 }
 
-/// Rebuild a frozen segment's immutable CSR with translated rows/neighbors and
-/// a truncated row space. Entry order is preserved so position-based EdgeId
-/// recovery (`edge_ids`) stays valid.
-fn remap_segment_csr(
-    segment: &mut CsrSegment,
-    row_mapping: Option<&HashMap<u32, u32>>,
-    neighbor_mapping: Option<&HashMap<u32, u32>>,
-) -> StorageResult<()> {
-    let entries: Vec<(u32, Nbr, Timestamp)> = segment
-        .csr
-        .read()
-        .iter()
-        .map(|(src, nbr)| {
-            let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (
-                src_u32,
-                Nbr::new(nbr.endpoint, nbr.rank, nbr.edge_id),
-                nbr.timestamp,
-            )
-        })
-        .collect();
-
-    if entries.is_empty() {
-        return Ok(());
-    }
-
-    let mut max_row = 0u32;
-    let mut new_entries = Vec::with_capacity(entries.len());
-    for (src, nbr, create_ts) in entries {
-        let new_src = remapped_row(src, row_mapping);
-        let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
-        let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
-        max_row = max_row.max(new_src);
-        new_entries.push((
-            new_src,
-            Nbr {
-                endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
-                rank: ep_rank,
-                ..nbr
-            },
-            create_ts,
-        ));
-    }
-
-    let capacity = (max_row as usize).saturating_add(1);
-    let mut csr = segment.csr.write();
-    *csr = Csr::from_nbr_entries(&new_entries, capacity);
-    Ok(())
-}
-
-impl TimeTravelEdgeStore {
+impl EdgeStore {
     /// Propagate vertex compaction old-to-new internal ID mappings into this
     /// edge table.
     ///
@@ -155,10 +105,9 @@ impl TimeTravelEdgeStore {
     /// - `src_mapping` applies to out CSR rows and in CSR neighbor keys
     /// - `dst_mapping` applies to in CSR rows and out CSR neighbor keys
     ///
-    /// Frozen segments are remapped in place; derived structures (sparse
-    /// vertex index, merged current snapshot, property index) are rebuilt or
-    /// invalidated. Row spaces of both mutable CSRs and segments are truncated
-    /// to the highest edge-bearing row plus one.
+    /// Both single-segment CSRs are rebuilt with a truncated row space. The
+    /// property index encodes (src, dst) internal IDs in its keys and is
+    /// rebuilt from the remapped data when enabled.
     pub fn remap_vertex_ids(
         &mut self,
         src_mapping: Option<&HashMap<u32, u32>>,
@@ -188,21 +137,6 @@ impl TimeTravelEdgeStore {
             self.config.overflow_chunk_edges,
         )?;
 
-        for segment in &mut self.out_segments {
-            remap_segment_csr(segment, src_mapping, dst_mapping)?;
-        }
-        for segment in &mut self.in_segments {
-            remap_segment_csr(segment, dst_mapping, src_mapping)?;
-        }
-
-        // Derived structures: sparse index keys and the merged snapshot cache
-        // are row-indexed and must follow the remap.
-        self.rebuild_sparse_vertex_indices();
-        self.current_snapshot_out = None;
-        self.current_snapshot_in = None;
-        self.snapshot_dirty = true;
-        self.update_segment_checksums();
-
         // The property index encodes (src, dst) internal IDs in its keys;
         // rebuild it from the remapped data when enabled.
         if self.property_index.is_some() {
@@ -227,53 +161,14 @@ impl TimeTravelEdgeStore {
     }
 }
 
-/// Rebuild an immutable CSR with translated rows/neighbors and a truncated
-/// row space (max edge-bearing row + 1), mirroring Ladybug's
-/// `getMaxOffsetWithRels()+1` semantics.
-pub(crate) fn remap_immutable_csr(
-    csr: &Csr,
-    row_mapping: Option<&HashMap<u32, u32>>,
-    neighbor_mapping: Option<&HashMap<u32, u32>>,
-) -> StorageResult<Csr> {
-    if row_mapping.is_none() && neighbor_mapping.is_none() {
-        return Ok(csr.clone());
-    }
-    if row_mapping.is_some_and(|m| m.is_empty()) && neighbor_mapping.is_some_and(|m| m.is_empty()) {
-        return Ok(csr.clone());
-    }
-
-    let entries: Vec<_> = csr
-        .iter()
-        .map(|(src, nbr)| {
-            let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            let new_src = remapped_row(src_u32, row_mapping);
-            let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
-            let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
-            (
-                new_src,
-                Nbr::new(ep_vid.as_int64().unwrap_or(0) as u32, ep_rank, nbr.edge_id),
-                nbr.timestamp,
-            )
-        })
-        .collect();
-
-    if entries.is_empty() {
-        return Ok(Csr::new());
-    }
-
-    let max_row = entries.iter().map(|(src, _, _)| *src).max().unwrap_or(0);
-    let capacity = (max_row as usize).saturating_add(1);
-    Ok(Csr::from_nbr_entries(&entries, capacity))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::edge::edge_table::config::EdgeTableConfig;
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
 
-    fn make_table() -> TimeTravelEdgeStore {
+    fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -287,7 +182,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     fn mapping_from_removals(live: &[u32]) -> HashMap<u32, u32> {
@@ -361,37 +256,6 @@ mod tests {
         assert!(table.get_edge(2, 3, 1, 200).is_some());
         // Max edge-bearing row is 2 (src 3 -> 2); row space truncated to 3.
         assert_eq!(table.out_csr.vertex_capacity(), 3);
-    }
-
-    #[test]
-    fn test_remap_segments() {
-        let mut table = make_table();
-        for (i, (src, dst)) in [(0u32, 1u32), (1, 3), (3, 0)].into_iter().enumerate() {
-            table.insert_edge(src, dst, i as i64, &[], 100).unwrap();
-        }
-        table.freeze_csr_only(150);
-
-        assert_eq!(table.out_segments.len(), 1);
-        let cap_before = table.out_segments[0].csr.read().vertex_capacity();
-        assert!(
-            cap_before >= 4,
-            "segment covers row 3: capacity {cap_before}"
-        );
-
-        // Vertex 2 removed; live {0, 1, 3} → dense {0, 1, 2}.
-        let mapping = mapping_from_removals(&[0, 1, 3]);
-
-        table
-            .remap_vertex_ids(Some(&mapping), Some(&mapping))
-            .unwrap();
-
-        // Segment rows truncated to max remapped row + 1 = 3.
-        let cap_after = table.out_segments[0].csr.read().vertex_capacity();
-        assert_eq!(cap_after, 3);
-
-        assert!(table.get_edge(0, 1, 0, 200).is_some());
-        assert!(table.get_edge(1, 2, 1, 200).is_some());
-        assert!(table.get_edge(2, 0, 2, 200).is_some());
     }
 
     #[test]
