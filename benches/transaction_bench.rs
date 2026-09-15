@@ -99,7 +99,7 @@ fn bench_mvcc_version_management(c: &mut Criterion) {
     group.bench_function("acquire_write_ts", |b| {
         b.iter(|| {
             let ts = vm.acquire_insert_timestamp().unwrap();
-            vm.commit_write_timestamp(ts);
+            vm.commit_ordered(ts).expect("ordered commit");
             black_box(ts);
         });
     });

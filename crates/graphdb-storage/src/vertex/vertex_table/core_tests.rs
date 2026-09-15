@@ -557,8 +557,8 @@ fn test_compact_delete_all() {
     assert_eq!(table.scan(200).count(), 0);
 
     let removed = table
-        .compact_with_ts_collect_mapping(300)
-        .expect("compact_with_ts_collect_mapping should succeed")
+        .compact_with_cutoff_collect_mapping(300)
+        .expect("compact_with_cutoff_collect_mapping should succeed")
         .0;
     assert_eq!(removed.len(), 5, "Should have removed 5 deleted entries");
 
@@ -769,7 +769,7 @@ fn test_vertex_gc_placeholder() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let (gc_vertices, gc_versions) = table.gc_detailed(200, false).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(200).unwrap();
 
     let cleaned = gc_vertices + gc_versions;
     assert_eq!(cleaned, 0);
@@ -786,7 +786,7 @@ fn test_vertex_mvcc_table_ops() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let (gc_vertices, gc_versions) = table.gc_detailed(200, false).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(200).unwrap();
 
     let gc_count = gc_vertices + gc_versions;
     assert_eq!(gc_count, 0);
@@ -854,7 +854,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         .unwrap();
 
     // Active table-level pin keeps versions [.., 300) alive.
-    let (gc_vertices, gc_versions) = table.gc_detailed(150, true).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(150).unwrap();
 
     let removed = gc_vertices + gc_versions;
     // Version chain entries with end_ts <= 150 are reclaimed; the entries
@@ -872,7 +872,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
     assert_eq!(props_at_200.get("age"), Some(&Value::Int(31)));
 
     // With no active snapshots, gc at 250 reclaims everything older.
-    let (gc_vertices, gc_versions) = table.gc_detailed(250, false).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(250).unwrap();
 
     let removed = gc_vertices + gc_versions;
     assert!(
@@ -959,7 +959,7 @@ fn test_partial_compact_preserves_unmoved_rows() {
     table.delete("v3", 200).unwrap();
 
     let (removed, _mapping) = table
-        .compact_with_ts_collect_mapping(300)
+        .compact_with_cutoff_collect_mapping(300)
         .expect("partial compact should succeed");
     assert_eq!(removed.len(), 2);
 
@@ -1004,7 +1004,7 @@ fn test_compact_preserves_moved_row_history() {
     table.delete("tmp", 250).unwrap();
 
     let (_, mapping) = table
-        .compact_with_ts_collect_mapping(300)
+        .compact_with_cutoff_collect_mapping(300)
         .expect("compact should succeed");
     assert!(!mapping.is_empty(), "expected rows to move");
 

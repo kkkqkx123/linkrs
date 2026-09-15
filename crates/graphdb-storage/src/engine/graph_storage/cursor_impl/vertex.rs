@@ -133,8 +133,6 @@ impl GraphVertexCursor {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
             if let Some(table) = tables.get(&label_id) {
-                // Lazily register the statement snapshot for this label.
-                self.ctx.ensure_vertex_snapshot_registered(label_id);
                 let ids = table.live_ids();
                 if !ids.is_empty() {
                     self.current_label = Some(label_id);
@@ -207,7 +205,10 @@ impl GraphVertexCursor {
     ) -> Result<crate::cursor::VertexColumnBatch, StorageError> {
         let data_store = self.ctx.data_store().clone();
         let names = self.tags.names.clone();
+        let (gate_vm, gate_own) = self.ctx.gate_inputs();
+        let ts = self.ts;
         let result = data_store.with_vertex_tables(|tables| {
+            let gate = crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own);
             let mut vids: Vec<VertexId> = Vec::new();
             let mut internal_ids: Vec<u32> = Vec::new();
             let mut tag_names: Vec<String> = Vec::new();
@@ -259,13 +260,23 @@ impl GraphVertexCursor {
                 };
 
                 let ids_vec: Vec<u32> = ids.to_vec();
-                let resolved = table.resolve_valid_ids(&ids_vec, self.ts);
+                let resolved = table.resolve_valid_ids(&ids_vec, ts);
                 let mut run_internal: Vec<u32> = Vec::new();
                 let mut run_vids: Vec<VertexId> = Vec::new();
                 for (pos, &id) in ids_vec.iter().enumerate() {
                     let Some(vid) = resolved[pos] else {
                         continue;
                     };
+                    // Pending-aware liveness: hide foreign uncommitted
+                    // creations, ignore foreign pending deletions so the
+                    // pre-delete row stays visible.
+                    let (create_ts, delete_ts) = match table.row_timestamps(id) {
+                        Some(stamps) => stamps,
+                        None => continue,
+                    };
+                    if !gate.is_row_visible(ts, create_ts, delete_ts) {
+                        continue;
+                    }
                     if let Some(ref range) = self.id_range {
                         match vid.as_int64() {
                             Some(vid) if (range.start..range.end).contains(&vid) => {}
@@ -429,7 +440,10 @@ impl GraphVertexCursor {
         let batch_size = batch_size.max(1);
         let data_store = self.ctx.data_store().clone();
         let names = self.tags.names.clone();
+        let (gate_vm, gate_own) = self.ctx.gate_inputs();
+        let ts = self.ts;
         let batch = data_store.with_vertex_tables(|tables| {
+            let gate = crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own);
             let mut batch = Vec::new();
 
             while batch.len() < batch_size && !self.exhausted {
@@ -454,13 +468,36 @@ impl GraphVertexCursor {
                     continue;
                 };
                 let label_id = self.current_label;
-                let records = table.get_projected_batch(ids, self.ts, self.projection.as_deref());
+                let records = table.get_projected_batch(ids, ts, self.projection.as_deref());
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
 
                 for record in records.into_iter().flatten() {
+                    let (create_ts, delete_ts) = match table.row_timestamps(record.internal_id) {
+                        Some(stamps) => stamps,
+                        None => continue,
+                    };
+                    if !gate.is_row_visible(ts, create_ts, delete_ts) {
+                        continue;
+                    }
+                    let starts = table.row_picked_starts(record.internal_id, ts);
+                    let record = if starts.iter().any(|stamp| gate.is_foreign_pending(ts, *stamp))
+                    {
+                        match crate::engine::graph_storage::context::GraphStorageContext::resolve_projected_on_table(
+                            &table,
+                            record.internal_id,
+                            ts,
+                            self.projection.as_deref(),
+                            &gate,
+                        ) {
+                            Some(resolved) => resolved,
+                            None => continue,
+                        }
+                    } else {
+                        record
+                    };
                     // The vertex-id range is applied to the external vertex ID
                     // (the same domain as `PartitionSpec` ranges). Internal IDs
                     // are shard-local and cannot be addressed by a global

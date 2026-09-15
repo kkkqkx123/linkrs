@@ -195,6 +195,87 @@ impl EdgeStore {
             .collect()
     }
 
+    fn merged_edges_of_with_gate(
+        &self,
+        csr: &CsrVariant,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<Nbr> {
+        csr.edges_of(src, ts)
+            .into_iter()
+            .filter(|nbr| self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate))
+            .collect()
+    }
+
+    pub fn merged_out_nbrs_with_gate(
+        &self,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<Nbr> {
+        self.merged_edges_of_with_gate(&self.out_csr, src, ts, gate)
+    }
+
+    pub fn merged_in_nbrs_with_gate(
+        &self,
+        dst: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<Nbr> {
+        self.merged_edges_of_with_gate(&self.in_csr, dst, ts, gate)
+    }
+
+    pub fn out_edges_with_gate(
+        &self,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<EdgeRecord> {
+        if !self.is_open {
+            return Vec::new();
+        }
+        self.merged_out_nbrs_with_gate(src, ts, gate)
+            .into_iter()
+            .map(|nbr| {
+                let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+                let rank = nbr.rank;
+                let properties = self.properties_for_edge(nbr.edge_id, ts);
+                EdgeRecord {
+                    src_vid: VertexId::from_int64(src as i64),
+                    dst_vid,
+                    rank,
+                    properties,
+                }
+            })
+            .collect()
+    }
+
+    pub fn in_edges_with_gate(
+        &self,
+        dst: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<EdgeRecord> {
+        if !self.is_open {
+            return Vec::new();
+        }
+        self.merged_in_nbrs_with_gate(dst, ts, gate)
+            .into_iter()
+            .map(|nbr| {
+                let src_vid = VertexId::from_int64(nbr.endpoint as i64);
+                let rank = nbr.rank;
+                let properties = self.properties_for_edge(nbr.edge_id, ts);
+                EdgeRecord {
+                    src_vid,
+                    dst_vid: VertexId::from_int64(dst as i64),
+                    rank,
+                    properties,
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn edge_record_from_nbr(
         &self,
         src: u32,
@@ -619,6 +700,31 @@ impl EdgeStore {
         })
     }
 
+    pub fn get_edge_with_gate(
+        &self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Option<EdgeRecord> {
+        if !self.is_open {
+            return None;
+        }
+        let dst_key = Self::edge_endpoint_key(dst, rank);
+        let nbr = self.out_csr.get_edge(src, dst_key, ts)?;
+        if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+            return None;
+        }
+        let properties = self.properties_for_edge(nbr.edge_id, ts);
+        Some(EdgeRecord {
+            src_vid: VertexId::from_int64(src as i64),
+            dst_vid: VertexId::from_int64(dst as i64),
+            rank,
+            properties,
+        })
+    }
+
     pub fn out_edges(&self, src: u32, ts: Timestamp) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -700,6 +806,28 @@ impl EdgeStore {
         }
 
         self.iter(ts).collect()
+    }
+
+    pub fn scan_with_gate(
+        &self,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<EdgeRecord> {
+        if !self.is_open {
+            return Vec::new();
+        }
+        let mut records = Vec::new();
+        for (src_vid, nbr) in self.out_csr.iter(ts) {
+            if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+                continue;
+            }
+            records.push(self.edge_record_from_nbr(
+                src_vid.as_int64().unwrap_or(0) as u32,
+                nbr,
+                ts,
+            ));
+        }
+        records
     }
 
     /// Optimizer-facing statistics snapshot for one property column
@@ -1368,26 +1496,23 @@ impl EdgeStore {
         let (orphan_mappings, orphan_csr_rows, tombstone_mismatches) =
             self.loaded_copy_mismatches();
         if orphan_mappings + orphan_csr_rows + tombstone_mismatches > 0 {
-            log::warn!(
+            return Err(crate::StorageError::db_error(format!(
                 "edge table {} loaded with copy mismatches: \
                  orphan property mappings={}, orphan CSR rows={}, \
-                 tombstone/authority mismatches={} (warn-only, no fail)",
-                self.label_name,
-                orphan_mappings,
-                orphan_csr_rows,
-                tombstone_mismatches,
-            );
+                 tombstone/authority mismatches={}",
+                self.label_name, orphan_mappings, orphan_csr_rows, tombstone_mismatches,
+            )));
         }
         self.is_open = true;
         Ok(())
     }
 
-    /// Warn-only cross-copy audit used by [`EdgeStore::load`].
+    /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
     /// Returns `(orphan property mappings, orphan CSR rows, tombstone /
     /// authority mismatches)`. Tombstones are rebuilt from the authority
     /// table on load, so a nonzero mismatch count signals file corruption or
-    /// a write-path regression; callers log it and keep serving.
+    /// a write-path regression; callers reject the load.
     pub fn loaded_copy_mismatches(&self) -> (usize, usize, usize) {
         let orphan_mappings = self
             .properties

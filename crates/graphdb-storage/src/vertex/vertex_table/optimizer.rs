@@ -13,17 +13,19 @@ use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
 impl VertexTable {
-    /// Compact vertices deleted at or before `ts` and return both the removed
+    /// Compact vertices deleted at or before `cutoff` and return both the removed
     /// external keys and the old-to-new internal ID mapping.
     ///
+    /// The cutoff must be derived from the global GC watermarks. Callers
+    /// pass the watermark safe timestamp, never a bare transaction stamp.
     /// The mapping is required by callers that propagate the remap to
     /// dependent row-indexed structures (edge CSR rows) so vertex references
     /// stay stable.
-    pub fn compact_with_ts_collect_mapping(
+    pub fn compact_with_cutoff_collect_mapping(
         &mut self,
-        ts: graphdb_core::types::Timestamp,
+        cutoff: graphdb_core::types::Timestamp,
     ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>)> {
-        let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(ts).collect();
+        let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(cutoff).collect();
 
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());
 
@@ -42,8 +44,9 @@ impl VertexTable {
 
     /// Compact the vertex table using the unified CompactionCoordinator
     ///
-    /// This is the **only** public compaction method. All table optimization,
-    /// ID remapping, and consistency verification happens through this single entry point.
+    /// Crate-internal re-layout step used by watermark-gated compaction
+    /// paths. External callers must go through the watermark-gated
+    /// collection mapping entry point instead of calling this directly.
     ///
     /// # Unified Coordination
     ///
@@ -91,7 +94,7 @@ impl VertexTable {
     /// table.compact_coordinated()?;
     /// log::info!("Compaction took {:?}", start.elapsed());
     /// ```
-    pub fn compact_coordinated(&mut self) -> StorageResult<()> {
+    pub(crate) fn compact_coordinated(&mut self) -> StorageResult<()> {
         let mut coordinator = super::compaction::CompactionCoordinator::new();
         coordinator.execute(self)
     }

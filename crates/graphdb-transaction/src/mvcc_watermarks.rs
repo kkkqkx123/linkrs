@@ -137,7 +137,7 @@ mod tests {
     fn safe_gc_with_no_active_snapshot_uses_last_published() {
         let vm = VersionManager::new();
         let ts = vm.acquire_insert_timestamp().unwrap();
-        vm.commit_write_timestamp(ts);
+        vm.commit_ordered(ts).expect("ordered commit");
         let wm = MvccWatermarks::capture(&vm, None, None);
         assert_eq!(wm.oldest_active_snapshot, NO_ACTIVE_SNAPSHOT);
         assert_eq!(wm.safe_gc_timestamp(), vm.read_timestamp());
@@ -151,7 +151,7 @@ mod tests {
         let wm = MvccWatermarks::capture(&vm, None, None);
         assert_eq!(wm.oldest_active_snapshot, ts);
         assert_eq!(wm.safe_gc_timestamp(), ts);
-        vm.commit_write_timestamp(ts);
+        vm.commit_ordered(ts).expect("ordered commit");
     }
 
     #[test]

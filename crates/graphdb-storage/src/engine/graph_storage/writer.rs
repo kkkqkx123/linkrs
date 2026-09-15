@@ -238,7 +238,7 @@ pub(crate) fn insert_vertex(
     }
 
     if result.is_ok() {
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
     }
@@ -662,7 +662,7 @@ pub(crate) fn update_vertex(
         }
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(())
 }
@@ -712,7 +712,7 @@ pub(crate) fn delete_vertex(
         }
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(())
 }
@@ -838,7 +838,7 @@ pub(crate) fn batch_insert_vertices(
         record_vertex_insert(ctx, item.label_id, item.vid, Some(item.redo_entry.clone()))?;
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(ids)
 }
@@ -961,7 +961,7 @@ pub(crate) fn delete_tags(
         }
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(deleted_count)
 }
@@ -996,7 +996,7 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     }
 
     if result.is_ok() {
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
     }
@@ -1217,7 +1217,7 @@ pub(crate) fn delete_edge(
         }
     }
     if result.is_ok() {
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
     }
@@ -1281,7 +1281,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
                 current_props.clone().into_iter().collect(),
                 delete_redo,
             )?;
-            ctx.commit_write_timestamp(ts);
+            ctx.commit_write_timestamp_ordered(ts)?;
             Ok(())
         }
         Err(e) => {
@@ -1347,7 +1347,7 @@ pub(crate) fn batch_insert_edges(
         )?;
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(())
 }
@@ -1437,7 +1437,7 @@ pub(crate) fn insert_vertex_data(
         Err(e) => Err(e),
     };
     if final_result.is_ok() {
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
     }
@@ -1556,7 +1556,7 @@ pub(crate) fn insert_edge_data(
         Err(e) => Err(e),
     };
     if final_result.is_ok() {
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
     }
@@ -1602,7 +1602,7 @@ pub(crate) fn delete_vertex_data(
         }
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(deleted)
 }
@@ -1690,7 +1690,7 @@ pub(crate) fn delete_edge_data(
         }
     }
 
-    ctx.commit_write_timestamp(ts);
+    ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(deleted)
 }
@@ -1799,7 +1799,7 @@ pub(crate) fn update_data(
             &merged_props.into_iter().collect::<Vec<_>>(),
             ts,
         )?;
-        ctx.commit_write_timestamp(ts);
+        ctx.commit_write_timestamp_ordered(ts)?;
         Ok(true)
     } else {
         ctx.abort_write_timestamp(ts);

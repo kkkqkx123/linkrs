@@ -255,7 +255,7 @@ pub(crate) fn create_checkpoint_with_reason(
 
     let stats = match result {
         Ok(stats) => {
-            ctx.commit_write_timestamp(ts);
+            ctx.commit_write_timestamp_ordered(ts)?;
             if let Some(mgr) = ctx.stats_manager().cloned() {
                 mgr.record_checkpoint_success(
                     stats.duration,
@@ -330,7 +330,7 @@ pub(crate) fn create_checkpoint_with_guard(
     );
     match result {
         Ok(stats) => {
-            ctx.commit_write_timestamp(ts);
+            ctx.commit_write_timestamp_ordered(ts)?;
             Ok(Some(stats))
         }
         Err(error) => {
@@ -532,7 +532,9 @@ pub(crate) fn compact_transactional(
 
     match result {
         Ok(()) => {
-            version_manager.commit_write_timestamp(timestamp);
+            version_manager
+                .commit_ordered(timestamp)
+                .map_err(|error| StorageError::db_error(error.to_string()))?;
 
             let after_stats = ctx.get_compact_stats();
             let reclaimed_bytes = before_stats

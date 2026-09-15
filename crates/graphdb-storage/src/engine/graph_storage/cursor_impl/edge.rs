@@ -173,8 +173,6 @@ impl EdgeCursor for GraphEdgeCursor {
                 }
 
                 let td = &target.tables[*table_idx];
-                // Lazily register the statement snapshot for this partition.
-                ctx.ensure_edge_snapshot_registered(td.key);
                 let arc = match edge_tables.get(&td.key) {
                     Some(a) => a.clone(),
                     None => {
@@ -250,6 +248,7 @@ struct ScanArgs<'a> {
 
 fn scan_mutable(args: ScanArgs) {
     let mut iter = args.store.out_csr.iter(args.ts);
+    let gate = args.ctx.pending_gate();
 
     let mut remaining = args.state.mutable_consumed;
     while remaining > 0 {
@@ -264,7 +263,11 @@ fn scan_mutable(args: ScanArgs) {
 
     for (src_vid, nbr) in iter {
         args.state.mutable_consumed += 1;
-        if !args.store.mvcc.is_edge_visible(nbr.edge_id, args.ts) {
+        if !args
+            .store
+            .mvcc
+            .is_edge_visible_with_gate(nbr.edge_id, args.ts, &gate)
+        {
             continue;
         }
         if let Some(ref r) = *args.src_id_range {

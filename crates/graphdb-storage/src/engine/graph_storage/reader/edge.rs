@@ -578,12 +578,6 @@ pub(crate) fn scan_edges_by_type(
                     .collect()
             });
 
-        // Lazily register the statement snapshots for every matching partition
-        // before scanning so GC cannot reclaim versions under this statement.
-        for (key, _) in &matching {
-            ctx.ensure_edge_snapshot_registered(*key);
-        }
-
         use rayon::prelude::*;
         let per_partition: Vec<Vec<Edge>> = matching
             .par_iter()
@@ -644,8 +638,6 @@ pub(crate) fn scan_edges_by_type(
     // instead of ctx.scan_edges() which collects into Vec.
     {
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        // Lazily register the statement snapshot for this partition.
-        ctx.ensure_edge_snapshot_registered(key);
         ctx.data_store().with_edge_tables(|edge_tables| {
             if let Some(arc) = edge_tables.get(&key) {
                 let guard = arc.read();
@@ -756,16 +748,6 @@ pub(crate) fn count_edges_by_type(
     };
 
     let hot_count = if src_label_id == 0 && dst_label_id == 0 {
-        // Lazily register the statement snapshots for every matching partition.
-        for key in ctx.data_store().with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label_id)
-                .collect::<Vec<_>>()
-        }) {
-            ctx.ensure_edge_snapshot_registered(key);
-        }
         ctx.data_store().with_edge_tables(|edge_tables| {
             edge_tables
                 .values()
@@ -777,7 +759,6 @@ pub(crate) fn count_edges_by_type(
     } else {
         let key =
             crate::engine::data_store::EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        ctx.ensure_edge_snapshot_registered(key);
         ctx.data_store()
             .with_single_edge_table(&key, |t| Ok(t.edge_count()))
             .unwrap_or(0)

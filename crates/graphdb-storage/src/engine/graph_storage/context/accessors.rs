@@ -7,7 +7,6 @@ use graphdb_core::types::{LabelId, TableId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_metrics::StatsManager;
 
-use crate::SnapshotHandle;
 use crate::StorageOperationContext;
 
 use super::{GraphStorageContext, WriteTimestampLease};
@@ -71,20 +70,9 @@ impl GraphStorageContext {
             read_only: true,
             auto_commit: true,
             mutation_recorder: None,
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: None,
         }));
         Ok(bound)
-    }
-
-    pub(crate) fn register_auto_commit_snapshots(
-        &self,
-        _timestamp: Timestamp,
-    ) -> StorageResult<(Vec<(LabelId, SnapshotHandle)>, bool)> {
-        Ok((Vec::new(), false))
     }
 
     pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
@@ -107,7 +95,7 @@ impl GraphStorageContext {
         let write_set = Arc::new(parking_lot::Mutex::new(
             graphdb_transaction::types::WriteSet::new(),
         ));
-        let mut context = StorageOperationContext {
+        let context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: timestamp,
             write_timestamp: Some(timestamp),
@@ -117,16 +105,8 @@ impl GraphStorageContext {
                 undo: undo_log.clone(),
                 write_set: write_set.clone(),
             })),
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: None,
         };
-
-        let (vertex_handles, edge_registered) = self.register_auto_commit_snapshots(timestamp)?;
-        context.mvcc_vertex_snapshot_handles = vertex_handles;
-        context.mvcc_edge_snapshot_registered = edge_registered;
 
         bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
@@ -155,12 +135,11 @@ impl GraphStorageContext {
             base_ctx: Arc::new(clean),
             gate_lease: write_gate_lease,
             first_ts: parking_lot::Mutex::new(None),
-            registered_vertex_snapshots: parking_lot::Mutex::new(Vec::new()),
-            registered_edge_snapshots: parking_lot::Mutex::new(Vec::new()),
             statement_count: std::sync::atomic::AtomicU64::new(0),
             snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
             group: std::sync::atomic::AtomicBool::new(false),
             group_undo: None,
+            group_write_sets: parking_lot::Mutex::new(Vec::new()),
         }))
     }
 
@@ -179,14 +158,13 @@ impl GraphStorageContext {
             base_ctx: Arc::new(clean),
             gate_lease: write_gate_lease,
             first_ts: parking_lot::Mutex::new(None),
-            registered_vertex_snapshots: parking_lot::Mutex::new(Vec::new()),
-            registered_edge_snapshots: parking_lot::Mutex::new(Vec::new()),
             statement_count: std::sync::atomic::AtomicU64::new(0),
             snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
             group: std::sync::atomic::AtomicBool::new(true),
             group_undo: Some(Arc::new(parking_lot::Mutex::new(
                 graphdb_transaction::UndoLogManager::new(),
             ))),
+            group_write_sets: parking_lot::Mutex::new(Vec::new()),
         }))
     }
 
@@ -194,16 +172,6 @@ impl GraphStorageContext {
         self.persistent
             .next_auto_transaction_id
             .fetch_max(max_transaction_id.saturating_add(1), Ordering::SeqCst);
-    }
-
-    pub(crate) fn commit_write_timestamp(&self, timestamp: Timestamp) {
-        if let Some(lease) = &self.write_timestamp_lease {
-            lease.commit();
-        } else if self.operation_context.is_none() {
-            self.persistent
-                .version_manager
-                .commit_write_timestamp(timestamp);
-        }
     }
 
     pub(crate) fn abort_write_timestamp(&self, timestamp: Timestamp) {
@@ -222,23 +190,28 @@ impl GraphStorageContext {
     /// over both slots, so auto-commit statements share the
     /// commit-ordered coordinate with explicit transactions (conflict
     /// windows and the read frontier alike). Returns the commit
-    /// timestamp for conflict-index publication. Falls back to
-    /// start-ordered commit when the slot is already settled.
-    pub(crate) fn commit_write_timestamp_ordered(&self, start: Timestamp) -> Timestamp {
+    /// timestamp for conflict-index publication. Re-settling an
+    /// already-settled slot is a benign no-op success reporting `start`:
+    /// writer helpers and operation finalization settle the same timestamp
+    /// by construction (per-statement commits stay visible to later
+    /// statements while the finalizer still settles), and the lease
+    /// `finalized` flag already carries exactly-once intent. Ordering is
+    /// guaranteed for the first settle of an acquired slot; the strict
+    /// fail-closed check lives in `VersionManager::commit_ordered`.
+    pub(crate) fn commit_write_timestamp_ordered(
+        &self,
+        start: Timestamp,
+    ) -> StorageResult<Timestamp> {
         let version_manager = &self.persistent.version_manager;
-        match version_manager.reserve_commit_timestamp(start) {
-            Ok(commit_ts) => {
-                if let Some(lease) = &self.write_timestamp_lease {
-                    lease.finalized.store(true, Ordering::SeqCst);
-                }
-                version_manager.publish_reserved_commit(start, commit_ts);
-                commit_ts
-            }
-            Err(_) => {
-                self.commit_write_timestamp(start);
-                start
-            }
+        let commit_ts = match version_manager.commit_ordered(start) {
+            Ok(commit_ts) => commit_ts,
+            Err(graphdb_transaction::VersionManagerError::InvalidTimestamp(_)) => start,
+            Err(error) => return Err(StorageError::db_error(error.to_string())),
+        };
+        if let Some(lease) = &self.write_timestamp_lease {
+            lease.finalized.store(true, Ordering::SeqCst);
         }
+        Ok(commit_ts)
     }
 
     pub(crate) fn finalize_operation(&self, committed: bool) -> StorageResult<()> {
@@ -259,8 +232,10 @@ impl GraphStorageContext {
 
         // Group mode: per-statement finalize — certify against recently
         // committed write sets, then no-wait WAL append or segment
-        // rollback. Do NOT commit/abort the write timestamp, release the gate,
-        // or unregister snapshots — those are deferred to `finalize_group`.
+        // rollback. The statement write set is accumulated into the window
+        // for publication at `finalize_group`. Do NOT commit/abort the write
+        // timestamp, release the gate, or unregister snapshots — those are
+        // deferred to `finalize_group`.
         if let Some(window) = &self.auto_commit_window {
             if window.is_grouped() {
                 let timestamp = operation.write_timestamp.ok_or_else(|| {
@@ -284,6 +259,12 @@ impl GraphStorageContext {
                     }
                     if let Some(txid) = operation.transaction_id {
                         self.commit_staged_writes_grouped(txid, &[])?;
+                    }
+                    if let Some(write_set) = self.auto_commit_write_set.as_ref() {
+                        let set = write_set.lock().clone();
+                        if !set.is_empty() {
+                            window.group_write_sets.lock().push(set);
+                        }
                     }
                 } else {
                     if let Some(undo) = &self.auto_commit_undo {
@@ -328,7 +309,7 @@ impl GraphStorageContext {
             // Commit-ordered visibility: the conflict window below is
             // indexed by the same commit timestamp that advances the
             // read frontier, matching explicit transactions.
-            let commit_ts = self.commit_write_timestamp_ordered(timestamp);
+            let commit_ts = self.commit_write_timestamp_ordered(timestamp)?;
             self.publish_auto_commit_write_set(commit_ts);
         } else {
             if let Some(undo) = &self.auto_commit_undo {
@@ -370,6 +351,19 @@ impl GraphStorageContext {
         None
     }
 
+    /// Test oracle for group-commit publication: whether `write_set`
+    /// overlaps a committed entry newer than `read_ts`.
+    #[cfg(test)]
+    pub(crate) fn committed_write_conflict_probe(
+        &self,
+        write_set: &graphdb_transaction::types::WriteSet,
+        read_ts: Timestamp,
+    ) -> bool {
+        self.persistent
+            .committed_write_sets
+            .has_conflict(write_set, read_ts)
+    }
+
     /// Publish the active auto-commit statement's write set for future
     /// commit-time certification.
     fn publish_auto_commit_write_set(&self, commit_ts: Timestamp) {
@@ -399,37 +393,7 @@ impl GraphStorageContext {
             .publish(commit_ts, write_set, horizon);
     }
 
-    fn unregister_statement_snapshots(&self, operation: &StorageOperationContext) {
-        let Some(timestamp) = operation.snapshot_timestamp() else {
-            return;
-        };
-
-        let registered_labels: Vec<LabelId> = {
-            let registered = operation.registered_vertex_labels.read();
-            registered.iter().cloned().collect()
-        };
-
-        if !registered_labels.is_empty() {
-            let tables: Vec<(
-                LabelId,
-                Arc<crate::vertex::vertex_table::ShardedVertexTable>,
-            )> = self
-                .persistent
-                .data_store
-                .with_vertex_tables(|vertex_tables| {
-                    registered_labels
-                        .iter()
-                        .filter_map(|label_id| {
-                            vertex_tables
-                                .get(label_id)
-                                .map(|table| (*label_id, table.clone()))
-                        })
-                        .collect()
-                });
-            for (_label_id, vertex_table) in tables {
-                let _ = vertex_table.unregister_snapshot_by_timestamp(timestamp);
-            }
-        }
+    fn unregister_statement_snapshots(&self, _operation: &StorageOperationContext) {
     }
 
     pub fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {

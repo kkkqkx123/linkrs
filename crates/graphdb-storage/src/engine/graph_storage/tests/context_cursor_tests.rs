@@ -171,11 +171,6 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
     setup_person_tag(&mut storage);
     insert_test_vertex(&mut storage, 1, "Alice");
 
-    let label = storage
-        .ctx
-        .data_store()
-        .with_vertex_tables(|tables| tables.keys().copied().collect::<Vec<_>>())[0];
-
     // Bind a read-only statement context with a fixed snapshot timestamp.
     let bound = storage.bind_read_operation_context().unwrap();
     let op_ctx = bound.operation_context().expect("read context");
@@ -187,21 +182,19 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
     let read_ts = op_ctx.read_timestamp;
     assert!(read_ts > 0, "read context must pin a snapshot timestamp");
 
-    // No snapshot is registered before the first table access (lazy).
-    let before = storage
+    // Snapshot truth lives in the global tracker: tables carry no pin.
+    let pinned = storage
         .ctx
         .data_store()
         .with_vertex_tables(|tables| {
-            Ok::<Timestamp, graphdb_core::StorageError>(
-                tables
-                    .get(&label)
-                    .map(|t| t.min_active_snapshot_ts())
-                    .unwrap_or(Timestamp::MAX),
+            Ok::<usize, graphdb_core::StorageError>(
+                tables.values().map(|t| t.active_snapshot_count()).sum(),
             )
         })
         .unwrap();
+    assert_eq!(pinned, 0, "tables must carry no snapshot pin");
 
-    // First read lazily registers the table snapshot at the read ts.
+    // Reads resolve without any table-level registration.
     let vertex = bound
         .get_vertex("test_space", &VertexId::from_int64(1))
         .unwrap()
@@ -210,42 +203,19 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
         vertex.properties.get("name").unwrap(),
         &Value::string("Alice")
     );
-    let pinned = storage
-        .ctx
-        .data_store()
-        .with_vertex_tables(|tables| {
-            Ok::<Timestamp, graphdb_core::StorageError>(
-                tables
-                    .get(&label)
-                    .map(|t| t.min_active_snapshot_ts())
-                    .unwrap_or(Timestamp::MAX),
-            )
-        })
-        .unwrap();
-    assert_eq!(
-        pinned, read_ts,
-        "lazy read registration must pin min_active_snapshot_ts to the read ts"
-    );
-    assert_ne!(before, pinned, "registration must change the pinned min");
 
-    // Finalize unregisters the statement snapshot.
+    // Finalize keeps the table pin-free.
     bound.finalize_operation(true).unwrap();
     let after = storage
         .ctx
         .data_store()
         .with_vertex_tables(|tables| {
-            Ok::<Timestamp, graphdb_core::StorageError>(
-                tables
-                    .get(&label)
-                    .map(|t| t.min_active_snapshot_ts())
-                    .unwrap_or(Timestamp::MAX),
+            Ok::<usize, graphdb_core::StorageError>(
+                tables.values().map(|t| t.active_snapshot_count()).sum(),
             )
         })
         .unwrap();
-    assert_eq!(
-        after, before,
-        "finalize must unregister the read statement snapshot"
-    );
+    assert_eq!(after, 0, "finalize must leave tables pin-free");
 }
 
 #[test]

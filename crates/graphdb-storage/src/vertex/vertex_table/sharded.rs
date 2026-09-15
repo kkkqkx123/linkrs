@@ -1,15 +1,13 @@
-use std::collections::HashMap;
 use std::path::Path;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::compression::CompressionType;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{IdKey, VertexRecord};
-use crate::SnapshotHandle;
-use graphdb_core::types::{Timestamp, MAX_TIMESTAMP};
+use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageResult, Value};
 
 /// Maximum shard count per vertex table. Lifted from 16 to 256 so a single
@@ -71,48 +69,6 @@ pub struct ShardedVertexTable {
     num_shards: usize,
     label: graphdb_core::types::LabelId,
     label_name: String,
-    snapshot_state: Mutex<SnapshotPinState>,
-}
-
-/// Table-level snapshot pin counts. The GC truth source is the transaction
-/// layer watermarks; this map only pins the table against timestamp
-/// compaction while a lazily registered statement snapshot is alive.
-#[derive(Debug, Default)]
-struct SnapshotPinState {
-    counts: HashMap<Timestamp, usize>,
-    min_ts: Timestamp,
-    handle_counter: u64,
-}
-
-impl SnapshotPinState {
-    fn new() -> Self {
-        Self {
-            counts: HashMap::new(),
-            min_ts: MAX_TIMESTAMP,
-            handle_counter: 0,
-        }
-    }
-
-    fn register(&mut self, ts: Timestamp) -> SnapshotHandle {
-        *self.counts.entry(ts).or_insert(0) += 1;
-        if ts < self.min_ts {
-            self.min_ts = ts;
-        }
-        self.handle_counter += 1;
-        SnapshotHandle::new(ts, self.handle_counter)
-    }
-
-    fn unregister_ts(&mut self, ts: Timestamp) {
-        if let Some(count) = self.counts.get_mut(&ts) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.counts.remove(&ts);
-                if ts == self.min_ts {
-                    self.min_ts = self.counts.keys().min().copied().unwrap_or(MAX_TIMESTAMP);
-                }
-            }
-        }
-    }
 }
 
 impl ShardedVertexTable {
@@ -145,7 +101,6 @@ impl ShardedVertexTable {
             num_shards,
             label,
             label_name,
-            snapshot_state: Mutex::new(SnapshotPinState::new()),
         }
     }
 
@@ -384,7 +339,12 @@ impl ShardedVertexTable {
     pub fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
-        table.get_by_internal_id(local_id, ts)
+        table
+            .get_by_internal_id(local_id, ts)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
     }
 
     /// Row survival stamps for pending-aware rechecks (shard-decoded).
@@ -540,39 +500,15 @@ impl ShardedVertexTable {
 
     // ==================== MVCC ====================
 
-    pub fn register_snapshot(&self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        Ok(self.snapshot_state.lock().register(ts))
-    }
-
-    pub fn unregister_snapshot(&self, handle: SnapshotHandle) -> StorageResult<()> {
-        self.snapshot_state.lock().unregister_ts(handle.ts);
-        Ok(())
-    }
-
-    /// Unregister all snapshots with the given timestamp.
-    /// Used by lazy registration cleanup on transaction finalize.
-    pub fn unregister_snapshot_by_timestamp(&self, ts: Timestamp) -> StorageResult<()> {
-        self.snapshot_state.lock().unregister_ts(ts);
-        Ok(())
-    }
-
-    /// Minimum timestamp among all active snapshots for this table
-    /// (`MAX_TIMESTAMP` when no snapshot is active).
-    /// Exposed for snapshot-lifecycle tests and diagnostics.
-    #[cfg(test)]
-    pub fn min_active_snapshot_ts(&self) -> Timestamp {
-        self.snapshot_state.lock().min_ts
-    }
-
     /// GC split into (reclaimed vertices, reclaimed version-chain entries).
     /// A nonzero vertex count means some shard re-densified internal IDs:
     /// caches keyed by internal ID must be invalidated for this label.
+    /// The cutoff must be the global watermark safe timestamp.
     pub fn gc_detailed(&self, min_ts: Timestamp) -> StorageResult<(usize, usize)> {
-        let has_active_pin = self.snapshot_state.lock().min_ts != MAX_TIMESTAMP;
         let mut reclaimed_vertices = 0;
         let mut version_entries = 0;
         for shard in &self.shards {
-            let (vertices, versions) = shard.write().gc_detailed(min_ts, has_active_pin)?;
+            let (vertices, versions) = shard.write().gc_detailed(min_ts)?;
             reclaimed_vertices += vertices;
             version_entries += versions;
         }
@@ -630,7 +566,12 @@ impl ShardedVertexTable {
     ) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
-        table.get_projected_by_internal_id(local_id, ts, projection)
+        table
+            .get_projected_by_internal_id(local_id, ts, projection)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
     }
 
     pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
@@ -821,7 +762,7 @@ impl ShardedVertexTable {
     }
 
     pub fn active_snapshot_count(&self) -> usize {
-        self.snapshot_state.lock().counts.len()
+        0
     }
 
     pub fn used_memory_size(&self) -> usize {
@@ -867,6 +808,10 @@ impl ShardedVertexTable {
     // ==================== Compaction ====================
 
     /// Compact vertices deleted at or before `ts` across all shards.
+    /// Watermark-gated vertex compaction across shards.
+    ///
+    /// The cutoff must be the watermark safe timestamp, never a bare
+    /// transaction stamp.
     ///
     /// Returns the removed external keys and the old-to-new *global* internal
     /// ID mapping (shard-local rows translated into encoded global IDs), which
@@ -876,9 +821,9 @@ impl ShardedVertexTable {
     /// [`SHARD_FRAGMENTATION_THRESHOLD`] are skipped (segment-level
     /// compaction): lazy ID recycling already reclaims their holes without a
     /// global remap, avoiding cross-shard coordination.
-    pub fn compact_with_ts_collect_mapping(
+    pub fn compact_with_cutoff_collect_mapping(
         &self,
-        ts: Timestamp,
+        cutoff: Timestamp,
     ) -> StorageResult<(Vec<IdKey>, std::collections::HashMap<u32, u32>)> {
         let mut all_removed = Vec::new();
         let mut all_mapping = std::collections::HashMap::new();
@@ -887,7 +832,7 @@ impl ShardedVertexTable {
             // fragmentation to avoid global remapping overhead.
             {
                 let table = shard.read();
-                let (live, allocated) = table.id_hole_stats(ts);
+                let (live, allocated) = table.id_hole_stats(cutoff);
                 if allocated > 0 {
                     let frag = if live >= allocated {
                         0.0
@@ -902,7 +847,7 @@ impl ShardedVertexTable {
                 }
             }
             let mut table = shard.write();
-            let (removed, local_mapping) = table.compact_with_ts_collect_mapping(ts)?;
+            let (removed, local_mapping) = table.compact_with_cutoff_collect_mapping(cutoff)?;
             for (old_local, new_local) in local_mapping {
                 all_mapping.insert(
                     self.encode_id(idx, old_local),
@@ -1207,23 +1152,6 @@ mod tests {
     fn test_table_level_snapshot_pin_counts() {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
         assert_eq!(table.active_snapshot_count(), 0);
-
-        let first = table.register_snapshot(300).unwrap();
-        assert_eq!(table.min_active_snapshot_ts(), 300);
-        let second = table.register_snapshot(100).unwrap();
-        assert_eq!(table.min_active_snapshot_ts(), 100);
-        assert_eq!(table.active_snapshot_count(), 2);
-
-        table.unregister_snapshot(first).unwrap();
-        assert_eq!(table.min_active_snapshot_ts(), 100);
-        assert_eq!(table.active_snapshot_count(), 1);
-
-        table.unregister_snapshot_by_timestamp(100).unwrap();
-        assert_eq!(table.active_snapshot_count(), 0);
-        assert_eq!(table.min_active_snapshot_ts(), crate::vertex::MAX_TIMESTAMP);
-
-        table.unregister_snapshot(second).unwrap();
-        assert_eq!(table.active_snapshot_count(), 0);
     }
 
     fn insert_with_name(table: &ShardedVertexTable, name: &str, ts: Timestamp) -> u32 {
@@ -1347,7 +1275,7 @@ mod tests {
 
         // Physical removal + compaction re-densifies local IDs and resets
         // the allocation counters (same path as compact_vertex_remap).
-        let (removed, mapping) = table.compact_with_ts_collect_mapping(ts_insert).unwrap();
+        let (removed, mapping) = table.compact_with_cutoff_collect_mapping(ts_insert).unwrap();
         assert_eq!(removed.len(), 30);
         assert!(!mapping.is_empty());
 

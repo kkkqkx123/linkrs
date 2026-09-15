@@ -11,15 +11,15 @@ impl GraphStorageContext {
     /// mappings into edge tables.
     ///
     /// Shared by manual compaction transactions and the background
-    /// maintenance thread (auto-compaction). Deletes at or before `ts` are
-    /// reclaimed; callers must pass a safe timestamp (e.g. the snapshot
-    /// tracker cleanup threshold) to preserve snapshot visibility.
+    /// maintenance thread (auto-compaction). The cutoff must be the
+    /// watermark safe timestamp; bare transaction stamps are rejected by
+    /// convention and must never be passed here.
     ///
     /// Returns the number of removed vertices. Compaction is an in-memory
     /// re-layout: it writes no WAL entries, and crash recovery replays
     /// external IDs from the WAL, so no persistence ordering constraint
     /// applies here.
-    pub(crate) fn compact_vertex_remap(&self, ts: Timestamp) -> StorageResult<usize> {
+    pub(crate) fn compact_vertex_remap(&self, cutoff: Timestamp) -> StorageResult<usize> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
@@ -43,7 +43,7 @@ impl GraphStorageContext {
                             "label {label_id} not found during compaction"
                         ))
                     })?;
-                    match table.compact_with_ts_collect_mapping(ts) {
+                    match table.compact_with_cutoff_collect_mapping(cutoff) {
                         Ok((removed, mapping)) => {
                             if !removed.is_empty() {
                                 last_compacted_vertices.push((label_id, removed));
@@ -144,8 +144,8 @@ impl GraphStorageContext {
         let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
         // One watermark capture shared by every sub-system below, margin
-        // applied. `ts` is the separate caller-provided compaction timestamp
-        // for the vertex remap.
+        // applied. The caller-provided compaction timestamp is ignored for
+        // vertex remap: the watermark cutoff is the only safe bound.
         let margin = self.persistent.config.gc_safety_margin;
         let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
         log::info!(
@@ -155,7 +155,7 @@ impl GraphStorageContext {
             wm.safe_gc_timestamp()
         );
 
-        let total_vertices_removed = self.compact_vertex_remap(ts)?;
+        let total_vertices_removed = self.compact_vertex_remap(cleanup_ts)?;
 
         let edge_keys_and_removed: Vec<(EdgeTableKey, usize)> = self
             .persistent

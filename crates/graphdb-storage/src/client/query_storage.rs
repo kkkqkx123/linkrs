@@ -29,20 +29,11 @@ pub trait QueryStorage:
     /// query layer observe which snapshot a per-query bound handle reads at,
     /// without reaching into the storage internals.
     ///
-    /// When the operation context already registered per-table MVCC snapshot
-    /// handles, the first one is preferred (it carries the storage's own
-    /// monotonically increasing handle id); otherwise a query-level handle
-    /// is synthesized from the pinned timestamp (`id = 0`).
+    /// Snapshot truth lives in the global tracker, so the handle is always
+    /// synthesized from the pinned timestamp (`id = 0`).
     fn snapshot_handle(&self) -> Option<SnapshotHandle> {
         let context = self.operation_context()?;
-        let ts = context.read_timestamp;
-        Some(
-            context
-                .mvcc_vertex_snapshot_handles
-                .first()
-                .map(|(_, handle)| *handle)
-                .unwrap_or_else(|| SnapshotHandle::new(ts, 0)),
-        )
+        Some(SnapshotHandle::new(context.read_timestamp, 0))
     }
 
     /// Export the given space to CSV files under `path/<space_name>/`.

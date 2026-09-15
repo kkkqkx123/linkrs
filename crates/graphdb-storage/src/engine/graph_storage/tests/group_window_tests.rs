@@ -288,3 +288,34 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
     });
     assert_eq!(active, 0, "group window leaked vertex snapshots");
 }
+
+#[test]
+fn test_group_finalize_publishes_write_set() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+
+    let window = storage.begin_auto_commit_group().unwrap();
+    {
+        let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
+        let vertex = Vertex::new(
+            VertexId::from_int64(11001),
+            vec![Tag::new(
+                "Person".to_string(),
+                vec![("name".to_string(), Value::string("published"))]
+                    .into_iter()
+                    .collect(),
+            )],
+        );
+        bound.insert_vertex("test_space", vertex).unwrap();
+        bound.finalize_operation(true).unwrap();
+    }
+    window.finalize_group().unwrap();
+
+    let mut probe = graphdb_transaction::types::WriteSet::new();
+    probe.record_vertex(VertexId::from_int64(11001));
+    assert!(
+        storage.ctx.committed_write_conflict_probe(&probe, 0),
+        "group commit must publish its write set for later certification"
+    );
+}

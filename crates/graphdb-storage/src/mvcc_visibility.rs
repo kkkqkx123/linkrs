@@ -257,8 +257,8 @@ mod tests {
         assert!(!foreign_view.is_foreign_pending(snapshot, own));
 
         // After the foreign write commits, a fresh snapshot observes it.
-        vm.commit_write_timestamp(foreign);
-        vm.commit_write_timestamp(own);
+        vm.commit_ordered(foreign).expect("ordered commit");
+        vm.commit_ordered(own).expect("ordered commit");
         let later = PendingGate::new(&vm, None);
         assert!(later.is_create_visible(snapshot, foreign));
         assert!(!later.is_foreign_pending(snapshot, foreign));
@@ -270,7 +270,7 @@ mod tests {
         use graphdb_transaction::VersionManager;
         let vm = VersionManager::new();
         let create = vm.acquire_insert_timestamp().expect("create");
-        vm.commit_write_timestamp(create);
+        vm.commit_ordered(create).expect("ordered commit");
         let delete = vm.acquire_insert_timestamp().expect("delete");
         let snapshot = delete;
 
@@ -293,7 +293,7 @@ mod tests {
         use graphdb_transaction::VersionManager;
         let vm = VersionManager::new();
         let committed = vm.acquire_insert_timestamp().expect("write");
-        vm.commit_write_timestamp(committed);
+        vm.commit_ordered(committed).expect("ordered commit");
         // The frontier swallowed the terminal slot: the gate trusts the
         // plain predicate without consulting slot state.
         let gate = PendingGate::new(&vm, None);

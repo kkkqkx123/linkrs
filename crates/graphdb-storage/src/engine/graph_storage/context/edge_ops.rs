@@ -71,9 +71,6 @@ impl GraphStorageContext {
 
         let key = EdgeTableKey::new(actual_src_label, actual_dst_label, params.edge_label);
         let template_key = EdgeTableKey::new(0, 0, params.edge_label);
-
-        // Lazily register snapshot for this edge partition if needed
-        self.ensure_edge_snapshot_registered(key);
         let stats_manager = self.persistent.stats_manager.clone();
         let maintenance_requested = self.persistent.data_store.with_edge_partition_mut(
             key,
@@ -156,17 +153,14 @@ impl GraphStorageContext {
             },
         )?;
 
-        // Lazily register snapshot for this edge partition if needed
-        self.ensure_edge_snapshot_registered(key);
-
         // Pending-aware recheck of the point lookup: the plain timestamp
         // predicate inside `get_edge` cannot see slot states, so a foreign
         // uncommitted creation would leak (dirty read) and a foreign
         // uncommitted deletion would hide a live edge. Recheck through the
         // gate; a creation owned by a foreign pending transaction hides the
         // edge, a foreign pending deletion is ignored by re-reading below it.
-        // Follow-up: scan-class funnels (`out_edges`/`in_edges`, iterators,
-        // CSR bulk reads) still use the plain predicate.
+        // Scan-class funnels share the same gate through the table
+        // `*_with_gate` methods.
         let own_write = self
             .operation_context
             .as_ref()
@@ -348,9 +342,6 @@ impl GraphStorageContext {
             return Ok(false);
         };
 
-        // Lazily register snapshot for this edge partition if needed
-        self.ensure_edge_snapshot_registered(key);
-
         let deleted =
             self.persistent
                 .data_store
@@ -399,25 +390,15 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
-        // Lazily register snapshots for every matching edge partition.
-        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label && key.src_label == actual_src)
-                .collect::<Vec<_>>()
-        }) {
-            self.ensure_edge_snapshot_registered(key);
-        }
-
         let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut records = Vec::new();
+            let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
-                records.extend(table.out_edges(src_internal, ts));
+                records.extend(table.out_edges_with_gate(src_internal, ts, &gate));
             }
             records
         });
@@ -454,25 +435,15 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
-        // Lazily register snapshots for every matching edge partition.
-        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label && key.src_label == actual_src)
-                .collect::<Vec<_>>()
-        }) {
-            self.ensure_edge_snapshot_registered(key);
-        }
-
         let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut nbrs = Vec::new();
+            let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
-                nbrs.extend(table.merged_out_nbrs(src_internal, ts));
+                nbrs.extend(table.merged_out_nbrs_with_gate(src_internal, ts, &gate));
             }
             nbrs
         });
@@ -506,25 +477,15 @@ impl GraphStorageContext {
                     Some((dst_internal, actual_dst))
                 })?;
 
-        // Lazily register snapshots for every matching edge partition.
-        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label && key.dst_label == actual_dst)
-                .collect::<Vec<_>>()
-        }) {
-            self.ensure_edge_snapshot_registered(key);
-        }
-
         let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut records = Vec::new();
+            let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
-                records.extend(table.in_edges(dst_internal, ts));
+                records.extend(table.in_edges_with_gate(dst_internal, ts, &gate));
             }
             records
         });
@@ -561,25 +522,15 @@ impl GraphStorageContext {
                     Some((dst_internal, actual_dst))
                 })?;
 
-        // Lazily register snapshots for every matching edge partition.
-        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label && key.dst_label == actual_dst)
-                .collect::<Vec<_>>()
-        }) {
-            self.ensure_edge_snapshot_registered(key);
-        }
-
         let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut nbrs = Vec::new();
+            let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
-                nbrs.extend(table.merged_in_nbrs(dst_internal, ts));
+                nbrs.extend(table.merged_in_nbrs_with_gate(dst_internal, ts, &gate));
             }
             nbrs
         });

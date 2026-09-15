@@ -192,10 +192,6 @@ impl StorageSchemaOps for GraphStorage {
             read_only: true,
             auto_commit: false,
             mutation_recorder: None,
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: None,
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
@@ -245,10 +241,6 @@ impl StorageSchemaOps for GraphStorage {
             read_only: true,
             auto_commit: false,
             mutation_recorder: None,
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: None,
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;

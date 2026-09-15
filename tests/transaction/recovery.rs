@@ -59,7 +59,7 @@ fn test_shutdown_prevents_new_transactions() {
     assert!(result.is_err(), "new txn should be rejected after shutdown");
 }
 
-/// Verify that the version manager's commit_write_timestamp properly advances
+/// Verify that the version manager's ordered commit properly advances
 /// the committed frontier.
 #[test]
 fn test_commit_advances_frontier() {

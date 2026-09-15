@@ -11,7 +11,7 @@ use crate::engine::paths::StoragePaths;
 use crate::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::vertex::gc_manager::VertexGcManager;
 use crate::StorageOperationContext;
-use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::types::Timestamp;
 use graphdb_transaction::undo_log::UndoLogManager;
 use graphdb_transaction::VersionManager;
 
@@ -131,12 +131,6 @@ impl Drop for WriteTimestampLease {
 }
 
 impl WriteTimestampLease {
-    fn commit(&self) {
-        if !self.finalized.swap(true, Ordering::SeqCst) {
-            self.version_manager.commit_write_timestamp(self.timestamp);
-        }
-    }
-
     fn abort(&self) {
         if !self.finalized.swap(true, Ordering::SeqCst) {
             self.version_manager.abort_write_timestamp(self.timestamp);
@@ -409,98 +403,6 @@ impl GraphStorageContext {
             }
         }
         gc
-    }
-
-    pub(crate) fn ensure_vertex_snapshot_registered(
-        &self,
-        label: LabelId,
-    ) -> Option<crate::SnapshotHandle> {
-        let operation = self.operation_context.as_ref()?;
-        if !operation.auto_commit {
-            return None;
-        }
-
-        // Check if already registered (using read lock)
-        {
-            let registered = operation.registered_vertex_labels.read();
-            if registered.contains(&label) {
-                return None;
-            }
-        }
-
-        // Register snapshot for this label
-        let timestamp = operation.snapshot_timestamp()?;
-        let vertex_tables = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|tables| tables.get(&label).cloned())?;
-
-        let handle = vertex_tables.register_snapshot(timestamp).ok()?;
-
-        // Store the label in the registered set (using write lock)
-        {
-            let mut registered = operation.registered_vertex_labels.write();
-            registered.insert(label);
-        }
-
-        // Batch windows own the snapshot lifecycle: record the registration so
-        // the window can unregister it (once per entry) at finalize. Without
-        // this the lazily registered snapshot would pin the table's GC
-        // watermark forever.
-        if let Some(window) = &self.auto_commit_window {
-            window
-                .registered_vertex_snapshots
-                .lock()
-                .push((label, handle));
-        }
-
-        Some(handle)
-    }
-
-    /// Lazily register an edge partition snapshot if not already registered.
-    ///
-    /// The single-segment edge table needs no per-partition snapshot pin:
-    /// this only tracks statement partition membership so finalize can
-    /// release the statement scope. Supports both auto-commit write
-    /// contexts (write timestamp) and read-only statement contexts (read
-    /// timestamp).
-    pub(crate) fn ensure_edge_snapshot_registered(
-        &self,
-        edge_key: crate::engine::data_store::EdgeTableKey,
-    ) -> bool {
-        let operation = match self.operation_context.as_ref() {
-            Some(op) if op.auto_commit => op,
-            _ => return false,
-        };
-
-        // Check if already registered (using read lock)
-        {
-            let registered = operation.registered_edge_partitions.read();
-            if registered.contains(&edge_key) {
-                return true;
-            }
-        }
-
-        // Register snapshot for this edge partition
-        let Some(_timestamp) = operation.snapshot_timestamp() else {
-            return false;
-        };
-
-        {
-            let mut registered = operation.registered_edge_partitions.write();
-            registered.insert(edge_key);
-        }
-
-        // Batch windows own the snapshot lifecycle: record the
-        // registration for window-level unregistration at finalize.
-        if let Some(window) = &self.auto_commit_window {
-            window
-                .registered_edge_snapshots
-                .lock()
-                .push((edge_key, operation.snapshot_timestamp().unwrap_or(0)));
-        }
-
-        true
     }
 }
 

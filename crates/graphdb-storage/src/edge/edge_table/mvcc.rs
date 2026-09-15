@@ -250,8 +250,8 @@ impl MVCCManager {
     /// pending creation hides the edge, a foreign pending deletion (in
     /// either the authoritative stamps or a tombstone-only entry) is
     /// ignored. The original function is retained for bare-table callers
-    /// without a transaction slot view. Follow-up: scan-class funnels
-    /// (iterators, CSR bulk reads) still use the plain predicate.
+    /// without a transaction slot view. Operation-layer scans funnel through
+    /// the table `*_with_gate` methods.
     pub fn is_edge_visible_with_gate(
         &self,
         edge_id: EdgeId,

@@ -16,12 +16,39 @@ impl GraphStorageContext {
         {
             return None;
         }
-        // Lazily register the statement snapshot for this label.
-        self.ensure_vertex_snapshot_registered(label);
+        let gate = self.pending_gate();
         self.persistent
             .data_store
             .catalog_read_snapshot()
-            .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(ts)))
+            .with_vertex_tables(|tables| {
+                tables.get(&label).map(|table| {
+                    table
+                        .scan(ts)
+                        .into_iter()
+                        .filter_map(|record| {
+                            let (create_ts, delete_ts) =
+                                table.row_timestamps(record.internal_id)?;
+                            if !gate.is_row_visible(ts, create_ts, delete_ts) {
+                                return None;
+                            }
+                            let starts = table.row_picked_starts(record.internal_id, ts);
+                            if starts
+                                .iter()
+                                .any(|stamp| gate.is_foreign_pending(ts, *stamp))
+                            {
+                                return Self::resolve_on_table(
+                                    table,
+                                    record.internal_id,
+                                    ts,
+                                    &gate,
+                                )
+                                .map(|(resolved, _, _, _)| resolved);
+                            }
+                            Some(record)
+                        })
+                        .collect()
+                })
+            })
     }
 
     pub fn total_vertex_count(&self) -> usize {
@@ -65,11 +92,17 @@ impl GraphStorageContext {
         // read lock, then scan each partition in parallel under its own read
         // lock. Results preserve partition order (indexed rayon collect).
         use rayon::prelude::*;
+        let version_manager = self.persistent.version_manager.clone();
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
         arcs.par_iter()
             .flat_map(|(key, arc)| {
                 let table = arc.read();
+                let gate = crate::mvcc_visibility::PendingGate::new(&version_manager, own_write);
                 table
-                    .scan(ts)
+                    .scan_with_gate(ts, &gate)
                     .into_iter()
                     .map(|edge_record| (key.src_label, key.dst_label, key.edge_label, edge_record))
                     .collect::<Vec<_>>()
@@ -140,6 +173,7 @@ impl GraphStorageContext {
         ts: Timestamp,
     ) -> Vec<crate::edge::EdgeRecord> {
         use crate::engine::data_store::EdgeTableKey;
+        let gate = self.pending_gate();
         self.persistent
             .data_store
             .catalog_read_snapshot()
@@ -151,7 +185,9 @@ impl GraphStorageContext {
                         table
                             .lookup_edges_by_property_range(prop_name, value_lower, value_upper)
                             .into_iter()
-                            .filter_map(|(src, dst, rank)| table.get_edge(src, dst, rank, ts))
+                            .filter_map(|(src, dst, rank)| {
+                                table.get_edge_with_gate(src, dst, rank, ts, &gate)
+                            })
                             .collect()
                     })
                     .unwrap_or_default()

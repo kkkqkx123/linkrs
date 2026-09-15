@@ -73,7 +73,7 @@ fn append_schema_redo<T: serde::Serialize>(
                         .map_err(|error| StorageError::db_error(error.to_string()))?,
                 }
             }
-            ctx.commit_write_timestamp(timestamp);
+            ctx.commit_write_timestamp_ordered(timestamp)?;
             Ok(entry)
         }
         Err(error) => {

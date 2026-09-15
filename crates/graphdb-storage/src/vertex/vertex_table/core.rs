@@ -717,13 +717,9 @@ impl VertexTable {
     }
 
     // ==================== MVCC Methods ====================
-    //
-    // Snapshot pins live one level up, on `ShardedVertexTable`: a snapshot
-    // registers once per table (O(1) locks) instead of once per shard.
-    // Shards keep no pin of their own; the GC truth source is the
-    // transaction layer watermarks, and the caller passes whether the table
-    // currently has any active pin so timestamp compaction stays gated on
-    // live readers.
+    // Snapshot truth lives in the transaction layer watermarks. The caller
+    // passes the watermark safe timestamp; timestamp compaction is always
+    // cutoff-gated.
 
     /// Perform garbage collection on version data older than min_ts
     ///
@@ -734,11 +730,7 @@ impl VertexTable {
     /// A nonzero vertex count means internal IDs were re-densified
     /// (`compact_coordinated`): caches keyed by internal ID must be
     /// invalidated for this label. Version-only passes leave IDs untouched.
-    pub fn gc_detailed(
-        &mut self,
-        min_ts: Timestamp,
-        table_has_active_snapshot: bool,
-    ) -> StorageResult<(usize, usize)> {
+    pub fn gc_detailed(&mut self, min_ts: Timestamp) -> StorageResult<(usize, usize)> {
         // Property version-chain GC runs every pass regardless of deleted
         // vertices so before-images of overwritten properties are reclaimed.
         let version_removed = self.columns.gc_versions(min_ts);
@@ -785,32 +777,20 @@ impl VertexTable {
         // Compact to reclaim space
         self.compact_coordinated()?;
 
-        // Timestamp compaction is cutoff-gated, not merely pin-gated: the
-        // table-local pin only proves readers that already touched this
-        // table, while a running statement at an older snapshot may first
-        // touch the table after this pass. Only rows invisible below the
-        // watermark cutoff (`min_ts`) are physically removed.
-        if !table_has_active_snapshot {
-            self.compact_timestamps(min_ts);
-        }
+        // Timestamp compaction is cutoff-gated: only rows invisible below
+        // the watermark cutoff (`min_ts`) are physically removed.
+        self.compact_timestamps(min_ts);
 
         Ok((count, version_removed))
     }
 
     /// Compact timestamps independently of id_indexer and columns.
     ///
-    /// Removes entries invisible below `cutoff` (those with
-    /// `end_ts <= cutoff`) and returns the old_id → new_id mapping for
-    /// entries that moved. This is a standalone operation — use it when
-    /// only timestamp cleanup is needed without full table compaction.
-    ///
-    /// # Safety
-    ///
-    /// The cutoff must come from the global GC watermarks. Table-local pin
-    /// state alone cannot prove that no snapshot observes the removed
-    /// entries. When in doubt, use `gc()` instead, which coordinates all
-    /// three structures and respects snapshot isolation boundaries.
-    pub fn compact_timestamps(&mut self, cutoff: Timestamp) -> std::collections::HashMap<u32, u32> {
+    /// Crate-internal cutoff-gated cleanup. The cutoff must come from the
+    /// global GC watermarks. External callers must go through the
+    /// watermark-gated compaction entry points instead of calling this
+    /// directly.
+    pub(crate) fn compact_timestamps(&mut self, cutoff: Timestamp) -> std::collections::HashMap<u32, u32> {
         self.timestamps.compact_with_cutoff(cutoff)
     }
 }

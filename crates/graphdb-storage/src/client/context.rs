@@ -1,9 +1,6 @@
 use graphdb_core::types::TransactionId;
-use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::types::Timestamp;
 use graphdb_transaction::TransactionMutationRecorder;
-
-use crate::engine::data_store::EdgeTableKey;
-use crate::SnapshotHandle;
 
 use std::sync::Arc;
 
@@ -16,14 +13,6 @@ pub struct StorageOperationContext {
     pub read_only: bool,
     pub auto_commit: bool,
     pub mutation_recorder: Option<Arc<dyn TransactionMutationRecorder>>,
-    /// MVCC snapshot handles for GC coordination - stores (label_id, handle) pairs for vertex tables
-    pub mvcc_vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)>,
-    /// Edge table snapshots tracked by timestamp only (no handles needed)
-    pub mvcc_edge_snapshot_registered: bool,
-    /// Lazily registered vertex labels with their snapshot handles (for unregistration on finalize)
-    pub registered_vertex_labels: parking_lot::RwLock<std::collections::HashSet<LabelId>>,
-    /// Lazily registered edge partitions (for snapshot unregistration on finalize)
-    pub registered_edge_partitions: parking_lot::RwLock<std::collections::HashSet<EdgeTableKey>>,
     /// Undo log entry count at the start of this statement's segment (group
     /// mode only). Used by `finalize_operation` to roll back only the failed
     /// statement's segment when a shared undo log is in use.
@@ -51,14 +40,6 @@ impl Clone for StorageOperationContext {
             read_only: self.read_only,
             auto_commit: self.auto_commit,
             mutation_recorder: self.mutation_recorder.clone(),
-            mvcc_vertex_snapshot_handles: self.mvcc_vertex_snapshot_handles.clone(),
-            mvcc_edge_snapshot_registered: self.mvcc_edge_snapshot_registered,
-            registered_vertex_labels: parking_lot::RwLock::new(
-                self.registered_vertex_labels.read().clone(),
-            ),
-            registered_edge_partitions: parking_lot::RwLock::new(
-                self.registered_edge_partitions.read().clone(),
-            ),
             auto_commit_group_start: self.auto_commit_group_start,
         }
     }
@@ -79,10 +60,6 @@ impl StorageOperationContext {
             read_only,
             auto_commit,
             mutation_recorder: None,
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: None,
         }
     }

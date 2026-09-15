@@ -112,13 +112,34 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
     for tag in &tags {
         let tag_id = tag.tag_id;
         let tag_name = &tag.tag_name;
-        // Lazily register the statement snapshot for this label.
-        ctx.ensure_vertex_snapshot_registered(tag_id);
+        let gate = ctx.pending_gate();
         ctx.data_store().with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&tag_id) {
                 let records = table.scan(ts);
                 for chunk in records.chunks(BATCH_SIZE) {
                     for record in chunk {
+                        let (create_ts, delete_ts) = match table.row_timestamps(record.internal_id)
+                        {
+                            Some(stamps) => stamps,
+                            None => continue,
+                        };
+                        if !gate.is_row_visible(ts, create_ts, delete_ts) {
+                            continue;
+                        }
+                        let starts = table.row_picked_starts(record.internal_id, ts);
+                        let record = if starts
+                            .iter()
+                            .any(|stamp| gate.is_foreign_pending(ts, *stamp))
+                        {
+                            match crate::engine::graph_storage::context::GraphStorageContext::resolve_on_table(
+                                table, record.internal_id, ts, &gate,
+                            ) {
+                                Some((resolved, _, _, _)) => resolved,
+                                None => continue,
+                            }
+                        } else {
+                            record.clone()
+                        };
                         record_vertex_read(ctx, record.vid);
                         let entry = merged.entry(record.vid).or_insert_with(|| MergedVertex {
                             vid: record.vid,
@@ -221,8 +242,6 @@ pub(crate) fn count_vertices_by_tag(
             .map(|t| t.total_count() as u64)
             .unwrap_or(0)
     });
-    // Lazily register the statement snapshot for this label.
-    ctx.ensure_vertex_snapshot_registered(tag_info.tag_id);
     Ok(count)
 }
 

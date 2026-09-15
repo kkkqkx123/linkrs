@@ -37,12 +37,28 @@ impl<'a> ExternalRef<'a> {
 }
 
 impl GraphStorageContext {
-    fn pending_gate(&self) -> PendingGate<'_> {
+    pub(crate) fn pending_gate(&self) -> PendingGate<'_> {
         let own_write = self
             .operation_context
             .as_ref()
             .and_then(|context| context.write_timestamp);
         PendingGate::new(&self.persistent.version_manager, own_write)
+    }
+
+    /// Owned gate inputs for closures that mutate their owner while
+    /// filtering: the caller clones the manager handle up front and builds
+    /// the gate inside the closure so no borrow of `self` is retained.
+    pub(crate) fn gate_inputs(
+        &self,
+    ) -> (
+        std::sync::Arc<graphdb_transaction::VersionManager>,
+        Option<Timestamp>,
+    ) {
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
+        (self.persistent.version_manager.clone(), own_write)
     }
 
     /// Pending-aware point-record resolution on one table, lock-free inside.
@@ -55,8 +71,8 @@ impl GraphStorageContext {
     /// Covering stamps are monotone decreasing across retries, so the loop
     /// terminates. Returns the record with the fences describing the version
     /// actually read (creation stamp, per-column covering stamps, read ts).
-    /// Scan-class paths keep the plain predicate (follow-up).
-    fn resolve_on_table(
+    /// Scan paths reuse this funnel per row (see `scan_vertices`).
+    pub(crate) fn resolve_on_table(
         table: &ShardedVertexTable,
         internal_id: u32,
         ts: Timestamp,
@@ -78,6 +94,62 @@ impl GraphStorageContext {
                         .min()
                     {
                         Some(0) | None => return Some((record, create_ts, starts, cur)),
+                        Some(stamp) => {
+                            cur = stamp.saturating_sub(1);
+                            continue;
+                        }
+                    }
+                }
+                (Some(_), None) => return None,
+                (None, Some((create_ts, delete_ts))) => {
+                    if gate.is_create_visible(cur, create_ts) {
+                        if let Some(delete_ts) = delete_ts {
+                            if delete_ts <= cur
+                                && gate.is_foreign_pending(cur, delete_ts)
+                                && delete_ts > 0
+                            {
+                                cur = delete_ts - 1;
+                                continue;
+                            }
+                        }
+                    }
+                    return None;
+                }
+                (None, None) => return None,
+            }
+        }
+    }
+
+    /// Pending-aware projected read on one table.
+    ///
+    /// Same gate fallback as [`Self::resolve_on_table`] but decodes only the
+    /// requested projection, so projected reads never consult or populate the
+    /// full-record cache and never observe foreign uncommitted writes.
+    pub(crate) fn resolve_projected_on_table(
+        table: &ShardedVertexTable,
+        internal_id: u32,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+        gate: &PendingGate<'_>,
+    ) -> Option<VertexRecord> {
+        let mut cur = ts;
+        loop {
+            let record = table.get_projected_by_internal_id(internal_id, cur, projection);
+            let survival = table.row_timestamps(internal_id);
+            match (record, survival) {
+                (Some(_), Some((create_ts, delete_ts))) => {
+                    if !gate.is_row_visible(cur, create_ts, delete_ts) {
+                        return None;
+                    }
+                    let starts = table.row_picked_starts(internal_id, cur);
+                    match starts
+                        .iter()
+                        .filter(|stamp| gate.is_foreign_pending(cur, **stamp))
+                        .min()
+                    {
+                        Some(0) | None => {
+                            return table.get_projected_by_internal_id(internal_id, cur, projection)
+                        }
                         Some(stamp) => {
                             cur = stamp.saturating_sub(1);
                             continue;
@@ -191,7 +263,6 @@ impl GraphStorageContext {
         external: ExternalRef<'_>,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
-        self.ensure_vertex_snapshot_registered(label);
         let gate = self.pending_gate();
         self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
@@ -205,9 +276,13 @@ impl GraphStorageContext {
                 Self::resolve_on_table(table, internal_id, ts, &gate)?;
             if self.record_cache_eligible(ts) {
                 let (live_create, live_delete) = table.row_timestamps(internal_id)?;
+                // Latest-observed fence probe: versions newer than both the
+                // read stamp and the published frontier (committed or foreign
+                // pending) veto the seed. Never a bare maximum sentinel.
+                let latest = ts.max(self.persistent.version_manager.read_timestamp());
                 if live_create == create_ts
                     && live_delete.is_none()
-                    && table.row_picked_starts(internal_id, Timestamp::MAX) == starts
+                    && table.row_picked_starts(internal_id, latest) == starts
                 {
                     self.persistent.cache_manager.cache_vertex(
                         label,
@@ -232,7 +307,6 @@ impl GraphStorageContext {
         internal_id: u32,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
-        self.ensure_vertex_snapshot_registered(label);
         let gate = self.pending_gate();
         self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
@@ -245,9 +319,13 @@ impl GraphStorageContext {
                 Self::resolve_on_table(table, internal_id, ts, &gate)?;
             if self.record_cache_eligible(ts) {
                 let (live_create, live_delete) = table.row_timestamps(internal_id)?;
+                // Latest-observed fence probe: versions newer than both the
+                // read stamp and the published frontier (committed or foreign
+                // pending) veto the seed. Never a bare maximum sentinel.
+                let latest = ts.max(self.persistent.version_manager.read_timestamp());
                 if live_create == create_ts
                     && live_delete.is_none()
-                    && table.row_picked_starts(internal_id, Timestamp::MAX) == starts
+                    && table.row_picked_starts(internal_id, latest) == starts
                 {
                     let external_id = table
                         .get_external_id(internal_id, ts)
@@ -285,9 +363,6 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-
-        // Lazily register snapshot for this vertex label if needed
-        self.ensure_vertex_snapshot_registered(label);
 
         let internal_id = self
             .persistent
@@ -382,25 +457,19 @@ impl GraphStorageContext {
         projection: Option<&[String]>,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
-        // Lazily register the statement snapshot for this label (MVCC GC
-        // coordination for read-only statement contexts).
-        self.ensure_vertex_snapshot_registered(label);
+        let gate = self.pending_gate();
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| -> Option<VertexRecord> {
                 let table = vertex_tables.get(&label)?;
-                match projection {
-                    Some(proj) => table.get_projected_by_internal_id(internal_id, ts, Some(proj)),
-                    None => table.get_by_internal_id(internal_id, ts),
-                }
+                Self::resolve_projected_on_table(table, internal_id, ts, projection, &gate)
             })
     }
 
     /// Fetch a vertex restricted to the given property projection, skipping
     /// the full-record cache so partial results never replace cached vertices.
     ///
-    /// Follow-up: projection reads still use the plain timestamp predicate;
-    /// wire them through the pending-aware gate like the full-record funnels.
+    /// Pending-aware through [`Self::resolve_projected_on_table`].
     pub fn get_vertex_projected(
         &self,
         label: LabelId,
@@ -412,10 +481,8 @@ impl GraphStorageContext {
             return None;
         }
 
-        // ID-index hits are mapping-revalidated; the record itself still
-        // uses the plain timestamp predicate (follow-up: pending-aware
-        // gate for projection reads).
-        self.ensure_vertex_snapshot_registered(label);
+        // ID-index hits are mapping-revalidated; the record itself is
+        // pending-aware through `read_record`.
         let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
             self.resolve_internal_id_rechecked(table, label, ExternalRef::Str(external_id), ts)
@@ -431,14 +498,12 @@ impl GraphStorageContext {
         projection: &[String],
         ts: Timestamp,
     ) -> Option<VertexRecord> {
-        // ID-index hits are mapping-revalidated; the record itself still
-        // uses the plain timestamp predicate (follow-up: pending-aware
-        // gate for projection reads).
+        // ID-index hits are mapping-revalidated; the record itself is
+        // pending-aware through `read_record`.
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
 
-        self.ensure_vertex_snapshot_registered(label);
         let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
             self.resolve_internal_id_rechecked(table, label, ExternalRef::I64(external_id), ts)
@@ -479,8 +544,6 @@ impl GraphStorageContext {
         internal_id: u32,
         ts: Timestamp,
     ) -> Option<String> {
-        // Lazily register the statement snapshot for this label.
-        self.ensure_vertex_snapshot_registered(label);
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| {
@@ -492,14 +555,6 @@ impl GraphStorageContext {
     }
 
     pub fn get_external_id_any(&self, internal_id: u32, ts: Timestamp) -> Option<String> {
-        // Lazily register the statement snapshot for every vertex label.
-        let labels: Vec<LabelId> = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|tables| tables.keys().copied().collect());
-        for label in labels {
-            self.ensure_vertex_snapshot_registered(label);
-        }
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| {
@@ -793,6 +848,27 @@ mod revalidation_tests {
         .expect("insert vertex");
     }
 
+    /// Acquire a real write timestamp from the version manager. Tests must
+    /// never use synthetic timestamps: unwatermarked stamps bypass the
+    /// read-frontier invariant the cache guards rely on.
+    fn write_ts(ctx: &GraphStorageContext) -> Timestamp {
+        ctx.persistent
+            .version_manager
+            .acquire_insert_timestamp()
+            .expect("acquire write ts")
+    }
+
+    fn commit_ts(ctx: &GraphStorageContext, ts: Timestamp) {
+        ctx.persistent
+            .version_manager
+            .commit_ordered(ts)
+            .expect("ordered commit");
+    }
+
+    fn live_frontier(ctx: &GraphStorageContext) -> Timestamp {
+        ctx.persistent.version_manager.read_timestamp()
+    }
+
     fn read_name(ctx: &GraphStorageContext, label: LabelId, name: &str, ts: Timestamp) -> Value {
         ctx.get_vertex(label, name, ts)
             .expect("vertex must be visible")
@@ -815,24 +891,27 @@ mod revalidation_tests {
     #[test]
     fn stale_id_mapping_is_rejected_and_reseeded() {
         let (ctx, label) = setup_ctx();
-        insert_person(&ctx, label, "alice", "A", 10);
-        let real_id = internal_id_of(&ctx, label, "alice", 10);
-        assert!(ctx.get_vertex(label, "alice", 10).is_some());
+        let ts = write_ts(&ctx);
+        insert_person(&ctx, label, "alice", "A", ts);
+        commit_ts(&ctx, ts);
+        let frontier = live_frontier(&ctx);
+        let real_id = internal_id_of(&ctx, label, "alice", frontier);
+        assert!(ctx.get_vertex(label, "alice", frontier).is_some());
 
         // Poison the ID-index cache the way a racy seed after a GC remap
         // would: the mapping no longer matches the table.
         ctx.persistent
             .cache_manager
-            .cache_vertex_id(label, "alice", real_id + 1000, 10);
+            .cache_vertex_id(label, "alice", real_id + 1000, frontier);
         let record = ctx
-            .get_vertex(label, "alice", 10)
+            .get_vertex(label, "alice", frontier)
             .expect("revalidation must fall back to the version-aware mapping");
         assert_eq!(record.internal_id, real_id);
         // The fresh mapping reseeds the cache.
         assert_eq!(
             ctx.persistent
                 .cache_manager
-                .get_cached_vertex_id(label, "alice", 10),
+                .get_cached_vertex_id(label, "alice", frontier),
             Some(real_id)
         );
     }
@@ -840,19 +919,27 @@ mod revalidation_tests {
     #[test]
     fn stale_record_fence_returns_fresh_value() {
         let (ctx, label) = setup_ctx();
-        insert_person(&ctx, label, "alice", "A", 10);
-        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
-        let internal_id = internal_id_of(&ctx, label, "alice", 10);
+        let first = write_ts(&ctx);
+        insert_person(&ctx, label, "alice", "A", first);
+        commit_ts(&ctx, first);
+        let frontier = live_frontier(&ctx);
+        assert_eq!(
+            read_name(&ctx, label, "alice", frontier),
+            Value::string("A")
+        );
+        let internal_id = internal_id_of(&ctx, label, "alice", frontier);
         let seeded = ctx
             .persistent
             .cache_manager
-            .get_cached_vertex(label, internal_id, 10)
+            .get_cached_vertex(label, internal_id, frontier)
             .expect("seeded entry");
-        assert_eq!(seeded.create_ts, 10);
+        assert_eq!(seeded.create_ts, first);
 
         // Concurrent commit lands after the seed (write path invalidates).
-        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), 20)
+        let second = write_ts(&ctx);
+        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), second)
             .expect("update");
+        commit_ts(&ctx, second);
 
         // A racy seed publishes the pre-commit value after the invalidation.
         ctx.persistent.cache_manager.cache_vertex(
@@ -860,35 +947,48 @@ mod revalidation_tests {
             internal_id,
             "alice".to_string(),
             seeded.properties.clone(),
-            10,
+            first,
             seeded.create_ts,
             seeded.column_starts.clone(),
         );
 
         // Hit revalidation must observe the drifted column fence and serve B.
-        assert_eq!(read_name(&ctx, label, "alice", 20), Value::string("B"));
+        assert_eq!(
+            read_name(&ctx, label, "alice", live_frontier(&ctx)),
+            Value::string("B")
+        );
     }
 
     #[test]
     fn historical_read_does_not_poison_future_readers() {
         let (ctx, label) = setup_ctx();
-        insert_person(&ctx, label, "alice", "A", 10);
-        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
-        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), 20)
+        let first = write_ts(&ctx);
+        insert_person(&ctx, label, "alice", "A", first);
+        commit_ts(&ctx, first);
+        assert_eq!(
+            read_name(&ctx, label, "alice", first),
+            Value::string("A")
+        );
+        let second = write_ts(&ctx);
+        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), second)
             .expect("update");
+        commit_ts(&ctx, second);
 
         // The historical snapshot still reads A, but its version is no
         // longer current so the seed must be skipped.
-        assert_eq!(read_name(&ctx, label, "alice", 10), Value::string("A"));
-        let internal_id = internal_id_of(&ctx, label, "alice", 20);
+        assert_eq!(read_name(&ctx, label, "alice", first), Value::string("A"));
+        let internal_id = internal_id_of(&ctx, label, "alice", live_frontier(&ctx));
         assert!(
             ctx.persistent
                 .cache_manager
-                .get_cached_vertex(label, internal_id, 20)
+                .get_cached_vertex(label, internal_id, live_frontier(&ctx))
                 .is_none(),
             "stale version must not be seeded"
         );
-        assert_eq!(read_name(&ctx, label, "alice", 20), Value::string("B"));
+        assert_eq!(
+            read_name(&ctx, label, "alice", live_frontier(&ctx)),
+            Value::string("B")
+        );
     }
 
     #[test]
@@ -897,22 +997,34 @@ mod revalidation_tests {
         use std::sync::Arc;
 
         let (ctx, label) = setup_ctx();
-        insert_person(&ctx, label, "key", "v0", 100);
+        let base = write_ts(&ctx);
+        insert_person(&ctx, label, "key", "v0", base);
+        commit_ts(&ctx, base);
         let done = Arc::new(AtomicBool::new(false));
 
         let writer_ctx = ctx.clone();
         let writer_done = done.clone();
         let writer = std::thread::spawn(move || {
             for i in 1..=50u64 {
+                let ts = writer_ctx
+                    .persistent
+                    .version_manager
+                    .acquire_insert_timestamp()
+                    .expect("acquire write ts");
                 writer_ctx
                     .update_vertex_property(
                         label,
                         "key",
                         "name",
                         &Value::string(format!("v{i}")),
-                        100 + i,
+                        ts,
                     )
                     .expect("writer update");
+                writer_ctx
+                    .persistent
+                    .version_manager
+                    .commit_ordered(ts)
+                    .expect("ordered commit");
             }
             writer_done.store(true, AtomicOrdering::Release);
         });
@@ -924,8 +1036,9 @@ mod revalidation_tests {
             readers.push(std::thread::spawn(move || {
                 let mut iterations = 0;
                 while !reader_done.load(AtomicOrdering::Acquire) || iterations < 20 {
+                    let frontier = reader_ctx.persistent.version_manager.read_timestamp();
                     let record = reader_ctx
-                        .get_vertex(label, "key", 1000)
+                        .get_vertex(label, "key", frontier)
                         .expect("concurrent read must succeed");
                     let name = record
                         .properties
@@ -947,7 +1060,11 @@ mod revalidation_tests {
         for reader in readers {
             reader.join().expect("reader");
         }
-        assert_eq!(read_name(&ctx, label, "key", 1000), Value::string("v50"));
+        let frontier = ctx.persistent.version_manager.read_timestamp();
+        assert_eq!(
+            read_name(&ctx, label, "key", frontier),
+            Value::string("v50")
+        );
     }
 }
 
@@ -1026,7 +1143,7 @@ mod pending_visibility_tests {
                 .map(|(_, v)| v),
             Some(&Value::string("A"))
         );
-        vm.commit_write_timestamp(start);
+        vm.commit_ordered(start).expect("ordered commit");
     }
 
     #[test]
@@ -1051,7 +1168,7 @@ mod pending_visibility_tests {
 
         // After the first transaction commits, the same snapshot observes it:
         // the committed stamp is at or below the advanced frontier.
-        vm.commit_write_timestamp(first);
+        vm.commit_ordered(first).expect("ordered commit");
         assert!(
             bound_second.get_vertex(label, "alice", second).is_some(),
             "committed row becomes visible to the peer snapshot"
@@ -1169,7 +1286,50 @@ mod pending_visibility_tests {
             bound_peer.get_edge(&params, peer).is_none(),
             "concurrent writer must not observe the foreign uncommitted edge"
         );
-        vm.commit_write_timestamp(start);
+        vm.commit_ordered(start).expect("ordered commit");
         vm.abort_write_timestamp(peer);
+    }
+
+    #[test]
+    fn scan_and_projection_hide_foreign_pending_row() {
+        let (ctx, label) = setup_ctx();
+        let vm = ctx.persistent.version_manager.clone();
+        let first = vm.acquire_insert_timestamp().expect("first txn");
+        ctx.insert_vertex(
+            label,
+            "alice",
+            &[("name".to_string(), Value::string("A"))],
+            first,
+        )
+        .expect("first txn writes");
+
+        let second = vm.acquire_insert_timestamp().expect("second txn");
+        let bound_second = bound_writer(&ctx, 2, second, second);
+        assert!(
+            bound_second
+                .get_vertex_projected(label, "alice", &["name".to_string()], second)
+                .is_none(),
+            "projection must not observe the foreign uncommitted row"
+        );
+        let scanned = bound_second
+            .scan_vertices(label, second)
+            .expect("scan resolves");
+        assert!(
+            scanned.is_empty(),
+            "scan must not observe the foreign uncommitted row"
+        );
+
+        vm.commit_ordered(first).expect("ordered commit");
+        assert!(
+            bound_second
+                .get_vertex_projected(label, "alice", &["name".to_string()], second)
+                .is_some(),
+            "projection observes the row after commit"
+        );
+        let scanned = bound_second
+            .scan_vertices(label, second)
+            .expect("scan resolves");
+        assert_eq!(scanned.len(), 1);
+        vm.abort_write_timestamp(second);
     }
 }

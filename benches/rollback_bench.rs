@@ -121,7 +121,7 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
     storage
         .commit_staged_writes(txid, &[])
         .expect("commit staged writes");
-    storage.version_manager().commit_write_timestamp(ts);
+    storage.version_manager().commit_ordered(ts).expect("ordered commit");
     let commit_us = commit_start.elapsed().as_micros() as u64;
 
     // Abort path: drop staged WAL + release timestamp (undo for insert-only

@@ -472,3 +472,27 @@ fn test_loaded_copy_mismatches_detect_orphans() {
     assert!(mappings >= 1);
     assert!(csr_rows >= 1);
 }
+
+#[test]
+fn test_with_gate_methods_hide_foreign_pending_edge() {
+    use crate::mvcc_visibility::PendingGate;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let vm = graphdb_transaction::VersionManager::new();
+    let foreign = vm.try_next_write_timestamp().expect("pending ts");
+    table.insert_edge(0, 1, 0, &[], foreign).unwrap();
+
+    let gate = PendingGate::new(&vm, None);
+    assert!(table.get_edge(0, 1, 0, foreign).is_some());
+    assert!(table.get_edge_with_gate(0, 1, 0, foreign, &gate).is_none());
+    assert!(table.out_edges_with_gate(0, foreign, &gate).is_empty());
+    assert!(table.in_edges_with_gate(1, foreign, &gate).is_empty());
+    assert!(table.scan_with_gate(foreign, &gate).is_empty());
+
+    vm.commit_ordered(foreign).expect("ordered commit");
+    let gate = PendingGate::new(&vm, None);
+    assert!(table.get_edge_with_gate(0, 1, 0, foreign, &gate).is_some());
+    assert_eq!(table.out_edges_with_gate(0, foreign, &gate).len(), 1);
+    assert_eq!(table.in_edges_with_gate(1, foreign, &gate).len(), 1);
+    assert_eq!(table.scan_with_gate(foreign, &gate).len(), 1);
+}

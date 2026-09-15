@@ -331,27 +331,25 @@ impl VersionManager {
         Ok(ts)
     }
 
-    pub fn commit_write_timestamp(&self, ts: Timestamp) {
-        // System/internal use only (storage background tasks such as
-        // auto-commit statements, compaction and GC leases that own no
-        // transaction context and bypass transaction certification).
-        // User transactions MUST go through
-        // `TransactionManager::commit_transaction`, which certifies the
-        // write set and allocates a commit timestamp via
-        // `allocate_commit_timestamp` after WAL durability and storage
-        // finalization. Calling this directly for a user write would
-        // publish visibility ordered by start time instead of commit time
-        // and skip conflict certification entirely.
-        self.finish_write_timestamp(ts, WriteTimestampState::Committed);
+    pub fn abort_write_timestamp(&self, ts: Timestamp) {
+        // Retires a timestamp that will never become visible. Aborting a
+        // user transaction must go through the manager abort protocol so
+        // SSI locks, leases and undo logs are released together with the
+        // timestamp.
+        self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
     }
 
-    pub fn abort_write_timestamp(&self, ts: Timestamp) {
-        // Counterpart of `commit_write_timestamp`: retires a timestamp that
-        // will never become visible. Same system-only boundary for the
-        // commit direction; aborting a user transaction must go through
-        // the manager abort protocol so SSI locks, leases and undo logs
-        // are released together with the timestamp.
-        self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
+    /// Settle a system write timestamp in commit order.
+    ///
+    /// Reserves a commit timestamp for `start` and publishes visibility
+    /// over both slots, so system commits share the commit-ordered
+    /// coordinate with explicit transactions. Fails closed when the start
+    /// slot is not a live pending write; callers must propagate the error
+    /// instead of falling back to start-ordered publishing.
+    pub fn commit_ordered(&self, start: Timestamp) -> VersionManagerResult<Timestamp> {
+        let commit_ts = self.reserve_commit_timestamp(start)?;
+        self.publish_reserved_commit(start, commit_ts);
+        Ok(commit_ts)
     }
 
     /// Allocate a commit timestamp at commit time and retire the start slot.
@@ -648,7 +646,7 @@ mod tests {
 
         let ts2 = vm.acquire_insert_timestamp().expect("acquire insert");
         assert!(ts2 >= 1);
-        vm.commit_write_timestamp(ts2);
+        vm.commit_ordered(ts2).expect("ordered commit");
     }
 
     #[test]
@@ -672,7 +670,7 @@ mod tests {
             .acquire_insert_timestamp()
             .expect("acquire should succeed");
         assert!(ts >= 1);
-        vm.commit_write_timestamp(ts);
+        vm.commit_ordered(ts).expect("ordered commit");
         assert_eq!(vm.pending_count(), 0);
 
         // Aborted system write (drop without commit) leaves no pending slot.
@@ -713,7 +711,7 @@ mod tests {
                     .acquire_insert_timestamp()
                     .expect("acquire should succeed");
                 thread::sleep(Duration::from_millis(10));
-                vm_clone.commit_write_timestamp(ts);
+                vm_clone.commit_ordered(ts).expect("ordered commit");
                 ts
             }));
         }
@@ -737,15 +735,15 @@ mod tests {
         assert_eq!(tracker.cleanup_threshold(), ts1);
 
         // Release first
-        vm.commit_write_timestamp(ts1);
+        vm.commit_ordered(ts1).expect("ordered commit");
         assert_eq!(tracker.cleanup_threshold(), ts2);
 
         // Release second
-        vm.commit_write_timestamp(ts2);
+        vm.commit_ordered(ts2).expect("ordered commit");
         assert_eq!(tracker.cleanup_threshold(), ts3);
 
         // Release last
-        vm.commit_write_timestamp(ts3);
+        vm.commit_ordered(ts3).expect("ordered commit");
         assert_eq!(tracker.cleanup_threshold(), u64::MAX); // No active snapshots
     }
 
@@ -759,12 +757,12 @@ mod tests {
             .acquire_insert_timestamp()
             .expect("second write timestamp");
 
-        vm.commit_write_timestamp(second);
+        vm.commit_ordered(second).expect("ordered commit");
         assert_eq!(vm.read_timestamp(), first - 1);
         assert_eq!(vm.pending_count(), 1);
 
-        vm.commit_write_timestamp(first);
-        assert_eq!(vm.read_timestamp(), second);
+        let first_commit = vm.commit_ordered(first).expect("ordered commit");
+        assert_eq!(vm.read_timestamp(), first_commit);
         assert_eq!(vm.pending_count(), 0);
     }
 
@@ -786,9 +784,9 @@ mod tests {
         let guard = ReadTimestampGuard::new(vm.clone()).expect("read timestamp");
         let timestamp = guard.timestamp();
         let write_timestamp = vm.acquire_insert_timestamp().expect("write timestamp");
-        vm.commit_write_timestamp(write_timestamp);
+        let commit_ts = vm.commit_ordered(write_timestamp).expect("ordered commit");
 
-        assert_eq!(vm.read_timestamp(), write_timestamp);
+        assert_eq!(vm.read_timestamp(), commit_ts);
         drop(guard);
         assert_eq!(vm.snapshot_tracker().ref_count(timestamp), None);
         assert_eq!(vm.pending_count(), 0);
@@ -819,16 +817,17 @@ mod tests {
         // Committing out of order must not advance the frontier past the
         // still-pending `first` write: crossing it would publish `first`'s
         // partial writes to new readers (dirty read).
-        vm.commit_write_timestamp(second);
+        vm.commit_ordered(second).expect("ordered commit");
         assert_eq!(vm.read_timestamp(), first - 1);
         assert_eq!(vm.pending_count(), 1);
 
-        // Even repeated commit attempts must not skip the pending timestamp.
-        vm.commit_write_timestamp(second);
+        // Settling an already-settled slot fails closed instead of silently
+        // re-publishing: the caller must not retry a finished commit.
+        assert!(vm.commit_ordered(second).is_err());
         assert_eq!(vm.read_timestamp(), first - 1);
 
-        vm.commit_write_timestamp(first);
-        assert_eq!(vm.read_timestamp(), second);
+        let first_commit = vm.commit_ordered(first).expect("ordered commit");
+        assert_eq!(vm.read_timestamp(), first_commit);
         assert_eq!(vm.pending_count(), 0);
     }
 
@@ -898,7 +897,7 @@ mod tests {
         assert!(ages[0].1 >= Duration::from_secs(120));
         assert_eq!(ages[1].0, second);
 
-        vm.commit_write_timestamp(first);
+        vm.commit_ordered(first).expect("ordered commit");
         let ages = vm.pending_write_ages();
         assert_eq!(ages.len(), 1);
         assert_eq!(ages[0].0, second);
@@ -925,8 +924,9 @@ mod tests {
         vm.publish_reserved_commit(second, commit_ts);
         assert_eq!(vm.read_timestamp(), first - 1);
 
-        vm.commit_write_timestamp(first);
-        assert_eq!(vm.read_timestamp(), commit_ts);
+        let first_commit = vm.commit_ordered(first).expect("ordered commit");
+        assert!(first_commit > commit_ts);
+        assert_eq!(vm.read_timestamp(), first_commit);
         assert_eq!(vm.pending_count(), 0);
     }
 
@@ -987,7 +987,7 @@ mod tests {
         // Committing out of order cannot cross the still-pending first slot,
         // so the aborted second slot stays observable until the frontier
         // swallows the whole run.
-        vm.commit_write_timestamp(first);
+        vm.commit_ordered(first).expect("ordered commit");
         assert_eq!(vm.timestamp_slot(first), TimestampSlot::Vanished);
         assert_eq!(vm.timestamp_slot(second), TimestampSlot::Vanished);
 

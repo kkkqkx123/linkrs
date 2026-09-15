@@ -4,7 +4,6 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use graphdb_core::types::EdgeIdentifier;
-use graphdb_core::types::LabelId;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
 use graphdb_transaction::undo_log::UndoLogManager;
@@ -12,8 +11,6 @@ use graphdb_transaction::{
     MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
 };
 
-use crate::engine::data_store::EdgeTableKey;
-use crate::SnapshotHandle;
 use crate::StorageOperationContext;
 
 /// Cumulative gate admission statistics (acquisitions and total wait time).
@@ -179,13 +176,6 @@ pub struct AutoCommitBatchWindow {
     pub(crate) base_ctx: Arc<super::GraphStorageContext>,
     pub(crate) gate_lease: Arc<AutoCommitWriteLease>,
     pub(crate) first_ts: Mutex<Option<Timestamp>>,
-    /// Lazily registered vertex snapshots as (label, handle) pairs. One
-    /// entry per registration; the per-timestamp refcount stays balanced when
-    /// the same label is registered by several statements (group mode shares
-    /// one timestamp).
-    pub(crate) registered_vertex_snapshots: Mutex<Vec<(LabelId, SnapshotHandle)>>,
-    /// Lazily registered edge-partition snapshots as (key, timestamp) pairs.
-    pub(crate) registered_edge_snapshots: Mutex<Vec<(EdgeTableKey, Timestamp)>>,
     pub(crate) statement_count: AtomicU64,
     pub(crate) snapshot_rounds: AtomicU64,
     /// Group mode: statements share one write timestamp (first_ts),
@@ -193,6 +183,11 @@ pub struct AutoCommitBatchWindow {
     pub(crate) group: AtomicBool,
     /// Shared before-image undo log for group mode (one segment per statement).
     pub(crate) group_undo: Option<Arc<Mutex<UndoLogManager>>>,
+    /// Accumulated statement write sets for group mode. Each grouped
+    /// statement pushes its write set at finalize; the group commit point
+    /// merges and publishes them so later transactions certify against the
+    /// grouped commit.
+    pub(crate) group_write_sets: Mutex<Vec<graphdb_transaction::types::WriteSet>>,
 }
 
 impl AutoCommitBatchWindow {
@@ -253,21 +248,25 @@ impl AutoCommitBatchWindow {
                 undo: undo_log.clone(),
                 write_set: write_set.clone(),
             })),
-            mvcc_vertex_snapshot_handles: Vec::new(),
-            mvcc_edge_snapshot_registered: false,
-            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
-            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
             auto_commit_group_start: group_undo_start,
         };
 
         self.statement_count.fetch_add(1, Ordering::SeqCst);
         let mut bound = (**base).clone();
         bound.operation_context = Some(Arc::new(context));
-        bound.write_timestamp_lease = Some(Arc::new(super::WriteTimestampLease {
-            version_manager: base.persistent.version_manager.clone(),
-            timestamp: ts,
-            finalized: AtomicBool::new(false),
-        }));
+        // Group mode shares one write timestamp across statements: no
+        // per-statement lease, otherwise dropping a bound statement would
+        // abort the shared timestamp before the group commit point settles
+        // it. The group commit/rollback point owns the settle exactly once.
+        bound.write_timestamp_lease = if is_group {
+            None
+        } else {
+            Some(Arc::new(super::WriteTimestampLease {
+                version_manager: base.persistent.version_manager.clone(),
+                timestamp: ts,
+                finalized: AtomicBool::new(false),
+            }))
+        };
         bound.write_gate_lease = None;
         bound.auto_commit_undo = Some(undo_log);
         bound.auto_commit_write_set = Some(write_set);
@@ -295,6 +294,10 @@ impl AutoCommitBatchWindow {
 
     /// Single group commit point: one fsync, then barrier advance, then the
     /// shared write-timestamp commit. Order: durability → visibility.
+    /// The shared timestamp settles through the commit-ordered path so group
+    /// commits share the commit-stamp coordinate with explicit transactions,
+    /// and the accumulated window write set is published for later
+    /// certification.
     pub fn finalize_group(&self) -> StorageResult<()> {
         // 1) Durability: one sync covering every no-wait appended statement.
         if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
@@ -308,12 +311,26 @@ impl AutoCommitBatchWindow {
                     .advance_barriers(graphdb_core::types::CommitLsn::new(durable.as_u64()));
             }
         }
-        // 2) Visibility: commit the shared write timestamp once.
+        // 2) Visibility: commit the shared write timestamp once, in commit
+        // order, then publish the merged window write set.
         if let Some(ts) = *self.first_ts.lock() {
-            self.base_ctx
-                .persistent
-                .version_manager
-                .commit_write_timestamp(ts);
+            let commit_ts = self.base_ctx.commit_write_timestamp_ordered(ts)?;
+            let sets = std::mem::take(&mut *self.group_write_sets.lock());
+            if !sets.is_empty() {
+                let mut merged = graphdb_transaction::types::WriteSet::new();
+                for set in sets {
+                    merged.vertices.extend(set.vertices);
+                    merged.edges.extend(set.edges);
+                    merged.edge_endpoints.extend(set.edge_endpoints);
+                    merged.deleted_vertices.extend(set.deleted_vertices);
+                    merged.schema_resources.extend(set.schema_resources);
+                    merged.index_resources.extend(set.index_resources);
+                    merged.read_ranges.extend(set.read_ranges);
+                }
+                if !merged.is_empty() {
+                    self.base_ctx.publish_committed_write_set(commit_ts, merged);
+                }
+            }
         }
         // 3) Window cleanup (unchanged): unregister snapshots, release gate.
         self.unregister_snapshots();
@@ -339,36 +356,13 @@ impl AutoCommitBatchWindow {
                 self.base_ctx.abort_write_timestamp(ts);
             }
         }
+        self.group_write_sets.lock().clear();
         self.unregister_snapshots();
         self.gate_lease.release();
         Ok(())
     }
 
     fn unregister_snapshots(&self) {
-        // Unregister every vertex snapshot registered lazily by the window's
-        // statements. Each entry matches one registration (handle), so the
-        // per-timestamp refcounts return to zero exactly.
-        let vertex_registrations = std::mem::take(&mut *self.registered_vertex_snapshots.lock());
-        if !vertex_registrations.is_empty() {
-            let tables = self
-                .base_ctx
-                .persistent
-                .data_store
-                .with_vertex_tables(|tables| tables.values().cloned().collect::<Vec<_>>());
-            for (label_id, handle) in vertex_registrations {
-                for table in &tables {
-                    if table.label() == label_id {
-                        let _ = table.unregister_snapshot(handle);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Edge partitions need no per-table unregistration on the
-        // single-segment store; dropping the recorded keys releases the
-        // statement scope.
-        let _edge_registrations = std::mem::take(&mut *self.registered_edge_snapshots.lock());
     }
 }
 
