@@ -32,6 +32,12 @@ impl TransactionManager {
     /// recovery, and an error is returned: the read frontier is NOT advanced,
     /// so new readers cannot observe the unfinalized writes. Use
     /// `recover_pending_finalization` to re-drive finalization.
+    ///
+    /// Locking: neither WAL durability (step 4) nor storage finalization
+    /// (step 6) holds the certifier `commit_lock`; certification runs in two
+    /// bounded in-memory critical sections (step 3 pre-check, step 5 final
+    /// review) and the final review closes the window opened by the unlocked
+    /// I/O between them.
     pub fn commit_transaction(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
         let context = {
             let entry = self

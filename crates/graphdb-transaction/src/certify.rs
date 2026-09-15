@@ -102,6 +102,14 @@ impl SsiTracker {
 ///
 /// Lock order wherever multiple locks are held: `commit_lock` →
 /// `committed_write_sets` → spatial indices → `ssi_tracker`.
+///
+/// Lock scope: the global lock is held only across each in-memory
+/// certification step (`check_write_set_conflict` pre-check and `publish`
+/// final review separately). WAL durability I/O and storage finalization in
+/// `TransactionManager::commit_transaction` run outside this lock; the final
+/// review re-scans validated active transactions plus every committed write
+/// set newer than the committer's start timestamp, so no conflict can slip
+/// through the unlocked I/O window.
 pub struct Certifier {
     /// Global certification lock. Held across the whole
     /// check-then-publish critical section.

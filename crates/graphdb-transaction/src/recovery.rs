@@ -284,3 +284,59 @@ impl Default for RecoveryManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::participant::TransactionCommitDescriptor;
+    use graphdb_core::types::{DurabilityLevel, TransactionId};
+
+    use crate::types::WriteSet;
+
+    fn test_descriptor(txn: u64, write_ts: Timestamp) -> TransactionCommitDescriptor {
+        TransactionCommitDescriptor::new(
+            TransactionId::new(txn),
+            write_ts,
+            DurabilityLevel::default(),
+            WriteSet::new(),
+        )
+    }
+
+    #[test]
+    fn pending_finalization_round_trip() {
+        let manager = RecoveryManager::new();
+        let descriptor = test_descriptor(7, 42);
+        manager.record(&descriptor, 0, CommitLsn::new(100));
+
+        // Queued under the transaction id with the pre-visibility commit
+        // timestamp (0 = visibility not yet published).
+        assert_eq!(manager.pending_txn_ids(), vec![TransactionId::new(7)]);
+
+        // `take_pending` owns the entry exclusively: the queue is empty until
+        // a failed re-drive re-records it.
+        let taken = manager
+            .take_pending(TransactionId::new(7))
+            .expect("pending entry");
+        assert_eq!(taken.txn_id, TransactionId::new(7));
+        assert_eq!(taken.write_timestamp, 42);
+        assert_eq!(taken.commit_timestamp, 0);
+        assert!(manager.pending_txn_ids().is_empty());
+        assert!(manager.take_pending(TransactionId::new(7)).is_none());
+    }
+
+    #[test]
+    fn re_recording_replaces_stale_entry() {
+        let manager = RecoveryManager::new();
+        let descriptor = test_descriptor(7, 42);
+        manager.record(&descriptor, 0, CommitLsn::new(100));
+        // Retry after visibility was published carries the commit timestamp;
+        // it must replace, not duplicate, the older entry.
+        manager.record(&descriptor, 43, CommitLsn::new(100));
+
+        assert_eq!(manager.pending_txn_ids(), vec![TransactionId::new(7)]);
+        let taken = manager
+            .take_pending(TransactionId::new(7))
+            .expect("pending entry");
+        assert_eq!(taken.commit_timestamp, 43);
+    }
+}

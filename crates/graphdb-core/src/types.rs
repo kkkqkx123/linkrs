@@ -527,10 +527,10 @@ pub use self::span::{Position, Span, ToSpan};
 
 // Export storage identifier types for cross-module usage
 pub use self::storage_ids::{
-    ColumnId, EdgeDeletionContext, EdgeDeletionContextParams, EdgeId, EdgeIdentifier, EdgeKey,
-    EdgeLocation, EdgeOperationContext, EdgePropertyUpdateContext, LabelId, SnapshotHandle,
-    Timestamp, TransactionId, VertexId, VertexIdentifier, INVALID_EDGE_ID, INVALID_TIMESTAMP,
-    MAX_TIMESTAMP,
+    is_allocatable_timestamp, ColumnId, EdgeDeletionContext, EdgeDeletionContextParams, EdgeId,
+    EdgeIdentifier, EdgeKey, EdgeLocation, EdgeOperationContext, EdgePropertyUpdateContext,
+    LabelId, SnapshotHandle, Timestamp, TransactionId, VertexId, VertexIdentifier, INVALID_EDGE_ID,
+    INVALID_TIMESTAMP, MAX_TIMESTAMP,
 };
 pub use self::sync_protocol::{
     CommitLsn, IdempotencyKey, IndexGeneration, LeaseEpoch, OrderingKey, ReadYourWritesConfig,

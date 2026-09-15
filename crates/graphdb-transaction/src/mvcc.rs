@@ -178,6 +178,16 @@ impl VersionManager {
             let next = current
                 .checked_add(1)
                 .ok_or(VersionManagerError::TimestampExhausted)?;
+            // The allocator shares the u64 domain with sentinel values, so it
+            // must stop before either sentinel instead of handing one out as a
+            // transaction timestamp.
+            debug_assert!(
+                graphdb_core::types::is_allocatable_timestamp(next),
+                "timestamp allocator reached reserved sentinel"
+            );
+            if !graphdb_core::types::is_allocatable_timestamp(next) {
+                return Err(VersionManagerError::TimestampExhausted);
+            }
             match self
                 .write_ts
                 .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
@@ -437,6 +447,26 @@ impl VersionManager {
 
     pub fn pending_count(&self) -> i32 {
         self.read_pending.load(Ordering::Relaxed) + self.write_pending.load(Ordering::Relaxed)
+    }
+
+    /// Ages of all currently `Pending` write timestamps.
+    ///
+    /// Lets the cleanup path tell a live long-running transaction (its
+    /// timestamp appears in the caller-supplied `owned` set and must never be
+    /// reaped, but it still pins the read frontier) apart from a crash
+    /// orphan (unowned and eligible for reaping). Sorted oldest-first so the
+    /// worst frontier blocker is reported first.
+    pub fn pending_write_ages(&self) -> Vec<(Timestamp, Duration)> {
+        let now = Instant::now();
+        let states = self.write_states.lock();
+        let mut ages: Vec<(Timestamp, Duration)> = states
+            .iter()
+            .filter(|(_, (_, state))| *state == WriteTimestampState::Pending)
+            .map(|(ts, (acquired, _))| (*ts, now.duration_since(*acquired)))
+            .collect();
+        ages.sort_by_key(|(_, age)| *age);
+        ages.reverse();
+        ages
     }
 
     /// Timeout after which a `Pending` write timestamp is reaped by
@@ -740,5 +770,30 @@ mod tests {
         assert_eq!(reaped, 1);
         assert_eq!(vm.read_timestamp(), first);
         assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_pending_write_ages_reports_oldest_first() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        let second = vm
+            .acquire_insert_timestamp()
+            .expect("second write timestamp");
+        vm.backdate_write_timestamp(first, Duration::from_secs(120));
+        vm.backdate_write_timestamp(second, Duration::from_secs(10));
+
+        let ages = vm.pending_write_ages();
+        assert_eq!(ages.len(), 2);
+        // Oldest blocker first so cleanup logs the frontier pin immediately.
+        assert_eq!(ages[0].0, first);
+        assert!(ages[0].1 >= Duration::from_secs(120));
+        assert_eq!(ages[1].0, second);
+
+        vm.commit_write_timestamp(first);
+        let ages = vm.pending_write_ages();
+        assert_eq!(ages.len(), 1);
+        assert_eq!(ages[0].0, second);
     }
 }

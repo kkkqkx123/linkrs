@@ -62,6 +62,29 @@ impl WriteSet {
         self.read_ranges.push(range);
     }
 
+    /// Whether this transaction locally wrote `vid` (insert/update/delete).
+    ///
+    /// Read-your-own-writes primitive: snapshot reads at `start_timestamp`
+    /// cannot observe uncommitted data, so every read path that must observe
+    /// the transaction's own writes has to consult this set (or the mutation
+    /// journal) in addition to the snapshot. Storage and query executors must
+    /// merge locally covered entities on top of the snapshot result.
+    /// Prefer the context-level probes
+    /// (`TransactionContext::has_local_vertex_write` /
+    /// `has_local_edge_write`) at call sites so the contract has a single
+    /// entry point.
+    pub fn covers_vertex(&self, vid: &VertexId) -> bool {
+        self.vertices.contains(vid)
+    }
+
+    /// Whether this transaction locally wrote `edge`.
+    ///
+    /// Same read-your-own-writes contract as `covers_vertex`: callers merge
+    /// locally written edges over the snapshot scan.
+    pub fn covers_edge(&self, edge: &EdgeIdentifier) -> bool {
+        self.edges.contains(edge)
+    }
+
     /// Check whether any committed write falls within a recorded read range.
     pub fn has_read_range_conflict_with(&self, committed: &WriteSet) -> bool {
         for range in &self.read_ranges {

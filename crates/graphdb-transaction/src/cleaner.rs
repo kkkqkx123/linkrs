@@ -63,6 +63,20 @@ impl TransactionCleaner {
             log::warn!("Reaped {reaped} orphaned write timestamp(s) older than timeout");
         }
 
+        // A live long-running transaction is protected from reaping by the
+        // `owned` set above, but its `Pending` slot still pins the read
+        // frontier behind it. Report it separately so operators can tell
+        // "frontier stalled by a live transaction" apart from "orphan reaped".
+        let warn_after = self.version_manager.write_reap_timeout() / 2;
+        for (ts, age) in self.version_manager.pending_write_ages() {
+            if owned.contains(&ts) && age > warn_after {
+                log::warn!(
+                    "Long-running write transaction holds timestamp {ts} for {age:?}; \
+                    read frontier cannot advance past it until commit or abort"
+                );
+            }
+        }
+
         let expired: Vec<(TransactionId, bool)> = active_transactions
             .iter()
             .filter(|entry| {

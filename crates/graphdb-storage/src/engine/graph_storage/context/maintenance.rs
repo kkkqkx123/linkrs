@@ -135,7 +135,11 @@ impl GraphStorageContext {
             self.persistent.version_manager.clone(),
         );
         let wm = gc.capture_watermarks();
-        let cleanup_ts = wm.safe_gc_timestamp();
+        // One watermark capture shared by every sub-system below, margin
+        // applied. `ts` is the separate caller-provided compaction timestamp
+        // for the vertex remap.
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
         log::info!(
             "Compact maintenance started: compact_ts={}, cleanup_threshold={} (watermarks={})",
             ts,
@@ -150,8 +154,8 @@ impl GraphStorageContext {
             .data_store
             .for_all_edge_partitions_mut(|key, table| {
                 let reserve_ratio = config.compute_reserve_ratio(table.edge_count() as usize, 0);
-                let removed = table.compact_csr_only(ts, reserve_ratio);
-                table.compact_properties(cleanup_ts);
+                let removed = table.compact_csr_only_with_watermarks(&wm, margin, reserve_ratio);
+                table.compact_properties_with_watermarks(&wm, margin);
                 Ok((key, removed))
             })?;
 

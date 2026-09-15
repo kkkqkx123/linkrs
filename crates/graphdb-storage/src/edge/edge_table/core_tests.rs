@@ -3,10 +3,14 @@ use crate::edge::edge_table::config::{AutoMaintenanceConfig, EdgeTableConfig};
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::{EdgeSchema, EdgeStrategy};
 use crate::types::StoragePropertyDef;
-use graphdb_core::types::{DataType, EdgeId, VertexId};
+use graphdb_core::types::{CommitLsn, DataType, EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
 
 type EdgeTable = EdgeStore;
+
+fn watermark_at(ts: Timestamp) -> graphdb_transaction::MvccWatermarks {
+    graphdb_transaction::MvccWatermarks::from_parts(ts, ts, None, CommitLsn::ZERO)
+}
 
 fn create_test_schema() -> EdgeSchema {
     EdgeSchema {
@@ -199,13 +203,11 @@ fn test_compact_physically_removes_edges_below_gc_bound() {
     assert!(table.delete_edge(0, 2, 0, 250).unwrap());
     assert_eq!(table.edge_count(), 2);
 
-    table.mvcc.register_active_snapshot(210);
-    let removed = table.compact_csr_only(210, 0.0);
+    let removed = table.compact_csr_only_with_watermarks(&watermark_at(210), 0, 0.0);
     assert_eq!(removed, 1);
     assert_eq!(table.edge_count(), 2);
     assert!(!table.has_edge(0, 1, 0, 300));
     assert!(!table.has_edge(0, 2, 0, 300));
-    table.mvcc.unregister_active_snapshot(210);
 }
 
 #[test]
@@ -264,7 +266,7 @@ fn test_row_capacity_assertion_on_compaction() {
     table.delete_edge(0, 50_000, 0, 150).unwrap();
     table.insert_edge(0, 50_001, 1, &[], 160).unwrap();
 
-    let _removed = table.compact_csr_only(200, 0.25);
+    let _removed = table.compact_csr_only_with_watermarks(&watermark_at(Timestamp::MAX), 0, 0.25);
 
     let max_src = 100_002usize;
     let max_dst = 500_001usize;

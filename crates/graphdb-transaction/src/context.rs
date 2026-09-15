@@ -843,6 +843,19 @@ impl TransactionContext {
         self.write_set.lock().record_index_resource(resource);
     }
 
+    /// Read-your-own-writes probe: whether this transaction locally wrote
+    /// `vid`. Snapshot reads at the transaction's own timestamp cannot
+    /// observe uncommitted data, so executors must merge locally covered
+    /// entities over the snapshot result (see `WriteSet::covers_vertex`).
+    pub fn has_local_vertex_write(&self, vid: &VertexId) -> bool {
+        self.write_set.lock().covers_vertex(vid)
+    }
+
+    /// Edge counterpart of [`Self::has_local_vertex_write`].
+    pub fn has_local_edge_write(&self, edge: &graphdb_core::types::EdgeIdentifier) -> bool {
+        self.write_set.lock().covers_edge(edge)
+    }
+
     /// Publish a complete mutation result in the canonical metadata order.
     ///
     /// The journal is the single source of truth: this method appends exactly

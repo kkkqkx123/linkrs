@@ -218,11 +218,9 @@ impl Column {
         })
     }
 
-    /// Garbage-collect version-chain entries no longer visible to any active
-    /// snapshot at `min_active_snapshot_ts`. Returns the number of entries
-    /// removed. Keeps the latest entry that ends at or before the cutoff when
-    /// it is needed as a baseline for queries that fall into a gap before the
-    /// next retained interval.
+    /// Garbage-collect version-chain entries eligible under
+    /// `Visibility::is_gc_eligible`, keeping one baseline entry when the
+    /// retained chain would otherwise start after the cutoff.
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         let mut removed = 0;
         self.with_version_chains_write(|chains| {
@@ -236,7 +234,7 @@ impl Column {
                     let mut after: Vec<VersionEntry> = Vec::new();
                     let mut last_before: Option<VersionEntry> = None;
                     for entry in chain.drain(..) {
-                        if entry.end_ts > safe {
+                        if !crate::mvcc_visibility::Visibility::is_gc_eligible(entry.end_ts, safe) {
                             after.push(entry);
                         } else {
                             if last_before

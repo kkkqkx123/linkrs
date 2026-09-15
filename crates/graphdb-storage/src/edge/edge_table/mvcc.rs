@@ -32,14 +32,15 @@ impl EdgeTimestamps {
 
 /// MVCC and snapshot management for the single-segment edge table.
 ///
-/// Single authoritative source for edge visibility. Tombstones are kept in
-/// one hot hash table; there is no cold tombstone layer.
+/// Single authority for edge visibility. `active_snapshots` /
+/// `min_active_snapshot_ts` are a per-table pin cache; the GC truth source
+/// is the transaction layer (`SnapshotTracker`, unified per pass via
+/// `MvccWatermarks`), so pass-level cutoffs must come from captured
+/// watermarks, never from this cache alone.
 pub struct MVCCManager {
-    /// Per-edge creation and deletion timestamps. Centralized MVCC state
-    /// used as the single visibility authority.
+    /// Per-edge creation/deletion timestamps (visibility authority).
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
-    /// Authoritative tombstone table. Every deletion is recorded here
-    /// exactly once, keyed by edge id with the earliest `delete_ts`.
+    /// Tombstone table: edge id to earliest `delete_ts`.
     pub tombstones: HashMap<EdgeId, Timestamp>,
     /// Minimum timestamp of all active snapshots.
     pub min_active_snapshot_ts: Timestamp,
@@ -71,35 +72,11 @@ impl MVCCManager {
             .is_some_and(|delete_ts| *delete_ts <= ts)
     }
 
-    /// Unified watermark variant. Derives the safe cutoff from the single
-    /// pass watermarks so edge tombstones share the same frontier as vertex
-    /// versions, indexes and WAL. `margin` is subtracted conservatively.
-    pub fn gc_tombstones_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
-        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
-        self.gc_tombstones(safe)
-    }
-
-    /// Garbage collect tombstones that are no longer needed for snapshot isolation.
-    ///
-    /// Removes tombstones with delete_ts < min_active_snapshot_ts.
-    /// These tombstones cannot affect any active snapshot since all snapshots
-    /// have ts >= min_active_snapshot_ts.
+    /// Drop tombstones eligible under `Visibility::is_gc_eligible`. Safe:
+    /// `is_edge_visible` consults `edge_timestamps.delete_ts` first, which
+    /// keeps hiding the edge from every snapshot at or past deletion.
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
         self.gc_tombstones_batch(min_active_snapshot_ts, usize::MAX)
-    }
-
-    pub fn gc_tombstones_batch_with_watermarks(
-        &mut self,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-        batch_size: usize,
-    ) -> usize {
-        let safe = watermarks.safe_gc_timestamp_with_margin(margin);
-        self.gc_tombstones_batch(safe, batch_size)
     }
 
     /// Inspect at most `batch_size` tombstones.
@@ -115,7 +92,11 @@ impl MVCCManager {
             .tombstones
             .iter()
             .filter_map(|(edge_id, delete_ts)| {
-                (*delete_ts < min_active_snapshot_ts).then_some(*edge_id)
+                crate::mvcc_visibility::Visibility::is_gc_eligible(
+                    *delete_ts,
+                    min_active_snapshot_ts,
+                )
+                .then_some(*edge_id)
             })
             .collect();
         eligible.truncate(batch_size);
@@ -342,6 +323,30 @@ mod tests {
     }
 
     #[test]
+    fn test_gc_tombstones_boundary_preserves_visibility() {
+        let mut table = create_edge_table_with_props();
+
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let edge_id = EdgeId(0);
+        table.mvcc.record_edge_deletion(edge_id, 200);
+
+        assert!(table.mvcc.is_edge_visible(edge_id, 199));
+        assert!(!table.mvcc.is_edge_visible(edge_id, 200));
+        assert!(!table.mvcc.is_edge_visible(edge_id, 201));
+
+        // The exclusive waterfront reclaims `delete_ts == safe`: the
+        // redundant tombstone entry goes away...
+        let removed = table.mvcc.gc_tombstones(200);
+        assert_eq!(removed, 1);
+
+        // ...while every visibility decision stays identical because
+        // `edge_timestamps.delete_ts` remains authoritative.
+        assert!(table.mvcc.is_edge_visible(edge_id, 199));
+        assert!(!table.mvcc.is_edge_visible(edge_id, 200));
+        assert!(!table.mvcc.is_edge_visible(edge_id, 201));
+    }
+
+    #[test]
     fn test_gc_tombstones_preserves_active_snapshots() {
         let mut table = create_edge_table_with_props();
 
@@ -358,19 +363,26 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_tombstones_boundary_is_exclusive() {
+    fn test_gc_tombstones_boundary_uses_exclusive_waterfront() {
         let mut manager = MVCCManager::new();
-        manager.tombstones.insert(EdgeId(0), 200);
-        manager.tombstones.insert(EdgeId(1), 201);
+        manager.record_creation(EdgeId(0), 100);
+        manager.record_creation(EdgeId(1), 100);
+        manager.record_edge_deletion(EdgeId(0), 200);
+        manager.record_edge_deletion(EdgeId(1), 201);
 
-        // A deletion exactly at the watermark is still observable there.
+        // The exclusive waterfront reclaims `delete_ts == safe`; the
+        // redundant tombstone entry goes away one round earlier.
         let removed = manager.gc_tombstones(200);
-        assert_eq!(removed, 0);
-        assert_eq!(manager.tombstones.len(), 2);
+        assert_eq!(removed, 1);
+        assert_eq!(manager.tombstones.len(), 1);
+
+        // Deletions stay observable through `edge_timestamps` regardless.
+        assert!(!manager.is_edge_visible(EdgeId(0), 200));
+        assert!(!manager.is_edge_visible(EdgeId(1), 201));
 
         let removed = manager.gc_tombstones(201);
         assert_eq!(removed, 1);
-        assert_eq!(manager.tombstones.len(), 1);
+        assert_eq!(manager.tombstones.len(), 0);
     }
 
     #[test]
@@ -396,11 +408,11 @@ mod tests {
         assert_eq!(table.mvcc.tombstones.len(), 10);
 
         let removed = table.mvcc.gc_tombstones(150);
-        assert_eq!(removed, 5);
-        assert_eq!(table.mvcc.tombstones.len(), 5);
+        assert_eq!(removed, 6);
+        assert_eq!(table.mvcc.tombstones.len(), 4);
 
         for &delete_ts in table.mvcc.tombstones.values() {
-            assert!(delete_ts >= 150);
+            assert!(delete_ts > 150);
         }
     }
 
@@ -472,11 +484,12 @@ mod tests {
 
         assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-        // GC removes entries from the single authoritative table: the edge
-        // deleted at ts=2 predates the cutoff and is dropped.
+        // GC removes entries from the single authoritative table: both edges
+        // deleted at ts <= 3 are covered by the exclusive waterfront, while
+        // their deletions stay observable through `edge_timestamps`.
         let removed = table.mvcc.gc_tombstones(3);
-        assert_eq!(removed, 1);
-        assert_eq!(table.mvcc.tombstones.len(), 1);
+        assert_eq!(removed, 2);
+        assert_eq!(table.mvcc.tombstones.len(), 0);
     }
 
     #[test]

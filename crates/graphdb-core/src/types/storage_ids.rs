@@ -18,9 +18,28 @@ use crate::Value;
 pub type Timestamp = u64;
 
 /// Invalid timestamp sentinel value (u64::MAX indicates "deleted" or "not set")
+///
+/// Timestamp allocator invariant: `write_ts` starts at 1 and only grows by 1
+/// per allocation, so it can never reach this value in practice
+/// (`TimestampExhausted` is returned on `u64` overflow first). No committed or
+/// snapshot timestamp may ever equal this sentinel; GC watermarks reuse it as
+/// `NO_ACTIVE_SNAPSHOT`, which is safe only because watermarks resolve it to
+/// `last_published_commit` before any version comparison.
 pub const INVALID_TIMESTAMP: Timestamp = u64::MAX;
 /// Maximum valid timestamp value (u64::MAX - 1 used for "latest" queries)
+///
+/// Reserved alongside `INVALID_TIMESTAMP`: the allocator must stop before
+/// either sentinel (see `is_allocatable_timestamp`).
 pub const MAX_TIMESTAMP: Timestamp = u64::MAX - 1;
+
+/// Whether `ts` may be handed out by the MVCC timestamp allocator.
+///
+/// Only values strictly below both sentinels are allocatable. This is the
+/// single choke point for the "allocator never touches a sentinel" invariant.
+#[inline]
+pub fn is_allocatable_timestamp(ts: Timestamp) -> bool {
+    ts != INVALID_TIMESTAMP && ts != MAX_TIMESTAMP
+}
 
 /// Label ID type for vertex and edge type identification
 pub type LabelId = u32;

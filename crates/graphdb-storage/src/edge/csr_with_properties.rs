@@ -942,7 +942,9 @@ impl CsrWithProperties {
                 continue;
             }
             if let Some(del_ts) = vis.delete_ts {
-                if del_ts <= retention_bound {
+                // Exclusive waterfront: deletable exactly when invisible to
+                // every snapshot at or past the cutoff.
+                if crate::mvcc_visibility::Visibility::is_gc_eligible(del_ts, retention_bound) {
                     to_reclaim.push(idx);
                 }
             }

@@ -170,10 +170,9 @@ impl GraphStorageContext {
         // original 2.0 growth intent; 2.0 clamps to 1.0 inside
         // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
         let config = CompactConfig::with_fixed_ratio(true, 0.5);
-        // Compact up to the unified GC watermark so all table types in the
-        // same pass share the same cutoff and no prefix reclaim can change
-        // the cutoff for a later type in the same pass.
-        let ts = wm.safe_gc_timestamp();
+        // One watermark capture shared by every table in this pass, margin
+        // applied to absorb the capture-execute race.
+        let margin = self.persistent.config.gc_safety_margin;
 
         // Use FreezeGuard to manage freeze statistics
         let mut freeze_guard = self
@@ -220,8 +219,10 @@ impl GraphStorageContext {
 
                         let reserve_ratio =
                             config.compute_reserve_ratio(table.edge_count() as usize, 0);
-                        frozen_here = table.compact_csr_only(ts, reserve_ratio) as u64;
-                        table.compact_properties(ts);
+                        frozen_here =
+                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)
+                                as u64;
+                        table.compact_properties_with_watermarks(wm, margin);
                         any_here = true;
                     } else if log::log_enabled!(log::Level::Debug) {
                         log::debug!("Skip freeze: {}", manager.get_reason(&input));
@@ -230,8 +231,10 @@ impl GraphStorageContext {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
                         let reserve_ratio =
                             config.compute_reserve_ratio(table.edge_count() as usize, 0);
-                        frozen_here = table.compact_csr_only(ts, reserve_ratio) as u64;
-                        table.compact_properties(ts);
+                        frozen_here =
+                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)
+                                as u64;
+                        table.compact_properties_with_watermarks(wm, margin);
                         any_here = true;
                     }
                 }

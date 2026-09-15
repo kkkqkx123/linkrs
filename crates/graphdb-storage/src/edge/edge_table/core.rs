@@ -946,57 +946,38 @@ impl EdgeStore {
             && self.estimate_memory_usage() > self.config.max_mutable_csr_bytes
     }
 
-    /// Run automatic maintenance based on configured thresholds.
-    ///
-    /// Called from write paths (`insert_edge`, `delete_edge`, updates) so
-    /// deleted entries and stale metadata are reclaimed without waiting for
-    /// an explicit maintenance invocation:
-    ///
-    /// - tombstone GC when the total tombstone count exceeds the threshold
-    ///   (rate-limited by `gc_min_serial` to bound write-path latency)
-    /// - property compaction when the deleted-row ratio is high
-    ///
-    /// Returns the number of maintenance passes that actually ran.
+    /// Write-path fast path: bound comes from the per-table pin cache, with
+    /// no global watermark capture. Background passes use the watermark
+    /// variant below.
     pub fn maybe_run_auto_maintenance(&mut self) -> usize {
+        let bound = self.mvcc.min_active_snapshot_ts;
+        self.run_auto_maintenance_pass(bound)
+    }
+
+    fn run_auto_maintenance_pass(&mut self, bound: Timestamp) -> usize {
         let cfg = self.config.auto_maintenance;
         if cfg.tombstone_gc_threshold == 0 {
             return 0;
         }
-        // The serial counts write-path calls and drives the cooldown below.
-        // It must advance on every call: gating attempts on a counter that
-        // only advances when work was found sticks on a multiple of
-        // `gc_min_serial`, turning the cooldown into a per-write full scan.
+        // Serial must advance on every call; gating on a counter that only
+        // advances when work was found turns the cooldown into a per-write
+        // full scan.
         self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-        // Retry cadence while the watermark is pinned: at most one attempt
-        // per `gc_min_serial` calls. A watermark advance always attempts.
         let cooldown_due =
             cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial);
         let mut maintenance_ran = 0;
 
-        // Tier 1: tombstone GC (rate-limited by serial counter).
-        if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold {
-            let bound = self.mvcc.min_active_snapshot_ts;
-            if bound < Timestamp::MAX && (bound != self.last_gc_min_snapshot_ts || cooldown_due) {
-                let cleaned = self.mvcc.gc_tombstones(bound);
-                self.last_gc_min_snapshot_ts = bound;
-                if cleaned > 0 {
-                    maintenance_ran += 1;
-                    log::debug!(
-                        "Auto-maintenance GC: removed {} tombstones (bound={}, total={})",
-                        cleaned,
-                        bound,
-                        self.mvcc.total_tombstone_count()
-                    );
-                }
+        if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
+            && bound < Timestamp::MAX
+            && (bound != self.last_gc_min_snapshot_ts || cooldown_due)
+        {
+            let cleaned = self.mvcc.gc_tombstones(bound);
+            self.last_gc_min_snapshot_ts = bound;
+            if cleaned > 0 {
+                maintenance_ran += 1;
             }
         }
 
-        // Tier 2: property table compaction when the deleted-row ratio is high.
-        // Shares the cooldown above: the fragmentation scan walks every row,
-        // so it must not run on every write while the watermark is pinned.
-        // A disabled cooldown (`gc_min_serial == 0`) keeps the old
-        // check-on-every-call behavior.
-        let bound = self.mvcc.min_active_snapshot_ts;
         if cfg.property_compact_ratio > 0.0
             && bound != Timestamp::MAX
             && (cooldown_due || cfg.gc_min_serial == 0)
@@ -1011,56 +992,15 @@ impl EdgeStore {
         maintenance_ran
     }
 
-    /// Unified watermark variant of `maybe_run_auto_maintenance`. Caller captures
-    /// `MvccWatermarks` once per GC pass and shares the same safe cutoff across
-    /// all table types so a prefix reclaim cannot change the cutoff for a later
-    /// sub-system in the same pass.
+    /// Background variant: bound comes from one per-pass watermark capture
+    /// shared across all tables.
     pub fn maybe_run_auto_maintenance_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
     ) -> usize {
-        let cfg = self.config.auto_maintenance;
-        if cfg.tombstone_gc_threshold == 0 {
-            return 0;
-        }
-        // Per-call serial; see `maybe_run_auto_maintenance` for why it must
-        // advance unconditionally.
-        self.maintenance_serial = self.maintenance_serial.saturating_add(1);
-        let cooldown_due =
-            cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial);
-        let mut maintenance_ran = 0;
         let bound = watermarks.safe_gc_timestamp_with_margin(margin);
-
-        if self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
-            && bound < Timestamp::MAX
-            && (bound != self.last_gc_min_snapshot_ts || cooldown_due)
-        {
-            let cleaned = self.mvcc.gc_tombstones(bound);
-            self.last_gc_min_snapshot_ts = bound;
-            if cleaned > 0 {
-                maintenance_ran += 1;
-                log::debug!(
-                    "Auto-maintenance GC (watermark): removed {} tombstones (bound={}, total={})",
-                    cleaned,
-                    bound,
-                    self.mvcc.total_tombstone_count()
-                );
-            }
-        }
-
-        if cfg.property_compact_ratio > 0.0
-            && bound != Timestamp::MAX
-            && (cooldown_due || cfg.gc_min_serial == 0)
-        {
-            let prop_stats = self.properties.compaction_stats();
-            if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
-                self.compact_properties(bound);
-                maintenance_ran += 1;
-            }
-        }
-
-        maintenance_ran
+        self.run_auto_maintenance_pass(bound)
     }
 
     // ── Edge Property Index ──

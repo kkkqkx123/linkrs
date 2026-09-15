@@ -81,7 +81,11 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let ts = self.get_read_timestamp();
+            let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+                self.persistent.version_manager.clone(),
+            );
+            let wm = gc.capture_watermarks();
+            let margin = self.persistent.config.gc_safety_margin;
             let edge_tables: Vec<(
                 EdgeTableKey,
                 Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
@@ -100,7 +104,7 @@ impl GraphStorageContext {
                             key.src_label, key.dst_label, key.edge_label
                         ));
                         let mut table = edge_table.write();
-                        table.maybe_compact_for_flush(ts, 2.0);
+                        table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
                         table.flush(&table_dir, compression)?;
                         Ok(())
                     })?;
@@ -270,7 +274,11 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let ts = self.get_read_timestamp();
+            let gc = crate::engine::gc_coordinator::GcCoordinator::new(
+                self.persistent.version_manager.clone(),
+            );
+            let wm = gc.capture_watermarks();
+            let margin = self.persistent.config.gc_safety_margin;
             let edge_tables: Vec<(
                 EdgeTableKey,
                 Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
@@ -289,7 +297,7 @@ impl GraphStorageContext {
                             key.src_label, key.dst_label, key.edge_label
                         ));
                         let mut table = edge_table.write();
-                        table.maybe_compact_for_flush(ts, 2.0);
+                        table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
                         table.flush(&table_dir, compression)?;
                         Ok(())
                     })?;

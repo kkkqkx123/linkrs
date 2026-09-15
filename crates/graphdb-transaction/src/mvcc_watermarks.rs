@@ -78,10 +78,11 @@ impl MvccWatermarks {
     /// Safe GC timestamp for version chains and tombstones.
     ///
     /// The returned value is exclusive: versions with `end_ts <= safe_gc_ts`
-    /// are reclaimable.  Callers must apply any configured margin
-    /// themselves so the policy is uniform across table types.
-    /// Individual layers may stay stricter (e.g. edge tombstones use `<`);
-    /// keeping more history than this bound is always safe.
+    /// are reclaimable (see `Visibility::is_gc_eligible` in graphdb-storage).
+    /// Callers must apply any configured margin themselves so the policy is
+    /// uniform across table types. All layers share this bound; the margin in
+    /// `safe_gc_timestamp_with_margin` absorbs the race between watermark
+    /// capture and GC execution.
     pub fn safe_gc_timestamp(&self) -> Timestamp {
         if self.oldest_active_snapshot == NO_ACTIVE_SNAPSHOT {
             self.last_published_commit

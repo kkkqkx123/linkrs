@@ -53,6 +53,19 @@ impl Visibility {
     pub fn is_version_visible(snapshot: Timestamp, start_ts: Timestamp, end_ts: Timestamp) -> bool {
         start_ts <= snapshot && snapshot < end_ts
     }
+
+    /// Whether a version ending at `end_ts` may be reclaimed under GC cutoff `safe`.
+    ///
+    /// Dual of `is_visible`: a version is visible to some snapshot `snap >= end_ts`
+    /// only while `snap < end_ts`, so once `end_ts <= safe` and every active
+    /// snapshot satisfies `snap >= safe`, no active reader can observe it.
+    /// All GC paths (column version chains, edge tombstones, CSR slots) share
+    /// this exclusive-waterfront predicate so tombstone and slot reclamation
+    /// cannot drift apart by one round.
+    #[inline]
+    pub fn is_gc_eligible(end_ts: Timestamp, safe: Timestamp) -> bool {
+        end_ts <= safe
+    }
 }
 
 #[cfg(test)]
@@ -82,5 +95,15 @@ mod tests {
         assert!(Visibility::is_version_visible(5, 5, 10));
         assert!(!Visibility::is_version_visible(10, 5, 10));
         assert!(!Visibility::is_version_visible(4, 5, 10));
+    }
+
+    #[test]
+    fn gc_eligibility_matches_visibility_dual() {
+        // end == safe: invisible to every snapshot >= safe, hence reclaimable.
+        assert!(Visibility::is_gc_eligible(10, 10));
+        assert!(Visibility::is_gc_eligible(9, 10));
+        assert!(!Visibility::is_gc_eligible(11, 10));
+        // Dual check: an eligible end is invisible to the boundary snapshot.
+        assert!(!Visibility::is_visible(10, 5, Some(10)));
     }
 }

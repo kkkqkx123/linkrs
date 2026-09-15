@@ -256,6 +256,12 @@ impl CheckpointTransaction<'_> {
 
     /// Commit with early release: WAL rotation done, release writes, then
     /// run storage callback before final commit.
+    ///
+    /// Snapshot isolation: the storage phase receives the begin-time
+    /// `write_ts`. Writes admitted after the early release allocate strictly
+    /// newer timestamps, so checkpoint output must be filtered by exactly
+    /// this `write_ts` — post-release commits must never leak into this
+    /// checkpoint's snapshot.
     pub fn commit_with_early_release<F>(mut self, storage_phase: F) -> Result<(), TransactionError>
     where
         F: FnOnce(Timestamp) -> Result<(), TransactionError>,
@@ -644,5 +650,34 @@ mod tests {
         );
         assert!(result.is_ok());
         assert!(!manager.checkpoint_gate().is_checkpoint_active());
+    }
+
+    #[test]
+    fn checkpoint_storage_phase_snapshot_predates_post_release_writes() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let result = manager.coordinated_checkpoint_with_early_release(
+            Duration::from_secs(5),
+            |ts| {
+                assert!(ts > 0);
+                Ok(graphdb_core::wal::types::Lsn::new(400))
+            },
+            |ts, _lsn| {
+                // A write admitted after the early release commits with a
+                // strictly newer timestamp than the checkpoint snapshot, so
+                // storage must filter output by `ts`, not by "latest".
+                let txn = manager
+                    .begin_insert_transaction(TransactionOptions::default())
+                    .expect("write admitted after early release");
+                manager
+                    .commit_transaction(txn)
+                    .expect("commit should succeed");
+                assert!(
+                    manager.version_manager().write_timestamp() > ts,
+                    "post-release write must be newer than the checkpoint snapshot"
+                );
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
     }
 }

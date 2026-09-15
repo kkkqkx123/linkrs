@@ -47,6 +47,22 @@ impl WriteSetAnalyzer {
         !ws1.edges.is_disjoint(&ws2.edges)
     }
 
+    /// Read-your-own-writes check: whether `writer` locally wrote an entity
+    /// that a snapshot read at the writer's own timestamp would otherwise
+    /// miss. Read paths merge locally covered entities over the snapshot.
+    pub fn has_local_write(writer: &WriteSet, vid: &graphdb_core::types::VertexId) -> bool {
+        writer.covers_vertex(vid)
+    }
+
+    /// Edge counterpart of [`Self::has_local_write`]: whether `writer`
+    /// locally wrote `edge`. Same merge-over-snapshot contract.
+    pub fn has_local_edge_write(
+        writer: &WriteSet,
+        edge: &graphdb_core::types::EdgeIdentifier,
+    ) -> bool {
+        writer.covers_edge(edge)
+    }
+
     /// Get a detailed conflict report
     pub fn analyze_conflict(ws1: &WriteSet, ws2: &WriteSet) -> ConflictReport {
         ConflictReport {
@@ -153,5 +169,37 @@ mod tests {
             !ws1.has_conflict_with(&ws2),
             "edges sharing a source vertex should not conflict"
         );
+    }
+
+    #[test]
+    fn test_has_local_write_covers_recorded_vertices() {
+        let vid = VertexId::from_int64(7);
+        let other = VertexId::from_int64(8);
+
+        let mut ws = WriteSet::new();
+        assert!(!WriteSetAnalyzer::has_local_write(&ws, &vid));
+        ws.record_vertex(vid);
+        assert!(WriteSetAnalyzer::has_local_write(&ws, &vid));
+        assert!(!WriteSetAnalyzer::has_local_write(&ws, &other));
+
+        let mut deleted = WriteSet::new();
+        deleted.record_vertex_delete(vid);
+        assert!(WriteSetAnalyzer::has_local_write(&deleted, &vid));
+    }
+
+    #[test]
+    fn test_has_local_edge_write_covers_recorded_edges() {
+        use graphdb_core::types::EdgeIdentifier;
+        let vid1 = VertexId::from_int64(1);
+        let vid2 = VertexId::from_int64(2);
+        let vid3 = VertexId::from_int64(3);
+        let edge = EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
+        let other = EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0);
+
+        let mut ws = WriteSet::new();
+        assert!(!WriteSetAnalyzer::has_local_edge_write(&ws, &edge));
+        ws.record_edge(edge);
+        assert!(WriteSetAnalyzer::has_local_edge_write(&ws, &edge));
+        assert!(!WriteSetAnalyzer::has_local_edge_write(&ws, &other));
     }
 }

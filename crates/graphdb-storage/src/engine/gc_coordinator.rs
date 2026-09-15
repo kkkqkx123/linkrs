@@ -21,6 +21,18 @@ impl GcDiagnostics {
     }
 }
 
+/// Coordinates MVCC garbage collection across table types.
+///
+/// The coordinator fixes one watermark per pass (`capture_watermarks`) and
+/// derives every table cutoff from it, so reclaiming vertices cannot move the
+/// cutoff used for edges later in the same pass. `config_margin` (default 1)
+/// is subtracted from the waterfront: GC then lags one timestamp behind the
+/// oldest active snapshot, absorbing the race between watermark capture and
+/// GC execution at the cost of keeping one extra round of history. Passes run
+/// on the storage background pool (5s period, 500ms minimum); a pass that
+/// finds `safe == 0` is a no-op. Garbage that survives a pass is therefore
+/// "retained by margin or by a live snapshot", never a leak — check
+/// `diagnostics()` before investigating.
 pub struct GcCoordinator {
     version_manager: Arc<VersionManager>,
     config_margin: Timestamp,

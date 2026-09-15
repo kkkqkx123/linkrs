@@ -44,7 +44,9 @@ impl Default for VertexTableConfig {
     }
 }
 
-/// MVCC snapshot tracking for VertexTable
+/// Per-table pin cache for lazily registered read snapshots. The GC truth
+/// source is the transaction layer (`SnapshotTracker`, via `MvccWatermarks`);
+/// pass-level cutoffs must come from captured watermarks, not this map.
 #[derive(Debug)]
 pub struct VertexMVCC {
     /// Maps timestamp → count of active snapshots at that timestamp

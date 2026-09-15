@@ -1022,25 +1022,16 @@ impl MutableCsr {
         Ok(())
     }
 
-    /// Compact CSR by removing deleted edges and reclaiming space.
-    /// Merges overflow back into primary, restoring flat CSR layout.
-    ///
-    /// Only entries whose deletion predates the active-snapshot cutoff are
-    /// physically removed (`delete_ts < cutoff` with `cutoff <
-    /// Timestamp::MAX`). With no active snapshot (`cutoff == MAX`) every
-    /// deleted entry is kept so snapshot reads overlapping the compaction
-    /// stay consistent; without that protection a concurrent reader could
-    /// miss entries it should still observe.
-    /// The `reserve_ratio` parameter reserves space for future edges.
+    /// Compact CSR, dropping entries eligible under
+    /// `Visibility::is_gc_eligible` and merging overflow into primary.
+    /// Removed entries are reported via the callback for tombstone promotion;
+    /// with `cutoff == MAX` nothing is dropped.
     pub fn compact_with_ts(&mut self, cutoff: Timestamp, reserve_ratio: f32) -> usize {
         self.compact_with_ts_reporting(cutoff, reserve_ratio, &mut |_, _| {})
     }
 
-    /// Compact with per-edge removal reporting.
-    ///
-    /// Same semantics as `compact_with_ts`; `on_edge_removed` is invoked for
-    /// every entry physically dropped, with its edge id and delete timestamp,
-    /// so the caller can promote the deletion into the global tombstone layer.
+    /// Compact with per-edge removal reporting (`on_edge_removed` receives
+    /// each dropped edge id and delete timestamp).
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
@@ -1067,7 +1058,10 @@ impl MutableCsr {
             // Collect active edges from primary (not deleted)
             for i in 0..degree {
                 let nbr = &self.nbr_list[start + i];
-                if nbr.delete_ts != Timestamp::MAX && removals_enabled && nbr.delete_ts < cutoff {
+                if nbr.delete_ts != Timestamp::MAX
+                    && removals_enabled
+                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
+                {
                     on_edge_removed(nbr.edge_id, nbr.delete_ts);
                     removed_count += 1;
                 } else {
@@ -1081,7 +1075,10 @@ impl MutableCsr {
                     for nbr in chunk {
                         if nbr.delete_ts != Timestamp::MAX
                             && removals_enabled
-                            && nbr.delete_ts < cutoff
+                            && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                                nbr.delete_ts,
+                                cutoff,
+                            )
                         {
                             on_edge_removed(nbr.edge_id, nbr.delete_ts);
                             removed_count += 1;

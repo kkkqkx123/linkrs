@@ -172,6 +172,10 @@ pub struct TransactionConfig {
     /// When a Serializable transaction's read set exceeds this many entries,
     /// conservative certification is used: any concurrent write since the
     /// transaction started causes an abort. `None` disables full-scan detection.
+    ///
+    /// Experimental: Serializable SSI is functional but not yet covered by
+    /// equivalence regression tests or abort-rate benchmarks. Production
+    /// workloads should stay on the default `RepeatableRead` until those land.
     pub serializable_full_scan_threshold: Option<usize>,
 }
 
