@@ -240,6 +240,9 @@ impl AutoCommitBatchWindow {
         } else {
             None
         };
+        let write_set = Arc::new(parking_lot::Mutex::new(
+            graphdb_transaction::types::WriteSet::new(),
+        ));
         let context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: ts,
@@ -248,9 +251,7 @@ impl AutoCommitBatchWindow {
             auto_commit: true,
             mutation_recorder: Some(Arc::new(AutoCommitMutationRecorder {
                 undo: undo_log.clone(),
-                write_set: Arc::new(parking_lot::Mutex::new(
-                    graphdb_transaction::types::WriteSet::new(),
-                )),
+                write_set: write_set.clone(),
             })),
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
@@ -269,6 +270,7 @@ impl AutoCommitBatchWindow {
         }));
         bound.write_gate_lease = None;
         bound.auto_commit_undo = Some(undo_log);
+        bound.auto_commit_write_set = Some(write_set);
         bound.auto_commit_window = Some(self.clone());
         Ok(bound)
     }

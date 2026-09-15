@@ -726,10 +726,6 @@ fn test_vertex_snapshot_isolation() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let snap1 = table.register_snapshot(100).unwrap();
-    assert_eq!(table.active_snapshot_count(), 1);
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
     table
         .update_property(0, "name", &Value::string("Alice Updated"), 200)
         .unwrap();
@@ -738,10 +734,6 @@ fn test_vertex_snapshot_isolation() {
 
     assert!(table.get_by_internal_id(0, 100).is_some());
     assert!(table.get_internal_id("v1", 300).is_none());
-
-    table.unregister_snapshot(snap1).unwrap();
-    assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
 }
 
 #[test]
@@ -753,16 +745,9 @@ fn test_vertex_multiple_snapshots() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let snap1 = table.register_snapshot(100).unwrap();
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
     table
         .insert("v2", &[("name".to_string(), Value::string("Bob"))], 150)
         .unwrap();
-
-    let snap2 = table.register_snapshot(200).unwrap();
-    assert_eq!(table.active_snapshot_count(), 2);
-    assert_eq!(table.min_active_snapshot_ts(), 100);
 
     table.delete("v1", 250).unwrap();
 
@@ -773,61 +758,6 @@ fn test_vertex_multiple_snapshots() {
     assert!(v1_at_snap2.is_some());
 
     assert!(table.get_by_internal_id(0, 300).is_none());
-
-    table.unregister_snapshot(snap1).unwrap();
-    assert_eq!(table.active_snapshot_count(), 1);
-    assert_eq!(table.min_active_snapshot_ts(), 200);
-
-    table.unregister_snapshot(snap2).unwrap();
-    assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
-}
-
-#[test]
-fn test_vertex_concurrent_snapshots_same_timestamp() {
-    let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
-
-    table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
-        .unwrap();
-
-    let snap1 = table.register_snapshot(100).unwrap();
-    let snap2 = table.register_snapshot(100).unwrap();
-
-    assert_eq!(table.active_snapshot_count(), 1);
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
-    assert_ne!(snap1.id, snap2.id);
-    assert_eq!(snap1.ts, snap2.ts);
-
-    table.unregister_snapshot(snap1).unwrap();
-    assert_eq!(table.active_snapshot_count(), 1);
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
-    table.unregister_snapshot(snap2).unwrap();
-    assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
-}
-
-#[test]
-fn test_min_active_snapshot_ts_incremental_out_of_order() {
-    let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
-
-    // Register out of order; the min must be tracked incrementally.
-    let snap_hi = table.register_snapshot(300).unwrap();
-    assert_eq!(table.min_active_snapshot_ts(), 300);
-    let snap_lo = table.register_snapshot(100).unwrap();
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
-    // Unregistering a non-min timestamp must not rescan or change the min.
-    table.unregister_snapshot(snap_hi).unwrap();
-    assert_eq!(table.min_active_snapshot_ts(), 100);
-
-    // Unregistering the current min recomputes it.
-    table.unregister_snapshot(snap_lo).unwrap();
-    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
 }
 
 #[test]
@@ -839,7 +769,9 @@ fn test_vertex_gc_placeholder() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let cleaned = table.gc(200).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(200, false).unwrap();
+
+    let cleaned = gc_vertices + gc_versions;
     assert_eq!(cleaned, 0);
 
     assert!(table.get_by_internal_id(0, 100).is_some());
@@ -854,13 +786,9 @@ fn test_vertex_mvcc_table_ops() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    let snap = table.register_snapshot(100).unwrap();
-    assert_eq!(table.active_snapshot_count(), 1);
+    let (gc_vertices, gc_versions) = table.gc_detailed(200, false).unwrap();
 
-    table.unregister_snapshot(snap).unwrap();
-    assert_eq!(table.active_snapshot_count(), 0);
-
-    let gc_count = table.gc(200).unwrap();
+    let gc_count = gc_vertices + gc_versions;
     assert_eq!(gc_count, 0);
 }
 
@@ -880,9 +808,7 @@ fn test_repeatable_read_property_updates() {
         )
         .unwrap();
 
-    // T1 opens a snapshot at ts=100.
-    let snap = table.register_snapshot(100).unwrap();
-
+    // T1 opens a snapshot at ts=100 (reads pin the timestamp directly).
     // T2 updates the property at a later timestamp.
     table
         .update_property(0, "age", &Value::Int(31), 200)
@@ -903,8 +829,6 @@ fn test_repeatable_read_property_updates() {
     let props: std::collections::HashMap<String, Value> = t2_read.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(31)));
     assert_eq!(props.get("name"), Some(&Value::string("Alice-renamed")));
-
-    table.unregister_snapshot(snap).unwrap();
 }
 
 #[test]
@@ -929,9 +853,10 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         .update_property(0, "age", &Value::Int(32), 300)
         .unwrap();
 
-    // Active snapshot at 200 keeps versions [.., 300) alive.
-    let snap = table.register_snapshot(200).unwrap();
-    let removed = table.gc(150).unwrap();
+    // Active table-level pin keeps versions [.., 300) alive.
+    let (gc_vertices, gc_versions) = table.gc_detailed(150, true).unwrap();
+
+    let removed = gc_vertices + gc_versions;
     // Version chain entries with end_ts <= 150 are reclaimed; the entries
     // covering ts=200.. must survive.
     assert_eq!(
@@ -945,10 +870,11 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         .into_iter()
         .collect();
     assert_eq!(props_at_200.get("age"), Some(&Value::Int(31)));
-    table.unregister_snapshot(snap).unwrap();
 
     // With no active snapshots, gc at 250 reclaims everything older.
-    let removed = table.gc(250).unwrap();
+    let (gc_vertices, gc_versions) = table.gc_detailed(250, false).unwrap();
+
+    let removed = gc_vertices + gc_versions;
     assert!(
         removed >= 1,
         "old versions should be reclaimed after snapshots drop"

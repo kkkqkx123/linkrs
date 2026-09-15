@@ -36,6 +36,12 @@ impl SerialColumnScan {
     pub(crate) fn contains(&self, value: i64) -> bool {
         self.present.binary_search(&value).is_ok()
     }
+
+    /// Consume the scan into its sorted present-value set for batch
+    /// validation (one scan feeds arbitrarily many row checks).
+    pub(crate) fn into_present(self) -> Vec<i64> {
+        self.present
+    }
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {

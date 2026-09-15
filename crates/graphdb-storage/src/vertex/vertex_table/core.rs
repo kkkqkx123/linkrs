@@ -21,7 +21,6 @@ use super::super::{
 };
 use crate::encoding::EncodingSelector;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
-use crate::SnapshotHandle;
 use graphdb_core::{StorageError, StorageResult, Value};
 
 #[derive(Debug, Clone)]
@@ -44,19 +43,6 @@ impl Default for VertexTableConfig {
     }
 }
 
-/// Per-table pin cache for lazily registered read snapshots. The GC truth
-/// source is the transaction layer (`SnapshotTracker`, via `MvccWatermarks`);
-/// pass-level cutoffs must come from captured watermarks, not this map.
-#[derive(Debug)]
-pub struct VertexMVCC {
-    /// Maps timestamp → count of active snapshots at that timestamp
-    active_snapshots: HashMap<Timestamp, usize>,
-    /// Minimum timestamp among all active snapshots
-    min_active_snapshot_ts: Timestamp,
-    /// Counter for generating unique snapshot IDs
-    handle_counter: u64,
-}
-
 #[derive(Debug)]
 pub struct VertexTable {
     pub(super) label: LabelId,
@@ -71,8 +57,6 @@ pub struct VertexTable {
     pub(super) property_index_cache: HashMap<String, usize>,
     /// Version history tracking for schema changes
     pub(super) version_history: Arc<Mutex<LabelVersionHistory>>,
-    /// MVCC snapshot tracking for snapshot isolation
-    pub(super) mvcc: VertexMVCC,
     /// Persistent encoding selector with accumulated compression feedback.
     /// Feedback is gathered across flushes so that `should_reencode` can
     /// detect when a column's compression ratio degrades and recommend
@@ -136,11 +120,6 @@ impl VertexTable {
             is_open: true,
             property_index_cache,
             version_history,
-            mvcc: VertexMVCC {
-                active_snapshots: HashMap::new(),
-                min_active_snapshot_ts: Timestamp::MAX,
-                handle_counter: 0,
-            },
             encoding_selector: EncodingSelector::default(),
             string_overflow_threshold: config.string_overflow_threshold,
             chunk_capacity: config.chunk_capacity,
@@ -719,91 +698,28 @@ impl VertexTable {
     }
 
     // ==================== MVCC Methods ====================
-
-    /// Register a new snapshot at the given timestamp
-    ///
-    /// Increments the reference count for this timestamp and tracks it in active_snapshots.
-    /// Returns a unique SnapshotHandle that must be used to unregister later.
-    pub fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        *self.mvcc.active_snapshots.entry(ts).or_insert(0) += 1;
-        // Incremental min maintenance: a new snapshot can only lower the
-        // minimum, so compare against the current value instead of rescanning
-        // the whole map (which made transaction begin O(active snapshots)).
-        if ts < self.mvcc.min_active_snapshot_ts {
-            self.mvcc.min_active_snapshot_ts = ts;
-        }
-
-        self.mvcc.handle_counter += 1;
-        Ok(SnapshotHandle::new(ts, self.mvcc.handle_counter))
-    }
-
-    /// Unregister a snapshot, allowing GC of related version data
-    ///
-    /// Decrements the reference count for the snapshot's timestamp.
-    /// When the count reaches 0, the timestamp is removed from tracking.
-    pub fn unregister_snapshot(&mut self, handle: SnapshotHandle) -> StorageResult<()> {
-        if let Some(count) = self.mvcc.active_snapshots.get_mut(&handle.ts) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.mvcc.active_snapshots.remove(&handle.ts);
-                // Only rescan when the removed timestamp was the current
-                // minimum; otherwise the min is unchanged.
-                if handle.ts == self.mvcc.min_active_snapshot_ts {
-                    self.mvcc.min_active_snapshot_ts = self
-                        .mvcc
-                        .active_snapshots
-                        .keys()
-                        .min()
-                        .copied()
-                        .unwrap_or(Timestamp::MAX);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Unregister all snapshots with the given timestamp.
-    /// Used by lazy registration cleanup on transaction finalize.
-    pub fn unregister_snapshot_by_timestamp(&mut self, ts: Timestamp) -> StorageResult<()> {
-        if let Some(count) = self.mvcc.active_snapshots.get_mut(&ts) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.mvcc.active_snapshots.remove(&ts);
-                // Only rescan when the removed timestamp was the current
-                // minimum; otherwise the min is unchanged.
-                if ts == self.mvcc.min_active_snapshot_ts {
-                    self.mvcc.min_active_snapshot_ts = self
-                        .mvcc
-                        .active_snapshots
-                        .keys()
-                        .min()
-                        .copied()
-                        .unwrap_or(Timestamp::MAX);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Get the count of currently active snapshots
-    pub fn active_snapshot_count(&self) -> usize {
-        self.mvcc.active_snapshots.len()
-    }
-
-    /// Get the minimum timestamp among all active snapshots
-    pub fn min_active_snapshot_ts(&self) -> Timestamp {
-        self.mvcc.min_active_snapshot_ts
-    }
+    //
+    // Snapshot pins live one level up, on `ShardedVertexTable`: a snapshot
+    // registers once per table (O(1) locks) instead of once per shard.
+    // Shards keep no pin of their own; the GC truth source is the
+    // transaction layer watermarks, and the caller passes whether the table
+    // currently has any active pin so timestamp compaction stays gated on
+    // live readers.
 
     /// Perform garbage collection on version data older than min_ts
     ///
     /// Reclaims deleted vertices (from the id indexer / timestamps) and drops
     /// property version-chain entries that no active snapshot can observe.
     ///
-    /// Returns the number of version entries cleaned up.
-    pub fn gc(&mut self, min_ts: Timestamp) -> StorageResult<usize> {
+    /// Returns `(reclaimed vertices, reclaimed version-chain entries)`.
+    /// A nonzero vertex count means internal IDs were re-densified
+    /// (`compact_coordinated`): caches keyed by internal ID must be
+    /// invalidated for this label. Version-only passes leave IDs untouched.
+    pub fn gc_detailed(
+        &mut self,
+        min_ts: Timestamp,
+        table_has_active_snapshot: bool,
+    ) -> StorageResult<(usize, usize)> {
         // Property version-chain GC runs every pass regardless of deleted
         // vertices so before-images of overwritten properties are reclaimed.
         let version_removed = self.columns.gc_versions(min_ts);
@@ -835,7 +751,7 @@ impl VertexTable {
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(min_ts).collect();
 
         if deleted_ids.is_empty() {
-            return Ok(version_removed);
+            return Ok((0, version_removed));
         }
 
         let count = deleted_ids.len();
@@ -854,14 +770,11 @@ impl VertexTable {
         // any entries with end_ts != MAX_TIMESTAMP. This is safe because
         // without active snapshots there are no readers that need those
         // version records.
-        if self.min_active_snapshot_ts() == crate::vertex::MAX_TIMESTAMP {
+        if !table_has_active_snapshot {
             self.compact_timestamps();
         }
-        // Read active snapshot count for diagnostics — ensures the method
-        // is exercised even when there are no snapshots to clean.
-        let _active_count = self.active_snapshot_count();
 
-        Ok(count)
+        Ok((count, version_removed))
     }
 
     /// Compact timestamps independently of id_indexer and columns.

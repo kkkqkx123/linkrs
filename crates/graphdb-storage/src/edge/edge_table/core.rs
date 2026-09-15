@@ -219,8 +219,15 @@ impl EdgeStore {
         if !self.mvcc.is_edge_visible(edge_id, query_ts) {
             return Vec::new();
         }
+        // Snapshot read through the property version chain so an old reader
+        // observes the before-image, not the latest write.
         self.properties
-            .read_properties_by_edge_id(edge_id)
+            .get_by_edge_id(edge_id, query_ts)
+            .map(|rows| {
+                rows.into_iter()
+                    .filter_map(|(name, value)| value.map(|v| (name, v)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -974,6 +981,16 @@ impl EdgeStore {
             let cleaned = self.mvcc.gc_tombstones(bound);
             self.last_gc_min_snapshot_ts = bound;
             if cleaned > 0 {
+                maintenance_ran += 1;
+            }
+        }
+
+        // Reclaim edge-property before-images that no active snapshot can
+        // observe. Runs on the same watermark as tombstone GC so version
+        // chains cannot grow without bound while snapshots are short-lived.
+        if bound != Timestamp::MAX && (cooldown_due || cfg.gc_min_serial == 0) {
+            let removed = self.properties.gc_property_versions(bound);
+            if removed > 0 {
                 maintenance_ran += 1;
             }
         }

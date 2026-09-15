@@ -21,6 +21,7 @@ impl GraphStorageContext {
             write_timestamp_lease: None,
             write_gate_lease: None,
             auto_commit_undo: None,
+            auto_commit_write_set: None,
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
         }
@@ -44,6 +45,7 @@ impl GraphStorageContext {
                 write_timestamp_lease: None,
                 write_gate_lease: None,
                 auto_commit_undo: None,
+                auto_commit_write_set: None,
                 auto_commit_window: None,
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
             }
@@ -78,6 +80,15 @@ impl GraphStorageContext {
             config,
         );
         self.runtime = runtime;
+        // GC passes re-densify internal IDs; hand the manager the record
+        // cache so it can invalidate remapped labels (forward-compatible
+        // cache hits would otherwise serve relocated rows).
+        if let (Some(gc), Some(cache)) = (
+            self.runtime.vertex_gc_manager.clone(),
+            self.persistent.cache_manager.record_cache.clone(),
+        ) {
+            gc.set_record_cache(cache);
+        }
         self.forward_gc_events_to_persistence();
         self
     }
@@ -112,6 +123,7 @@ impl GraphStorageContext {
             write_timestamp_lease: self.write_timestamp_lease.clone(),
             write_gate_lease: self.write_gate_lease.clone(),
             auto_commit_undo: self.auto_commit_undo.clone(),
+            auto_commit_write_set: self.auto_commit_write_set.clone(),
             auto_commit_window: self.auto_commit_window.clone(),
             checkpoint_scheduler: self.checkpoint_scheduler.clone(),
         }

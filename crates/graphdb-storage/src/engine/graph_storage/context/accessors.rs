@@ -57,6 +57,7 @@ impl GraphStorageContext {
         bound.write_timestamp_lease = None;
         bound.write_gate_lease = None;
         bound.auto_commit_window = None;
+        bound.auto_commit_write_set = None;
         bound
     }
 
@@ -103,6 +104,9 @@ impl GraphStorageContext {
         let undo_log = Arc::new(parking_lot::Mutex::new(
             graphdb_transaction::UndoLogManager::new(),
         ));
+        let write_set = Arc::new(parking_lot::Mutex::new(
+            graphdb_transaction::types::WriteSet::new(),
+        ));
         let mut context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: timestamp,
@@ -111,9 +115,7 @@ impl GraphStorageContext {
             auto_commit: true,
             mutation_recorder: Some(Arc::new(super::AutoCommitMutationRecorder {
                 undo: undo_log.clone(),
-                write_set: Arc::new(parking_lot::Mutex::new(
-                    graphdb_transaction::types::WriteSet::new(),
-                )),
+                write_set: write_set.clone(),
             })),
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
@@ -134,6 +136,7 @@ impl GraphStorageContext {
         }));
         bound.write_gate_lease = Some(write_gate_lease);
         bound.auto_commit_undo = Some(undo_log);
+        bound.auto_commit_write_set = Some(write_set);
         Ok(bound)
     }
 
@@ -146,6 +149,7 @@ impl GraphStorageContext {
         clean.write_timestamp_lease = None;
         clean.write_gate_lease = None;
         clean.auto_commit_undo = None;
+        clean.auto_commit_write_set = None;
         clean.auto_commit_window = None;
         Ok(Arc::new(super::AutoCommitBatchWindow {
             base_ctx: Arc::new(clean),
@@ -169,6 +173,7 @@ impl GraphStorageContext {
         clean.write_timestamp_lease = None;
         clean.write_gate_lease = None;
         clean.auto_commit_undo = None;
+        clean.auto_commit_write_set = None;
         clean.auto_commit_window = None;
         Ok(Arc::new(super::AutoCommitBatchWindow {
             base_ctx: Arc::new(clean),
@@ -227,7 +232,8 @@ impl GraphStorageContext {
             return Ok(());
         }
 
-        // Group mode: per-statement finalize — no-wait WAL append or segment
+        // Group mode: per-statement finalize — certify against recently
+        // committed write sets, then no-wait WAL append or segment
         // rollback. Do NOT commit/abort the write timestamp, release the gate,
         // or unregister snapshots — those are deferred to `finalize_group`.
         if let Some(window) = &self.auto_commit_window {
@@ -236,6 +242,21 @@ impl GraphStorageContext {
                     StorageError::db_error("Group operation has no write timestamp")
                 })?;
                 if committed {
+                    if let Some(conflict) = self.auto_commit_conflict(operation) {
+                        if let Some(undo) = &self.auto_commit_undo {
+                            let mut log = undo.lock();
+                            let start = operation.auto_commit_group_start.unwrap_or(0);
+                            if let Err(error) = log.execute_undo_from_index(self, timestamp, start)
+                            {
+                                log::error!("Group statement rollback failed: {}", error);
+                            }
+                        }
+                        if let Some(txid) = operation.transaction_id {
+                            self.abort_staged_writes(txid);
+                        }
+                        self.maybe_run_index_gc();
+                        return Err(conflict);
+                    }
                     if let Some(txid) = operation.transaction_id {
                         self.commit_staged_writes_grouped(txid, &[])?;
                     }
@@ -262,7 +283,25 @@ impl GraphStorageContext {
         let transaction_id = operation.transaction_id;
 
         if committed {
+            if let Some(conflict) = self.auto_commit_conflict(operation) {
+                if let Some(undo) = &self.auto_commit_undo {
+                    let mut log = undo.lock();
+                    if let Err(error) = log.execute_undo(self, timestamp) {
+                        log::error!("Auto-commit rollback failed: {}", error);
+                    }
+                }
+                self.abort_write_timestamp(timestamp);
+                if let Some(lease) = &self.write_gate_lease {
+                    lease.release();
+                }
+                if let Some(transaction_id) = transaction_id {
+                    self.persistent.staged_wal.remove(&transaction_id);
+                }
+                self.maybe_run_index_gc();
+                return Err(conflict);
+            }
             self.commit_write_timestamp(timestamp);
+            self.publish_auto_commit_write_set(timestamp);
         } else {
             if let Some(undo) = &self.auto_commit_undo {
                 let mut log = undo.lock();
@@ -280,6 +319,59 @@ impl GraphStorageContext {
         }
         self.maybe_run_index_gc();
         Ok(())
+    }
+
+    /// Check the active auto-commit statement against recently committed
+    /// write sets. Returns a write-write conflict error when the statement
+    /// overlaps a commit newer than its read timestamp.
+    fn auto_commit_conflict(
+        &self,
+        operation: &StorageOperationContext,
+    ) -> Option<StorageError> {
+        let write_set = self.auto_commit_write_set.as_ref()?.lock().clone();
+        if write_set.is_empty() {
+            return None;
+        }
+        if self
+            .persistent
+            .committed_write_sets
+            .has_conflict(&write_set, operation.read_timestamp)
+        {
+            return Some(StorageError::write_write_conflict(format!(
+                "auto-commit statement at ts={} overlaps a recently committed write",
+                operation.read_timestamp,
+            )));
+        }
+        None
+    }
+
+    /// Publish the active auto-commit statement's write set for future
+    /// commit-time certification.
+    fn publish_auto_commit_write_set(&self, commit_ts: Timestamp) {
+        let Some(write_set) = self.auto_commit_write_set.as_ref() else {
+            return;
+        };
+        let write_set = write_set.lock().clone();
+        self.publish_committed_write_set(commit_ts, write_set);
+    }
+
+    /// Publish an externally committed write set (explicit-transaction
+    /// bridge). Lets the transaction manager feed explicit commits into the
+    /// storage certification window so auto-commit statements certify
+    /// against them.
+    pub(crate) fn publish_committed_write_set(
+        &self,
+        commit_ts: Timestamp,
+        write_set: graphdb_transaction::types::WriteSet,
+    ) {
+        let horizon = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
+        self.persistent
+            .committed_write_sets
+            .publish(commit_ts, write_set, horizon);
     }
 
     fn unregister_statement_snapshots(&self, operation: &StorageOperationContext) {

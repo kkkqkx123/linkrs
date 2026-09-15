@@ -212,7 +212,11 @@ pub fn add_vertex_property(
     }
 
     ctx.data_store()
-        .with_vertex_table_mut(label, |table| table.add_property(prop))
+        .with_vertex_table_mut(label, |table| table.add_property(prop))?;
+    // Cached records predate the new column; drop them so later snapshots
+    // read the widened schema instead of a stale projection.
+    ctx.invalidate_vertex_cache(label);
+    Ok(())
 }
 
 pub fn delete_vertex_property(
@@ -225,7 +229,10 @@ pub fn delete_vertex_property(
     }
 
     ctx.data_store()
-        .with_vertex_table_mut(label, |table| table.remove_property(prop_name))
+        .with_vertex_table_mut(label, |table| table.remove_property(prop_name))?;
+    // Cached records still carry the dropped column.
+    ctx.invalidate_vertex_cache(label);
+    Ok(())
 }
 
 pub fn rename_vertex_property(
@@ -239,7 +246,10 @@ pub fn rename_vertex_property(
     }
 
     ctx.data_store()
-        .with_vertex_table_mut(label, |table| table.rename_property(old_name, new_name))
+        .with_vertex_table_mut(label, |table| table.rename_property(old_name, new_name))?;
+    // Cached records still carry the old column name.
+    ctx.invalidate_vertex_cache(label);
+    Ok(())
 }
 
 pub fn add_edge_property(

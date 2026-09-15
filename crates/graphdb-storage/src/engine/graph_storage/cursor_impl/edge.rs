@@ -403,11 +403,14 @@ fn decode_edge_properties(
     if !store.mvcc.is_edge_visible(edge_id, ts) {
         return Vec::new();
     }
-    let props_opt = store.properties.read_properties_by_edge_id(edge_id);
+    // Snapshot read through the property version chain so old readers see
+    // the before-image instead of the latest write.
+    let props_opt = store.properties.get_by_edge_id(edge_id, ts);
     props_opt
         .map(|props| {
             props
                 .into_iter()
+                .filter_map(|(k, v)| v.map(|value| (k, value)))
                 .filter(|(k, _)| {
                     projection.as_ref().is_none_or(|names| {
                         names.iter().any(|name| name == k)

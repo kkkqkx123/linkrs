@@ -161,11 +161,6 @@ impl CsrWithProperties {
             let idx = free_off as usize;
             if idx >= self.visibility.len() {
                 self.visibility.resize(idx + 1, RowVisibility::new(0));
-                for col in &mut self.property_columns {
-                    if col.len() <= idx {
-                        col.resize(idx + 1);
-                    }
-                }
             }
             self.visibility[idx] = RowVisibility::new(create_ts);
             self.row_count += 1;
@@ -173,25 +168,19 @@ impl CsrWithProperties {
         } else {
             let idx = self.visibility.len();
             self.visibility.push(RowVisibility::new(create_ts));
-            for col in &mut self.property_columns {
-                if col.len() <= idx {
-                    col.resize(idx + 1);
-                }
-            }
             self.row_count += 1;
             idx
         };
         for (i, schema) in self.property_schema.iter().enumerate() {
             let col = &mut self.property_columns[i];
-            if col.len() <= row_idx {
-                col.resize(row_idx + 1);
-            }
-            // Edge properties keep the current value only: plain `set`
-            // records no before-image version history.
+            // Versioned write so snapshot readers keep seeing the
+            // before-image through the column version chain.
+            // (`set_versioned` grows the column itself; pre-sizing here
+            // would record a spurious [0, create_ts) baseline entry.)
             if let Some((_, v)) = values.iter().find(|(k, _)| k == &schema.name) {
-                col.set(row_idx, Some(v))?;
+                col.set_versioned(row_idx, Some(v), create_ts)?;
             } else {
-                let _ = col.set(row_idx, None);
+                let _ = col.set_versioned(row_idx, None, create_ts);
             }
         }
         Ok(row_idx)
@@ -213,22 +202,16 @@ impl CsrWithProperties {
             self.visibility.resize(pos + 1, RowVisibility::new(0));
         }
         self.visibility[pos] = RowVisibility::new(ts);
-        for col in &mut self.property_columns {
-            if col.len() <= pos {
-                col.resize(pos + 1);
-            }
-        }
+        // Columns grow inside `set_versioned` below; pre-sizing here would
+        // record a spurious [0, ts) baseline version for every fresh row.
         self.row_count += 1;
 
         for (i, schema) in self.property_schema.iter().enumerate() {
             let col = &mut self.property_columns[i];
-            if col.len() <= pos {
-                col.resize(pos + 1);
-            }
             if let Some((_, v)) = properties.iter().find(|(k, _)| k == &schema.name) {
-                col.set(pos, Some(v))?;
+                col.set_versioned(pos, Some(v), ts)?;
             } else {
-                let _ = col.set(pos, None);
+                let _ = col.set_versioned(pos, None, ts);
             }
         }
 
@@ -262,7 +245,7 @@ impl CsrWithProperties {
                 .iter()
                 .enumerate()
                 .map(|(i, s)| {
-                    let v = self.property_columns[i].get(pos);
+                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
                     (s.name.clone(), v)
                 })
                 .collect(),
@@ -293,7 +276,7 @@ impl CsrWithProperties {
                 .iter()
                 .enumerate()
                 .map(|(i, s)| {
-                    let v = self.property_columns[i].get(pos);
+                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
                     (s.name.clone(), v)
                 })
                 .collect(),
@@ -558,7 +541,7 @@ impl CsrWithProperties {
         row_idx: usize,
         name: &str,
         value: Option<Value>,
-        _ts: Timestamp,
+        ts: Timestamp,
     ) -> StorageResult<()> {
         if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
             return Err(StorageError::invalid_offset(row_idx as u32));
@@ -569,7 +552,7 @@ impl CsrWithProperties {
             .position(|s| s.name == name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let col = &mut self.property_columns[col_idx];
-        col.set(row_idx, value.as_ref())?;
+        col.set_versioned(row_idx, value.as_ref(), ts)?;
         Ok(())
     }
 
@@ -578,7 +561,7 @@ impl CsrWithProperties {
         &mut self,
         row_idx: usize,
         properties: &[(String, Value)],
-        _ts: Timestamp,
+        ts: Timestamp,
     ) -> StorageResult<()> {
         if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
             return Err(StorageError::invalid_offset(row_idx as u32));
@@ -590,7 +573,7 @@ impl CsrWithProperties {
                 .position(|s| s.name == *name)
                 .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let col = &mut self.property_columns[col_idx];
-            col.set(row_idx, Some(value))?;
+            col.set_versioned(row_idx, Some(value), ts)?;
         }
         Ok(())
     }
@@ -618,6 +601,42 @@ impl CsrWithProperties {
             live_records,
             free_list_size: self.free_list.len(),
             reclaimable_bytes,
+        }
+    }
+
+    /// Garbage-collect property version-chain entries that no active snapshot
+    /// can observe. Returns the total number of before-images removed.
+    pub fn gc_property_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        self.property_columns
+            .iter_mut()
+            .map(|col| col.gc_versions(min_active_snapshot_ts))
+            .sum()
+    }
+
+    /// Aggregate version-chain statistics across all property columns.
+    pub fn property_version_stats(&self) -> crate::vertex::column::mvcc::VersionChainStats {
+        let mut total_rows = 0usize;
+        let mut total_entries = 0usize;
+        let mut max_len = 0usize;
+        let mut memory_bytes = 0usize;
+        for col in &self.property_columns {
+            let stats = col.version_chain_stats();
+            total_rows = total_rows.max(stats.total_rows);
+            total_entries += stats.total_entries;
+            max_len = max_len.max(stats.max_len);
+            memory_bytes += stats.memory_bytes;
+        }
+        let avg_len = if total_rows > 0 {
+            total_entries as f64 / total_rows as f64
+        } else {
+            0.0
+        };
+        crate::vertex::column::mvcc::VersionChainStats {
+            total_rows,
+            total_entries,
+            max_len,
+            avg_len,
+            memory_bytes,
         }
     }
 
@@ -1016,21 +1035,49 @@ mod tests {
     }
 
     #[test]
-    fn columnar_current_value_only() {
+    fn columnar_repeatable_read() {
         let mut csr = CsrWithProperties::new(2, schema());
         let eid = EdgeId(42);
         csr.insert_properties(0, eid, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
         csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
             .unwrap();
-        // Edge properties keep the current value only: reads at any visible
-        // timestamp observe the latest write.
-        for ts in [150, 250] {
-            let got = csr.get_by_edge_id(eid, ts).unwrap();
-            assert!(got
-                .iter()
-                .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
-        }
+        // Snapshot read at 150 still observes the before-image (RepeatableRead).
+        let old = csr.get_by_edge_id(eid, 150).unwrap();
+        assert!(old
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
+        // Newer readers observe the latest write.
+        let got = csr.get_by_edge_id(eid, 250).unwrap();
+        assert!(got
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+    }
+
+    #[test]
+    fn columnar_property_version_gc_keeps_visible_snapshots() {
+        let mut csr = CsrWithProperties::new(2, schema());
+        let eid = EdgeId(7);
+        csr.insert_properties(0, eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
+            .unwrap();
+        csr.set_property_for_edge(eid, "weight", Some(Value::Double(3.0)), 300)
+            .unwrap();
+        // Entries ending at or before the cutoff are eligible; the chain
+        // covering ts=200 must survive a GC at 150.
+        assert_eq!(csr.gc_property_versions(150), 0);
+        let at_200 = csr.get_by_edge_id(eid, 200).unwrap();
+        assert!(at_200
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        // Past every active snapshot, history is reclaimed but the latest
+        // value stays readable.
+        assert!(csr.gc_property_versions(300) >= 1);
+        let at_300 = csr.get_by_edge_id(eid, 300).unwrap();
+        assert!(at_300
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(3.0))));
     }
 
     #[test]

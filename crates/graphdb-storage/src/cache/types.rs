@@ -49,8 +49,8 @@ pub struct CachedVertex {
 #[derive(Debug, Clone, Copy)]
 pub struct IdIndexCacheValue {
     pub internal_id: u32,
-    /// Snapshot timestamp of the cached mapping, used for exact-snapshot
-    /// cache hits.
+    /// Snapshot timestamp the mapping was loaded at. Served to readers at
+    /// or past this timestamp while no write has invalidated the entry.
     pub cached_at_ts: Timestamp,
     /// Cache-internal invalidation generation of the owning label, assigned
     /// by `RecordCache` on insert.

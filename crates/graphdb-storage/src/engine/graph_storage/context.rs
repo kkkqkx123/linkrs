@@ -302,6 +302,10 @@ pub struct GraphStorageContext {
     /// finalize(false) to roll back partial writes (see
     /// [`AutoCommitMutationRecorder`]).
     auto_commit_undo: Option<Arc<Mutex<UndoLogManager>>>,
+    /// Write set of the active auto-commit statement, shared with its
+    /// [`AutoCommitMutationRecorder`]; certified at commit against recently
+    /// committed write sets.
+    auto_commit_write_set: Option<Arc<parking_lot::Mutex<graphdb_transaction::types::WriteSet>>>,
     /// When `Some`, this context is bound inside an [`AutoCommitBatchWindow`]
     /// MVCC snapshots and the write-gate lease are owned by the window
     /// and shared across all statements of the batch. `finalize_operation`
@@ -318,6 +322,7 @@ pub struct GraphStorageContext {
 
 mod accessors;
 mod cache_index;
+pub(crate) mod conflict;
 mod edge_ops;
 mod freeze;
 pub(crate) mod helpers;
@@ -347,6 +352,7 @@ impl GraphStorageContext {
             write_timestamp_lease: None,
             write_gate_lease: None,
             auto_commit_undo: None,
+            auto_commit_write_set: None,
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
         })

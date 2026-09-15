@@ -226,27 +226,28 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
 
     /// Insert or replace the cached entry for `key`.
     ///
-    /// The capacity check runs while holding the owning shard lock. If the
-    /// shard has nothing evictable, an intervening global eviction (fixed
-    /// shard order, holding at most one lock at a time) makes room before the
-    /// insert. Dirty evictees are written back after all locks are released so
-    /// I/O never happens under a shard lock.
+    /// Quota is reserved atomically before touching any shard lock, so
+    /// concurrent inserts on different shards observe each other's footprint
+    /// and the pool overshoot stays bounded by one entry instead of scaling
+    /// with the writer count. Eviction then reclaims the reserved space when
+    /// over capacity. Dirty evictees are written back after all locks are
+    /// released so I/O never happens under a shard lock.
     pub(crate) fn insert(&self, key: K, item: T, size: usize) {
         let idx = self.shard_for(&key);
         let size_u64 = size as u64;
         let mut writebacks: WritebackList<K, T> = WritebackList::new();
 
+        // Atomic pre-reservation: every concurrent inserter is visible in
+        // `usage` before any eviction decision is made.
+        self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+
         {
             let mut shard = self.inner.shards[idx].lock();
             let capacity = self.inner.capacity.load(Ordering::Relaxed);
-            let needed = self
-                .inner
-                .usage
-                .load(Ordering::Relaxed)
-                .saturating_add(size_u64);
+            let usage = self.inner.usage.load(Ordering::Relaxed);
             let mut need_global_evict = false;
-            if needed > capacity {
-                let (evicted, wb) = self.evict_locked(&mut shard, needed - capacity + 1);
+            if usage > capacity {
+                let (evicted, wb) = self.evict_locked(&mut shard, usage - capacity + 1);
                 writebacks.extend(wb);
                 if evicted == 0 {
                     // Nothing evictable in the owning shard: make room globally.
@@ -257,9 +258,8 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
                 drop(shard);
                 let cap = self.inner.capacity.load(Ordering::Relaxed);
                 let usage = self.inner.usage.load(Ordering::Relaxed);
-                if usage.saturating_add(size_u64) > cap {
-                    writebacks
-                        .extend(self.evict_all_collect(usage.saturating_add(size_u64) - cap + 1));
+                if usage > cap {
+                    writebacks.extend(self.evict_all_collect(usage - cap + 1));
                 }
                 shard = self.inner.shards[idx].lock();
             }
@@ -268,13 +268,11 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
             match shard.entry(key) {
                 Entry::Vacant(entry) => {
                     entry.insert(cached);
-                    self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
                 }
                 Entry::Occupied(mut entry) => {
                     let previous = entry.insert(cached);
                     let previous_size = previous.size as u64;
-                    if previous_size != size_u64 {
-                        self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+                    if previous_size != 0 {
                         self.inner.usage.fetch_sub(previous_size, Ordering::Relaxed);
                     }
                     if previous.dirty.load(Ordering::Acquire) {
@@ -410,30 +408,45 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         self.inner.shards.iter().map(|m| m.lock().len()).sum()
     }
 
-    /// Remove all entries satisfying a predicate.
-    /// Returns the number of entries removed.
-    pub(crate) fn retain<F>(&self, mut f: F) -> usize
-    where
-        F: FnMut(&K, &T) -> bool,
-    {
-        let mut removed = 0usize;
+    /// Remove the entry for `key`, touching only the shard that owns it.
+    /// O(1) point invalidation: preferred over `retain` scans when the key
+    /// is known (each cache key maps to at most one entry).
+    /// Returns true when an entry was present and removed.
+    pub(crate) fn remove(&self, key: &K) -> bool {
+        let mut shard = self.inner.shards[self.shard_for(key)].lock();
+        let Some(cached) = shard.remove(key) else {
+            return false;
+        };
+        let item_size = cached.size as u64;
+        self.inner.usage.fetch_sub(item_size, Ordering::Relaxed);
+        if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+            accounting.release_category(MemoryCategory::Cache, item_size);
+        }
+        if cached.dirty.load(Ordering::Acquire) {
+            drop(shard);
+            let writer = self.inner.writer.lock().clone();
+            if let Some(writer) = writer {
+                let _ = writer(key.clone(), &cached.item);
+            }
+        }
+        true
+    }
+
+    /// Remove all entries. Touches each shard once; no per-entry predicate.
+    pub(crate) fn clear(&self) {
         let mut removed_bytes = 0u64;
         for shard_mutex in &self.inner.shards {
             let mut shard = shard_mutex.lock();
-            shard.retain(|k, v| {
-                if f(k, &v.item) {
-                    true
-                } else {
-                    removed_bytes += v.size as u64;
-                    removed += 1;
-                    false
-                }
-            });
+            for (_, cached) in shard.drain() {
+                removed_bytes += cached.size as u64;
+            }
         }
-        if removed > 0 {
+        if removed_bytes > 0 {
             self.inner.usage.fetch_sub(removed_bytes, Ordering::Relaxed);
+            if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+                accounting.release_category(MemoryCategory::Cache, removed_bytes);
+            }
         }
-        removed
     }
 }
 
@@ -576,8 +589,13 @@ mod tests {
             "usage must equal the sum of remaining item sizes"
         );
 
-        // retain decrements the counter for removed entries.
-        let removed = pool.retain(|&k, _| k % 2 == 0);
+        // Point removal decrements the counter for removed entries.
+        let mut removed = 0usize;
+        for k in (0..100u32).filter(|k| k % 2 == 0) {
+            if pool.remove(&k) {
+                removed += 1;
+            }
+        }
         assert!(removed > 0);
         let expected: u64 = {
             let mut sum = 0u64;

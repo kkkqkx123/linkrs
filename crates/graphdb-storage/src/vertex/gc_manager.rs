@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cache::SharedRecordCache;
 use crate::engine::data_store::GraphDataStore;
 use crate::engine::storage_events::GcEventSink;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
@@ -66,6 +67,12 @@ pub struct VertexGcManager {
     stats: AtomicU64,
     total_removed: AtomicU64,
     gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
+    /// Record cache to invalidate when a GC pass remaps internal IDs.
+    /// Compaction re-densifies the ID space, so cached ID mappings and
+    /// vertex records keyed by old internal IDs must be dropped; otherwise
+    /// forward-compatible cache hits (`cached_at_ts <= query_ts`) would
+    /// serve relocated rows to newer readers.
+    record_cache: Arc<RwLock<Option<SharedRecordCache>>>,
 }
 
 impl VertexGcManager {
@@ -84,7 +91,14 @@ impl VertexGcManager {
             stats: AtomicU64::new(0),
             total_removed: AtomicU64::new(0),
             gc_event_sink: Arc::new(RwLock::new(None)),
+            record_cache: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Attach the record cache so GC passes that remap internal IDs can
+    /// invalidate the affected labels. No-op when caching is disabled.
+    pub fn set_record_cache(&self, cache: SharedRecordCache) {
+        *self.record_cache.write() = Some(cache);
     }
 
     /// Attach a sink for reclaimed-entry counts (forwarded as `GcRun`).
@@ -132,16 +146,24 @@ impl VertexGcManager {
         }
 
         let mut total_removed = 0usize;
+        let mut remapped_labels = Vec::new();
         if let Err(e) = self.data_store.with_vertex_tables_mut(|tables| {
             for table in tables.values() {
                 let active = table.active_snapshot_count();
-                match table.gc(safe_ts) {
-                    Ok(count) => {
-                        total_removed += count;
-                        if count > 0 && active > 0 {
+                match table.gc_detailed(safe_ts) {
+                    Ok((reclaimed_vertices, version_entries)) => {
+                        total_removed += reclaimed_vertices + version_entries;
+                        if reclaimed_vertices > 0 {
+                            // Internal IDs were re-densified: cached ID
+                            // mappings and vertex records for this label
+                            // are keyed by stale IDs until invalidated.
+                            // Version-only passes leave IDs untouched.
+                            remapped_labels.push(table.label());
+                        }
+                        if reclaimed_vertices + version_entries > 0 && active > 0 {
                             log::debug!(
                                 "GC removed {} entries from vertex table with {} active snapshots",
-                                count,
+                                reclaimed_vertices + version_entries,
                                 active,
                             );
                         }
@@ -154,6 +176,15 @@ impl VertexGcManager {
             Ok(())
         }) {
             log::warn!("Vertex table GC encountered error: {}", e);
+        }
+
+        if !remapped_labels.is_empty() {
+            if let Some(cache) = self.record_cache.read().clone() {
+                for label in remapped_labels {
+                    cache.invalidate_vertices_by_label(label);
+                    cache.invalidate_id_indexes_by_label(label);
+                }
+            }
         }
 
         self.total_removed
@@ -221,6 +252,7 @@ impl Clone for VertexGcManager {
             stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
             total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
             gc_event_sink: self.gc_event_sink.clone(),
+            record_cache: self.record_cache.clone(),
         }
     }
 }

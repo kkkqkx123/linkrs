@@ -12,9 +12,14 @@ use super::types::*;
 /// Record cache for vertex data and ID index mappings.
 ///
 /// Backed by two sharded BufferPool instances with CLOCK-based eviction.
-/// Keys carry no snapshot timestamp: cached entries keep the timestamp they
-/// were loaded at, and a hit is only served for the exact snapshot. Per-label
-/// invalidation generations let stale entries be marked invalid in O(1).
+/// Keys carry no snapshot timestamp: each key maps to at most one entry.
+/// A cached entry records the timestamp it was loaded at (`cached_at_ts`)
+/// and is served to any reader at or past that timestamp
+/// (`cached_at_ts <= query_ts`); older snapshots miss and fall back to a
+/// version-chain read. Correctness rests on write-through invalidation:
+/// every vertex/edge write path removes (O(1)) or generation-bumps the
+/// affected entries, so a surviving entry still reflects the current value.
+/// Per-label invalidation generations mark stale entries invalid in O(1).
 /// Capacity can be adjusted at runtime via `set_capacity`.
 pub struct RecordCache {
     vertex_pool: Arc<BufferPool<VertexCacheKey, CachedVertex>>,
@@ -132,8 +137,12 @@ impl RecordCache {
     ) -> Option<u32> {
         let key = IdIndexCacheKey::new(label_id, external_id.to_string());
         match self.id_index_pool.get(&key) {
+            // Forward-compatible hit: the mapping was loaded at or before
+            // the reader's snapshot and no write has invalidated it since.
+            // Older snapshots (query_ts < cached_at_ts) miss so they fall
+            // back to a version-aware lookup instead of seeing newer data.
             Some(cached)
-                if cached.item.cached_at_ts == query_ts
+                if cached.item.cached_at_ts <= query_ts
                     && cached.item.generation == self.label_generation(label_id) =>
             {
                 self.id_index_stats.record_hit();
@@ -165,8 +174,9 @@ impl RecordCache {
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
-        self.id_index_pool
-            .retain(|k, _| k.label_id != label_id || k.external_id != external_id);
+        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
+        // O(1) point invalidation: each key maps to at most one entry.
+        self.id_index_pool.remove(&key);
         self.id_index_stats.record_invalidation();
     }
 
@@ -174,8 +184,13 @@ impl RecordCache {
 
     pub fn get_vertex(&self, key: &VertexCacheKey, query_ts: Timestamp) -> Option<CachedVertex> {
         match self.vertex_pool.get(key) {
+            // Forward-compatible hit: the record was loaded at or before
+            // the reader's snapshot and no write has invalidated it since,
+            // so it still reflects the current value. Older snapshots
+            // (query_ts < cached_at_ts) miss so they fall back to a
+            // version-chain read instead of seeing newer data.
             Some(cached)
-                if cached.item.cached_at_ts == query_ts
+                if cached.item.cached_at_ts <= query_ts
                     && cached.item.generation == self.label_generation(key.label_id) =>
             {
                 self.vertex_stats.record_hit();
@@ -197,8 +212,8 @@ impl RecordCache {
     }
 
     pub fn remove_vertex(&self, key: &VertexCacheKey) {
-        self.vertex_pool
-            .retain(|vk, _| vk.label_id != key.label_id || vk.internal_id != key.internal_id);
+        // O(1) point invalidation: each key maps to at most one entry.
+        self.vertex_pool.remove(key);
         self.vertex_stats.record_invalidation();
     }
 
@@ -221,9 +236,8 @@ impl RecordCache {
     }
 
     pub fn clear(&self) {
-        // BufferPool doesn't support clear, use retain with false predicate
-        self.vertex_pool.retain(|_, _| false);
-        self.id_index_pool.retain(|_, _| false);
+        self.vertex_pool.clear();
+        self.id_index_pool.clear();
         self.label_generations.write().clear();
         self.vertex_stats.record_invalidation();
         self.id_index_stats.record_invalidation();

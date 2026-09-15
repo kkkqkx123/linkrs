@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::path::Path;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::compression::CompressionType;
@@ -8,7 +9,7 @@ use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{IdKey, VertexRecord};
 use crate::SnapshotHandle;
-use graphdb_core::types::Timestamp;
+use graphdb_core::types::{Timestamp, MAX_TIMESTAMP};
 use graphdb_core::{StorageResult, Value};
 
 /// Maximum shard count per vertex table. Lifted from 16 to 256 so a single
@@ -70,6 +71,48 @@ pub struct ShardedVertexTable {
     num_shards: usize,
     label: graphdb_core::types::LabelId,
     label_name: String,
+    snapshot_state: Mutex<SnapshotPinState>,
+}
+
+/// Table-level snapshot pin counts. The GC truth source is the transaction
+/// layer watermarks; this map only pins the table against timestamp
+/// compaction while a lazily registered statement snapshot is alive.
+#[derive(Debug, Default)]
+struct SnapshotPinState {
+    counts: HashMap<Timestamp, usize>,
+    min_ts: Timestamp,
+    handle_counter: u64,
+}
+
+impl SnapshotPinState {
+    fn new() -> Self {
+        Self {
+            counts: HashMap::new(),
+            min_ts: MAX_TIMESTAMP,
+            handle_counter: 0,
+        }
+    }
+
+    fn register(&mut self, ts: Timestamp) -> SnapshotHandle {
+        *self.counts.entry(ts).or_insert(0) += 1;
+        if ts < self.min_ts {
+            self.min_ts = ts;
+        }
+        self.handle_counter += 1;
+        SnapshotHandle::new(ts, self.handle_counter)
+    }
+
+    fn unregister_ts(&mut self, ts: Timestamp) {
+        if let Some(count) = self.counts.get_mut(&ts) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.counts.remove(&ts);
+                if ts == self.min_ts {
+                    self.min_ts = self.counts.keys().min().copied().unwrap_or(MAX_TIMESTAMP);
+                }
+            }
+        }
+    }
 }
 
 impl ShardedVertexTable {
@@ -102,6 +145,7 @@ impl ShardedVertexTable {
             num_shards,
             label,
             label_name,
+            snapshot_state: Mutex::new(SnapshotPinState::new()),
         }
     }
 
@@ -485,47 +529,42 @@ impl ShardedVertexTable {
     // ==================== MVCC ====================
 
     pub fn register_snapshot(&self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        let handle = self.shards[0].write().register_snapshot(ts)?;
-        for shard in &self.shards[1..] {
-            shard.write().register_snapshot(ts)?;
-        }
-        Ok(handle)
+        Ok(self.snapshot_state.lock().register(ts))
     }
 
     pub fn unregister_snapshot(&self, handle: SnapshotHandle) -> StorageResult<()> {
-        for shard in &self.shards {
-            shard.write().unregister_snapshot(handle)?;
-        }
+        self.snapshot_state.lock().unregister_ts(handle.ts);
         Ok(())
     }
 
     /// Unregister all snapshots with the given timestamp.
     /// Used by lazy registration cleanup on transaction finalize.
     pub fn unregister_snapshot_by_timestamp(&self, ts: Timestamp) -> StorageResult<()> {
-        for shard in &self.shards {
-            shard.write().unregister_snapshot_by_timestamp(ts)?;
-        }
+        self.snapshot_state.lock().unregister_ts(ts);
         Ok(())
     }
 
-    /// Minimum timestamp among all active snapshots across shards
-    /// (the GC watermark; `Timestamp::MAX` when no snapshot is active).
+    /// Minimum timestamp among all active snapshots for this table
+    /// (`MAX_TIMESTAMP` when no snapshot is active).
     /// Exposed for snapshot-lifecycle tests and diagnostics.
     #[cfg(test)]
     pub fn min_active_snapshot_ts(&self) -> Timestamp {
-        self.shards
-            .iter()
-            .map(|shard| shard.read().min_active_snapshot_ts())
-            .min()
-            .unwrap_or(Timestamp::MAX)
+        self.snapshot_state.lock().min_ts
     }
 
-    pub fn gc(&self, min_ts: Timestamp) -> StorageResult<usize> {
-        let mut total = 0;
+    /// GC split into (reclaimed vertices, reclaimed version-chain entries).
+    /// A nonzero vertex count means some shard re-densified internal IDs:
+    /// caches keyed by internal ID must be invalidated for this label.
+    pub fn gc_detailed(&self, min_ts: Timestamp) -> StorageResult<(usize, usize)> {
+        let has_active_pin = self.snapshot_state.lock().min_ts != MAX_TIMESTAMP;
+        let mut reclaimed_vertices = 0;
+        let mut version_entries = 0;
         for shard in &self.shards {
-            total += shard.write().gc(min_ts)?;
+            let (vertices, versions) = shard.write().gc_detailed(min_ts, has_active_pin)?;
+            reclaimed_vertices += vertices;
+            version_entries += versions;
         }
-        Ok(total)
+        Ok((reclaimed_vertices, version_entries))
     }
 
     // ==================== Schema ====================
@@ -770,11 +809,7 @@ impl ShardedVertexTable {
     }
 
     pub fn active_snapshot_count(&self) -> usize {
-        let mut total = 0;
-        for shard in &self.shards {
-            total += shard.read().active_snapshot_count();
-        }
-        total
+        self.snapshot_state.lock().counts.len()
     }
 
     pub fn used_memory_size(&self) -> usize {
@@ -1156,6 +1191,32 @@ mod tests {
         assert_eq!(record.properties.len(), 2);
     }
 
+    #[test]
+    fn test_table_level_snapshot_pin_counts() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+        assert_eq!(table.active_snapshot_count(), 0);
+
+        let first = table.register_snapshot(300).unwrap();
+        assert_eq!(table.min_active_snapshot_ts(), 300);
+        let second = table.register_snapshot(100).unwrap();
+        assert_eq!(table.min_active_snapshot_ts(), 100);
+        assert_eq!(table.active_snapshot_count(), 2);
+
+        table.unregister_snapshot(first).unwrap();
+        assert_eq!(table.min_active_snapshot_ts(), 100);
+        assert_eq!(table.active_snapshot_count(), 1);
+
+        table.unregister_snapshot_by_timestamp(100).unwrap();
+        assert_eq!(table.active_snapshot_count(), 0);
+        assert_eq!(
+            table.min_active_snapshot_ts(),
+            crate::vertex::MAX_TIMESTAMP
+        );
+
+        table.unregister_snapshot(second).unwrap();
+        assert_eq!(table.active_snapshot_count(), 0);
+    }
+
     fn insert_with_name(table: &ShardedVertexTable, name: &str, ts: Timestamp) -> u32 {
         table
             .insert(name, &[("name".to_string(), Value::from(name))], ts)
@@ -1235,7 +1296,9 @@ mod tests {
         let ts2 = 100;
         insert_with_name(&table, "gc_test", ts1);
         table.delete("gc_test", ts2).unwrap();
-        let count = table.gc(150).unwrap();
+        let (gc_vertices, gc_versions) = table.gc_detailed(150).unwrap();
+
+        let count = gc_vertices + gc_versions;
         assert!(count > 0);
     }
 

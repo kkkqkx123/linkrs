@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::index::traits::VertexIndexOps;
 use crate::index::types::EdgeIdentity;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{
-    ColumnId, EdgeIdentifier, EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp,
-    UpdateInfo, UpdateOp, UpdateTarget, VertexId,
+    ColumnId, EdgeIdentifier, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId,
+    TagInfo, Timestamp, UpdateInfo, UpdateOp, UpdateTarget, VertexId,
 };
 use graphdb_core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertEdgeRedo, InsertVertexRedo, UpdateVertexPropRedo,
@@ -292,6 +292,120 @@ fn insert_vertex_at_timestamp(
     }
 
     Ok(vertex.vid)
+}
+
+/// Batch variant of [`insert_vertex_at_timestamp`] using pre-resolved schema
+/// data: tag table (one `list_tags` per batch), pre-scanned SERIAL state (one
+/// column scan per touched serial column), and pre-listed tag indexes (one
+/// `list_tag_indexes` per batch). Row semantics match the per-row path.
+fn insert_vertex_at_timestamp_prechecked(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    tag_map: &HashMap<&str, &TagInfo>,
+    tag_indexes: &[Index],
+    serial_state: &mut SerialBatchState,
+    vertex: Vertex,
+    ts: Timestamp,
+    rollback: &mut Vec<InsertedVertexTag>,
+) -> StorageResult<VertexId> {
+    for tag in &vertex.tags {
+        let tag_info = tag_map.get(tag.name.as_str()).ok_or_else(|| {
+            StorageError::not_found(format!("Tag {} not found", tag.name))
+        })?;
+        let label_id = tag_info.tag_id;
+        let props: Vec<(String, Value)> = tag
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let props = apply_tag_constraints_prechecked(
+            ctx,
+            space_id,
+            tag_info,
+            serial_state,
+            props,
+        )?;
+        let redo = InsertVertexRedo {
+            label: label_id,
+            vid: vertex.vid,
+            properties: props.clone(),
+        };
+        let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
+
+        if let Some(vid_int) = vertex.vid.as_int64() {
+            ctx.insert_vertex_by_i64(label_id, vid_int, &props, ts)?;
+        } else if let Some(id_str) = vertex.vid.as_str() {
+            ctx.insert_vertex(label_id, id_str, &props, ts)?;
+        } else {
+            let id_str = vertex.vid.to_string();
+            ctx.insert_vertex(label_id, &id_str, &props, ts)?;
+        }
+
+        let vid_value = Value::from(vertex.vid);
+        rollback.push(InsertedVertexTag {
+            label_id,
+            id: vertex.vid.to_string(),
+            vid: vertex.vid,
+            vertex_id: vid_value.clone(),
+            tag_name: tag.name.clone(),
+            redo_entry,
+        });
+
+        update_vertex_indexes_with_list(
+            ctx,
+            tag_indexes,
+            space_id,
+            &vid_value,
+            &tag.name,
+            &props,
+            ts,
+        )?;
+    }
+
+    Ok(vertex.vid)
+}
+
+/// Batch variant of [`apply_tag_constraints`] operating on an already
+/// resolved [`TagInfo`]. Explicit SERIAL values are validated against the
+/// batch pre-scan instead of re-scanning the column per row.
+fn apply_tag_constraints_prechecked(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    tag: &TagInfo,
+    serial_state: &mut SerialBatchState,
+    props: Vec<(String, Value)>,
+) -> StorageResult<Vec<(String, Value)>> {
+    let mut result = props;
+    for prop_def in &tag.properties {
+        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+            if !prop_def.nullable && value.is_null() {
+                return Err(StorageError::null_value_not_allowed(&prop_def.name));
+            }
+            if prop_def.serial {
+                serial_state.check_explicit(
+                    ctx,
+                    space_id,
+                    &tag.tag_name,
+                    tag.tag_id,
+                    &prop_def.name,
+                    value,
+                )?;
+            }
+            continue;
+        }
+        if prop_def.serial {
+            let key = super::serial::SerialKey::new(space_id, tag.tag_name.clone());
+            let next = ctx.serial_allocator().next(&key);
+            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
+            continue;
+        }
+        if let Some(default) = &prop_def.default {
+            result.push((prop_def.name.clone(), default.clone()));
+        } else if !prop_def.nullable {
+            return Err(StorageError::null_value_not_allowed(&prop_def.name));
+        }
+    }
+    Ok(result)
 }
 
 /// Apply tag schema constraints (DEFAULT values, NOT NULL and SERIAL) to a
@@ -631,15 +745,31 @@ pub(crate) fn batch_insert_vertices(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    validate_vertex_batch(ctx, space, &vertices)?;
+    // Resolve tags once per batch instead of once per row per use site
+    // (validation, reserve counting, and insertion each re-looked them up).
+    let tags = ctx.schema_manager().list_tags(space)?;
+    let mut tag_map: HashMap<&str, &TagInfo> = HashMap::with_capacity(tags.len());
+    for tag in &tags {
+        tag_map.insert(tag.tag_name.as_str(), tag);
+    }
+    for vertex in &vertices {
+        for tag in &vertex.tags {
+            if !tag_map.contains_key(tag.name.as_str()) {
+                return Err(StorageError::not_found(format!(
+                    "Tag {} not found",
+                    tag.name
+                )));
+            }
+        }
+    }
 
     // Pre-count vertices per tag and reserve capacity to avoid rehashing during inserts.
     {
         let mut tag_counts: HashMap<LabelId, usize> = HashMap::new();
         for vertex in &vertices {
             for tag in &vertex.tags {
-                if let Ok(Some(label_id)) = tag_label_id(ctx, space, &tag.name) {
-                    *tag_counts.entry(label_id).or_insert(0) += 1;
+                if let Some(info) = tag_map.get(tag.name.as_str()) {
+                    *tag_counts.entry(info.tag_id).or_insert(0) += 1;
                 }
             }
         }
@@ -648,15 +778,44 @@ pub(crate) fn batch_insert_vertices(
         }
     }
 
+    // One serial-column scan per touched column for the whole batch. The
+    // per-row path scanned the full column for every explicit SERIAL value
+    // (O(n log n) per row, O(n^2 log n) per batch); the batch path checks
+    // explicit values against this snapshot plus the batch-local seen sets.
+    let mut serial_state = SerialBatchState::new();
+    for tag in tags.iter() {
+        for prop_def in tag.properties.iter().filter(|p| p.serial) {
+            let needs_scan = vertices.iter().any(|v| {
+                v.tags.iter().any(|t| {
+                    t.name == tag.tag_name && t.properties.keys().any(|k| k == &prop_def.name)
+                })
+            });
+            if needs_scan {
+                if let Some(scan) =
+                    scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)
+                {
+                    serial_state.add_present(tag.tag_id, &prop_def.name, scan);
+                }
+            }
+        }
+    }
+
+    // Fetch tag indexes once per batch instead of once per row.
+    let tag_indexes = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_info.space_id)?;
+
     let ts = ctx.get_write_timestamp()?;
     let mut ids = Vec::with_capacity(vertices.len());
     let mut rollback = Vec::new();
 
     for vertex in vertices {
-        let id = match insert_vertex_at_timestamp(
+        let id = match insert_vertex_at_timestamp_prechecked(
             ctx,
-            space,
             space_info.space_id,
+            &tag_map,
+            &tag_indexes,
+            &mut serial_state,
             vertex,
             ts,
             &mut rollback,
@@ -680,22 +839,73 @@ pub(crate) fn batch_insert_vertices(
     Ok(ids)
 }
 
-fn validate_vertex_batch(
-    ctx: &GraphStorageContext,
-    space: &str,
-    vertices: &[Vertex],
-) -> StorageResult<()> {
-    for vertex in vertices {
-        for tag in &vertex.tags {
-            if tag_label_id(ctx, space, &tag.name)?.is_none() {
-                return Err(StorageError::not_found(format!(
-                    "Tag {} not found",
-                    tag.name
-                )));
-            }
+/// Batch-local SERIAL validation state: one committed-column snapshot per
+/// serial column plus the explicit values already accepted in this batch.
+/// Later rows observe earlier batch rows exactly as the per-row rescan did
+/// (same-timestamp rows are snapshot-visible), without re-scanning.
+struct SerialBatchState {
+    present: HashMap<(LabelId, String), HashSet<i64>>,
+    seen: HashMap<(LabelId, String), HashSet<i64>>,
+}
+
+impl SerialBatchState {
+    fn new() -> Self {
+        Self {
+            present: HashMap::new(),
+            seen: HashMap::new(),
         }
     }
-    Ok(())
+
+    fn add_present(
+        &mut self,
+        label: LabelId,
+        prop_name: &str,
+        scan: super::serial::SerialColumnScan,
+    ) {
+        let present: HashSet<i64> = scan.into_present().into_iter().collect();
+        self.present
+            .insert((label, prop_name.to_string()), present);
+    }
+
+    /// Validate an explicit SERIAL value against committed data and earlier
+    /// batch rows, recording it for later rows on success.
+    fn check_explicit(
+        &mut self,
+        ctx: &GraphStorageContext,
+        space_id: u64,
+        table_name: &str,
+        label: LabelId,
+        prop_name: &str,
+        value: &Value,
+    ) -> StorageResult<()> {
+        let Some(integer) = serial_value_as_i64(value) else {
+            return Ok(());
+        };
+        if integer < 0 {
+            return Ok(());
+        }
+        let key = (label, prop_name.to_string());
+        let duplicate = self
+            .present
+            .get(&key)
+            .is_some_and(|present| present.contains(&integer))
+            || self
+                .seen
+                .get(&key)
+                .is_some_and(|seen| seen.contains(&integer));
+        if duplicate {
+            return Err(StorageError::invalid_operation(format!(
+                "Duplicate value {} for SERIAL column '{}': the value is already allocated",
+                integer, prop_name
+            )));
+        }
+        self.seen.entry(key).or_default().insert(integer);
+        ctx.serial_allocator().advance_to(
+            &super::serial::SerialKey::new(space_id, table_name),
+            integer as u64,
+        );
+        Ok(())
+    }
 }
 
 pub(crate) fn delete_tags(
@@ -1620,6 +1830,18 @@ fn update_vertex_indexes(
     ts: Timestamp,
 ) -> StorageResult<()> {
     let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
+    update_vertex_indexes_with_list(ctx, &indexes, space_id, vertex_id, tag_name, props, ts)
+}
+
+fn update_vertex_indexes_with_list(
+    ctx: &GraphStorageContext,
+    indexes: &[Index],
+    space_id: u64,
+    vertex_id: &Value,
+    tag_name: &str,
+    props: &[(String, Value)],
+    ts: Timestamp,
+) -> StorageResult<()> {
     for index in indexes {
         if index.schema_name != tag_name {
             continue;

@@ -249,7 +249,7 @@ fn test_invalidate_by_label() {
 }
 
 #[test]
-fn test_vertex_cache_is_snapshot_exact() {
+fn test_vertex_cache_is_forward_compatible() {
     let cache = RecordCache::new();
 
     let key = VertexCacheKey::new(1, 42);
@@ -262,20 +262,50 @@ fn test_vertex_cache_is_snapshot_exact() {
     };
     cache.insert_vertex(key, vertex);
 
-    // A cached version is only valid for its exact snapshot.
+    // Older snapshots miss so they fall back to a version-chain read
+    // instead of observing newer data.
     assert!(cache.get_vertex(&key, 50).is_none());
     assert!(cache.get_vertex(&key, 100).is_some());
-    assert!(cache.get_vertex(&key, 200).is_none());
+    // Newer snapshots hit: no write has invalidated the entry, so it
+    // still reflects the current value.
+    assert!(cache.get_vertex(&key, 200).is_some());
 }
 
 #[test]
-fn test_id_index_cache_is_snapshot_exact() {
+fn test_vertex_cache_point_invalidation_is_precise() {
+    let cache = RecordCache::new();
+
+    for id in [1u32, 2u32] {
+        cache.insert_vertex(
+            VertexCacheKey::new(1, id),
+            CachedVertex {
+                internal_id: id,
+                external_id: format!("v{id}"),
+                properties: vec![],
+                cached_at_ts: 100,
+                generation: 0,
+            },
+        );
+    }
+    // Point invalidation removes only the targeted key; the neighbour
+    // entry keeps serving newer snapshots.
+    cache.remove_vertex(&VertexCacheKey::new(1, 1));
+    assert!(cache.get_vertex(&VertexCacheKey::new(1, 1), 200).is_none());
+    assert!(cache.get_vertex(&VertexCacheKey::new(1, 2), 200).is_some());
+}
+
+#[test]
+fn test_id_index_cache_is_forward_compatible() {
     let cache = RecordCache::new();
 
     cache.insert_id_index(1, "user", 42, 100);
 
     assert_eq!(cache.get_id_index(1, "user", 50), None);
     assert_eq!(cache.get_id_index(1, "user", 100), Some(42));
+    assert_eq!(cache.get_id_index(1, "user", 200), Some(42));
+
+    // Point invalidation drops the mapping for newer readers too.
+    cache.remove_id_index(1, "user");
     assert_eq!(cache.get_id_index(1, "user", 200), None);
 }
 

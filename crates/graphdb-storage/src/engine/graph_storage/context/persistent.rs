@@ -74,6 +74,9 @@ pub(crate) struct GraphStoragePersistent {
     /// SERIAL column allocators (one counter per space + table).
     pub(crate) serial_allocator: crate::engine::graph_storage::serial::SerialAllocator,
     pub(crate) migration_history: Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
+    /// Recently committed auto-commit write sets for commit-time conflict
+    /// certification (auto-commit bypasses the transaction manager).
+    pub(crate) committed_write_sets: Arc<super::conflict::CommittedWriteSetWindow>,
 }
 
 impl GraphStoragePersistent {
@@ -192,6 +195,7 @@ impl GraphStoragePersistent {
             migration_history: Arc::new(RwLock::new(
                 crate::migration_history::MigrationHistoryManager::new(),
             )),
+            committed_write_sets: Arc::new(super::conflict::CommittedWriteSetWindow::new()),
         }
     }
 
@@ -291,6 +295,7 @@ impl GraphStoragePersistent {
             migration_history: Arc::new(RwLock::new(
                 crate::migration_history::MigrationHistoryManager::new(),
             )),
+            committed_write_sets: Arc::new(super::conflict::CommittedWriteSetWindow::new()),
         })
     }
 }

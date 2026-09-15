@@ -62,6 +62,16 @@ impl GraphStorageContext {
             self.mark_vertex_modified(label_id);
         }
 
+        // Compaction re-densifies internal IDs: cached ID mappings and
+        // vertex records for remapped labels are keyed by stale IDs.
+        // Bump their invalidation generations (O(1) per label) so newer
+        // readers fall back to the remapped tables.
+        for &label_id in vertex_mappings.keys() {
+            self.persistent
+                .cache_manager
+                .invalidate_vertices_by_label(label_id);
+        }
+
         // Propagate compaction ID remaps into every edge table referencing a
         // compacted vertex label before CSR structures are rebuilt below.
         if !vertex_mappings.is_empty() {
