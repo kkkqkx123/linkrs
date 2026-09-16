@@ -15,7 +15,7 @@ use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaOb
 use crate::types::PropertyId;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByOffsetParams};
@@ -163,10 +163,7 @@ impl EdgeStore {
     }
 
     pub(crate) fn edge_endpoint_key(endpoint: u32, rank: i64) -> VertexId {
-        let mut data = Vec::with_capacity(16);
-        data.extend_from_slice(&(endpoint as i64).to_be_bytes());
-        data.extend_from_slice(&rank.to_be_bytes());
-        VertexId::from_bytes(data)
+        VertexId::edge_endpoint_key(endpoint, rank)
     }
 
     pub(crate) fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
@@ -232,6 +229,53 @@ impl EdgeStore {
             .into_iter()
             .filter(|nbr| self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate))
             .collect()
+    }
+
+    /// First-`limit` visible neighbors without decoding the full adjacency.
+    /// Uses the zero-alloc vertex iterator when the shard offers one so
+    /// high-degree `LIMIT` queries stop after `k` visible neighbors instead
+    /// of decoding every edge plus properties.
+    pub fn merged_out_nbrs_with_limit(&self, src: u32, ts: Timestamp, limit: usize) -> Vec<Nbr> {
+        self.merged_nbrs_with_limit(&self.out_csr, src, ts, limit)
+    }
+
+    /// First-`limit` visible in-neighbors, mirroring the out direction.
+    pub fn merged_in_nbrs_with_limit(&self, dst: u32, ts: Timestamp, limit: usize) -> Vec<Nbr> {
+        self.merged_nbrs_with_limit(&self.in_csr, dst, ts, limit)
+    }
+
+    fn merged_nbrs_with_limit(
+        &self,
+        csr: &CsrShardSet,
+        vid: u32,
+        ts: Timestamp,
+        limit: usize,
+    ) -> Vec<Nbr> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        if let Some(iter) = csr.iter_edges_of(vid, ts) {
+            let mut out = Vec::with_capacity(limit.min(32));
+            for nbr in iter {
+                if self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+                    out.push(*nbr);
+                    if out.len() >= limit {
+                        break;
+                    }
+                }
+            }
+            return out;
+        }
+        let mut out = Vec::new();
+        for nbr in csr.edges_of(vid, ts) {
+            if self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+                out.push(nbr);
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        out
     }
 
     pub fn merged_out_nbrs_with_gate(
@@ -335,7 +379,9 @@ impl EdgeStore {
 
     /// Topology-first property read: MVCC authority decides visibility,
     /// then only the projected columns are decoded. `None` decodes all
-    /// columns, `Some(&[])` decodes none.
+    /// columns, `Some(&[])` decodes none. Null-valued columns are filtered
+    /// out, so callers cannot distinguish NULL from a missing column; the
+    /// streaming cursor path shares this projection contract.
     fn properties_for_edge_projected(
         &self,
         edge_id: EdgeId,
@@ -514,6 +560,25 @@ impl EdgeStore {
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {}@{}",
                 src, dst, rank
+            )));
+        }
+        // Single strategy holds at most one live edge per bound endpoint.
+        // Reject a second live edge explicitly instead of silently
+        // overwriting the slot and orphaning authority plus property rows.
+        if self.schema.oe_strategy == super::super::EdgeStrategy::Single
+            && !self.merged_edges_of(&self.out_csr, src, ts).is_empty()
+        {
+            return Err(StorageError::invalid_operation(format!(
+                "Single out-edge strategy already holds a live edge for src={}",
+                src
+            )));
+        }
+        if self.schema.ie_strategy == super::super::EdgeStrategy::Single
+            && !self.merged_edges_of(&self.in_csr, dst, ts).is_empty()
+        {
+            return Err(StorageError::invalid_operation(format!(
+                "Single in-edge strategy already holds a live edge for dst={}",
+                dst
             )));
         }
 
@@ -772,6 +837,11 @@ impl EdgeStore {
         }
     }
 
+    /// Offset-based delete for transaction undo paths that captured CSR
+    /// positions before the delete. Retained because the undo log replays by
+    /// offset; new code should prefer [`EdgeStore::delete_edge`].
+    /// Authority visibility and the property index are maintained exactly
+    /// like the staged-delete path.
     pub fn delete_edge_by_offset(
         &mut self,
         src: u32,
@@ -785,26 +855,32 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
-            if !self.out_csr.delete_edge_by_offset(src, oe_offset, ts) {
-                return Ok(false);
-            }
-            if !self.in_csr.delete_edge_by_offset(dst, ie_offset, ts) {
-                // Roll back the out-direction deletion to keep both sides
-                // consistent.
-                self.out_csr.revert_delete_by_offset(src, oe_offset, ts);
-                return Ok(false);
-            }
-            // Record deletion in the centralized MVCC store.
-            self.mvcc.record_edge_deletion(nbr.edge_id, ts);
-            // Mark the property record deleted once both sides are gone so
-            // the row is reclaimable by compact_properties.
-            let _ = self.properties.mark_deleted(nbr.edge_id, ts);
-            self.mark_properties_dirty();
-            self.maybe_run_auto_maintenance();
-            return Ok(true);
+        let Some(nbr) = self.merged_get_edge(&self.out_csr, src, dst_key, ts) else {
+            return Ok(false);
+        };
+        let edge_properties = if self.property_index.is_some() {
+            self.properties.read_properties_by_edge_id(nbr.edge_id)
+        } else {
+            None
+        };
+        if !self.out_csr.delete_edge_by_offset(src, oe_offset, ts) {
+            return Ok(false);
         }
-        Ok(false)
+        if !self.in_csr.delete_edge_by_offset(dst, ie_offset, ts) {
+            // Roll back the out-direction deletion to keep both sides
+            // consistent.
+            self.out_csr.revert_delete_by_offset(src, oe_offset, ts);
+            return Ok(false);
+        }
+        // Record deletion in the centralized MVCC store.
+        self.mvcc.record_edge_deletion(nbr.edge_id, ts);
+        // Mark the property record deleted once both sides are gone so
+        // the row is reclaimable by compact_properties.
+        let _ = self.properties.mark_deleted(nbr.edge_id, ts);
+        self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
+        self.mark_properties_dirty();
+        self.maybe_run_auto_maintenance();
+        Ok(true)
     }
 
     pub fn revert_delete_edge_by_offset(
@@ -851,14 +927,18 @@ impl EdgeStore {
         }
 
         // Fallback undo for deletions recorded without usable CSR offsets:
-        // locate the edge among all physically present entries, verify this
-        // undo owns the deletion, then revert both CSR sides by edge id.
-        let Some(edge_id) = self
-            .out_csr
+        // locate the edge within its source group only, verify this undo
+        // owns the deletion, then revert both CSR sides by edge id.
+        let gid = crate::edge::node_group::group_id_for(src, self.out_csr.group_bits());
+        let base = crate::edge::node_group::group_base(gid, self.out_csr.group_bits());
+        let Some(variant) = self.out_csr.group_variant(gid) else {
+            return Ok(false);
+        };
+        let Some(edge_id) = variant
             .iter_all()
-            .filter_map(|(row, nbr)| {
-                let row_u32 = row.as_int64().unwrap_or(-1);
-                if row_u32 == src as i64 && nbr.endpoint == dst && nbr.rank == rank {
+            .filter_map(|(local, nbr)| {
+                let global = local.as_int64().unwrap_or(-1) + base as i64;
+                if global == src as i64 && nbr.endpoint == dst && nbr.rank == rank {
                     Some(nbr.edge_id)
                 } else {
                     None
@@ -1032,6 +1112,10 @@ impl EdgeStore {
         self.iter(ts).collect()
     }
 
+    /// Batch full-table scan with a pending gate. Materializes every visible
+    /// record, so it is an offline path for index builds and scatter-gather
+    /// queries; latency-sensitive traversals should use the streaming
+    /// [`EdgeStore::iter`] plus per-vertex limit pushdown instead.
     pub fn scan_with_gate(
         &self,
         ts: Timestamp,
@@ -1108,18 +1192,15 @@ impl EdgeStore {
         self.publish_pending_add_property()
     }
 
-    /// Select and persist encodings for every property column.
+    /// Select and apply encodings for every property column.
     ///
-    /// Explicit maintenance operation shared with the checkpoint path: hot
-    /// columns stay unencoded between runs by design so everyday writes never
-    /// pay re-encoding. Returns the number of columns that received an
-    /// encoding and marks properties dirty when at least one did.
+    /// Explicit memory-only acceleration: encodings change the physical
+    /// representation without changing logical values, so this never marks
+    /// properties dirty. A checkpoint persists current values and the reload
+    /// restores plain columns; re-run after load when encoded scans matter.
+    /// Returns the number of columns that received an encoding.
     pub fn encode_property_columns(&mut self) -> usize {
-        let encoded = self.properties.auto_encode_properties();
-        if encoded > 0 {
-            self.mark_properties_dirty();
-        }
-        encoded
+        self.properties.auto_encode_properties()
     }
 
     /// Recompute persisted per-column statistics from current contents.
@@ -1352,15 +1433,22 @@ impl EdgeStore {
     }
 
     /// Estimate memory usage based on edge count and CSR strategy.
+    ///
+    /// Write-path fast path: counts plus per-shard sizes only, never a
+    /// full-table fragmentation walk. Whole-table waste stays an explicit
+    /// observation metric via `fragmentation_observation`.
     pub fn estimate_memory_usage(&self) -> usize {
         let out_edges = self.out_csr.edge_count() as usize;
         let in_edges = self.in_csr.edge_count() as usize;
         let out_bytes_per_edge = self.out_csr.bytes_per_edge();
         let in_bytes_per_edge = self.in_csr.bytes_per_edge();
-        let estimated = out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge;
+        out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge
+    }
 
-        // Whole-table waste is an observation metric from the live
-        // structures, never estimated from empty counters.
+    /// Whole-table fragmentation observation for background diagnostics.
+    /// Never called on the write path; collection triggers use per-vertex
+    /// counts instead.
+    pub fn fragmentation_observation(&self) -> (usize, usize) {
         let mut total_capacity = 0usize;
         let mut total_wasted = 0usize;
         for csr in [&self.out_csr, &self.in_csr] {
@@ -1377,8 +1465,7 @@ impl EdgeStore {
                 total_capacity
             );
         }
-
-        estimated
+        (total_capacity, total_wasted)
     }
 
     /// Record mutable CSR pressure without performing maintenance on the write path.
@@ -1439,12 +1526,11 @@ impl EdgeStore {
         }
 
         // Reclaim edge-property before-images that no active snapshot can
-        // observe. Runs on the same watermark as tombstone GC so version
-        // chains cannot grow without bound while snapshots are short-lived.
+        // observe. Version history is memory-only (checkpoints persist
+        // current values), so reclamation never dirties the property file.
         if bound != Timestamp::MAX && (cooldown_due || cfg.gc_min_serial == 0) {
             let removed = self.properties.gc_property_versions(bound);
             if removed > 0 {
-                self.mark_properties_dirty();
                 maintenance_ran += 1;
             }
         }
@@ -1491,6 +1577,8 @@ impl EdgeStore {
     }
 
     /// Build the property index by scanning all edges.
+    /// Streams one record at a time so peak memory stays flat instead of
+    /// materializing every live edge plus decoded properties at once.
     pub(crate) fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         let mut index = EdgePropertyIndex::new(pool_capacity);
         // MAX_TIMESTAMP satisfies `create_ts <= ts < delete_ts` for live
@@ -1498,8 +1586,7 @@ impl EdgeStore {
         let all_ts = graphdb_core::types::MAX_TIMESTAMP;
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
-        let edge_records: Vec<EdgeRecord> = iter.collect();
-        for edge in &edge_records {
+        for edge in iter {
             let src_u32 = edge.src_vid.as_int64().unwrap_or(0) as u32;
             let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
             for (prop_name, prop_value) in &edge.properties {
@@ -1565,6 +1652,10 @@ impl EdgeStore {
     /// authority mismatches)`. Tombstones are rebuilt from the authority
     /// table on load, so a nonzero mismatch count signals file corruption or
     /// a write-path regression; callers reject the load.
+    ///
+    /// Live-authority orphans (a live authority entry with no CSR row, as
+    /// produced by a silent Single-slot overwrite) are reported separately
+    /// by [`EdgeStore::live_authority_orphans`] and also reject the load.
     pub fn loaded_copy_mismatches(&self) -> (usize, usize, usize) {
         let orphan_mappings = self
             .properties
@@ -1589,6 +1680,21 @@ impl EdgeStore {
             })
             .count();
         (orphan_mappings, orphan_csr_rows, tombstone_mismatches)
+    }
+
+    /// Live authority entries with no CSR row in either direction.
+    /// Audit-only (load path plus tests); a nonzero count means a past
+    /// silent overwrite orphaned the authority record.
+    pub fn live_authority_orphans(&self) -> usize {
+        let mut csr_ids = HashSet::new();
+        for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
+            csr_ids.insert(nbr.edge_id);
+        }
+        self.mvcc
+            .edge_timestamps
+            .iter()
+            .filter(|(edge_id, ts)| ts.delete_ts == Timestamp::MAX && !csr_ids.contains(edge_id))
+            .count()
     }
 }
 

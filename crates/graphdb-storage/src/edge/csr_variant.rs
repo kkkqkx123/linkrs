@@ -192,7 +192,8 @@ impl CsrVariant {
     ///
     /// Computed as `used_memory_size() / edge_count()` to dynamically adapt
     /// to actual storage characteristics (fragmentation, compression).
-    /// Falls back to empirical defaults when edge_count is 0.
+    /// Falls back to empirical defaults when edge_count is 0. Empty-table
+    /// fallbacks are debug-only so write-path estimates stay quiet.
     pub fn bytes_per_edge(&self) -> usize {
         let edges = self.edge_count().max(1) as usize;
         let bytes = self.used_memory_size();
@@ -204,7 +205,7 @@ impl CsrVariant {
                 }
                 CsrVariant::None { .. } => 0,
             };
-            log::warn!(
+            log::debug!(
                 "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
                 bytes,
                 self.edge_count(),

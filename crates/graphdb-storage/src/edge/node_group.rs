@@ -281,6 +281,18 @@ impl CsrShardSet {
         }
     }
 
+    /// Mark every group dirty so the next checkpoint rewrites the full
+    /// direction. Used after topology-wide rebuilds such as vertex remapping,
+    /// where clean-group skipping would otherwise persist stale group files.
+    pub fn mark_all_dirty(&mut self) {
+        for shard in &mut self.shards {
+            shard.dirty = GroupDirty {
+                inserted: true,
+                deleted: true,
+            };
+        }
+    }
+
     /// Resize the group space for loading: grows with fresh variants,
     /// shrinks by dropping trailing groups.
     pub fn resize_groups(&mut self, count: usize) -> StorageResult<()> {
@@ -431,6 +443,8 @@ impl CsrShardSet {
     }
 
     /// Average bytes per edge based on actual memory usage.
+    /// Empty tables report the fallback without log noise; only genuinely
+    /// degenerate non-empty measurements emit a debug line.
     pub fn bytes_per_edge(&self) -> usize {
         let edges = self.edge_count().max(1) as usize;
         let bytes = self.used_memory_size();
@@ -441,7 +455,7 @@ impl CsrShardSet {
                 _ => std::mem::size_of::<Nbr>(),
             };
             if fallback > 0 {
-                log::warn!(
+                log::debug!(
                     "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
                     bytes,
                     self.edge_count(),
@@ -510,6 +524,8 @@ impl CsrShardSet {
     }
 
     /// Compact with per-edge removal reporting across all groups.
+    /// Only groups that actually dropped entries are marked dirty so clean
+    /// groups are never dragged into the next checkpoint.
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
@@ -518,11 +534,12 @@ impl CsrShardSet {
     ) -> usize {
         let mut removed = 0usize;
         for shard in &mut self.shards {
+            let before = removed;
             removed +=
                 shard
                     .variant
                     .compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
-            if removed > 0 {
+            if removed > before {
                 shard.dirty.deleted = true;
             }
         }
@@ -781,12 +798,11 @@ impl MutableCsrTrait for CsrShardSet {
     fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
         let mut removed = 0usize;
         for shard in &mut self.shards {
-            removed += shard.variant.compact_with_ts(ts, reserve_ratio);
-        }
-        if removed > 0 {
-            for shard in &mut self.shards {
+            let n = shard.variant.compact_with_ts(ts, reserve_ratio);
+            if n > 0 {
                 shard.dirty.deleted = true;
             }
+            removed += n;
         }
         removed
     }
@@ -904,10 +920,7 @@ mod tests {
     }
 
     fn endpoint(dst: u32, rank: i64) -> VertexId {
-        let mut data = Vec::with_capacity(16);
-        data.extend_from_slice(&(dst as i64).to_be_bytes());
-        data.extend_from_slice(&rank.to_be_bytes());
-        VertexId::from_bytes(data)
+        VertexId::edge_endpoint_key(dst, rank)
     }
 
     #[test]

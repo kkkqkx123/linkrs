@@ -57,14 +57,29 @@ impl RowVisibility {
 ///
 /// Every edge owns exactly one row, including edges without properties.
 /// Row identity is the edge-to-row map; there is no per-vertex addressing.
+///
+/// Memory-only version and encoding semantics: property before-images and
+/// column encodings accelerate live reads but are not persisted.
+/// `dump` serializes current values plus row visibility only; a reload
+/// collapses history to the latest value and restores plain columns.
+/// Attribute time travel is therefore valid within a checkpoint epoch and
+/// must be re-encoded after a reload when needed.
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {
     property_schema: Vec<PropertySchema>,
     property_columns: Vec<Column>,
     visibility: Vec<RowVisibility>,
     edge_to_row: HashMap<EdgeId, u32>,
+    /// Reverse index for O(1) row-to-edge lookup. Authoritative with
+    /// `edge_to_row`; rebuilt on load, never persisted separately.
+    row_to_edge: Vec<Option<EdgeId>>,
     free_list: Vec<u32>,
+    /// O(1) membership for free slots; rebuilt from `free_list` on load.
+    free_set: HashSet<u32>,
     row_count: usize,
+    /// Columns mutated since the last stats refresh or checkpoint.
+    /// Drives per-column stats refresh so clean columns never pay recompute.
+    dirty_columns: HashSet<String>,
 }
 
 impl CsrWithProperties {
@@ -84,9 +99,38 @@ impl CsrWithProperties {
             property_columns,
             visibility: Vec::new(),
             edge_to_row: HashMap::new(),
+            row_to_edge: Vec::new(),
             free_list: Vec::new(),
+            free_set: HashSet::new(),
             row_count: 0,
+            dirty_columns: HashSet::new(),
         }
+    }
+
+    fn ensure_row_aux_len(&mut self, len: usize) {
+        if self.row_to_edge.len() < len {
+            self.row_to_edge.resize(len, None);
+        }
+    }
+
+    fn mark_column_dirty(&mut self, name: &str) {
+        self.dirty_columns.insert(name.to_string());
+    }
+
+    fn mark_all_columns_dirty(&mut self) {
+        for schema in &self.property_schema {
+            self.dirty_columns.insert(schema.name.clone());
+        }
+    }
+
+    /// Clear per-column dirt after a successful checkpoint.
+    pub fn clear_dirty_columns(&mut self) {
+        self.dirty_columns.clear();
+    }
+
+    /// Whether any property column changed since the last checkpoint.
+    pub fn has_dirty_columns(&self) -> bool {
+        !self.dirty_columns.is_empty()
     }
 
     pub fn property_schema(&self) -> &[PropertySchema] {
@@ -106,6 +150,7 @@ impl CsrWithProperties {
     ) -> StorageResult<usize> {
         let row_idx = if let Some(free_off) = self.free_list.pop() {
             let idx = free_off as usize;
+            self.free_set.remove(&free_off);
             if idx >= self.visibility.len() {
                 self.visibility.resize(idx + 1, RowVisibility::new(0));
             }
@@ -118,13 +163,23 @@ impl CsrWithProperties {
             self.row_count += 1;
             idx
         };
+        self.ensure_row_aux_len(self.visibility.len());
+        self.row_to_edge[row_idx] = None;
+        let names: Vec<String> = self
+            .property_schema
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
         for (i, schema) in self.property_schema.iter().enumerate() {
             let col = &mut self.property_columns[i];
             // Extend column data buffer for the new row without generating
             // a spurious [0, create_ts) version chain entry. We do this by
             // writing directly to the column's internal buffer and setting
             // the correct visibility timestamp.
-            let value_opt = values.iter().find(|(k, _)| k == &schema.name).map(|(_, v)| v);
+            let value_opt = values
+                .iter()
+                .find(|(k, _)| k == &schema.name)
+                .map(|(_, v)| v);
             match value_opt {
                 Some(v) => {
                     // Value provided: versioned write with the given value
@@ -137,14 +192,17 @@ impl CsrWithProperties {
                 }
             }
         }
+        for name in names {
+            self.mark_column_dirty(&name);
+        }
         Ok(row_idx)
     }
 
     /// Release a row back to the free list without leaving an orphan.
     ///
     /// Clears the visibility stamp so the slot is skipped by reads and GC
-    /// scans, drops the edge mapping if still present, and queues the slot
-    /// for reuse. Reused slots are fully overwritten by `allocate_row`.
+    /// scans, drops the edge mapping via the reverse index, and queues the
+    /// slot for reuse. Reused slots are fully overwritten by `allocate_row`.
     /// Idempotent: releasing an already-free or out-of-range row is a no-op.
     pub fn release_row(&mut self, row_idx: usize) {
         if row_idx < self.visibility.len()
@@ -155,9 +213,15 @@ impl CsrWithProperties {
             self.visibility[row_idx].delete_ts = None;
             self.row_count = self.row_count.saturating_sub(1);
         }
-        self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
+        if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
+            if let Some(edge_id) = slot.take() {
+                self.edge_to_row.remove(&edge_id);
+            }
+        } else {
+            self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
+        }
         let slot = row_idx as u32;
-        if !self.free_list.contains(&slot) {
+        if self.free_set.insert(slot) {
             self.free_list.push(slot);
         }
     }
@@ -260,12 +324,16 @@ impl CsrWithProperties {
     ) -> StorageResult<()> {
         let row_idx = self.allocate_row(values, create_ts)?;
         self.edge_to_row.insert(edge_id, row_idx as u32);
+        self.ensure_row_aux_len(row_idx + 1);
+        self.row_to_edge[row_idx] = Some(edge_id);
         Ok(())
     }
 
     /// Associate an existing row index with an edge id.
     pub fn associate_edge(&mut self, edge_id: EdgeId, row_idx: usize) {
         self.edge_to_row.insert(edge_id, row_idx as u32);
+        self.ensure_row_aux_len(row_idx + 1);
+        self.row_to_edge[row_idx] = Some(edge_id);
     }
 
     /// Get the row index for an edge.
@@ -275,7 +343,13 @@ impl CsrWithProperties {
 
     /// Remove edge-to-row mapping and return the row index.
     pub fn remove_edge_mapping(&mut self, edge_id: EdgeId) -> Option<usize> {
-        self.edge_to_row.remove(&edge_id).map(|pos| pos as usize)
+        let pos = self.edge_to_row.remove(&edge_id).map(|pos| pos as usize)?;
+        if let Some(slot) = self.row_to_edge.get_mut(pos) {
+            if *slot == Some(edge_id) {
+                *slot = None;
+            }
+        }
+        Some(pos)
     }
 
     /// Edge-aware property update: lookup row via `edge_id`.
@@ -399,12 +473,13 @@ impl CsrWithProperties {
         let schema =
             PropertySchema::new(name.clone(), prop_id, data_type.clone()).nullable(nullable);
         self.property_schema.push(schema);
-        let mut col = Column::new(name, prop_id, data_type, nullable);
+        let mut col = Column::new(name.clone(), prop_id, data_type, nullable);
         let rows = self.visibility.len();
         if rows > 0 {
             col.resize(rows);
         }
         self.property_columns.push(col);
+        self.mark_column_dirty(&name);
         Ok(crate::types::PropertyId::new(prop_id as u16))
     }
 
@@ -422,6 +497,7 @@ impl CsrWithProperties {
                 col.col_id = i as i32;
             }
         }
+        self.dirty_columns.remove(name);
         Ok(())
     }
 
@@ -437,6 +513,9 @@ impl CsrWithProperties {
         self.property_schema[idx].name = new_name.to_string();
         if let Some(col) = self.property_columns.get_mut(idx) {
             col.name = new_name.to_string();
+        }
+        if self.dirty_columns.remove(old_name) {
+            self.dirty_columns.insert(new_name.to_string());
         }
         Ok(())
     }
@@ -458,6 +537,7 @@ impl CsrWithProperties {
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let col = &mut self.property_columns[col_idx];
         col.set_versioned(row_idx, value.as_ref(), ts)?;
+        self.mark_column_dirty(name);
         Ok(())
     }
 
@@ -479,6 +559,7 @@ impl CsrWithProperties {
                 .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let col = &mut self.property_columns[col_idx];
             col.set_versioned(row_idx, Some(value), ts)?;
+            self.mark_column_dirty(name);
         }
         Ok(())
     }
@@ -565,6 +646,8 @@ impl CsrWithProperties {
         total +=
             self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
         total += self.free_list.capacity() * std::mem::size_of::<u32>();
+        total += self.row_to_edge.capacity() * std::mem::size_of::<Option<EdgeId>>();
+        total += self.free_set.len() * std::mem::size_of::<u32>();
         for col in &self.property_columns {
             total += col.memory_size();
         }
@@ -573,6 +656,9 @@ impl CsrWithProperties {
     }
 
     pub fn dump(&self) -> Vec<u8> {
+        // Current-value snapshot only: version chains and column encodings
+        // stay memory-only by design. Load restores plain columns holding
+        // the latest value with the row creation stamp.
         let mut buf = Vec::new();
         buf.push(2u8); // version
         buf.extend_from_slice(&(self.visibility.len() as u32).to_le_bytes());
@@ -789,7 +875,24 @@ impl CsrWithProperties {
                 "unexpected trailing data in properties payload".to_string(),
             ));
         }
+        self.rebuild_aux_indexes();
+        self.dirty_columns.clear();
         Ok(())
+    }
+
+    fn rebuild_aux_indexes(&mut self) {
+        self.row_to_edge.clear();
+        self.row_to_edge.resize(self.visibility.len(), None);
+        for (edge_id, pos) in &self.edge_to_row {
+            let idx = *pos as usize;
+            if idx < self.row_to_edge.len() {
+                self.row_to_edge[idx] = Some(*edge_id);
+            }
+        }
+        self.free_set.clear();
+        for &slot in &self.free_list {
+            self.free_set.insert(slot);
+        }
     }
 
     pub fn reclaim_slots(
@@ -805,11 +908,13 @@ impl CsrWithProperties {
             if vis.create_ts == 0 {
                 continue;
             }
-            // Find the edge_id that maps to this row, if any.
+            // O(1) ownership check via the reverse index instead of scanning
+            // the full edge map for every row.
             let has_live_edge = self
-                .edge_to_row
-                .iter()
-                .any(|(eid, &p)| p as usize == idx && valid_edge_ids.contains(eid));
+                .row_to_edge
+                .get(idx)
+                .and_then(|slot| *slot)
+                .is_some_and(|eid| valid_edge_ids.contains(&eid));
             if has_live_edge {
                 continue;
             }
@@ -821,13 +926,22 @@ impl CsrWithProperties {
                 }
             }
         }
+        if to_reclaim.is_empty() {
+            return 0;
+        }
+        let reclaim_set: HashSet<u32> = to_reclaim.iter().map(|&i| i as u32).collect();
         for &idx in &to_reclaim {
             self.visibility[idx].create_ts = 0;
             self.visibility[idx].delete_ts = None;
-            self.edge_to_row.retain(|_, p| *p as usize != idx);
-            self.free_list.push(idx as u32);
+            if let Some(slot) = self.row_to_edge.get_mut(idx) {
+                slot.take();
+            }
+            if self.free_set.insert(idx as u32) {
+                self.free_list.push(idx as u32);
+            }
             self.row_count = self.row_count.saturating_sub(1);
         }
+        self.edge_to_row.retain(|_, pos| !reclaim_set.contains(pos));
         to_reclaim.len()
     }
 
@@ -963,10 +1077,32 @@ impl CsrWithProperties {
     /// Recompute persisted per-column statistics from flush buffers.
     ///
     /// Called before the property file is serialized so statistics follow the
-    /// checkpoint instead of drifting. Columns that fail to compute keep
-    /// their previous statistics.
+    /// checkpoint instead of drifting. Only columns marked dirty are
+    /// recomputed; clean columns keep their persisted statistics. Columns
+    /// that fail to compute keep their previous statistics.
     pub fn refresh_column_stats(&mut self) {
+        if self.dirty_columns.is_empty() {
+            for col in &mut self.property_columns {
+                if let Ok(stats) = col.compute_stats() {
+                    col.set_stats(stats);
+                }
+            }
+            return;
+        }
         for col in &mut self.property_columns {
+            if !self.dirty_columns.contains(&col.name) {
+                continue;
+            }
+            if let Ok(stats) = col.compute_stats() {
+                col.set_stats(stats);
+            }
+        }
+    }
+
+    /// Refresh statistics for one column only. Used by column-level
+    /// checkpoint follow-up when only a subset changed.
+    pub fn refresh_column_stats_for(&mut self, column: &str) {
+        if let Some(col) = self.property_columns.iter_mut().find(|c| c.name == column) {
             if let Ok(stats) = col.compute_stats() {
                 col.set_stats(stats);
             }
@@ -987,6 +1123,7 @@ impl CsrWithProperties {
         for row in 0..rows {
             col.set(row, Some(default))?;
         }
+        self.mark_column_dirty(column);
         Ok(())
     }
 }
@@ -1201,6 +1338,44 @@ mod tests {
             .expect("typed insert should succeed");
         }
         csr
+    }
+
+    #[test]
+    fn dump_collapses_version_history_to_latest() {
+        let mut csr = CsrWithProperties::new(schema());
+        let eid = EdgeId(42);
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
+            .unwrap();
+        let bytes = csr.dump();
+        let mut loaded = CsrWithProperties::new(schema());
+        loaded.load(&bytes).unwrap();
+        let collapsed = loaded
+            .get_by_edge_id(eid, 150)
+            .expect("row survives reload");
+        assert!(collapsed
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+    }
+
+    #[test]
+    fn dump_restores_plain_columns_with_current_values() {
+        let mut csr = fill_typed_store(20);
+        assert!(csr.auto_encode_properties() > 0);
+        let bytes = csr.dump();
+        let mut loaded = typed_store();
+        loaded.load(&bytes).unwrap();
+        assert_eq!(
+            loaded.column_encoding_type("count"),
+            Some(EncodingType::None)
+        );
+        let got = loaded
+            .get_by_edge_id(EdgeId(3), 200)
+            .expect("row should read");
+        assert!(got
+            .iter()
+            .any(|(k, v)| k == "count" && v == &Some(Value::Int(3))));
     }
 
     #[test]

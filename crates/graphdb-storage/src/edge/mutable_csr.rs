@@ -57,6 +57,10 @@ pub struct MutableCsr {
     /// whose `delete_ts == MAX`. Enables O(1) duplicate detection for
     /// high-degree vertices instead of scanning all overflow blocks.
     overflow_live_sets: HashMap<u32, HashSet<(u32, i64)>>,
+    /// Live endpoint set for primary rows, mirroring the overflow sets.
+    /// Checked first on insert so high-degree vertices never pay a primary
+    /// linear scan when the set is present; rebuilt on load and compact.
+    primary_live_sets: HashMap<u32, HashSet<(u32, i64)>>,
 
     edge_count: AtomicU64,
     total_edge_capacity: usize,
@@ -73,6 +77,7 @@ impl Clone for MutableCsr {
             overflow_chunk_edges: self.overflow_chunk_edges,
             overflow_index: self.overflow_index.clone(),
             overflow_live_sets: self.overflow_live_sets.clone(),
+            primary_live_sets: self.primary_live_sets.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
             total_edge_capacity: self.total_edge_capacity,
         }
@@ -119,6 +124,7 @@ impl MutableCsr {
             overflow_chunk_edges: overflow_chunk_edges.max(1),
             overflow_index: OverflowIndex::new(),
             overflow_live_sets: HashMap::new(),
+            primary_live_sets: HashMap::new(),
             edge_count: AtomicU64::new(0),
             total_edge_capacity: 0,
         }
@@ -226,6 +232,69 @@ impl MutableCsr {
             if set.is_empty() {
                 self.overflow_live_sets.remove(&vid);
             }
+        }
+    }
+
+    fn rebuild_primary_live_sets(&mut self) {
+        self.primary_live_sets.clear();
+        for vid in 0..self.vertex_capacity() {
+            let degree = self.degrees[vid] as usize;
+            let offset = self.adj_offsets[vid] as usize;
+            let mut set = HashSet::new();
+            for i in 0..degree {
+                if let Some(nbr) = self.nbr_list.get(offset + i) {
+                    if nbr.delete_ts == Timestamp::MAX {
+                        set.insert((nbr.endpoint, nbr.rank));
+                    }
+                }
+            }
+            if !set.is_empty() {
+                self.primary_live_sets.insert(vid as u32, set);
+            }
+        }
+    }
+
+    fn rebuild_live_sets(&mut self) {
+        self.rebuild_overflow_live_sets();
+        self.rebuild_primary_live_sets();
+    }
+
+    fn track_primary_live_insert(&mut self, vid: u32, endpoint: u32, rank: i64) {
+        self.primary_live_sets
+            .entry(vid)
+            .or_default()
+            .insert((endpoint, rank));
+    }
+
+    fn track_primary_live_remove(&mut self, vid: u32, endpoint: u32, rank: i64) {
+        if let Some(set) = self.primary_live_sets.get_mut(&vid) {
+            set.remove(&(endpoint, rank));
+            if set.is_empty() {
+                self.primary_live_sets.remove(&vid);
+            }
+        }
+    }
+
+    fn rebuild_primary_live_set_for_vertex(&mut self, vid: u32) {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            self.primary_live_sets.remove(&vid);
+            return;
+        }
+        let degree = self.degrees[idx] as usize;
+        let offset = self.adj_offsets[idx] as usize;
+        let mut set = HashSet::new();
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if nbr.delete_ts == Timestamp::MAX {
+                    set.insert((nbr.endpoint, nbr.rank));
+                }
+            }
+        }
+        if set.is_empty() {
+            self.primary_live_sets.remove(&vid);
+        } else {
+            self.primary_live_sets.insert(vid, set);
         }
     }
 
@@ -365,19 +434,29 @@ impl MutableCsr {
             self.allocate_primary_block(src_idx);
         }
 
-        // Duplicate check across both primary and overflow
-        let degree = self.degrees[src_idx] as usize;
-        let base = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            let nbr = &self.nbr_list[base + i];
-            if nbr.endpoint == decoded_endpoint
-                && nbr.rank == decoded_rank
-                && nbr.delete_ts == Timestamp::MAX
-            {
+        // Duplicate check via O(1) live sets first; fallback to scans only
+        // when a set is missing for this vertex.
+        if let Some(set) = self.primary_live_sets.get(&src_vid) {
+            if set.contains(&(decoded_endpoint, decoded_rank)) {
                 return Err(StorageError::edge_already_exists(format!(
                     "{} -> {:?}",
                     src_vid, dst
                 )));
+            }
+        } else {
+            let degree = self.degrees[src_idx] as usize;
+            let base = self.adj_offsets[src_idx] as usize;
+            for i in 0..degree {
+                let nbr = &self.nbr_list[base + i];
+                if nbr.endpoint == decoded_endpoint
+                    && nbr.rank == decoded_rank
+                    && nbr.delete_ts == Timestamp::MAX
+                {
+                    return Err(StorageError::edge_already_exists(format!(
+                        "{} -> {:?}",
+                        src_vid, dst
+                    )));
+                }
             }
         }
         // Overflow duplicate check via O(1) live set; fallback to scan if
@@ -409,11 +488,14 @@ impl MutableCsr {
         let nbr_with_ts = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
 
         // Write to primary if space available and overflow not yet allocated
+        let degree = self.degrees[src_idx] as usize;
+        let base = self.adj_offsets[src_idx] as usize;
         if self.overflow_chunks.get(&src_vid).is_none_or(Vec::is_empty)
             && degree < self.primary_capacities[src_idx] as usize
         {
             self.nbr_list[base + degree] = nbr_with_ts;
             self.degrees[src_idx] += 1;
+            self.track_primary_live_insert(src_vid, decoded_endpoint, decoded_rank);
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
@@ -489,8 +571,10 @@ impl MutableCsr {
                 }
                 let create_ts = nbr.create_ts;
                 if create_ts <= ts {
+                    let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                    self.track_primary_live_remove(src_vid, endpoint, rank);
                     return Ok(true);
                 }
                 // Cannot delete an edge that is not yet created at `ts`.
@@ -555,6 +639,7 @@ impl MutableCsr {
                 if create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                    self.track_primary_live_remove(src_vid, decoded_endpoint, decoded_rank);
                     deleted = true;
                 }
             }
@@ -603,8 +688,10 @@ impl MutableCsr {
         if nbr.delete_ts == Timestamp::MAX {
             let create_ts = nbr.create_ts;
             if create_ts <= ts {
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.track_primary_live_remove(src_vid, endpoint, rank);
                 return true;
             }
         }
@@ -636,8 +723,10 @@ impl MutableCsr {
         // Only revert deletions that happened at or before rollback time.
         // Prevents rolling back deletions that occur after the rollback point.
         if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+            let (endpoint, rank) = (nbr.endpoint, nbr.rank);
             nbr.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.track_primary_live_insert(src_vid, endpoint, rank);
             return true;
         }
         false
@@ -659,11 +748,19 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             if self.nbr_list[offset + i].edge_id == edge_id {
+                let was_live = self.nbr_list[offset + i].delete_ts == Timestamp::MAX;
+                let (endpoint, rank) = {
+                    let n = &self.nbr_list[offset + i];
+                    (n.endpoint, n.rank)
+                };
                 // Shift left to close the gap, then decrement the degree.
                 for j in i..degree - 1 {
                     self.nbr_list[offset + j] = self.nbr_list[offset + j + 1];
                 }
                 self.degrees[src_idx] -= 1;
+                if was_live {
+                    self.track_primary_live_remove(src_vid, endpoint, rank);
+                }
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
             }
@@ -736,8 +833,10 @@ impl MutableCsr {
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
             if nbr.edge_id == edge_id && nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = Timestamp::MAX;
                 self.edge_count.fetch_add(1, Ordering::Relaxed);
+                self.track_primary_live_insert(src_vid, endpoint, rank);
                 return true;
             }
         }
@@ -869,6 +968,7 @@ impl MutableCsr {
         self.overflow_chunks.clear();
         self.overflow_index.clear();
         self.overflow_live_sets.clear();
+        self.primary_live_sets.clear();
         self.total_edge_capacity = self
             .primary_capacities
             .iter()
@@ -1022,7 +1122,7 @@ impl MutableCsr {
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
-        self.rebuild_overflow_live_sets();
+        self.rebuild_live_sets();
 
         Ok(())
     }
@@ -1139,6 +1239,7 @@ impl MutableCsr {
         self.overflow_chunks = OverflowStorage::new();
         self.overflow_index.clear();
         self.overflow_live_sets.clear();
+        self.rebuild_primary_live_sets();
 
         removed_count
     }
@@ -1321,6 +1422,9 @@ impl MutableCsr {
                     self.overflow_live_sets.insert(vid, set);
                 }
             }
+        }
+        if removed > 0 {
+            self.rebuild_primary_live_set_for_vertex(vid);
         }
 
         removed

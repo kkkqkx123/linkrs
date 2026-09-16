@@ -1,5 +1,5 @@
-use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use graphdb_core::types::Timestamp;
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::column_stats::ColumnStats;
 use crate::encoding::ColumnEncoding;
@@ -454,7 +454,12 @@ impl Column {
     /// a version chain entry. This is used when initializing a new row where
     /// the initial value should be visible from `create_ts` onward and no
     /// before-image exists.
-    pub fn set_with_timestamp(&mut self, row_idx: usize, value: Option<&Value>, create_ts: Timestamp) -> StorageResult<()> {
+    pub fn set_with_timestamp(
+        &mut self,
+        row_idx: usize,
+        value: Option<&Value>,
+        create_ts: Timestamp,
+    ) -> StorageResult<()> {
         self.ensure_row_meta(row_idx + 1);
         // Clear any existing version chain for this row
         self.with_version_chains_write(|chains| {

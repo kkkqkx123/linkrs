@@ -10,9 +10,10 @@
 //!
 //! Only groups holding uncheckpointed writes are rewritten; clean groups
 //! are skipped. The manifest is written last so a crash between group
-//! writes and the manifest write still loads from the previous manifest.
-//! Directories holding the old single-file layout (`out_csr.bin` without
-//! a manifest) are rejected explicitly, never converted.
+//! writes and the manifest write drops the in-flight checkpoint but still
+//! loads from the previous manifest. Directories holding the old single-file
+//! layout (`out_csr.bin` without a manifest) are rejected explicitly, never
+//! converted.
 
 use super::core::EdgeStore;
 use super::persistence;
@@ -108,6 +109,10 @@ impl EdgeStore {
     }
 
     fn flush_metadata_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<u64> {
+        // Meta stays a full rewrite: edge timestamps are a single global map
+        // with no column sharding yet, so any timestamp change needs the whole
+        // table. Sharded or delta meta is future work once timestamps split
+        // by group.
         let mut meta_payload = Vec::new();
         crate::persistence::write_header_to(
             &mut meta_payload,
@@ -140,11 +145,15 @@ impl EdgeStore {
         if !self.properties_dirty && path.exists() {
             return Ok(0);
         }
+        // Column-level follow-up: only dirty columns recompute stats, clean
+        // columns keep persisted values. The file itself is still a full
+        // rewrite; per-column files are future work once properties split.
         self.properties.refresh_column_stats();
         let mut props_payload = Vec::new();
         persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
         let edge_count = self.properties.row_count() as u32;
         persistence::write_pages_to_file(&path, &props_payload, page_size, level, edge_count)?;
+        self.properties.clear_dirty_columns();
         Ok(file_bytes(&path))
     }
 
@@ -264,12 +273,17 @@ impl EdgeStore {
         }
         let (orphan_mappings, orphan_csr_rows, tombstone_mismatches) =
             self.loaded_copy_mismatches();
-        if orphan_mappings + orphan_csr_rows + tombstone_mismatches > 0 {
+        let live_orphans = self.live_authority_orphans();
+        if orphan_mappings + orphan_csr_rows + tombstone_mismatches + live_orphans > 0 {
             return Err(crate::StorageError::db_error(format!(
                 "edge table {} loaded with copy mismatches: \
                  orphan property mappings={}, orphan CSR rows={}, \
-                 tombstone/authority mismatches={}",
-                self.label_name, orphan_mappings, orphan_csr_rows, tombstone_mismatches,
+                 tombstone/authority mismatches={}, live authority orphans={}",
+                self.label_name,
+                orphan_mappings,
+                orphan_csr_rows,
+                tombstone_mismatches,
+                live_orphans,
             )));
         }
         self.properties_dirty = false;
@@ -629,5 +643,43 @@ mod tests {
         assert_eq!(snapshot.row_count, 1);
         assert_eq!(snapshot.min_value, Some(Value::Double(3.0)));
         assert_eq!(snapshot.max_value, Some(Value::Double(3.0)));
+    }
+
+    #[test]
+    fn encoded_values_survive_reload_as_plain_columns() {
+        let mut table = make_table();
+        for i in 0..20 {
+            table
+                .insert_edge(
+                    i,
+                    i + 100,
+                    0,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    100,
+                )
+                .unwrap();
+        }
+        let encoded = table.encode_property_columns();
+        assert!(encoded > 0);
+        assert!(table.properties.column_encoding_type("weight").is_some());
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert_eq!(
+            loaded.properties.column_encoding_type("weight"),
+            Some(crate::encoding::EncodingType::None)
+        );
+        let record = loaded.get_edge(3, 103, 0, 200).expect("edge survives");
+        assert!(record
+            .properties
+            .iter()
+            .any(|(k, v)| k == "weight" && *v == Value::Double(3.0)));
     }
 }

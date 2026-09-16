@@ -96,10 +96,11 @@ fn remap_direction(
             }
         }
     }
-    // Freshly routed rows are clean by construction for checkpoint purposes,
-    // but keep the reclaim hints: tombstoned entries survived the rebuild and
-    // the next reclaim pass must inspect their groups once.
-    rebuilt.clear_all_dirty();
+    // Rebuilt rows must reach the next checkpoint: mark every surviving
+    // group dirty so incremental flush cannot skip them. Reclaim hints are
+    // preserved: tombstoned entries survived the rebuild and the next
+    // reclaim pass must inspect their groups once.
+    rebuilt.mark_all_dirty();
     rebuilt.truncate_trailing_empty_groups();
     Ok(rebuilt)
 }
@@ -327,5 +328,39 @@ mod tests {
         assert!(table.get_edge(1, 2, 0, 200).is_some());
         assert!(table.get_edge(5000, 6000, 0, 200).is_none());
         assert_eq!(table.out_csr.group_count(), 1);
+    }
+
+    #[test]
+    fn test_remap_flush_load_roundtrip() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+
+        let src_mapping = HashMap::from([(5000u32, 1u32)]);
+        let dst_mapping = HashMap::from([(6000u32, 2u32)]);
+        table
+            .remap_vertex_ids(Some(&src_mapping), Some(&dst_mapping))
+            .unwrap();
+        assert!(!table.out_csr.dirty_group_ids().is_empty());
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("post-remap flush should succeed");
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.get_edge(0, 1, 0, 200).is_some());
+        assert!(loaded.get_edge(1, 2, 0, 200).is_some());
+        assert!(loaded.get_edge(5000, 6000, 0, 200).is_none());
+        assert_eq!(loaded.edge_count(), 2);
     }
 }

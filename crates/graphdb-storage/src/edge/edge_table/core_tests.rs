@@ -729,3 +729,46 @@ fn test_vertex_reclaim_is_row_scoped() {
     assert!(!table.vertex_fragmentation(0, 200).needs_compact());
     assert_eq!(table.vertex_fragmentation(5, 200).dead_entries, 0);
 }
+
+#[test]
+fn test_single_strategy_rejects_second_live_edge() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Single;
+    schema.ie_strategy = EdgeStrategy::Single;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let err = table
+        .insert_edge(0, 2, 0, &[], 110)
+        .expect_err("second live edge on Single src must fail");
+    assert!(err.to_string().contains("Single"));
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert!(table.delete_edge(0, 1, 0, 120).unwrap());
+    table.insert_edge(0, 2, 0, &[], 130).unwrap();
+    assert!(table.has_edge(0, 2, 0, 140));
+}
+
+#[test]
+fn test_delete_by_offset_maintains_property_index() {
+    use graphdb_core::value::ordered_codec::OrderedCodec;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.enable_property_index(1024).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge_by_offset(0, 1, 0, 0, 0, 200).unwrap());
+    let codec = OrderedCodec::new();
+    let lower = codec.encode(&Value::Double(0.0)).unwrap();
+    let index = table.property_index.as_ref().expect("index enabled");
+    let records = index.lookup("weight", &lower, &Vec::new());
+    assert!(!records.is_empty());
+    assert!(records
+        .iter()
+        .all(|(key, record)| *key != (0, 1, 0) || record.deleted_ts.is_some()));
+    assert!(table
+        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .unwrap());
+    let hits = table.lookup_edges_by_property_range("weight", &lower, &Vec::new());
+    assert!(!hits.is_empty());
+}
