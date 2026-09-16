@@ -17,7 +17,7 @@
 
 use super::core::EdgeStore;
 use super::persistence;
-use crate::edge::node_group::TableShardManifest;
+use crate::edge::node_group::{EdgeCheckpointKind, TableShardManifest};
 use crate::edge::CsrBase;
 use graphdb_core::{StorageError, StorageResult};
 use std::path::{Path, PathBuf};
@@ -61,21 +61,47 @@ impl EdgeStore {
         self.properties_dirty = true;
     }
 
+    /// Mark property columns dirty and trace the owning groups.
+    ///
+    /// Property-only writes leave topology files untouched, so the group
+    /// trace records column dirt only and never forces a topology rewrite.
+    pub(crate) fn mark_properties_dirty_for_edge(&mut self, src: u32, dst: u32) {
+        self.properties_dirty = true;
+        self.out_csr.mark_column_updated_for(src);
+        self.in_csr.mark_column_updated_for(dst);
+    }
+
     /// Flush dirty state incrementally: metadata always, property columns
     /// only when dirty, topology groups only when dirty or missing.
     ///
     /// Property statistics are refreshed before the property payload is
-    /// serialized so they follow the checkpoint. Flushed bytes and elapsed
-    /// time are reported to the shared metrics registry when one is set.
+    /// serialized so they follow the checkpoint. The checkpoint kind is
+    /// derived from the dirt before it is cleared: any delete dirt makes a
+    /// rebalance, otherwise the flush only lands the memory append layer.
+    /// Flushed bytes, elapsed time and authority tombstone totals are
+    /// reported to the shared metrics registry when one is set. Returns the
+    /// checkpoint kind for engine-side logging.
     pub(crate) fn flush_incremental(
         &mut self,
         dir: &Path,
         page_size: usize,
         level: i32,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<EdgeCheckpointKind> {
         let started = std::time::Instant::now();
         std::fs::create_dir_all(dir)?;
         crate::compression::cleanup_shadow_files(dir)?;
+
+        let kind = match (
+            self.out_csr.checkpoint_kind(),
+            self.in_csr.checkpoint_kind(),
+        ) {
+            (EdgeCheckpointKind::Rebalance, _) | (_, EdgeCheckpointKind::Rebalance) => {
+                EdgeCheckpointKind::Rebalance
+            }
+            _ => EdgeCheckpointKind::AppendOnly,
+        };
+        let dirty_groups =
+            self.out_csr.dirty_group_ids().len() + self.in_csr.dirty_group_ids().len();
 
         let mut flushed_bytes = 0u64;
         flushed_bytes += self.flush_metadata_file(dir, page_size, level)?;
@@ -101,11 +127,28 @@ impl EdgeStore {
         self.out_csr.clear_all_dirty();
         self.in_csr.clear_all_dirty();
         self.remove_orphan_group_files(dir);
+        log::debug!(
+            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={}",
+            self.label,
+            kind,
+            dirty_groups,
+            flushed_bytes
+        );
         if let Some(stats) = &self.stats_manager {
             stats.record_incremental_checkpoint(started.elapsed(), flushed_bytes);
             stats.record_checkpoint_strategy_by_name("incremental");
+            let tombstones = self.mvcc.tombstone_stats();
+            let active_snapshots: u64 = self.mvcc.active_snapshots.values().sum::<usize>() as u64;
+            let saturate = |ts: Option<u64>| ts.map(|v| u32::try_from(v).unwrap_or(u32::MAX));
+            stats.record_tombstone_stats(
+                tombstones.count as u64,
+                tombstones.memory_bytes as u64,
+                saturate(tombstones.oldest_delete_ts),
+                saturate(tombstones.newest_delete_ts),
+                active_snapshots,
+            );
         }
-        Ok(())
+        Ok(kind)
     }
 
     fn flush_metadata_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<u64> {
@@ -293,6 +336,7 @@ impl EdgeStore {
         // crash is equivalent to aborting them, because the property store is
         // rebuilt from the published schema below.
         self.pending_add_column = None;
+        self.pending_drop_column = None;
         self.is_open = true;
         Ok(())
     }
@@ -335,12 +379,6 @@ impl EdgeStore {
         self.set_schema(meta.schema);
         self.next_edge_id = meta.next_edge_id;
         self.mvcc.edge_timestamps = meta.edge_timestamps;
-        self.mvcc.tombstones.clear();
-        for (edge_id, ts) in self.mvcc.edge_timestamps.iter() {
-            if ts.delete_ts != graphdb_core::types::Timestamp::MAX {
-                self.mvcc.tombstones.insert(*edge_id, ts.delete_ts);
-            }
-        }
         self.mvcc.min_active_snapshot_ts = graphdb_core::types::Timestamp::MAX;
         self.mvcc.active_snapshots.clear();
         Ok(())
@@ -646,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn encoded_values_survive_reload_as_plain_columns() {
+    fn encoded_values_survive_reload_with_encoding() {
         let mut table = make_table();
         for i in 0..20 {
             table
@@ -661,7 +699,8 @@ mod tests {
         }
         let encoded = table.encode_property_columns();
         assert!(encoded > 0);
-        assert!(table.properties.column_encoding_type("weight").is_some());
+        let before = table.properties.column_encoding_type("weight");
+        assert!(before.is_some_and(|enc| enc != crate::encoding::EncodingType::None));
         let dir = tempfile::tempdir().expect("temporary edge table directory");
         table
             .flush(
@@ -672,14 +711,224 @@ mod tests {
 
         let mut loaded = make_table();
         loaded.load(dir.path()).expect("load should succeed");
-        assert_eq!(
-            loaded.properties.column_encoding_type("weight"),
-            Some(crate::encoding::EncodingType::None)
-        );
+        assert_eq!(loaded.properties.column_encoding_type("weight"), before);
         let record = loaded.get_edge(3, 103, 0, 200).expect("edge survives");
         assert!(record
             .properties
             .iter()
             .any(|(k, v)| k == "weight" && *v == Value::Double(3.0)));
+        let snapshot = loaded
+            .column_stats_snapshot("weight")
+            .expect("flushed stats should be queryable");
+        assert_eq!(snapshot.row_count, 20);
+        assert!(snapshot.null_count.is_some());
+    }
+
+    #[test]
+    fn legacy_properties_version_is_rejected() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let mut payload = table.properties.dump();
+        assert!(!payload.is_empty());
+        payload[0] = 2;
+        let mut reloaded = make_table();
+        assert!(reloaded.properties.load(&payload).is_err());
+    }
+
+    #[test]
+    fn stable_column_ids_survive_drop_and_reload() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .add_property("score".to_string(), graphdb_core::DataType::Int, true)
+            .expect("add score should succeed");
+        let score_id = table
+            .properties
+            .get_property_id("score")
+            .expect("score id should exist");
+        table
+            .remove_property("weight")
+            .expect("drop should succeed");
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef::new(
+                "score".to_string(),
+                graphdb_core::types::DataType::Int,
+            )],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+        };
+        let mut loaded =
+            EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds");
+        loaded.load(dir.path()).expect("load should succeed");
+        assert_eq!(loaded.properties.get_property_id("score"), Some(score_id));
+        loaded
+            .add_property("extra".to_string(), graphdb_core::DataType::Int, true)
+            .expect("add extra should succeed");
+        let extra_id = loaded
+            .properties
+            .get_property_id("extra")
+            .expect("extra id should exist");
+        assert!(extra_id != score_id);
+        assert!(extra_id > score_id);
+    }
+
+    #[test]
+    fn insert_only_flush_reports_append_only() {
+        use crate::edge::EdgeCheckpointKind;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::AppendOnly);
+    }
+
+    #[test]
+    fn delete_flush_reports_rebalance() {
+        use crate::edge::EdgeCheckpointKind;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        table.delete_edge(0, 1, 0, 200).unwrap();
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::Rebalance);
+    }
+
+    #[test]
+    fn property_only_update_skips_topology_rewrite() {
+        use crate::edge::EdgeCheckpointKind;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        let group_zero = dir.path().join(out_group_file(0));
+        let stamp = group_zero.metadata().unwrap().modified().unwrap();
+
+        table
+            .update_edge_property(0, 1, 0, "weight", &Value::Double(9.0), 200)
+            .expect("property update should succeed");
+        assert!(!table.out_csr.column_dirty_group_ids().is_empty());
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::AppendOnly);
+        assert_eq!(group_zero.metadata().unwrap().modified().unwrap(), stamp);
+    }
+
+    #[test]
+    fn remap_forces_rebalance_checkpoint() {
+        use crate::edge::EdgeCheckpointKind;
+        use std::collections::HashMap;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert!(table.out_csr.dirty_group_ids().is_empty());
+
+        let src_mapping: HashMap<u32, u32> = [(5000u32, 2u32)].into_iter().collect();
+        let dst_mapping: HashMap<u32, u32> = [(6000u32, 3u32)].into_iter().collect();
+        table
+            .remap_vertex_ids(Some(&src_mapping), Some(&dst_mapping))
+            .expect("remap should succeed");
+        assert!(!table.out_csr.dirty_group_ids().is_empty());
+        assert!(table.has_edge(2, 3, 0, 200));
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::Rebalance);
+    }
+
+    #[test]
+    fn flush_reports_tombstone_totals_to_registry() {
+        use graphdb_metrics::{MetricType, StatsManager};
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        table.delete_edge(0, 1, 0, 200).unwrap();
+        let stats = std::sync::Arc::new(StatsManager::new());
+        table.set_stats_manager(stats.clone());
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert_eq!(stats.get_value(MetricType::TombstoneCount), Some(1));
+        assert!(
+            stats
+                .get_value(MetricType::TombstoneMemoryBytes)
+                .unwrap_or(0)
+                > 0
+        );
     }
 }

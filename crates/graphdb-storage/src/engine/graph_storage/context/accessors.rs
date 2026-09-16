@@ -620,6 +620,19 @@ impl GraphStorageContext {
         Some(metrics)
     }
 
+    /// Force the WAL to a durable state. Write-ahead semantics require a redo
+    /// record to be durable before the operation that produced it is
+    /// acknowledged; the async flush buffer alone cannot guarantee that.
+    /// No-op when persistence is disabled.
+    pub(crate) fn sync_wal(&self) -> StorageResult<()> {
+        if let Some(persistence) = self.persistent.persistence.as_ref() {
+            if let Some(wal) = persistence.read().wal_manager() {
+                wal.read().sync()?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_open_flag(&self) -> &std::sync::atomic::AtomicBool {
         &self.persistent.is_open
     }

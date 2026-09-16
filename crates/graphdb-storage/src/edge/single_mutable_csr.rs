@@ -157,14 +157,27 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Reject if there's an active edge with newer or equal timestamp
-        if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
+        if nbr.delete_ts == Timestamp::MAX && nbr.edge_id != INVALID_EDGE_ID && ts <= nbr.create_ts
+        {
             return Err(StorageError::conflict(format!(
                 "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
                 src, ts, nbr.create_ts
             )));
         }
+        // Resurrection follows the same monotonicity as live writes: the new
+        // timestamp must advance past both the creation and deletion stamps.
+        if nbr.delete_ts != Timestamp::MAX
+            && nbr.edge_id != INVALID_EDGE_ID
+            && (ts <= nbr.create_ts || ts <= nbr.delete_ts)
+        {
+            return Err(StorageError::conflict(format!(
+                "[SingleMutableCsr] resurrect conflict on src={}: ts={} <= create_ts={} or delete_ts={}",
+                src, ts, nbr.create_ts, nbr.delete_ts
+            )));
+        }
 
-        let was_empty = nbr.delete_ts < Timestamp::MAX;
+        let was_empty =
+            nbr.edge_id == INVALID_EDGE_ID || nbr.delete_ts != Timestamp::MAX;
         let (endpoint_vid, rank) = dst.decode_edge_endpoint();
         nbr.endpoint = endpoint_vid.as_int64().unwrap_or(0) as u32;
         nbr.rank = rank;
@@ -283,16 +296,182 @@ impl SingleMutableCsr {
         false
     }
 
-    pub fn delete_edge_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
+    pub fn delete_edge_by_offset(
+        &mut self,
+        src: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         if offset != 0 {
-            return false;
+            return Ok(false);
         }
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return Ok(false);
+        }
+        let edge_id = self.nbr_list[src_idx].edge_id;
+        self.delete_edge(src, edge_id, ts)
+    }
+
+    pub fn nbr_at_offset(&self, src: u32, offset: i32) -> Option<Nbr> {
+        if offset != 0 {
+            return None;
+        }
+        self.nbr_list.get(src as usize).copied()
+    }
+
+    pub fn get_edge_physical(&self, src: u32, dst: VertexId) -> Option<Nbr> {
+        let slot = self.nbr_list.get(src as usize)?;
+        if slot.edge_id == INVALID_EDGE_ID {
+            return None;
+        }
+        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
+        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
+        if slot.endpoint == dst_ep && slot.rank == dst_rank {
+            Some(*slot)
+        } else {
+            None
+        }
+    }
+
+    pub fn physical_edges_of(&self, src: u32) -> Vec<Nbr> {
+        match self.nbr_list.get(src as usize) {
+            Some(nbr) if nbr.edge_id != INVALID_EDGE_ID => vec![*nbr],
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn visit_physical<F>(&self, src: u32, mut f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        if let Some(nbr) = self.nbr_list.get(src as usize) {
+            if nbr.edge_id != INVALID_EDGE_ID {
+                let _ = f(*nbr);
+            }
+        }
+    }
+
+    pub fn has_physical_entries(&self, vid: u32) -> bool {
+        self.nbr_list
+            .get(vid as usize)
+            .is_some_and(|nbr| nbr.edge_id != INVALID_EDGE_ID)
+    }
+
+    pub fn primary_contains(&self, src: u32, edge_id: EdgeId) -> bool {
+        self.nbr_list
+            .get(src as usize)
+            .is_some_and(|slot| slot.edge_id == edge_id)
+    }
+
+    pub fn remove_edge(&mut self, src: u32, edge_id: EdgeId) -> bool {
         let src_idx = src as usize;
         if src_idx >= self.vertex_capacity() {
             return false;
         }
-        let edge_id = self.nbr_list[src_idx].edge_id;
-        self.delete_edge(src, edge_id, ts).unwrap_or(false)
+        let slot = &mut self.nbr_list[src_idx];
+        if slot.edge_id == INVALID_EDGE_ID {
+            return false;
+        }
+        if edge_id.0 != u64::MAX && slot.edge_id != edge_id {
+            return false;
+        }
+        let was_live = slot.delete_ts == Timestamp::MAX;
+        *slot = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+        if was_live {
+            self.edge_count.fetch_sub(1, Ordering::Relaxed);
+        }
+        true
+    }
+
+    pub fn revert_delete_by_edge_id(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+        let slot = &mut self.nbr_list[src_idx];
+        if slot.edge_id == INVALID_EDGE_ID {
+            return false;
+        }
+        if edge_id.0 != u64::MAX && slot.edge_id != edge_id {
+            return false;
+        }
+        if slot.delete_ts != Timestamp::MAX && slot.delete_ts <= ts {
+            slot.delete_ts = Timestamp::MAX;
+            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    pub fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let Some(slot) = self.nbr_list.get(vid as usize) else {
+            return 0;
+        };
+        if slot.edge_id != INVALID_EDGE_ID
+            && slot.delete_ts != Timestamp::MAX
+            && crate::mvcc_visibility::Visibility::is_gc_eligible(slot.delete_ts, cutoff)
+        {
+            1
+        } else {
+            0
+        }
+    }
+
+    pub fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
+        let Some(slot) = self.nbr_list.get(vid as usize) else {
+            return (0, 0, 0);
+        };
+        if slot.edge_id == INVALID_EDGE_ID {
+            return (0, 0, 0);
+        }
+        if slot.delete_ts == Timestamp::MAX {
+            (1, 0, 1)
+        } else {
+            (0, 1, 1)
+        }
+    }
+
+    pub fn compact_vertex_with_reporting(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        if self.reclaimable_count(vid, cutoff) == 0 {
+            return 0;
+        }
+        let src_idx = vid as usize;
+        let (edge_id, delete_ts) = (self.nbr_list[src_idx].edge_id, self.nbr_list[src_idx].delete_ts);
+        on_edge_removed(edge_id, delete_ts);
+        self.nbr_list[src_idx] = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+        1
+    }
+
+    pub fn compact_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let mut removed = 0usize;
+        for idx in 0..self.nbr_list.len() {
+            let slot = self.nbr_list[idx];
+            if slot.edge_id != INVALID_EDGE_ID
+                && slot.delete_ts != Timestamp::MAX
+                && crate::mvcc_visibility::Visibility::is_gc_eligible(slot.delete_ts, cutoff)
+            {
+                on_edge_removed(slot.edge_id, slot.delete_ts);
+                self.nbr_list[idx] = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+                removed += 1;
+            }
+        }
+        removed
     }
 
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
@@ -506,12 +685,45 @@ impl MutableCsrTrait for SingleMutableCsr {
         SingleMutableCsr::delete_edge_by_dst(self, src, dst, ts)
     }
 
-    fn delete_edge_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
+    fn delete_edge_by_offset(
+        &mut self,
+        src: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         SingleMutableCsr::delete_edge_by_offset(self, src, offset, ts)
     }
 
     fn revert_delete_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
         SingleMutableCsr::revert_delete_by_offset(self, src, offset, ts)
+    }
+
+    fn nbr_at_offset(&self, src: u32, offset: i32) -> Option<Nbr> {
+        SingleMutableCsr::nbr_at_offset(self, src, offset)
+    }
+
+    fn get_edge_physical(&self, src: u32, dst: VertexId) -> Option<Nbr> {
+        SingleMutableCsr::get_edge_physical(self, src, dst)
+    }
+
+    fn physical_edges_of(&self, src: u32) -> Vec<Nbr> {
+        SingleMutableCsr::physical_edges_of(self, src)
+    }
+
+    fn has_physical_entries(&self, vid: u32) -> bool {
+        SingleMutableCsr::has_physical_entries(self, vid)
+    }
+
+    fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        SingleMutableCsr::primary_contains(self, src_vid, edge_id)
+    }
+
+    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        SingleMutableCsr::remove_edge(self, src_vid, edge_id)
+    }
+
+    fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+        SingleMutableCsr::revert_delete_by_edge_id(self, src_vid, edge_id, ts)
     }
 
     fn get_edge(&self, src: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
@@ -524,6 +736,23 @@ impl MutableCsrTrait for SingleMutableCsr {
 
     fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
         SingleMutableCsr::compact_with_ts(self, ts, reserve_ratio)
+    }
+
+    fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        SingleMutableCsr::reclaimable_count(self, vid, cutoff)
+    }
+
+    fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
+        SingleMutableCsr::vertex_census(self, vid)
+    }
+
+    fn compact_vertex_with_reporting(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        SingleMutableCsr::compact_vertex_with_reporting(self, vid, cutoff, on_edge_removed)
     }
 
     fn used_memory_size(&self) -> usize {
@@ -603,5 +832,72 @@ mod tests {
         let mut trailing = data.clone();
         trailing.push(0xff);
         assert!(csr2.load(&trailing).is_err());
+    }
+
+    #[test]
+    fn test_offset_delete_propagates_conflict() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap() == false);
+        assert!(csr.delete_edge(0, EdgeId(100), 160).is_err());
+        // Offset path surfaces the same conflict instead of folding it.
+        assert!(csr.delete_edge_by_offset(0, 0, 160).is_err());
+        assert!(csr.delete_edge_by_offset(0, 1, 160).unwrap() == false);
+    }
+
+    #[test]
+    fn test_resurrect_requires_monotonic_timestamp() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert!(csr
+            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 140)
+            .is_err());
+        assert!(csr
+            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 150)
+            .is_err());
+        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 151)
+            .unwrap();
+        assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_single_reclaim_reports_and_clears_slot() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert_eq!(csr.reclaimable_count(0, 100), 0);
+        assert_eq!(csr.reclaimable_count(0, 150), 1);
+        assert_eq!(csr.vertex_census(0), (0, 1, 1));
+        let mut reported = Vec::new();
+        assert_eq!(
+            csr.compact_vertex_with_reporting(0, 150, &mut |id, ts| reported.push((id, ts))),
+            1
+        );
+        assert_eq!(reported, vec![(EdgeId(100), 150)]);
+        assert_eq!(csr.vertex_census(0), (0, 0, 0));
+        assert!(!csr.has_physical_entries(0));
+        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 160)
+            .unwrap();
+        assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_single_remove_and_revert_by_id() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.remove_edge(0, EdgeId(100)));
+        assert_eq!(csr.edge_count(), 0);
+        assert!(!csr.has_physical_entries(0));
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(101), 110)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(101), 120).unwrap());
+        assert!(csr.revert_delete_by_edge_id(0, EdgeId(101), 130));
+        assert_eq!(csr.edges_of(0, 130).len(), 1);
     }
 }

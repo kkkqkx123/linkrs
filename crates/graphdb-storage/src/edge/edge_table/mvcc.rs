@@ -1,12 +1,11 @@
-//! MVCC and tombstone management: snapshot isolation and garbage collection.
+//! MVCC management: snapshot isolation and garbage collection.
 //!
-//! Visibility authority is `edge_timestamps` alone. The tombstone table is a
-//! derived index for garbage-collection enumeration, maintained through the
-//! record/remove entry points; it never overrules the authority. CSR row
-//! stamps and adjacency `Nbr` stamps are physical projections for collection
-//! only. Every visibility decision goes through
-//! [`MVCCManager::is_edge_visible`] (or its pending-aware overload) so the
-//! copies cannot drift apart.
+//! Visibility authority is `edge_timestamps` alone. There is no second
+//! tombstone table: deletion enumeration, statistics, and tombstone checks
+//! all derive from the authority records. CSR row stamps and adjacency `Nbr`
+//! stamps are physical projections for collection only. Every visibility
+//! decision goes through [`MVCCManager::is_edge_visible`] (or its
+//! pending-aware overload) so the projections cannot drift apart.
 
 use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
@@ -42,8 +41,6 @@ impl EdgeTimestamps {
 pub struct MVCCManager {
     /// Per-edge creation/deletion timestamps (visibility authority).
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
-    /// Tombstone table: edge id to earliest `delete_ts`.
-    pub tombstones: HashMap<EdgeId, Timestamp>,
     /// Minimum timestamp of all active snapshots.
     pub min_active_snapshot_ts: Timestamp,
     /// Active snapshot timestamps and their reference count.
@@ -61,54 +58,39 @@ impl MVCCManager {
     pub fn new() -> Self {
         Self {
             edge_timestamps: HashMap::new(),
-            tombstones: HashMap::new(),
             min_active_snapshot_ts: Timestamp::MAX,
             active_snapshots: HashMap::new(),
         }
     }
 
     /// Check if an edge is tombstoned at a given timestamp.
+    ///
+    /// Derived from the authority record; edges without authority are never
+    /// reported as tombstoned.
     pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        self.tombstones
+        self.edge_timestamps
             .get(&edge_id)
-            .is_some_and(|delete_ts| *delete_ts <= ts)
+            .is_some_and(|info| info.delete_ts != Timestamp::MAX && info.delete_ts <= ts)
     }
 
-    /// Drop tombstones eligible under `Visibility::is_gc_eligible`. Safe:
-    /// `is_edge_visible` consults `edge_timestamps.delete_ts` first, which
-    /// keeps hiding the edge from every snapshot at or past deletion.
-    pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
-        self.gc_tombstones_batch(min_active_snapshot_ts, usize::MAX)
+    /// Drop tombstones eligible under `Visibility::is_gc_eligible`.
+    ///
+    /// The authority records stay for visibility; there is no second table
+    /// to clean, so collection is a no-op returning zero. Physical slot
+    /// reclamation happens through the CSR reclaim passes.
+    pub fn gc_tombstones(&mut self, _min_active_snapshot_ts: Timestamp) -> usize {
+        0
     }
 
     /// Inspect at most `batch_size` tombstones.
+    ///
+    /// No-op for the same reason as [`Self::gc_tombstones`].
     pub fn gc_tombstones_batch(
         &mut self,
-        min_active_snapshot_ts: Timestamp,
-        batch_size: usize,
+        _min_active_snapshot_ts: Timestamp,
+        _batch_size: usize,
     ) -> usize {
-        if batch_size == 0 {
-            return 0;
-        }
-        let mut eligible: Vec<EdgeId> = self
-            .tombstones
-            .iter()
-            .filter_map(|(edge_id, delete_ts)| {
-                crate::mvcc_visibility::Visibility::is_gc_eligible(
-                    *delete_ts,
-                    min_active_snapshot_ts,
-                )
-                .then_some(*edge_id)
-            })
-            .collect();
-        eligible.truncate(batch_size);
-        let mut removed = 0;
-        for edge_id in eligible {
-            if self.tombstones.remove(&edge_id).is_some() {
-                removed += 1;
-            }
-        }
-        removed
+        0
     }
 
     /// Register a new active snapshot at the given timestamp.
@@ -167,10 +149,19 @@ impl MVCCManager {
     }
 
     /// Get current tombstone statistics for observability.
+    ///
+    /// Derived from the authority records; no second table is maintained.
     pub fn tombstone_stats(&self) -> TombstoneStats {
-        let count = self.tombstones.len();
-        let oldest = self.tombstones.values().copied().min();
-        let newest = self.tombstones.values().copied().max();
+        let mut count = 0usize;
+        let mut oldest: Option<Timestamp> = None;
+        let mut newest: Option<Timestamp> = None;
+        for info in self.edge_timestamps.values() {
+            if info.delete_ts != Timestamp::MAX {
+                count += 1;
+                oldest = Some(oldest.map_or(info.delete_ts, |cur| cur.min(info.delete_ts)));
+                newest = Some(newest.map_or(info.delete_ts, |cur| cur.max(info.delete_ts)));
+            }
+        }
         TombstoneStats {
             count,
             memory_bytes: TombstoneStats::estimate_memory(count),
@@ -180,28 +171,33 @@ impl MVCCManager {
     }
 
     /// Total count of deletions (for memory accounting).
+    ///
+    /// Derived from the authority records.
     pub fn total_tombstone_count(&self) -> usize {
-        self.tombstones.len()
+        self.edge_timestamps
+            .values()
+            .filter(|info| info.delete_ts != Timestamp::MAX)
+            .count()
     }
 
-    /// Record a deletion in the authoritative tombstone table.
+    /// Record a deletion against the authority record.
     ///
     /// Single entry point for every deletion path. Keeps the earliest
     /// `delete_ts` when the same edge is recorded more than once: an
-    /// earlier deletion covers a wider query range and must win.
+    /// earlier deletion covers a wider query range and must win. Edges
+    /// without authority are ignored; such orphans are rejected on load.
     pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
-        let earliest = self
-            .tombstones
-            .get(&edge_id)
-            .map_or(delete_ts, |ts| (*ts).min(delete_ts));
-        self.tombstones.insert(edge_id, earliest);
+        if let Some(info) = self.edge_timestamps.get_mut(&edge_id) {
+            info.delete_ts = info.delete_ts.min(delete_ts);
+        }
     }
 
-    /// Undo of [`Self::record_deletion`]: remove the tombstone for `edge_id`.
+    /// Undo of [`Self::record_deletion`].
     ///
-    /// Returns true when a tombstone was present and removed.
-    pub fn remove_deletion(&mut self, edge_id: EdgeId) -> bool {
-        self.tombstones.remove(&edge_id).is_some()
+    /// Authority clearing is done by the caller through the timestamp record;
+    /// there is no second table, so this is a no-op returning false.
+    pub fn remove_deletion(&mut self, _edge_id: EdgeId) -> bool {
+        false
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -230,9 +226,10 @@ impl MVCCManager {
 
     /// Check if an edge is visible at a given timestamp.
     ///
-    /// This is the single entry point for all MVCC visibility decisions.
-    /// When the authority record exists it decides alone; the tombstone
-    /// table is consulted only for edges without an authority record.
+    /// Frozen contract: creation later than the query hides, deletion at or
+    /// before the query hides, same-stamp re-delete is idempotent, and
+    /// cross-stamp conflicts are reported on the write path, never hidden here.
+    /// Edges without authority are invisible (fail closed).
     pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
             return crate::mvcc_visibility::Visibility::is_edge_visible(
@@ -241,7 +238,7 @@ impl MVCCManager {
                 ts_info.delete_ts,
             );
         }
-        !self.is_tombstoned(edge_id, ts)
+        false
     }
 
     /// Pending-aware overload of [`Self::is_edge_visible`].
@@ -249,9 +246,9 @@ impl MVCCManager {
     /// Same single authority, but creation/deletion stamps owned by foreign
     /// uncommitted transactions are filtered through `gate`: a foreign
     /// pending creation hides the edge, a foreign pending deletion in the
-    /// authority stamps is ignored. Edges without an authority record fall
-    /// back to the tombstone table. Operation-layer scans funnel through
-    /// the table `*_with_gate` methods.
+    /// authority stamps is ignored. Edges without an authority record are
+    /// invisible. Operation-layer scans funnel through the table
+    /// `*_with_gate` methods.
     pub fn is_edge_visible_with_gate(
         &self,
         edge_id: EdgeId,
@@ -267,12 +264,7 @@ impl MVCCManager {
             }
             return gate.is_edge_visible(ts, ts_info.create_ts, ts_info.delete_ts);
         }
-        if let Some(delete_ts) = self.tombstones.get(&edge_id) {
-            if *delete_ts <= ts && gate.is_foreign_pending(ts, *delete_ts) {
-                return true;
-            }
-        }
-        !self.is_tombstoned(edge_id, ts)
+        false
     }
 
     /// Get the creation timestamp of an edge, if known.
@@ -288,12 +280,11 @@ impl MVCCManager {
             .map(|ts| ts.delete_ts)
     }
 
-    /// Check if an edge has been deleted (tombstoned or has delete_ts < MAX).
+    /// Check if an edge has been deleted (authority delete stamp set).
     pub fn is_edge_deleted(&self, edge_id: EdgeId) -> bool {
-        if let Some(ts) = self.edge_timestamps.get(&edge_id) {
-            return ts.delete_ts != Timestamp::MAX;
-        }
-        self.tombstones.contains_key(&edge_id)
+        self.edge_timestamps
+            .get(&edge_id)
+            .is_some_and(|ts| ts.delete_ts != Timestamp::MAX)
     }
 
     /// Remove edge timestamps. Called during rollback of a failed insert.
@@ -331,34 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_tombstones_basic() {
+    fn test_authority_deletion_count() {
         let mut table = create_edge_table_with_props();
 
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
         table.insert_edge(0, 2, 0, &[], 100).unwrap();
         table.insert_edge(0, 3, 0, &[], 100).unwrap();
+        assert_eq!(table.mvcc.total_tombstone_count(), 0);
 
-        table.mvcc.tombstones.insert(EdgeId(0), 200);
-        table.mvcc.tombstones.insert(EdgeId(1), 250);
-        table.mvcc.tombstones.insert(EdgeId(2), 300);
-
-        assert_eq!(table.mvcc.tombstones.len(), 3);
-
-        let removed = table.mvcc.gc_tombstones(220);
-        assert_eq!(removed, 1);
-        assert_eq!(table.mvcc.tombstones.len(), 2);
-
-        let removed = table.mvcc.gc_tombstones(260);
-        assert_eq!(removed, 1);
-        assert_eq!(table.mvcc.tombstones.len(), 1);
-
-        let removed = table.mvcc.gc_tombstones(310);
-        assert_eq!(removed, 1);
-        assert_eq!(table.mvcc.tombstones.len(), 0);
+        table.delete_edge(0, 1, 0, 200).unwrap();
+        table.delete_edge(0, 2, 0, 250).unwrap();
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
+        assert!(table.mvcc.is_tombstoned(EdgeId(0), 200));
+        assert!(!table.mvcc.is_tombstoned(EdgeId(0), 199));
     }
 
     #[test]
-    fn test_gc_tombstones_boundary_preserves_visibility() {
+    fn test_gc_is_noop_and_preserves_visibility() {
         let mut table = create_edge_table_with_props();
 
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
@@ -369,86 +349,34 @@ mod tests {
         assert!(!table.mvcc.is_edge_visible(edge_id, 200));
         assert!(!table.mvcc.is_edge_visible(edge_id, 201));
 
-        // The exclusive waterfront reclaims `delete_ts == safe`: the
-        // redundant tombstone entry goes away...
-        let removed = table.mvcc.gc_tombstones(200);
-        assert_eq!(removed, 1);
-
-        // ...while every visibility decision stays identical because
-        // `edge_timestamps.delete_ts` remains authoritative.
+        // Authority records stay for visibility; collection only reclaims
+        // physical slots through the CSR passes.
+        assert_eq!(table.mvcc.gc_tombstones(200), 0);
+        assert_eq!(table.mvcc.total_tombstone_count(), 1);
         assert!(table.mvcc.is_edge_visible(edge_id, 199));
         assert!(!table.mvcc.is_edge_visible(edge_id, 200));
         assert!(!table.mvcc.is_edge_visible(edge_id, 201));
     }
 
     #[test]
-    fn test_gc_tombstones_preserves_active_snapshots() {
-        let mut table = create_edge_table_with_props();
-
-        table.mvcc.tombstones.insert(EdgeId(0), 200);
-        assert_eq!(table.mvcc.tombstones.len(), 1);
-
-        let removed = table.mvcc.gc_tombstones(151);
-        assert_eq!(removed, 0);
-        assert_eq!(table.mvcc.tombstones.len(), 1);
-
-        let removed = table.mvcc.gc_tombstones(201);
-        assert_eq!(removed, 1);
-        assert_eq!(table.mvcc.tombstones.len(), 0);
-    }
-
-    #[test]
-    fn test_gc_tombstones_boundary_uses_exclusive_waterfront() {
+    fn test_gc_batch_is_noop() {
         let mut manager = MVCCManager::new();
         manager.record_creation(EdgeId(0), 100);
-        manager.record_creation(EdgeId(1), 100);
         manager.record_edge_deletion(EdgeId(0), 200);
-        manager.record_edge_deletion(EdgeId(1), 201);
-
-        // The exclusive waterfront reclaims `delete_ts == safe`; the
-        // redundant tombstone entry goes away one round earlier.
-        let removed = manager.gc_tombstones(200);
-        assert_eq!(removed, 1);
-        assert_eq!(manager.tombstones.len(), 1);
-
-        // Deletions stay observable through `edge_timestamps` regardless.
+        assert_eq!(manager.gc_tombstones_batch(300, 11), 0);
+        assert_eq!(manager.total_tombstone_count(), 1);
         assert!(!manager.is_edge_visible(EdgeId(0), 200));
-        assert!(!manager.is_edge_visible(EdgeId(1), 201));
-
-        let removed = manager.gc_tombstones(201);
-        assert_eq!(removed, 1);
-        assert_eq!(manager.tombstones.len(), 0);
     }
 
     #[test]
-    fn test_incremental_gc_never_exceeds_batch() {
-        let mut manager = MVCCManager::new();
-        for id in 0..100u64 {
-            manager.tombstones.insert(EdgeId(id), 10);
-        }
-
-        let removed = manager.gc_tombstones_batch(20, 11);
-        assert_eq!(removed, 11);
-        assert_eq!(manager.tombstones.len(), 89);
-    }
-
-    #[test]
-    fn test_tombstones_gc_multiple_edges() {
+    fn test_authority_stats_derive_from_records() {
         let mut table = create_edge_table_with_props();
-
-        for i in 0..10u64 {
-            table.mvcc.tombstones.insert(EdgeId(i), 100 + (i * 10));
-        }
-
-        assert_eq!(table.mvcc.tombstones.len(), 10);
-
-        let removed = table.mvcc.gc_tombstones(150);
-        assert_eq!(removed, 6);
-        assert_eq!(table.mvcc.tombstones.len(), 4);
-
-        for &delete_ts in table.mvcc.tombstones.values() {
-            assert!(delete_ts > 150);
-        }
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.delete_edge(0, 1, 0, 150).unwrap();
+        let stats = table.mvcc.tombstone_stats();
+        assert_eq!(stats.count, 1);
+        assert_eq!(stats.oldest_delete_ts, Some(150));
     }
 
     #[test]
@@ -483,10 +411,10 @@ mod tests {
         let stats_after_unregister = table.mvcc.tombstone_stats();
         assert_eq!(stats_after_unregister.count, 1);
 
-        let removed = table.mvcc.gc_tombstones(Timestamp::MAX);
-        assert_eq!(removed, 1);
+        // Authority records survive explicit collection; visibility is unchanged.
+        assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 0);
         let stats_after_gc = table.mvcc.tombstone_stats();
-        assert_eq!(stats_after_gc.count, 0);
+        assert_eq!(stats_after_gc.count, 1);
     }
 
     #[test]
@@ -524,12 +452,10 @@ mod tests {
 
         assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-        // GC removes entries from the single authoritative table: both edges
-        // deleted at ts <= 3 are covered by the exclusive waterfront, while
-        // their deletions stay observable through `edge_timestamps`.
-        let removed = table.mvcc.gc_tombstones(3);
-        assert_eq!(removed, 2);
-        assert_eq!(table.mvcc.tombstones.len(), 0);
+        // Authority deletions stay observable; collection only reclaims
+        // physical slots through the CSR passes.
+        assert_eq!(table.mvcc.gc_tombstones(3), 0);
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
     }
 
     #[test]
@@ -597,12 +523,13 @@ mod tests {
     #[test]
     fn test_record_deletion_keeps_earliest_ts() {
         let mut mvcc = MVCCManager::new();
+        mvcc.record_creation(EdgeId(7), 100);
 
         mvcc.record_deletion(EdgeId(7), 200);
         mvcc.record_deletion(EdgeId(7), 150);
 
         // The earlier deletion wins: it covers a wider query range.
-        assert_eq!(mvcc.tombstones.get(&EdgeId(7)), Some(&150));
+        assert_eq!(mvcc.deletion_ts_of(EdgeId(7)), Some(150));
         assert!(mvcc.is_tombstoned(EdgeId(7), 200));
         assert!(!mvcc.is_tombstoned(EdgeId(7), 100));
     }
@@ -610,15 +537,14 @@ mod tests {
     #[test]
     fn test_record_deletion_deduplicates() {
         let mut mvcc = MVCCManager::new();
+        mvcc.record_creation(EdgeId(3), 100);
 
-        // Repeated deletions of the same edge must not grow the tombstone
-        // count: the authoritative table keeps a single entry with the
-        // earliest delete_ts.
+        // Repeated deletions of the same edge must not grow the authority
+        // count: a single record keeps the earliest delete_ts.
         mvcc.record_deletion(EdgeId(3), 150);
         mvcc.record_deletion(EdgeId(3), 200);
 
-        assert_eq!(mvcc.tombstones.len(), 1);
-        assert_eq!(mvcc.tombstones.get(&EdgeId(3)), Some(&150));
+        assert_eq!(mvcc.deletion_ts_of(EdgeId(3)), Some(150));
         assert_eq!(mvcc.total_tombstone_count(), 1);
         assert!(mvcc.is_tombstoned(EdgeId(3), 200));
         assert!(!mvcc.is_tombstoned(EdgeId(3), 100));

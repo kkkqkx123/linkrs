@@ -93,6 +93,7 @@ fn remap_direction(
             )?;
             if new_nbr.delete_ts != Timestamp::MAX {
                 let _ = rebuilt.delete_edge(new_src, new_nbr.edge_id, new_nbr.delete_ts);
+                rebuilt.mark_reclaim_hint_for(new_src);
             }
         }
     }

@@ -165,14 +165,8 @@ impl UndoTarget for GraphStorageContext {
         );
         self.data_store()
             .with_single_edge_table_mut(&key, |table| {
-                TransactionOps::revert_delete_edge_single(
-                    table,
-                    params,
-                    edge_ctx.oe_offset,
-                    edge_ctx.ie_offset,
-                    edge_ctx.timestamp,
-                )
-                .map_err(|e| graphdb_core::StorageError::db_error(e.to_string()))
+                TransactionOps::revert_delete_edge_single_by_key(table, params, edge_ctx.timestamp)
+                    .map_err(|e| graphdb_core::StorageError::db_error(e.to_string()))
             })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);

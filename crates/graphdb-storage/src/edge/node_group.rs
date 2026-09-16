@@ -3,13 +3,13 @@
 //! Each edge direction is partitioned by bound-endpoint interval:
 //! `group = vid >> group_bits`, `local = vid & (group_size - 1)`.
 //! Every group owns one `CsrVariant` holding only the rows of its interval,
-//! plus insert/delete dirt markers driving incremental checkpoints.
-//! Neighbor keys keep global endpoint values; only row addressing is local.
+//! plus insert/delete/column-update dirt markers driving incremental
+//! checkpoints. Neighbor keys keep global endpoint values; only row
+//! addressing is local.
 //!
 //! Properties and visibility stay global by edge id and are not sharded.
-//! Leaf-row sizing and the packed-row density floor live here for
-//! observability; intra-group hierarchical merges are future work, the
-//! checkpoint granularity of this stage is the group.
+//! Groups report leaf-region densities over fixed row windows for collection
+//! observability; the checkpoint input-output unit stays the group.
 
 use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
@@ -63,16 +63,40 @@ pub fn validate_group_bits(group_bits: u32) -> StorageResult<()> {
 }
 
 /// Write-path dirt of one group. Cleared for groups a checkpoint persisted.
+///
+/// Topology checkpoints rewrite a group exactly when `inserted` or `deleted`
+/// is set; `column_updated` traces property-only writes to their owning
+/// groups for observability without forcing a topology rewrite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupDirty {
     pub inserted: bool,
     pub deleted: bool,
+    pub column_updated: bool,
 }
 
 impl GroupDirty {
     pub fn is_dirty(self) -> bool {
         self.inserted || self.deleted
     }
+
+    pub fn is_column_dirty(self) -> bool {
+        self.column_updated
+    }
+
+    pub fn has_any_dirt(self) -> bool {
+        self.inserted || self.deleted || self.column_updated
+    }
+}
+
+/// Checkpoint class derived from group dirt before it is cleared.
+///
+/// Any delete dirt (including the full-dirty mark left by topology-wide
+/// rebuilds) makes the checkpoint a rebalance; insert-only or
+/// column-only dirt flushes the memory append layer alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeCheckpointKind {
+    AppendOnly,
+    Rebalance,
 }
 
 /// Observability view of one group.
@@ -95,6 +119,16 @@ impl NodeGroupStats {
     pub fn is_sparse(self) -> bool {
         self.density < NODE_GROUP_DENSITY_FLOOR
     }
+}
+
+/// Density view of one fixed row window inside a group.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeafDensity {
+    pub leaf: usize,
+    pub base: u32,
+    pub live_edges: usize,
+    pub capacity: usize,
+    pub density: f32,
 }
 
 /// Per-table group layout shared by both directions.
@@ -269,6 +303,36 @@ impl CsrShardSet {
             .collect()
     }
 
+    /// Ids of groups holding uncheckpointed property-only writes.
+    pub fn column_dirty_group_ids(&self) -> Vec<usize> {
+        self.shards
+            .iter()
+            .enumerate()
+            .filter_map(|(gid, shard)| shard.dirty.is_column_dirty().then_some(gid))
+            .collect()
+    }
+
+    /// Checkpoint class for the current dirt without clearing it.
+    pub fn checkpoint_kind(&self) -> EdgeCheckpointKind {
+        let rebalance = self.shards.iter().any(|shard| shard.dirty.deleted);
+        if rebalance {
+            EdgeCheckpointKind::Rebalance
+        } else {
+            EdgeCheckpointKind::AppendOnly
+        }
+    }
+
+    /// Trace a property-only write to the group owning `vid`.
+    ///
+    /// Best effort: vids outside the current group space leave no group
+    /// trace and rely on the table-level property dirt.
+    pub fn mark_column_updated_for(&mut self, vid: u32) {
+        let gid = group_id_for(vid, self.group_bits);
+        if let Some(shard) = self.shards.get_mut(gid) {
+            shard.dirty.column_updated = true;
+        }
+    }
+
     pub fn clear_group_dirty(&mut self, gid: usize) {
         if let Some(shard) = self.shards.get_mut(gid) {
             shard.dirty = GroupDirty::default();
@@ -289,6 +353,7 @@ impl CsrShardSet {
             shard.dirty = GroupDirty {
                 inserted: true,
                 deleted: true,
+                column_updated: true,
             };
         }
     }
@@ -341,12 +406,14 @@ impl CsrShardSet {
             })
     }
 
-    /// Drop trailing groups holding no edges. Non-empty strategies keep at
-    /// least one group so an empty table stays addressable.
+    /// Drop trailing groups holding no physical entries. Tombstone-only tail
+    /// groups are retained so snapshot history before the cutoff survives.
+    /// Non-empty strategies keep at least one group so an empty table stays
+    /// addressable.
     pub fn truncate_trailing_empty_groups(&mut self) {
         let mut keep = 0usize;
         for (gid, shard) in self.shards.iter().enumerate() {
-            if shard.variant.edge_count() > 0 {
+            if shard.variant.iter_all().next().is_some() {
                 keep = gid + 1;
             }
         }
@@ -354,6 +421,36 @@ impl CsrShardSet {
             keep = keep.max(1);
         }
         self.shards.truncate(keep);
+    }
+
+    /// Whether the primary row of one vertex holds `edge_id`.
+    pub fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return false;
+        };
+        self.shards[gid].variant.primary_contains(local, edge_id)
+    }
+
+    /// Visit every physically stored entry of one vertex without allocating.
+    pub fn visit_physical<F>(&self, src_vid: u32, f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return;
+        };
+        self.shards[gid].variant.visit_physical(local, f);
+    }
+
+    /// Set the reclaim hint for the group owning `vid`.
+    ///
+    /// Used by remap to preserve the hint explicitly instead of relying on
+    /// delete side effects.
+    pub fn mark_reclaim_hint_for(&mut self, vid: u32) {
+        let gid = group_id_for(vid, self.group_bits);
+        if let Some(shard) = self.shards.get_mut(gid) {
+            shard.reclaim_hint = true;
+        }
     }
 
     /// Whether a group may hold tombstones worth a reclaim scan.
@@ -424,6 +521,68 @@ impl CsrShardSet {
             .collect()
     }
 
+    /// Ids of groups denser than nothing: live edges per reserved capacity
+    /// below the packed-row density floor. Observation only; collection
+    /// triggers use per-vertex reclaimable counts.
+    pub fn sparse_group_ids(&self) -> Vec<usize> {
+        self.all_group_stats()
+            .into_iter()
+            .filter(|stats| stats.is_sparse())
+            .map(|stats| stats.group)
+            .collect()
+    }
+
+    /// Per-leaf density report of one group over fixed row windows.
+    ///
+    /// Windows cover `NODE_GROUP_LEAF_ROWS` consecutive rows; the last
+    /// window may be shorter. Counts come from the same per-row census
+    /// backing the incremental collection trigger.
+    pub fn group_leaf_densities(&self, gid: usize) -> Vec<LeafDensity> {
+        let Some(base) = self
+            .shards
+            .get(gid)
+            .map(|_| group_base(gid, self.group_bits))
+        else {
+            return Vec::new();
+        };
+        let rows = self.group_size();
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        while start < rows {
+            let end = (start + NODE_GROUP_LEAF_ROWS).min(rows);
+            let mut live = 0usize;
+            let mut capacity = 0usize;
+            for local in start..end {
+                let vid = base.saturating_add(local as u32);
+                let (row_live, _, row_cap) = self.vertex_census(vid);
+                live += row_live;
+                capacity += row_cap;
+            }
+            let density = if capacity == 0 {
+                1.0
+            } else {
+                live as f32 / capacity as f32
+            };
+            out.push(LeafDensity {
+                leaf: start / NODE_GROUP_LEAF_ROWS,
+                base: base.saturating_add(start as u32),
+                live_edges: live,
+                capacity,
+                density,
+            });
+            start = end;
+        }
+        out
+    }
+
+    /// Number of leaf windows of one group below the density floor.
+    pub fn sparse_leaf_count(&self, gid: usize) -> usize {
+        self.group_leaf_densities(gid)
+            .into_iter()
+            .filter(|leaf| leaf.density < NODE_GROUP_DENSITY_FLOOR)
+            .count()
+    }
+
     /// Whether a group holds uncheckpointed writes.
     pub fn needs_checkpoint(&self, gid: usize) -> bool {
         self.group_dirty(gid).is_dirty()
@@ -437,6 +596,7 @@ impl CsrShardSet {
             shard.dirty = GroupDirty {
                 inserted: false,
                 deleted: true,
+                column_updated: false,
             };
             shard.reclaim_hint = false;
         }
@@ -501,17 +661,17 @@ impl CsrShardSet {
             return 0.0;
         }
         let mut total_capacity = 0usize;
-        let mut live = 0usize;
+        let mut wasted = 0usize;
         for shard in &self.shards {
             if let Some(stats) = shard.variant.fragmentation_stats() {
                 total_capacity += stats.total_capacity;
-                live += stats.reachable_edges;
+                wasted += stats.wasted_capacity;
             }
         }
-        if live == 0 {
+        if total_capacity == 0 {
             0.0
         } else {
-            total_capacity as f32 / live as f32
+            wasted as f32 / total_capacity as f32
         }
     }
 
@@ -732,18 +892,54 @@ impl MutableCsrTrait for CsrShardSet {
         deleted
     }
 
-    fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
+    fn delete_edge_by_offset(
+        &mut self,
+        src_vid: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         let Some((gid, local)) = self.route(src_vid) else {
-            return false;
+            return Ok(false);
         };
         let deleted = self.shards[gid]
             .variant
-            .delete_edge_by_offset(local, offset, ts);
+            .delete_edge_by_offset(local, offset, ts)?;
         if deleted {
             self.shards[gid].dirty.deleted = true;
             self.shards[gid].reclaim_hint = true;
         }
-        deleted
+        Ok(deleted)
+    }
+
+    fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
+        let (gid, local) = self.route(src_vid)?;
+        self.shards[gid].variant.nbr_at_offset(local, offset)
+    }
+
+    fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
+        let (gid, local) = self.route(src_vid)?;
+        self.shards[gid].variant.get_edge_physical(local, dst)
+    }
+
+    fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return Vec::new();
+        };
+        self.shards[gid].variant.physical_edges_of(local)
+    }
+
+    fn has_physical_entries(&self, vid: u32) -> bool {
+        let Some((gid, local)) = self.route(vid) else {
+            return false;
+        };
+        self.shards[gid].variant.has_physical_entries(local)
+    }
+
+    fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return false;
+        };
+        self.shards[gid].variant.primary_contains(local, edge_id)
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
@@ -1052,5 +1248,72 @@ mod tests {
         assert!(set.remove_edge(9000, EdgeId(0)));
         set.truncate_trailing_empty_groups();
         assert_eq!(set.group_count(), 1);
+    }
+
+    #[test]
+    fn truncate_keeps_tombstone_only_tail_groups() {
+        let mut set = multi_set();
+        set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
+            .unwrap();
+        assert_eq!(set.group_count(), 3);
+        assert!(set.delete_edge(9000, EdgeId(0), 150).unwrap());
+        assert_eq!(set.edge_count(), 0);
+        set.truncate_trailing_empty_groups();
+        assert_eq!(set.group_count(), 3);
+    }
+
+    #[test]
+    fn offset_delete_rejects_out_of_degree() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        assert!(set.delete_edge_by_offset(0, 5, 150).unwrap() == false);
+        assert!(set.delete_edge_by_offset(0, 0, 150).unwrap());
+    }
+
+    #[test]
+    fn physical_reads_ignore_timestamps() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        assert!(set.delete_edge(0, EdgeId(0), 150).unwrap());
+        assert!(set.get_edge_physical(0, endpoint(1, 0)).is_some());
+        assert_eq!(set.physical_edges_of(0).len(), 1);
+        assert!(set.has_physical_entries(0));
+    }
+
+    #[test]
+    fn column_dirt_does_not_force_topology_checkpoint() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.clear_all_dirty();
+        set.mark_column_updated_for(0);
+        assert!(set.column_dirty_group_ids() == vec![0]);
+        assert!(set.dirty_group_ids().is_empty());
+        assert!(!set.needs_checkpoint(0));
+        assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::AppendOnly);
+    }
+
+    #[test]
+    fn checkpoint_kind_turns_rebalance_on_delete_dirt() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::AppendOnly);
+        assert!(set.delete_edge(0, EdgeId(0), 150).unwrap());
+        assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::Rebalance);
+        set.clear_all_dirty();
+        assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::AppendOnly);
+        set.mark_all_dirty();
+        assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::Rebalance);
+    }
+
+    #[test]
+    fn leaf_density_windows_cover_group_rows() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        let leaves = set.group_leaf_densities(0);
+        assert_eq!(leaves.len(), set.group_size() / NODE_GROUP_LEAF_ROWS);
+        assert_eq!(leaves[0].base, 0);
+        let total_live: usize = leaves.iter().map(|leaf| leaf.live_edges).sum();
+        assert_eq!(total_live, set.edge_count() as usize);
+        assert!(set.group_leaf_densities(99).is_empty());
     }
 }

@@ -50,9 +50,9 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        if self.pending_add_column.is_some() {
+        if self.pending_add_column.is_some() || self.pending_drop_column.is_some() {
             return Err(StorageError::invalid_operation(
-                "another add-column change is already pending".to_string(),
+                "another schema change is already pending".to_string(),
             ));
         }
         if self.properties.has_property(&name) {

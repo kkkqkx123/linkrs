@@ -228,10 +228,10 @@ fn test_auto_gc_tombstones() {
     }
     assert_eq!(table.mvcc.total_tombstone_count(), 20);
     // Pin a GC bound newer than the deletions; the next write-path pass
-    // must drop every covered tombstone.
+    // reclaims the covered physical slots while authority stays for visibility.
     table.mvcc.register_active_snapshot(300);
     table.insert_edge(0, 999, 0, &[], 300).unwrap();
-    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    assert_eq!(table.mvcc.total_tombstone_count(), 20);
     assert_eq!(table.scan(400).len(), 1);
 }
 
@@ -331,18 +331,21 @@ fn test_auto_maintenance_serial_advances_without_progress() {
     assert_eq!(table.maintenance_serial, 9);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-    // Advancing the watermark past the deletions reclaims both tombstones
-    // through an explicit watermark-driven pass: unregistering snapshots
-    // is pure bookkeeping and never reclaims on its own.
+    // Advancing the watermark past the deletions reclaims both physical
+    // slots through an explicit watermark-driven pass: unregistering
+    // snapshots is pure bookkeeping and never reclaims on its own, while
+    // authority records stay for visibility.
     table.mvcc.register_active_snapshot(200);
     table.mvcc.unregister_active_snapshot(100);
     table.mvcc.unregister_active_snapshot(200);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
-    let reclaimed = table
-        .mvcc
-        .gc_tombstones(graphdb_core::types::Timestamp::MAX);
+    assert_eq!(
+        table.mvcc.gc_tombstones(graphdb_core::types::Timestamp::MAX),
+        0
+    );
+    let reclaimed = table.compact_reclaimable_vertices(201, 32);
     assert_eq!(reclaimed, 2);
-    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    assert_eq!(table.mvcc.total_tombstone_count(), 2);
 }
 
 #[test]
@@ -370,8 +373,8 @@ fn test_csr_timestamps_agree_with_mvcc() {
         }
         assert_eq!(seen, 2);
     }
-    assert_eq!(table.mvcc.tombstones.get(&EdgeId(0)), Some(&150));
-    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(1)));
+    assert_eq!(table.mvcc.deletion_ts_of(EdgeId(0)), Some(150));
+    assert!(!table.mvcc.is_edge_deleted(EdgeId(1)));
 }
 
 #[test]
@@ -387,7 +390,7 @@ fn test_failed_insert_leaves_no_orphan_copies() {
     assert!(result.is_err());
     assert_eq!(table.properties.row_count(), rows_before);
     assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
-    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(0)));
+    assert!(!table.mvcc.is_edge_deleted(EdgeId(0)));
     assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
 }
 
@@ -433,8 +436,8 @@ fn test_valid_edge_ids_survive_tombstone_gc() {
         .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
-    assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 1);
-    // Visibility is unchanged by tombstone reclamation (authority first).
+    // Authority records survive collection; visibility is unchanged.
+    assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 0);
     assert!(!table.mvcc.is_edge_visible(EdgeId(0), 250));
     assert!(table.mvcc.is_edge_visible(EdgeId(1), 250));
     table.compact_properties(250);
@@ -452,7 +455,7 @@ fn test_erase_edge_removes_all_copies_idempotently() {
         .unwrap();
     assert!(table.erase_edge(0, 1, 0, 100));
     assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
-    assert!(!table.mvcc.tombstones.contains_key(&EdgeId(0)));
+    assert!(!table.mvcc.is_edge_deleted(EdgeId(0)));
     assert!(table.properties.get_row_for_edge(EdgeId(0)).is_none());
     assert!(table.get_edge(0, 1, 0, 100).is_none());
     // Replay is idempotent: the second erase finds nothing but still succeeds.
@@ -559,14 +562,16 @@ fn test_unified_row_space_insert_delete_reclaim_remap() {
 }
 
 #[test]
-fn test_authority_overrules_stale_tombstone() {
+fn test_authority_is_single_truth_for_deletion() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
-    // A tombstone entry without an authority deletion must not hide a live edge.
+    // Deletion truth lives in the authority record alone.
     table.mvcc.record_deletion(EdgeId(0), 150);
-    assert!(table.mvcc.is_edge_visible(EdgeId(0), 200));
-    assert!(table.has_edge(0, 1, 0, 200));
+    assert_eq!(table.mvcc.deletion_ts_of(EdgeId(0)), Some(150));
+    assert!(!table.mvcc.is_edge_visible(EdgeId(0), 200));
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert!(table.has_edge(0, 1, 0, 149));
 }
 
 #[test]
@@ -771,4 +776,212 @@ fn test_delete_by_offset_maintains_property_index() {
         .unwrap());
     let hits = table.lookup_edges_by_property_range("weight", &lower, &Vec::new());
     assert!(!hits.is_empty());
+}
+
+#[test]
+fn test_stale_offset_delete_fails_without_side_effects() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(0, 2, 0, &[], 100).unwrap();
+    // Physically drop the first edge so the second shifts into offset 0.
+    let first = table.edge_id_of(0, 1, 0, 150).expect("first edge exists");
+    table.out_csr.remove_edge(0, first);
+    table.in_csr.remove_edge(1, first);
+    // Stale offset 1 no longer addresses the merged edge (0,2).
+    assert!(!table.delete_edge_by_offset(0, 2, 0, 1, 0, 200).unwrap());
+    assert!(table.has_edge(0, 2, 0, 200));
+}
+
+#[test]
+fn test_offset_delete_rejects_out_of_degree() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(!table.delete_edge_by_offset(0, 1, 0, 5, 0, 200).unwrap());
+    assert!(table.has_edge(0, 1, 0, 200));
+}
+
+#[test]
+fn test_visibility_contract_four_rules() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(!table.has_edge(0, 1, 0, 99));
+    assert!(table.has_edge(0, 1, 0, 100));
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert!(table.has_edge(0, 1, 0, 149));
+    assert!(!table.has_edge(0, 1, 0, 150));
+    // Same-stamp re-delete is idempotent.
+    assert!(!table.delete_edge(0, 1, 0, 150).unwrap());
+    // Cross-stamp re-delete is a conflict.
+    assert!(table.delete_edge(0, 1, 0, 160).is_err());
+}
+
+#[test]
+fn test_topology_property_authority_consistency() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(0, 2, 0, &[], 100).unwrap();
+    table.delete_edge(0, 1, 0, 150).unwrap();
+    let mut out_topo: Vec<EdgeId> = table
+        .out_csr
+        .iter_all()
+        .map(|(_, nbr)| nbr.edge_id)
+        .collect();
+    out_topo.sort();
+    let mut in_topo: Vec<EdgeId> = table
+        .in_csr
+        .iter_all()
+        .map(|(_, nbr)| nbr.edge_id)
+        .collect();
+    in_topo.sort();
+    let mut props: Vec<EdgeId> = table.properties.edge_ids().collect();
+    props.sort();
+    let mut authority: Vec<EdgeId> = table.mvcc.edge_timestamps.keys().copied().collect();
+    authority.sort();
+    assert_eq!(out_topo, authority);
+    assert_eq!(in_topo, authority);
+    assert_eq!(props, authority);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.live_authority_orphans(), 0);
+}
+
+#[test]
+fn test_single_time_travel_survives_reload() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Single;
+    schema.ie_strategy = EdgeStrategy::Single;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(!table.has_edge(0, 1, 0, 99));
+    assert!(table.has_edge(0, 1, 0, 100));
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("flush should succeed");
+    let schema2 = create_test_schema();
+    let mut schema2 = schema2;
+    schema2.oe_strategy = EdgeStrategy::Single;
+    schema2.ie_strategy = EdgeStrategy::Single;
+    let mut loaded =
+        EdgeTable::with_config(schema2, EdgeTableConfig::default()).unwrap();
+    loaded.load(dir.path()).expect("load should succeed");
+    assert!(!loaded.has_edge(0, 1, 0, 99));
+    assert!(loaded.has_edge(0, 1, 0, 100));
+}
+
+#[test]
+fn test_remap_preserves_reclaim_hint_for_tombstones() {
+    use std::collections::HashMap;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.delete_edge(0, 1, 0, 150).unwrap();
+    let mapping = HashMap::from([(0u32, 0u32), (1u32, 1u32)]);
+    table
+        .remap_vertex_ids(Some(&mapping), Some(&mapping))
+        .unwrap();
+    assert!(table.out_csr.group_needs_reclaim_scan(0));
+    assert_eq!(table.out_edges(0, 149).len(), 1);
+    assert_eq!(table.out_edges(0, 200).len(), 0);
+}
+
+#[test]
+fn test_single_reclaim_clears_tombstone_slot() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Single;
+    schema.ie_strategy = EdgeStrategy::Single;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert_eq!(table.out_csr.reclaimable_count(0, 150), 1);
+    let mut reported = Vec::new();
+    let removed = table.out_csr.compact_vertex_with_reporting(
+        0,
+        150,
+        &mut |id, ts| reported.push((id, ts)),
+    );
+    assert_eq!(removed, 1);
+    assert_eq!(reported.len(), 1);
+}
+
+#[test]
+fn test_projected_scan_empty_projection_decodes_no_properties() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    let full = table.scan_projected(100, None);
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0].properties.len(), 1);
+    let empty: Vec<String> = Vec::new();
+    let pruned = table.scan_projected(100, Some(empty));
+    assert_eq!(pruned.len(), 1);
+    assert!(pruned[0].properties.is_empty());
+    assert_eq!(table.out_edges_projected(0, 100, Some(&[])).len(), 1);
+    assert!(table.out_edges_projected(0, 100, Some(&[]))[0]
+        .properties
+        .is_empty());
+}
+
+#[test]
+fn test_limit_nbrs_returns_prefix_without_full_row() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for dst in 1..10u32 {
+        table.insert_edge(0, dst, 0, &[], 100).unwrap();
+    }
+    let limited = table.merged_out_nbrs_with_limit(0, 100, 3);
+    assert_eq!(limited.len(), 3);
+    let full = table.merged_out_nbrs(0, 100);
+    assert_eq!(full.len(), 9);
+    assert_eq!(limited, full[..3].to_vec());
+}
+
+#[test]
+fn test_staging_prevalidate_rejects_batch_without_side_effects() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let mut batch = EdgeStore::staging_batch();
+    batch.stage_insert(0, 2, 0, &[], 110);
+    batch.stage_insert(0, 2, 0, &[], 111);
+    assert!(table.commit_staging_batch(batch).is_err());
+    assert!(!table.has_edge(0, 2, 0, 120));
+    assert!(table.has_edge(0, 1, 0, 120));
+}
+
+#[test]
+fn test_revert_delete_by_key_restores_edge() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert!(table.revert_delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table.has_edge(0, 1, 0, 200));
+}
+
+#[test]
+fn test_fragmentation_ratio_unified() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for dst in 1..5u32 {
+        table.insert_edge(0, dst, 0, &[], 100).unwrap();
+    }
+    table.delete_edge(0, 1, 0, 150).unwrap();
+    let ratio = table.out_csr.fragmentation_ratio();
+    let stats = table.out_csr.fragmentation_stats().unwrap();
+    let expected = if stats.total_capacity == 0 {
+        0.0
+    } else {
+        stats.wasted_capacity as f32 / stats.total_capacity as f32
+    };
+    assert!((ratio - expected).abs() < f32::EPSILON);
 }

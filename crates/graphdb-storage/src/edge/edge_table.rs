@@ -9,6 +9,7 @@
 //! - `persistence`: version-2 serialization (flush/load)
 //! - `remap`: vertex ID remapping across node groups
 //! - `schema_add_column`: staged add-column state machine (prepare/fill/publish/abort)
+//! - `schema_drop_column`: staged drop-column state machine (prepare/publish/abort)
 //! - `stats`: tombstone and deletion statistics
 //!
 //! Write batching contract: the engine layer currently commits one edge per
@@ -28,6 +29,7 @@ pub mod mvcc;
 pub mod persistence;
 pub mod remap;
 pub mod schema_add_column;
+pub mod schema_drop_column;
 pub mod staging;
 pub mod stats;
 

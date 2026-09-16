@@ -58,12 +58,12 @@ impl RowVisibility {
 /// Every edge owns exactly one row, including edges without properties.
 /// Row identity is the edge-to-row map; there is no per-vertex addressing.
 ///
-/// Memory-only version and encoding semantics: property before-images and
-/// column encodings accelerate live reads but are not persisted.
-/// `dump` serializes current values plus row visibility only; a reload
-/// collapses history to the latest value and restores plain columns.
-/// Attribute time travel is therefore valid within a checkpoint epoch and
-/// must be re-encoded after a reload when needed.
+/// Memory and persistence semantics: property before-images (row version
+/// chains) stay memory-only; `dump` serializes current values plus row
+/// visibility, per-column stable identifiers, encoding choices and refreshed
+/// statistics. A reload restores plain values first, then re-applies the
+/// recorded encodings and statistics, so encoded scans survive checkpoints.
+/// Attribute time travel is therefore valid within a checkpoint epoch.
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {
     property_schema: Vec<PropertySchema>,
@@ -80,6 +80,9 @@ pub struct CsrWithProperties {
     /// Columns mutated since the last stats refresh or checkpoint.
     /// Drives per-column stats refresh so clean columns never pay recompute.
     dirty_columns: HashSet<String>,
+    /// Stable column identifier allocator. Never reused or reassigned so
+    /// stored undo parameters keyed by id stay valid across column drops.
+    next_prop_id: i32,
 }
 
 impl CsrWithProperties {
@@ -94,6 +97,13 @@ impl CsrWithProperties {
             );
             property_columns.push(col);
         }
+        let next_prop_id = property_schema
+            .iter()
+            .map(|s| s.prop_id)
+            .max()
+            .unwrap_or(-1)
+            .saturating_add(1)
+            .max(property_schema.len() as i32);
         Self {
             property_schema,
             property_columns,
@@ -104,6 +114,7 @@ impl CsrWithProperties {
             free_set: HashSet::new(),
             row_count: 0,
             dirty_columns: HashSet::new(),
+            next_prop_id,
         }
     }
 
@@ -204,15 +215,31 @@ impl CsrWithProperties {
     /// scans, drops the edge mapping via the reverse index, and queues the
     /// slot for reuse. Reused slots are fully overwritten by `allocate_row`.
     /// Idempotent: releasing an already-free or out-of-range row is a no-op.
+    /// Slots that were never used are never admitted to the free list.
     pub fn release_row(&mut self, row_idx: usize) {
-        if row_idx < self.visibility.len()
-            && (self.visibility[row_idx].create_ts != 0
-                || self.visibility[row_idx].delete_ts.is_some())
-        {
-            self.visibility[row_idx].create_ts = 0;
-            self.visibility[row_idx].delete_ts = None;
-            self.row_count = self.row_count.saturating_sub(1);
+        if row_idx >= self.visibility.len() {
+            if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
+                if let Some(edge_id) = slot.take() {
+                    self.edge_to_row.remove(&edge_id);
+                }
+            } else {
+                self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
+            }
+            return;
         }
+        let virgin = self.visibility[row_idx].create_ts == 0
+            && self.visibility[row_idx].delete_ts.is_none();
+        if virgin {
+            if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
+                if let Some(edge_id) = slot.take() {
+                    self.edge_to_row.remove(&edge_id);
+                }
+            }
+            return;
+        }
+        self.visibility[row_idx].create_ts = 0;
+        self.visibility[row_idx].delete_ts = None;
+        self.row_count = self.row_count.saturating_sub(1);
         if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
             if let Some(edge_id) = slot.take() {
                 self.edge_to_row.remove(&edge_id);
@@ -281,6 +308,51 @@ impl CsrWithProperties {
         query_ts: Timestamp,
     ) -> Option<Vec<(String, Option<Value>)>> {
         self.get_projected_by_edge_id(edge_id, query_ts, None)
+    }
+
+    /// Physical property projection without row visibility filtering.
+    ///
+    /// Callers must decide visibility through the version authority first;
+    /// row stamps exist only for collection. Returns `None` only when the
+    /// edge has no row mapping.
+    pub fn get_projected_physical_by_edge_id(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
+        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        if pos >= self.visibility.len() {
+            return None;
+        }
+        match projection {
+            None => Some(
+                self.property_schema
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                        (s.name.clone(), v)
+                    })
+                    .collect(),
+            ),
+            Some(names) => {
+                if names.is_empty() {
+                    return Some(Vec::new());
+                }
+                Some(
+                    self.property_schema
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| names.iter().any(|n| n == &s.name))
+                        .map(|(i, s)| {
+                            let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                            (s.name.clone(), v)
+                        })
+                        .collect(),
+                )
+            }
+        }
     }
 
     /// Read non-nullable properties for an edge by its EdgeId (no MVCC filtering).
@@ -392,13 +464,13 @@ impl CsrWithProperties {
             .edge_to_row
             .get(&edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        let idx = prop_id.as_usize();
-        if idx >= self.property_schema.len() {
-            return Err(StorageError::column_not_found(format!(
-                "prop_id={}",
-                prop_id.0
-            )));
-        }
+        let idx = self
+            .property_schema
+            .iter()
+            .position(|s| s.prop_id as u16 == prop_id.0)
+            .ok_or_else(|| {
+                StorageError::column_not_found(format!("prop_id={}", prop_id.0))
+            })?;
         let name = self.property_schema[idx].name.clone();
         self.set_property_at_row(pos as usize, &name, value, ts)
     }
@@ -456,8 +528,8 @@ impl CsrWithProperties {
     pub fn get_property_id(&self, name: &str) -> Option<crate::types::PropertyId> {
         self.property_schema
             .iter()
-            .position(|s| s.name == name)
-            .map(|i| crate::types::PropertyId::new(i as u16))
+            .find(|s| s.name == name)
+            .map(|s| crate::types::PropertyId::new(s.prop_id as u16))
     }
 
     pub fn add_property(
@@ -469,7 +541,8 @@ impl CsrWithProperties {
         if self.has_property(&name) {
             return Err(StorageError::column_already_exists(name));
         }
-        let prop_id = self.property_schema.len() as i32;
+        let prop_id = self.next_prop_id;
+        self.next_prop_id = self.next_prop_id.saturating_add(1);
         let schema =
             PropertySchema::new(name.clone(), prop_id, data_type.clone()).nullable(nullable);
         self.property_schema.push(schema);
@@ -491,14 +564,41 @@ impl CsrWithProperties {
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         self.property_schema.remove(idx);
         self.property_columns.remove(idx);
-        for (i, s) in self.property_schema.iter_mut().enumerate() {
-            s.prop_id = i as i32;
-            if let Some(col) = self.property_columns.get_mut(i) {
-                col.col_id = i as i32;
-            }
-        }
         self.dirty_columns.remove(name);
         Ok(())
+    }
+
+    /// Clone one physical column for the staged drop snapshot.
+    pub fn column_cloned(&self, name: &str) -> Option<crate::vertex::column::Column> {
+        self.property_columns
+            .iter()
+            .find(|col| col.name == name)
+            .cloned()
+    }
+
+    /// Whether one column holds unrefreshed writes.
+    pub fn has_column_dirt(&self, name: &str) -> bool {
+        self.dirty_columns.contains(name)
+    }
+
+    /// Put back a column removed by a failed drop publish at its exact
+    /// schema position, restoring its dirt mark when it had one.
+    pub fn restore_property_at(
+        &mut self,
+        index: usize,
+        schema: PropertySchema,
+        column: crate::vertex::column::Column,
+        had_column_dirt: bool,
+    ) {
+        let at = index.min(self.property_schema.len());
+        self.property_schema.insert(at, schema);
+        let at = at.min(self.property_columns.len());
+        self.property_columns.insert(at, column);
+        if had_column_dirt {
+            if let Some(restored) = self.property_schema.get(at) {
+                self.dirty_columns.insert(restored.name.clone());
+            }
+        }
     }
 
     pub fn rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
@@ -656,11 +756,12 @@ impl CsrWithProperties {
     }
 
     pub fn dump(&self) -> Vec<u8> {
-        // Current-value snapshot only: version chains and column encodings
-        // stay memory-only by design. Load restores plain columns holding
-        // the latest value with the row creation stamp.
+        // Current-value snapshot plus per-column identity, encoding choice
+        // and statistics. Row version chains stay memory-only by design:
+        // load restores plain values holding the latest value with the row
+        // creation stamp, then re-applies the recorded encodings.
         let mut buf = Vec::new();
-        buf.push(2u8); // version
+        buf.push(3u8); // version
         buf.extend_from_slice(&(self.visibility.len() as u32).to_le_bytes());
         for vis in &self.visibility {
             buf.extend_from_slice(&vis.create_ts.to_le_bytes());
@@ -681,12 +782,21 @@ impl CsrWithProperties {
         for &off in &self.free_list {
             buf.extend_from_slice(&off.to_le_bytes());
         }
-        // Serialize current column values (without version history).
+        // Serialize current column values (without version history) keyed by
+        // column name, each carrying its stable identifier, its encoding
+        // choice and its last refreshed statistics.
         buf.extend_from_slice(&(self.property_columns.len() as u32).to_le_bytes());
-        for col in &self.property_columns {
+        for (idx, col) in self.property_columns.iter().enumerate() {
             // Column name keys the payload to the schema entry on load.
             buf.extend_from_slice(&(col.name.len() as u32).to_le_bytes());
             buf.extend_from_slice(col.name.as_bytes());
+            let prop_id = self
+                .property_schema
+                .get(idx)
+                .map(|schema| schema.prop_id)
+                .unwrap_or(-1);
+            buf.extend_from_slice(&prop_id.to_le_bytes());
+            buf.push(col.encoding_type().to_u8());
             let rows = self.visibility.len();
             buf.extend_from_slice(&(rows as u32).to_le_bytes());
             for row_idx in 0..rows {
@@ -703,169 +813,254 @@ impl CsrWithProperties {
                     buf.push(0);
                 }
             }
+            match col.stats() {
+                Some(stats) => {
+                    let mut stats_buf = Vec::new();
+                    if stats.serialize_meta(&mut stats_buf).is_ok() {
+                        buf.push(1);
+                        buf.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                        buf.extend_from_slice(&stats_buf);
+                    } else {
+                        buf.push(0);
+                    }
+                }
+                None => buf.push(0),
+            }
         }
         buf
     }
 
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
+        fn need(data: &[u8], offset: usize, len: usize, what: &str) -> StorageResult<()> {
+            if data.len().saturating_sub(offset) < len {
+                return Err(StorageError::deserialize_error(format!(
+                    "properties payload too short for {}",
+                    what
+                )));
+            }
+            Ok(())
+        }
         if data.is_empty() {
-            return Ok(());
+            return Err(StorageError::deserialize_error(
+                "properties payload is empty",
+            ));
         }
         let mut offset = 0usize;
-        if offset >= data.len() {
-            return Ok(());
-        }
+        need(data, offset, 1, "version")?;
         let version = data[offset];
         offset += 1;
-        if version != 2 {
+        if version != 3 {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported CsrWithProperties version: {}, only version 2 is accepted",
+                "Unsupported CsrWithProperties version: {}, only version 3 is accepted",
                 version
             )));
         }
-        if offset + 4 > data.len() {
-            return Ok(());
-        }
+        need(data, offset, 4, "visibility length")?;
         let vis_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         self.visibility.clear();
         self.visibility.reserve(vis_len);
         for _ in 0..vis_len {
-            if offset + 8 > data.len() {
-                break;
-            }
+            need(data, offset, 8, "row creation stamp")?;
             let create = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
             offset += 8;
-            if offset >= data.len() {
-                break;
-            }
+            need(data, offset, 1, "row deletion flag")?;
             let has_del = data[offset];
             offset += 1;
             let del = if has_del == 1 {
-                if offset + 8 > data.len() {
-                    None
-                } else {
-                    let d = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-                    offset += 8;
-                    Some(d)
-                }
-            } else {
+                need(data, offset, 8, "row deletion stamp")?;
+                let d = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                Some(d)
+            } else if has_del == 0 {
                 None
+            } else {
+                return Err(StorageError::deserialize_error(format!(
+                    "invalid row deletion flag: {}",
+                    has_del
+                )));
             };
             self.visibility.push(RowVisibility {
                 create_ts: create,
                 delete_ts: del,
             });
         }
-        if offset + 4 <= data.len() {
-            self.row_count =
-                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        need(data, offset, 4, "row count")?;
+        self.row_count =
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        need(data, offset, 4, "edge map length")?;
+        let map_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        self.edge_to_row.clear();
+        for _ in 0..map_len {
+            need(data, offset, 12, "edge map entry")?;
+            let eid = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            let pos = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
+            self.edge_to_row.insert(EdgeId(eid), pos);
         }
-        if offset + 4 <= data.len() {
-            let map_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        need(data, offset, 4, "free list length")?;
+        let free_len =
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        self.free_list.clear();
+        for _ in 0..free_len {
+            need(data, offset, 4, "free list entry")?;
+            let off = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
-            self.edge_to_row.clear();
-            for _ in 0..map_len {
-                if offset + 12 > data.len() {
-                    break;
-                }
-                let eid = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-                offset += 8;
-                let pos = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                self.edge_to_row.insert(EdgeId(eid), pos);
-            }
+            self.free_list.push(off);
         }
-        if offset + 4 <= data.len() {
-            let free_len =
-                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            self.free_list.clear();
-            for _ in 0..free_len {
-                if offset + 4 > data.len() {
-                    break;
-                }
-                let off = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                self.free_list.push(off);
-            }
-        }
-        if offset + 4 <= data.len() {
+        need(data, offset, 4, "column count")?;
+        {
             let col_count =
                 u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
+            let mut seen_names = HashSet::new();
+            let mut seen_ids = HashSet::new();
             for _ in 0..col_count {
-                if offset + 4 > data.len() {
-                    break;
-                }
+                need(data, offset, 4, "column name length")?;
                 let name_len =
                     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                if offset + name_len > data.len() {
-                    break;
-                }
+                need(data, offset, name_len, "column name")?;
                 let name = String::from_utf8_lossy(&data[offset..offset + name_len]).to_string();
                 offset += name_len;
-                if offset + 4 > data.len() {
-                    break;
+                if !seen_names.insert(name.clone()) {
+                    return Err(StorageError::deserialize_error(format!(
+                        "duplicate column in properties payload: {}",
+                        name
+                    )));
                 }
+                need(data, offset, 4, "column identifier")?;
+                let prop_id = i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                if !seen_ids.insert(prop_id) {
+                    return Err(StorageError::deserialize_error(format!(
+                        "duplicate column identifier in properties payload: {}",
+                        prop_id
+                    )));
+                }
+                need(data, offset, 1, "column encoding")?;
+                let encoding_tag = data[offset];
+                offset += 1;
+                if encoding_tag > 6 {
+                    return Err(StorageError::deserialize_error(format!(
+                        "unknown column encoding tag: {}",
+                        encoding_tag
+                    )));
+                }
+                let encoding = crate::encoding::EncodingType::from_u8(encoding_tag);
+                need(data, offset, 4, "column row count")?;
                 let rows =
                     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
                 if let Some(col_idx) = self.property_schema.iter().position(|s| s.name == name) {
+                    self.property_schema[col_idx].prop_id = prop_id;
                     let col = &mut self.property_columns[col_idx];
+                    col.col_id = prop_id;
                     if col.len() < rows {
                         col.resize(rows);
                     }
                     for row_idx in 0..rows {
-                        if offset >= data.len() {
-                            break;
-                        }
+                        need(data, offset, 1, "column cell flag")?;
                         let has = data[offset];
                         offset += 1;
                         if has == 1 {
-                            if offset + 4 > data.len() {
-                                break;
-                            }
+                            need(data, offset, 4, "column cell length")?;
                             let vlen =
                                 u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
                                     as usize;
                             offset += 4;
-                            if offset + vlen > data.len() {
-                                break;
-                            }
+                            need(data, offset, vlen, "column cell value")?;
                             let vbytes = &data[offset..offset + vlen];
                             offset += vlen;
                             if let Ok(val) = postcard::from_bytes::<Value>(vbytes) {
                                 let _ = col.set(row_idx, Some(&val));
                             }
-                        } else {
+                        } else if has == 0 {
                             let _ = col.set(row_idx, None);
+                        } else {
+                            return Err(StorageError::deserialize_error(format!(
+                                "invalid column cell flag: {}",
+                                has
+                            )));
                         }
                     }
-                } else {
-                    // skip unknown column values
-                    for _ in 0..rows {
-                        if offset >= data.len() {
-                            break;
+                    need(data, offset, 1, "column stats flag")?;
+                    let has_stats = data[offset];
+                    offset += 1;
+                    if has_stats == 1 {
+                        need(data, offset, 4, "column stats length")?;
+                        let stats_len =
+                            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+                                as usize;
+                        offset += 4;
+                        need(data, offset, stats_len, "column stats")?;
+                        let stats_bytes = &data[offset..offset + stats_len];
+                        offset += stats_len;
+                        let mut cursor = stats_bytes;
+                        let stats =
+                            crate::column_stats::ColumnStats::deserialize_meta(&mut cursor)?;
+                        if !cursor.is_empty() {
+                            return Err(StorageError::deserialize_error(
+                                "unexpected trailing data in column stats".to_string(),
+                            ));
                         }
+                        if encoding != crate::encoding::EncodingType::None {
+                            self.apply_encoding_to_column(&name, encoding, 255)?;
+                        }
+                        let col = &mut self.property_columns[col_idx];
+                        col.set_stats(stats);
+                    } else if has_stats == 0 {
+                        if encoding != crate::encoding::EncodingType::None {
+                            self.apply_encoding_to_column(&name, encoding, 255)?;
+                        }
+                    } else {
+                        return Err(StorageError::deserialize_error(format!(
+                            "invalid column stats flag: {}",
+                            has_stats
+                        )));
+                    }
+                } else {
+                    for _ in 0..rows {
+                        need(data, offset, 1, "unknown column cell flag")?;
                         let has = data[offset];
                         offset += 1;
                         if has == 1 {
-                            if offset + 4 > data.len() {
-                                break;
-                            }
+                            need(data, offset, 4, "unknown column cell length")?;
                             let vlen =
                                 u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
                                     as usize;
                             offset += 4;
-                            if offset + vlen <= data.len() {
-                                offset += vlen;
-                            } else {
-                                break;
-                            }
+                            need(data, offset, vlen, "unknown column cell value")?;
+                            offset += vlen;
+                        } else if has != 0 {
+                            return Err(StorageError::deserialize_error(format!(
+                                "invalid unknown column cell flag: {}",
+                                has
+                            )));
                         }
+                    }
+                    // Unpublished columns keep the abort-on-reload contract:
+                    // skip their cells, encoding tag and statistics alike.
+                    need(data, offset, 1, "unknown column stats flag")?;
+                    let unknown_stats = data[offset];
+                    offset += 1;
+                    if unknown_stats == 1 {
+                        need(data, offset, 4, "unknown column stats length")?;
+                        let stats_len =
+                            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+                                as usize;
+                        offset += 4;
+                        need(data, offset, stats_len, "unknown column stats")?;
+                        offset += stats_len;
+                    } else if unknown_stats != 0 {
+                        return Err(StorageError::deserialize_error(format!(
+                            "invalid unknown column stats flag: {}",
+                            unknown_stats
+                        )));
                     }
                 }
             }
@@ -893,6 +1088,8 @@ impl CsrWithProperties {
         for &slot in &self.free_list {
             self.free_set.insert(slot);
         }
+        let max_id = self.property_schema.iter().map(|s| s.prop_id).max().unwrap_or(-1);
+        self.next_prop_id = max_id.saturating_add(1).max(self.property_schema.len() as i32);
     }
 
     pub fn reclaim_slots(
@@ -1017,7 +1214,11 @@ impl CsrWithProperties {
             return Ok(());
         }
         if col.has_chunks() {
-            return col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols);
+            col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)?;
+            if let Some(schema) = self.property_schema.iter_mut().find(|s| s.name == column) {
+                schema.encoding_type = col.encoding_type();
+            }
+            return Ok(());
         }
         match encoding_type {
             crate::encoding::EncodingType::Fsst => {
@@ -1039,6 +1240,9 @@ impl CsrWithProperties {
                 col.apply_constant_encoding()?;
             }
             crate::encoding::EncodingType::None => {}
+        }
+        if let Some(schema) = self.property_schema.iter_mut().find(|s| s.name == column) {
+            schema.encoding_type = col.encoding_type();
         }
         Ok(())
     }
@@ -1360,22 +1564,90 @@ mod tests {
     }
 
     #[test]
-    fn dump_restores_plain_columns_with_current_values() {
+    fn dump_restores_recorded_encodings_with_current_values() {
         let mut csr = fill_typed_store(20);
         assert!(csr.auto_encode_properties() > 0);
+        let before = csr.column_encoding_type("count");
+        assert!(before.is_some_and(|enc| enc != EncodingType::None));
         let bytes = csr.dump();
         let mut loaded = typed_store();
         loaded.load(&bytes).unwrap();
-        assert_eq!(
-            loaded.column_encoding_type("count"),
-            Some(EncodingType::None)
-        );
+        assert_eq!(loaded.column_encoding_type("count"), before);
         let got = loaded
             .get_by_edge_id(EdgeId(3), 200)
             .expect("row should read");
         assert!(got
             .iter()
             .any(|(k, v)| k == "count" && v == &Some(Value::Int(3))));
+    }
+
+    #[test]
+    fn dump_persists_statistics_without_refresh() {
+        let mut csr = fill_typed_store(10);
+        csr.refresh_column_stats();
+        let before = csr
+            .column_stats_snapshot("count")
+            .expect("stats should exist");
+        assert!(before.null_count.is_some());
+        let bytes = csr.dump();
+        let mut loaded = typed_store();
+        loaded.load(&bytes).unwrap();
+        let after = loaded
+            .column_stats_snapshot("count")
+            .expect("stats should survive reload");
+        assert_eq!(after.row_count, before.row_count);
+        assert_eq!(after.null_count, before.null_count);
+        assert_eq!(after.min_value, before.min_value);
+        assert_eq!(after.max_value, before.max_value);
+    }
+
+    #[test]
+    fn duplicate_column_identifiers_are_rejected() {
+        let csr = fill_typed_store(2);
+        let mut bytes = csr.dump();
+        // Patch the second column header identifier to collide with the
+        // first: name length plus name precedes the identifier.
+        let mut cursor = 1usize;
+        let read_u32 = |cursor: &mut usize| {
+            let value = u32::from_le_bytes(bytes[*cursor..*cursor + 4].try_into().unwrap());
+            *cursor += 4;
+            value
+        };
+        let vis_len = read_u32(&mut cursor) as usize;
+        cursor += vis_len * 9 + 4;
+        let map_len = read_u32(&mut cursor) as usize;
+        cursor += map_len * 12;
+        let free_len = read_u32(&mut cursor) as usize;
+        cursor += free_len * 4;
+        let col_count = read_u32(&mut cursor);
+        assert!(col_count >= 2);
+        let first_name_len = read_u32(&mut cursor) as usize;
+        cursor += first_name_len;
+        let first_id = cursor;
+        cursor += 4 + 1;
+        let first_rows = read_u32(&mut cursor) as usize;
+        // Cells hold typed values of unknown byte length here: skip them by
+        // re-reading flags and lengths from the payload itself.
+        for _ in 0..first_rows {
+            let has = bytes[cursor];
+            cursor += 1;
+            if has == 1 {
+                let vlen = read_u32(&mut cursor) as usize;
+                cursor += vlen;
+            }
+        }
+        let stats_flag = bytes[cursor];
+        cursor += 1;
+        if stats_flag == 1 {
+            let stats_len = read_u32(&mut cursor) as usize;
+            cursor += stats_len;
+        }
+        let second_name_len = read_u32(&mut cursor) as usize;
+        cursor += second_name_len;
+        let second_id = cursor;
+        bytes.copy_within(first_id..first_id + 4, second_id);
+        let mut loaded = typed_store();
+        assert!(loaded.load(&bytes).is_err());
     }
 
     #[test]
@@ -1483,5 +1755,89 @@ mod tests {
         assert_eq!(after.null_count, Some(1));
         assert!(after.distinct_count.is_some());
         assert!(csr.column_stats_snapshot("missing").is_none());
+    }
+
+    #[test]
+    fn truncated_payloads_are_rejected() {
+        let mut csr = CsrWithProperties::new(schema());
+        csr.insert_for_edge(
+            EdgeId(10),
+            &[("weight".to_string(), Value::Double(1.0))],
+            100,
+        )
+        .unwrap();
+        let bytes = csr.dump();
+        assert!(!bytes.is_empty());
+        for cut in [1, 5, 9, bytes.len() / 2, bytes.len() - 1] {
+            let mut loaded = CsrWithProperties::new(schema());
+            assert!(
+                loaded.load(&bytes[..cut]).is_err(),
+                "cut at {} must fail",
+                cut
+            );
+        }
+        let mut empty = CsrWithProperties::new(schema());
+        assert!(empty.load(&[]).is_err());
+    }
+
+    #[test]
+    fn release_never_admits_virgin_rows() {
+        let mut csr = CsrWithProperties::new(schema());
+        csr.release_row(0);
+        csr.release_row(999);
+        assert!(csr.edge_ids().next().is_none());
+        let eid = EdgeId(11);
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let row = csr.get_row_for_edge(eid).expect("row exists");
+        csr.release_row(row);
+        assert!(csr.get_row_for_edge(eid).is_none());
+        // Releasing the same used row twice never duplicates free slots.
+        csr.release_row(row);
+    }
+
+    #[test]
+    fn stable_column_ids_survive_column_drop() {
+        let mut csr = CsrWithProperties::new(vec![
+            PropertySchema::new("a".to_string(), 0, DataType::Int),
+            PropertySchema::new("b".to_string(), 1, DataType::Int),
+            PropertySchema::new("c".to_string(), 2, DataType::Int),
+        ]);
+        let eid = EdgeId(1);
+        csr.insert_for_edge(
+            eid,
+            &[
+                ("a".to_string(), Value::Int(1)),
+                ("b".to_string(), Value::Int(2)),
+                ("c".to_string(), Value::Int(3)),
+            ],
+            100,
+        )
+        .unwrap();
+        let id_c = csr.get_property_id("c").expect("c id exists");
+        csr.remove_property("a").unwrap();
+        // Stored undo parameters keyed by stable id still address column c.
+        csr.set_property_by_id_for_edge(eid, id_c, Some(Value::Int(30)), 110)
+            .expect("stable id must survive column drop");
+        let got = csr.get_by_edge_id(eid, 110).expect("row readable");
+        assert!(got
+            .iter()
+            .any(|(k, v)| k == "c" && v == &Some(Value::Int(30))));
+        // Dropped columns stay unknown by name and by stale position.
+        assert!(csr.get_property_id("a").is_none());
+    }
+
+    #[test]
+    fn physical_projection_ignores_row_visibility() {
+        let mut csr = CsrWithProperties::new(schema());
+        let eid = EdgeId(21);
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        csr.mark_deleted(eid, 150);
+        assert!(csr.get_projected_by_edge_id(eid, 200, None).is_none());
+        let physical = csr
+            .get_projected_physical_by_edge_id(eid, 200, None)
+            .expect("physical row survives");
+        assert_eq!(physical.len(), 2);
     }
 }

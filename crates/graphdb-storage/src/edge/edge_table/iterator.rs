@@ -19,6 +19,7 @@ pub struct EdgeTableScanIterator<'a> {
     max_records: Option<usize>,
     /// Current record count
     current_count: usize,
+    projection: Option<Vec<String>>,
 }
 
 impl<'a> EdgeTableScanIterator<'a> {
@@ -26,19 +27,53 @@ impl<'a> EdgeTableScanIterator<'a> {
         Self::with_limit(table, ts, None)
     }
 
+    pub fn with_projection(
+        table: &'a EdgeStore,
+        ts: Timestamp,
+        projection: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            table,
+            inner: table.out_csr.iter_all(),
+            ts,
+            max_records: None,
+            current_count: 0,
+            projection,
+        }
+    }
+
     /// Create a scan iterator with a maximum record limit.
     ///
     /// The limit is enforced while advancing, not at construction:
-    /// constructing this iterator performs no table access.
+    /// constructing this iterator performs no table access. Physical entries
+    /// are visited and visibility is decided by the version authority alone;
+    /// row stamps never filter reads.
     pub fn with_limit(table: &'a EdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
-        // Sharded scan: every live entry in every group is visited once in
-        // group order, so no cross-group deduplication is needed.
+        // Sharded scan: every physical entry in every group is visited once
+        // in group order, so no cross-group deduplication is needed.
         Self {
             table,
-            inner: table.out_csr.iter(ts),
+            inner: table.out_csr.iter_all(),
             ts,
             max_records,
             current_count: 0,
+            projection: None,
+        }
+    }
+
+    pub fn with_limit_and_projection(
+        table: &'a EdgeStore,
+        ts: Timestamp,
+        max_records: Option<usize>,
+        projection: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            table,
+            inner: table.out_csr.iter_all(),
+            ts,
+            max_records,
+            current_count: 0,
+            projection,
         }
     }
 }
@@ -58,10 +93,11 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
                 continue;
             }
             self.current_count += 1;
-            return Some(self.table.edge_record_from_nbr(
+            return Some(self.table.edge_record_from_nbr_projected(
                 src_vid.as_int64().unwrap_or(0) as u32,
                 nbr,
                 self.ts,
+                self.projection.as_deref(),
             ));
         }
         None

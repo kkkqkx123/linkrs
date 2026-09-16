@@ -84,6 +84,14 @@ impl EdgeStagingBatch {
         self.inserts.len()
     }
 
+    pub fn staged_inserts(&self) -> &[StagedInsert] {
+        &self.inserts
+    }
+
+    pub fn staged_deletes(&self) -> &[StagedDelete] {
+        &self.deletes
+    }
+
     pub fn delete_count(&self) -> usize {
         self.deletes.len()
     }

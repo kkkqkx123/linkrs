@@ -35,16 +35,20 @@ enum TablePhase {
 #[derive(Clone, Debug)]
 struct TableScanState {
     phase: TablePhase,
-    /// Number of edges already consumed from the single-segment CSR
-    /// (valid + tombstoned), used to resume across batches.
-    mutable_consumed: usize,
+    /// Resumable position: group to resume from plus physical entries to skip
+    /// within that group. Whole groups before `resume_group` are never
+    /// revisited, so multi-batch scans stay linear instead of replaying from
+    /// the table start on every batch.
+    resume_group: usize,
+    skip_in_group: usize,
 }
 
 impl TableScanState {
     fn new() -> Self {
         Self {
             phase: TablePhase::Mutable,
-            mutable_consumed: 0,
+            resume_group: 0,
+            skip_in_group: 0,
         }
     }
 }
@@ -247,19 +251,7 @@ struct ScanArgs<'a> {
 // ---------------------------------------------------------------------------
 
 fn scan_mutable(args: ScanArgs) {
-    let mut iter = args.store.out_csr.iter(args.ts);
     let gate = args.ctx.pending_gate();
-
-    let mut remaining = args.state.mutable_consumed;
-    while remaining > 0 {
-        match iter.next() {
-            Some(_) => remaining -= 1,
-            None => {
-                args.state.phase = TablePhase::Done;
-                return;
-            }
-        }
-    }
 
     // Column pruning: fetch the projection plus any predicate-only columns
     // in one storage read instead of decoding every column per edge.
@@ -277,60 +269,89 @@ fn scan_mutable(args: ScanArgs) {
         }
     };
 
-    for (src_vid, nbr) in iter {
-        args.state.mutable_consumed += 1;
-        if !args
-            .store
-            .mvcc
-            .is_edge_visible_with_gate(nbr.edge_id, args.ts, &gate)
-        {
+    let group_count = args.store.out_csr.group_count();
+    let group_bits = args.store.out_csr.group_bits();
+    let start_group = args.state.resume_group.min(group_count);
+    for gid in start_group..group_count {
+        let Some(variant) = args.store.out_csr.group_variant(gid) else {
+            args.state.resume_group = gid + 1;
+            args.state.skip_in_group = 0;
             continue;
+        };
+        let base = crate::edge::node_group::group_base(gid, group_bits);
+        let mut iter = variant.iter_all();
+        if gid == args.state.resume_group {
+            let mut skip = args.state.skip_in_group;
+            while skip > 0 {
+                match iter.next() {
+                    Some(_) => skip -= 1,
+                    None => break,
+                }
+            }
+            // Consumed prefix; subsequent groups start at zero.
+            args.state.skip_in_group = 0;
         }
-        if let Some(ref r) = *args.src_id_range {
-            let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
-            let src_ext =
-                resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
-            let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
-            if src_int < r.start || src_int >= r.end {
+        for (local_vid, nbr) in iter.by_ref() {
+            args.state.skip_in_group += 1;
+            if !args
+                .store
+                .mvcc
+                .is_edge_visible_with_gate(nbr.edge_id, args.ts, &gate)
+            {
                 continue;
             }
-        }
+            let src_vid = VertexId::from_int64(local_vid.as_int64().unwrap_or(0) + base as i64);
+            if let Some(ref r) = *args.src_id_range {
+                let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
+                let src_ext =
+                    resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
+                let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
+                if src_int < r.start || src_int >= r.end {
+                    continue;
+                }
+            }
 
-        // Decode once with predicate columns included so pushed predicates
-        // can be evaluated; matching rows are then trimmed back to the
-        // projection. Filtering happens before offset/limit accounting.
-        let mut properties =
-            decode_edge_properties(args.store, nbr.edge_id, args.ts, fetch_columns.as_deref());
-        if !args
-            .predicate
-            .iter()
-            .all(|p| p.matches(properties.as_slice()))
-        {
-            continue;
-        }
-        trim_to_projection(&mut properties, args.projection);
+            // Decode once with predicate columns included so pushed predicates
+            // can be evaluated; matching rows are then trimmed back to the
+            // projection. Filtering happens before offset/limit accounting.
+            let mut properties =
+                decode_edge_properties(args.store, nbr.edge_id, args.ts, fetch_columns.as_deref());
+            if !args
+                .predicate
+                .iter()
+                .all(|p| p.matches(properties.as_slice()))
+            {
+                continue;
+            }
+            trim_to_projection(&mut properties, args.projection);
 
-        if *args.offset_remaining > 0 {
-            *args.offset_remaining -= 1;
-            continue;
-        }
+            if *args.offset_remaining > 0 {
+                *args.offset_remaining -= 1;
+                continue;
+            }
 
-        let edge = build_edge_candidate(EdgeBuildArgs {
-            target: args.target,
-            td: args.td,
-            src_vid: &src_vid,
-            nbr,
-            props: properties,
-        });
-        args.batch.push(edge);
-        *args.emitted += 1;
+            let edge = build_edge_candidate(EdgeBuildArgs {
+                target: args.target,
+                td: args.td,
+                src_vid: &src_vid,
+                nbr,
+                props: properties,
+            });
+            args.batch.push(edge);
+            *args.emitted += 1;
 
-        if args.batch.len() >= args.batch_size {
-            return;
+            if args.batch.len() >= args.batch_size {
+                args.state.resume_group = gid;
+                return;
+            }
+            if args.limit.is_some_and(|l| *args.emitted >= l) {
+                args.state.resume_group = gid + 1;
+                args.state.skip_in_group = 0;
+                return;
+            }
         }
-        if args.limit.is_some_and(|l| *args.emitted >= l) {
-            return;
-        }
+        args.state.resume_group = gid + 1;
+        args.state.skip_in_group = 0;
     }
 
     args.state.phase = TablePhase::Done;
@@ -417,10 +438,11 @@ fn decode_edge_properties(
         return Vec::new();
     }
     // Snapshot read through the property version chain so old readers see
-    // the before-image instead of the latest write.
+    // the before-image instead of the latest write. Row stamps never filter;
+    // authority above already decided visibility.
     let props_opt = store
         .properties
-        .get_projected_by_edge_id(edge_id, ts, fetch);
+        .get_projected_physical_by_edge_id(edge_id, ts, fetch);
     props_opt
         .map(|props| {
             props

@@ -373,6 +373,19 @@ impl TransactionOps {
         Ok(())
     }
 
+    /// Edge-key based revert for transaction undo. Offsets are not consulted;
+    /// location goes through the merged physical read plus version authority.
+    pub fn revert_delete_edge_single_by_key(
+        table: &mut EdgeStore,
+        params: RevertDeleteEdgeParams,
+        ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        table
+            .revert_delete_edge(params.src_vid, params.dst_vid, params.rank, ts)
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn revert_rename_vertex_properties(
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         vertex_label_names: &HashMap<String, LabelId>,

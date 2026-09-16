@@ -312,14 +312,7 @@ impl MutableCsr {
         }
         if live.is_empty() {
             // Remove empty overflow entry entirely to reclaim metadata.
-            // We need to remove from sorted vector; find index and remove.
-            if let Ok(idx) = self
-                .overflow_chunks
-                .entries
-                .binary_search_by_key(&vid, |(k, _)| *k)
-            {
-                self.overflow_chunks.entries.remove(idx);
-            }
+            self.overflow_chunks.remove(&vid);
             self.overflow_live_sets.remove(&vid);
             return;
         }
@@ -672,17 +665,25 @@ impl MutableCsr {
         deleted
     }
 
-    pub fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
+    pub fn delete_edge_by_offset(
+        &mut self,
+        src_vid: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         if offset < 0 {
-            return false;
+            return Ok(false);
         }
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
-            return false;
+            return Ok(false);
+        }
+        if offset as usize >= self.degrees[src_idx] as usize {
+            return Ok(false);
         }
         let idx = self.adj_offsets[src_idx] as usize + offset as usize;
         if idx >= self.nbr_list.len() {
-            return false;
+            return Ok(false);
         }
         let nbr = &mut self.nbr_list[idx];
         if nbr.delete_ts == Timestamp::MAX {
@@ -692,10 +693,10 @@ impl MutableCsr {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 self.track_primary_live_remove(src_vid, endpoint, rank);
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     /// Revert a deleted edge by offset position in the primary block.
@@ -709,6 +710,9 @@ impl MutableCsr {
         }
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+            return false;
+        }
+        if offset as usize >= self.degrees[src_idx] as usize {
             return false;
         }
 
@@ -730,6 +734,147 @@ impl MutableCsr {
             return true;
         }
         false
+    }
+
+    /// Read-only view of one primary slot without mutating state.
+    ///
+    /// Used to verify that a caller-supplied offset still addresses the
+    /// expected edge before a destructive offset write runs.
+    pub fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
+        if offset < 0 {
+            return None;
+        }
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+            return None;
+        }
+        if offset as usize >= self.degrees[src_idx] as usize {
+            return None;
+        }
+        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
+        self.nbr_list.get(idx).copied()
+    }
+
+    /// Locate one edge by endpoint without consulting timestamps.
+    ///
+    /// Physical addressing only; visibility is decided by the version
+    /// authority above this layer.
+    pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return None;
+        }
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
+                    return Some(*nbr);
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
+                        return Some(*nbr);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Every physically stored entry of one vertex without timestamp filtering.
+    ///
+    /// Visibility is decided by the version authority above this layer.
+    pub fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return Vec::new();
+        }
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        let mut out = Vec::new();
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                out.push(*nbr);
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            for chunk in chunks {
+                out.extend_from_slice(chunk);
+            }
+        }
+        out
+    }
+
+    /// Visit every physically stored entry of one vertex without allocating.
+    ///
+    /// The visitor returns false to stop early. Visibility is decided by the
+    /// version authority above this layer.
+    pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return;
+        }
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if !f(*nbr) {
+                    return;
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            for chunk in chunks {
+                for nbr in chunk {
+                    if !f(*nbr) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the primary row of one vertex holds `edge_id`.
+    ///
+    /// Used to distinguish a stale offset (edge lives in primary at a
+    /// different offset, must fail) from an overflow row (no offset can
+    /// address it, may fall back to the edge-id path).
+    pub fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            if self.nbr_list.get(offset + i).is_some_and(|nbr| nbr.edge_id == edge_id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether one vertex holds any physically stored entry.
+    pub fn has_physical_entries(&self, vid: u32) -> bool {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return false;
+        }
+        if self.degrees[idx] > 0 {
+            return true;
+        }
+        self.overflow_chunks
+            .get(&vid)
+            .is_some_and(|chunks| chunks.iter().any(|c| !c.is_empty()))
     }
 
     /// Physically remove an edge by edge id from primary or overflow.
@@ -760,8 +905,8 @@ impl MutableCsr {
                 self.degrees[src_idx] -= 1;
                 if was_live {
                     self.track_primary_live_remove(src_vid, endpoint, rank);
+                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 }
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
             }
         }
@@ -787,23 +932,19 @@ impl MutableCsr {
                         .total_edge_capacity
                         .saturating_sub(self.overflow_chunk_edges);
                     if chunks.is_empty() {
-                        // Remove empty overflow entry from sorted vector.
-                        if let Ok(idx) = self
-                            .overflow_chunks
-                            .entries
-                            .binary_search_by_key(&src_vid, |(k, _)| *k)
-                        {
-                            self.overflow_chunks.entries.remove(idx);
-                        }
+                        // Drop the per-vertex entry so later lookups stay constant time.
+                        self.overflow_chunks.remove(&src_vid);
                         self.overflow_live_sets.remove(&src_vid);
-                        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        if was_live {
+                            self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        }
                         return true;
                     }
                 }
                 if was_live {
                     self.track_overflow_live_remove(src_vid, endpoint, rank);
+                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 }
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
             }
         }
@@ -1530,12 +1671,37 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::delete_edge_by_dst(self, src_vid, dst, ts)
     }
 
-    fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
+    fn delete_edge_by_offset(
+        &mut self,
+        src_vid: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         MutableCsr::delete_edge_by_offset(self, src_vid, offset, ts)
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
         MutableCsr::revert_delete_by_offset(self, src_vid, offset, ts)
+    }
+
+    fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
+        MutableCsr::nbr_at_offset(self, src_vid, offset)
+    }
+
+    fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
+        MutableCsr::get_edge_physical(self, src_vid, dst)
+    }
+
+    fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
+        MutableCsr::physical_edges_of(self, src_vid)
+    }
+
+    fn has_physical_entries(&self, vid: u32) -> bool {
+        MutableCsr::has_physical_entries(self, vid)
+    }
+
+    fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        MutableCsr::primary_contains(self, src_vid, edge_id)
     }
 
     fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
@@ -2204,5 +2370,78 @@ mod tests {
         );
         let (live, dead, _) = csr.vertex_census(0);
         assert_eq!((live, dead), (2, 1));
+    }
+
+    #[test]
+    fn test_remove_after_delete_does_not_double_count() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
+        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
+        assert_eq!(csr.edge_count(), 1);
+        assert!(csr.remove_edge(0u32, EdgeId(100)));
+        assert_eq!(csr.edge_count(), 1);
+        assert!(csr.remove_edge(0u32, EdgeId(101)));
+        assert_eq!(csr.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_remove_after_delete_overflow_does_not_double_count() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        for i in 0..6u64 {
+            csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+                .unwrap();
+        }
+        assert_eq!(csr.edge_count(), 6);
+        assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
+        assert_eq!(csr.edge_count(), 5);
+        assert!(csr.remove_edge(0u32, EdgeId(5)));
+        assert_eq!(csr.edge_count(), 5);
+    }
+
+    #[test]
+    fn test_offset_delete_rejects_out_of_degree() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(1u32, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
+        // Row 0 holds one live entry; offset 1 addresses reserved capacity.
+        assert!(!csr.delete_edge_by_offset(0u32, 1, 2).unwrap());
+        assert_eq!(csr.edges_of(0u32, 2).len(), 1);
+        assert_eq!(csr.edges_of(1u32, 2).len(), 1);
+        assert!(!csr.revert_delete_by_offset(0u32, 1, 2));
+        // Valid offset still works.
+        assert!(csr.delete_edge_by_offset(0u32, 0, 2).unwrap());
+        assert_eq!(csr.edges_of(0u32, 2).len(), 0);
+        assert!(csr.revert_delete_by_offset(0u32, 0, 2));
+        assert_eq!(csr.edges_of(0u32, 2).len(), 1);
+    }
+
+    #[test]
+    fn test_nbr_at_offset_views_primary_slot() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(7), EdgeId(100), 1)
+            .unwrap();
+        let slot = csr.nbr_at_offset(0u32, 0).expect("slot exists");
+        assert_eq!(slot.edge_id, EdgeId(100));
+        assert!(csr.nbr_at_offset(0u32, 1).is_none());
+        assert!(csr.nbr_at_offset(0u32, -1).is_none());
+    }
+
+    #[test]
+    fn test_physical_reads_ignore_timestamps() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+            .unwrap();
+        assert!(csr.delete_edge(0u32, EdgeId(100), 20).unwrap());
+        assert!(csr
+            .get_edge_physical(0u32, VertexId::from_int64(1))
+            .is_some());
+        assert_eq!(csr.physical_edges_of(0u32).len(), 1);
+        assert!(csr.has_physical_entries(0u32));
+        assert!(!csr.has_physical_entries(1u32));
     }
 }

@@ -50,7 +50,8 @@ pub trait MutableCsrTrait: CsrBase {
     ///   but was deleted at a **different** timestamp.
     ///
     /// - `MutableCsr`: uses `edge_id` to locate and delete the specific edge.
-    /// - `SingleMutableCsr`: `edge_id` is **ignored** since there is only one edge per vertex.
+    /// - `SingleMutableCsr`: the stored edge id must match unless the caller
+    ///   passes the wildcard (`u64::MAX`), which addresses the single slot.
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool>;
 
     /// Delete all edges matching (src, dst).
@@ -60,13 +61,50 @@ pub trait MutableCsrTrait: CsrBase {
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool;
 
     /// Delete an edge by its offset position in the primary block.
-    fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool;
+    ///
+    /// Offset indexes into the live row degree, never into reserved capacity.
+    /// Out-of-degree offsets fail without touching any slot. Conflict errors
+    /// are propagated instead of folded into a failure value.
+    fn delete_edge_by_offset(
+        &mut self,
+        src_vid: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool>;
 
     /// Revert a deleted edge by its offset position.
     ///
-    /// - `MutableCsr`: offset indexes into the primary block.
+    /// - `MutableCsr`: offset indexes into the primary block degree.
     /// - `SingleMutableCsr`: only offset == 0 is valid.
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool;
+
+    /// Read-only view of one primary slot for offset identity checks.
+    fn nbr_at_offset(&self, _src_vid: u32, _offset: i32) -> Option<Nbr> {
+        None
+    }
+
+    /// Locate one edge by endpoint without consulting timestamps.
+    ///
+    /// Physical addressing only; visibility is decided by the version
+    /// authority above this layer.
+    fn get_edge_physical(&self, _src_vid: u32, _dst: VertexId) -> Option<Nbr> {
+        None
+    }
+
+    /// Every physically stored entry of one vertex without timestamp filtering.
+    fn physical_edges_of(&self, _src_vid: u32) -> Vec<Nbr> {
+        Vec::new()
+    }
+
+    /// Whether one vertex holds any physically stored entry.
+    fn has_physical_entries(&self, _vid: u32) -> bool {
+        false
+    }
+
+    /// Whether the primary row of one vertex holds `edge_id`.
+    fn primary_contains(&self, _src_vid: u32, _edge_id: EdgeId) -> bool {
+        false
+    }
 
     /// Physically remove an edge by edge id (no tombstone trace).
     ///

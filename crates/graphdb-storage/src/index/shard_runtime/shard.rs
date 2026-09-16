@@ -303,46 +303,54 @@ impl ShardRuntime {
         }
         merged.into_iter().collect()
     }
-
     /// Quick check: does this shard possibly have forward entries in [lower, upper)?
     pub(crate) fn forward_may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, self.prefix_forward_len);
-        // Bloom pre-check on lower bound
-        if !self.forward_bloom.lock().might_contain(lower_suffix) {
-            let base = self.base_forward.load();
-            if !base.range(lower_suffix, upper_suffix).is_empty() {
-                return true;
-            }
-            let delta = self.delta_forward.load();
-            return delta
-                .range((
-                    Bound::Included(lower_suffix.to_vec()),
-                    Bound::Excluded(upper_suffix.to_vec()),
-                ))
-                .next()
-                .is_some();
+        // Bloom pre-check on lower bound. A saturated filter that never
+        // filters is bypassed; bypass keeps result semantics identical.
+        let bloom_negative = {
+            let mut bloom = self.forward_bloom.lock();
+            !bloom.is_saturated() && !bloom.might_contain(lower_suffix)
+        };
+        if !bloom_negative {
+            return true;
         }
-        true
+        let base = self.base_forward.load();
+        if !base.range(lower_suffix, upper_suffix).is_empty() {
+            return true;
+        }
+        let delta = self.delta_forward.load();
+        delta
+            .range((
+                Bound::Included(lower_suffix.to_vec()),
+                Bound::Excluded(upper_suffix.to_vec()),
+            ))
+            .next()
+            .is_some()
     }
 
     /// Quick check: does this shard possibly have reverse entries in [lower, upper)?
     pub(crate) fn reverse_may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, self.prefix_reverse_len);
-        if !self.reverse_bloom.lock().might_contain(lower_suffix) {
-            let base = self.base_reverse.load();
-            if !base.range(lower_suffix, upper_suffix).is_empty() {
-                return true;
-            }
-            let delta = self.delta_reverse.load();
-            return delta
-                .range((
-                    Bound::Included(lower_suffix.to_vec()),
-                    Bound::Excluded(upper_suffix.to_vec()),
-                ))
-                .next()
-                .is_some();
+        let bloom_negative = {
+            let mut bloom = self.reverse_bloom.lock();
+            !bloom.is_saturated() && !bloom.might_contain(lower_suffix)
+        };
+        if !bloom_negative {
+            return true;
         }
-        true
+        let base = self.base_reverse.load();
+        if !base.range(lower_suffix, upper_suffix).is_empty() {
+            return true;
+        }
+        let delta = self.delta_reverse.load();
+        delta
+            .range((
+                Bound::Included(lower_suffix.to_vec()),
+                Bound::Excluded(upper_suffix.to_vec()),
+            ))
+            .next()
+            .is_some()
     }
 
     pub(crate) fn snapshot(&self) -> IndexMaps {

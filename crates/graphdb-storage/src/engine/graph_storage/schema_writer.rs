@@ -73,8 +73,22 @@ fn append_schema_redo<T: serde::Serialize>(
                         .map_err(|error| StorageError::db_error(error.to_string()))?,
                 }
             }
-            ctx.commit_write_timestamp_ordered(timestamp)?;
-            Ok(entry)
+            // Write-ahead discipline: when the redo was appended directly to
+            // the WAL (auto-commit DDL, no enclosing transaction), make it
+            // durable before the operation returns. Staged entries inside an
+            // explicit transaction defer durability to the commit point.
+            let durability = if entry.transaction_id.is_none() {
+                ctx.sync_wal()
+            } else {
+                Ok(())
+            };
+            match durability.and_then(|()| ctx.commit_write_timestamp_ordered(timestamp)) {
+                Ok(_) => Ok(entry),
+                Err(error) => {
+                    ctx.abort_write_timestamp(timestamp);
+                    Err(error)
+                }
+            }
         }
         Err(error) => {
             ctx.abort_write_timestamp(timestamp);

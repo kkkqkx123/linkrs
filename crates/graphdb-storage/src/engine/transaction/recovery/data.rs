@@ -17,6 +17,30 @@ fn is_replayable_edge_duplicate(err: &UndoLogError) -> bool {
     text.contains("already exists") || text.contains("already_exists")
 }
 
+/// Whether a property-update replay failure is a benign miss.
+///
+/// Replay is idempotent: a second replay after a partial checkpoint, or a
+/// replay racing a newer delete, meets a target that is already gone. Absent
+/// labels, vertices, edges and columns are moot updates, while type mismatches
+/// and other substantive failures still propagate.
+fn is_benign_replay_missing(err: &UndoLogError) -> bool {
+    match err {
+        UndoLogError::LabelNotFound(_)
+        | UndoLogError::VertexNotFound(_)
+        | UndoLogError::EdgeNotFound(_)
+        | UndoLogError::PropertyNotFound(_) => true,
+        UndoLogError::UndoFailed(text) | UndoLogError::InvalidState(text) => {
+            let folded = text.to_lowercase();
+            folded.contains("not found")
+                || folded.contains("missing")
+                || folded.contains("no such")
+                || folded.contains("does not exist")
+                || folded.contains("unknown column")
+                || folded.contains("column_not_found")
+        }
+    }
+}
+
 pub(crate) fn replay_insert_vertex(
     ctx: &GraphStorageContext,
     label: LabelId,
@@ -99,16 +123,26 @@ pub(crate) fn replay_update_vertex_prop(
     value: &Value,
     ts: Timestamp,
 ) -> StorageResult<()> {
-    ctx.data_store().with_vertex_tables_mut(|vertex_tables| {
-        Ok(TransactionOps::update_vertex_property_by_vid(
-            vertex_tables,
-            label,
-            vid,
-            prop_name,
-            value,
-            ts,
-        )?)
-    })?;
+    let replayed = ctx
+        .data_store()
+        .with_vertex_tables_mut_result(|vertex_tables| {
+            TransactionOps::update_vertex_property_by_vid(
+                vertex_tables,
+                label,
+                vid,
+                prop_name,
+                value,
+                ts,
+            )
+        });
+    if let Err(e) = replayed {
+        if !is_benign_replay_missing(&e) {
+            return Err(StorageError::db_error(format!(
+                "Failed to replay update vertex property: {}",
+                e
+            )));
+        }
+    }
 
     ctx.mark_vertex_modified(label);
     Ok(())
@@ -130,14 +164,22 @@ pub(crate) fn replay_update_edge_prop(
 
     {
         let mut catalog = ctx.data_store().catalog_write_set();
-        TransactionOps::update_edge_property(
+        let replayed = TransactionOps::update_edge_property(
             &mut catalog.edge_tables,
             &catalog.vertex_tables,
             params,
             &redo.prop_name,
             &redo.value,
             ts,
-        )?;
+        );
+        if let Err(e) = replayed {
+            if !is_benign_replay_missing(&e) {
+                return Err(StorageError::db_error(format!(
+                    "Failed to replay update edge property: {}",
+                    e
+                )));
+            }
+        }
     }
     ctx.mark_edge_modified(redo.edge_label);
 
@@ -367,5 +409,28 @@ mod tests {
         assert!(is_replayable_edge_duplicate(&underscored));
         let conflict = UndoLogError::UndoFailed("Write-write conflict: e".to_string());
         assert!(!is_replayable_edge_duplicate(&conflict));
+    }
+
+    #[test]
+    fn benign_replay_missing_covers_absent_targets_only() {
+        assert!(is_benign_replay_missing(&UndoLogError::LabelNotFound(1)));
+        assert!(is_benign_replay_missing(&UndoLogError::EdgeNotFound(
+            graphdb_core::types::EdgeId(7)
+        )));
+        assert!(is_benign_replay_missing(&UndoLogError::PropertyNotFound(
+            "weight".to_string()
+        )));
+        assert!(is_benign_replay_missing(&UndoLogError::UndoFailed(
+            "column not found: score".to_string()
+        )));
+        assert!(is_benign_replay_missing(&UndoLogError::UndoFailed(
+            "Edge does not exist: 0 -> 1".to_string()
+        )));
+        assert!(!is_benign_replay_missing(&UndoLogError::UndoFailed(
+            "Write-write conflict: edge already deleted at ts=5".to_string()
+        )));
+        assert!(!is_benign_replay_missing(&UndoLogError::UndoFailed(
+            "type mismatch: expected Int".to_string()
+        )));
     }
 }

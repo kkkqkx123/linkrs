@@ -42,12 +42,15 @@ pub struct DeletionStats {
 }
 
 impl DeletionStats {
-    /// Get deletion percentage as a ratio (0.0 to 1.0)
+    /// Get deletion share as a ratio (0.0 to 1.0) over all tracked edges.
     pub fn deletion_ratio(&self) -> f64 {
-        if self.total_live_edges == 0 {
+        let total = self
+            .total_live_edges
+            .saturating_add(self.total_deleted_edges);
+        if total == 0 {
             0.0
         } else {
-            self.total_deleted_edges as f64 / self.total_live_edges as f64
+            self.total_deleted_edges as f64 / total as f64
         }
     }
 
@@ -115,14 +118,18 @@ mod tests {
 
         stats.total_live_edges = 100;
         stats.total_deleted_edges = 50;
-        assert_eq!(stats.deletion_ratio(), 0.5);
-        assert_eq!(stats.deletion_percentage(), 50.0);
+        assert!((stats.deletion_ratio() - 50.0 / 150.0).abs() < 1e-9);
+        assert!((stats.deletion_percentage() - 100.0 * 50.0 / 150.0).abs() < 1e-9);
         assert!(stats.is_significant());
 
         stats.total_deleted_edges = 5;
-        assert_eq!(stats.deletion_ratio(), 0.05);
-        assert_eq!(stats.deletion_percentage(), 5.0);
+        assert!((stats.deletion_ratio() - 5.0 / 105.0).abs() < 1e-9);
         assert!(!stats.is_significant());
+
+        // Fully deleted tables saturate at 1.0 instead of overflowing.
+        stats.total_live_edges = 0;
+        stats.total_deleted_edges = 3;
+        assert_eq!(stats.deletion_ratio(), 1.0);
     }
 
     #[test]

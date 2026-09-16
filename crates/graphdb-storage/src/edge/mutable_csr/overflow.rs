@@ -155,113 +155,93 @@ pub struct OverflowIndexStats {
     pub metadata_bytes_saved: usize,
 }
 
-/// Sorted-vector based overflow storage replacing `HashMap<u32, Vec<Vec<Nbr>>>`.
+/// Per-vertex overflow storage keyed by vertex id for constant-time lookup.
+///
+/// Each vertex owns an independent chunk list; vertex insert and removal never
+/// move other vertices, so hot vertices stay bounded by their own block count.
 #[derive(Debug, Clone, Default)]
 pub struct OverflowStorage {
-    pub(crate) entries: Vec<(u32, Vec<Vec<Nbr>>)>,
+    pub(crate) map: HashMap<u32, Vec<Vec<Nbr>>>,
 }
 
 impl OverflowStorage {
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            map: HashMap::new(),
         }
-    }
-
-    #[inline]
-    pub(crate) fn find_index(&self, vid: &u32) -> Result<usize, usize> {
-        self.entries.binary_search_by_key(vid, |(k, _)| *k)
     }
 
     #[inline]
     pub fn get(&self, vid: &u32) -> Option<&Vec<Vec<Nbr>>> {
-        match self.find_index(vid) {
-            Ok(idx) => Some(&self.entries[idx].1),
-            Err(_) => None,
-        }
+        self.map.get(vid)
     }
 
     #[inline]
     pub fn get_mut(&mut self, vid: &u32) -> Option<&mut Vec<Vec<Nbr>>> {
-        match self.find_index(vid) {
-            Ok(idx) => Some(&mut self.entries[idx].1),
-            Err(_) => None,
-        }
+        self.map.get_mut(vid)
     }
 
     /// Get mutable reference to the chunk list for `vid`, inserting an empty
-    /// entry if absent while keeping the vector sorted.
+    /// entry if absent.
     #[inline]
     pub fn get_or_create(&mut self, vid: u32) -> &mut Vec<Vec<Nbr>> {
-        match self.find_index(&vid) {
-            Ok(idx) => &mut self.entries[idx].1,
-            Err(idx) => {
-                self.entries.insert(idx, (vid, Vec::new()));
-                &mut self.entries[idx].1
-            }
-        }
+        self.map.entry(vid).or_default()
     }
 
     #[inline]
     pub fn insert(&mut self, vid: u32, chunks: Vec<Vec<Nbr>>) {
-        match self.find_index(&vid) {
-            Ok(idx) => self.entries[idx].1 = chunks,
-            Err(idx) => self.entries.insert(idx, (vid, chunks)),
-        }
+        self.map.insert(vid, chunks);
     }
 
     #[inline]
     pub fn contains_key(&self, vid: &u32) -> bool {
-        self.find_index(vid).is_ok()
+        self.map.contains_key(vid)
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.map.len()
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.map.is_empty()
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.map.clear();
     }
 
     #[inline]
-    pub fn iter(&self) -> std::slice::Iter<'_, (u32, Vec<Vec<Nbr>>)> {
-        self.entries.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (&u32, &Vec<Vec<Nbr>>)> {
+        self.map.iter()
     }
 
     #[inline]
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, (u32, Vec<Vec<Nbr>>)> {
-        self.entries.iter_mut()
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&u32, &mut Vec<Vec<Nbr>>)> {
+        self.map.iter_mut()
     }
 
     /// Remove entry for `vid` and return its chunks if present.
     #[inline]
     pub fn remove(&mut self, vid: &u32) -> Option<Vec<Vec<Nbr>>> {
-        match self.find_index(vid) {
-            Ok(idx) => Some(self.entries.remove(idx).1),
-            Err(_) => None,
-        }
+        self.map.remove(vid)
     }
 
     /// Total number of Nbr entries across all overflow chunks.
     pub fn total_nbr_count(&self) -> usize {
-        self.entries
-            .iter()
-            .map(|(_, chunks)| chunks.iter().map(Vec::len).sum::<usize>())
+        self.map
+            .values()
+            .map(|chunks| chunks.iter().map(Vec::len).sum::<usize>())
             .sum()
     }
 
     /// Estimate of wasted capacity inside overflow chunks (capacity - len).
     pub fn wasted_capacity(&self) -> usize {
-        self.entries
-            .iter()
-            .map(|(_, chunks)| {
+        self.map
+            .values()
+            .map(|chunks| {
                 chunks
                     .iter()
                     .map(|c| c.capacity().saturating_sub(c.len()))

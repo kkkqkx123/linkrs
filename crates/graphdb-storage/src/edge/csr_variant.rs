@@ -317,12 +317,49 @@ impl MutableCsrTrait for CsrVariant {
         dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> false)
     }
 
-    fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
-        dispatch!(self, delete_edge_by_offset(src_vid, offset, ts) -> false)
+    fn delete_edge_by_offset(
+        &mut self,
+        src_vid: u32,
+        offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+            CsrVariant::Single(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+            CsrVariant::None { .. } => Ok(false),
+        }
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
         dispatch!(self, revert_delete_by_offset(src_vid, offset, ts) -> false)
+    }
+
+    fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
+        dispatch_immutable!(self, nbr_at_offset(src_vid, offset) -> None)
+    }
+
+    fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
+        dispatch_immutable!(self, get_edge_physical(src_vid, dst) -> None)
+    }
+
+    fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
+        dispatch_immutable!(self, physical_edges_of(src_vid) -> Vec::new())
+    }
+
+    fn has_physical_entries(&self, vid: u32) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
+            CsrVariant::Single(csr) => csr.has_physical_entries(vid),
+            CsrVariant::None { .. } => false,
+        }
+    }
+
+    fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::Single(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::None { .. } => false,
+        }
     }
 
     fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
@@ -355,28 +392,34 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
             }
-            CsrVariant::Single(_) | CsrVariant::None { .. } => 0,
+            CsrVariant::Single(csr) => {
+                csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
+            }
+            CsrVariant::None { .. } => 0,
         }
     }
 
     fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
         match self {
             CsrVariant::Multiple(csr) => csr.reclaimable_count(vid, cutoff),
-            _ => 0,
+            CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff),
+            CsrVariant::None { .. } => 0,
         }
     }
 
     fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
-            _ => false,
+            CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff) > 0,
+            CsrVariant::None { .. } => false,
         }
     }
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_census(vid),
-            _ => (0, 0, 0),
+            CsrVariant::Single(csr) => csr.vertex_census(vid),
+            CsrVariant::None { .. } => (0, 0, 0),
         }
     }
 
@@ -425,9 +468,8 @@ impl CsrVariant {
 
     /// Compact with per-edge removal reporting.
     ///
-    /// Only the `Multiple` strategy tracks per-edge delete timestamps;
-    /// the other strategies fall back to their existing `compact_with_ts`
-    /// semantics.
+    /// Both retained strategies report reclaimed tombstones; the placeholder
+    /// keeps the no-op semantics.
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
@@ -438,7 +480,40 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
             }
-            _ => self.compact_with_ts(cutoff, reserve_ratio),
+            CsrVariant::Single(csr) => {
+                csr.compact_with_ts_reporting(cutoff, on_edge_removed)
+            }
+            CsrVariant::None { .. } => 0,
+        }
+    }
+
+    /// Whether one row holds any physically stored entry.
+    pub fn has_physical_entries(&self, vid: u32) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
+            CsrVariant::Single(csr) => csr.has_physical_entries(vid),
+            CsrVariant::None { .. } => false,
+        }
+    }
+
+    /// Whether the primary row of one vertex holds `edge_id`.
+    pub fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::Single(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::None { .. } => false,
+        }
+    }
+
+    /// Visit every physically stored entry of one vertex without allocating.
+    pub fn visit_physical<F>(&self, src_vid: u32, f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        match self {
+            CsrVariant::Multiple(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::Single(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::None { .. } => {}
         }
     }
 

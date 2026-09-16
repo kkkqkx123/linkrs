@@ -135,12 +135,21 @@ impl EdgeStore {
             let rows = crate::edge::node_group::group_size(group_bits);
             let base = crate::edge::node_group::group_base(gid, group_bits);
             let mut group_done = true;
+            let mut any_dead = false;
             for local in 0..rows {
                 if visited >= max_vertices {
                     group_done = false;
                     break;
                 }
                 let vid = base.saturating_add(local as u32);
+                if out_scan && gid < self.out_csr.group_count() {
+                    let (_, dead, _) = self.out_csr.vertex_census(vid);
+                    any_dead |= dead > 0;
+                }
+                if in_scan && gid < self.in_csr.group_count() {
+                    let (_, dead, _) = self.in_csr.vertex_census(vid);
+                    any_dead |= dead > 0;
+                }
                 let mut needs = false;
                 if out_scan && gid < self.out_csr.group_count() {
                     needs |= self.out_csr.vertex_needs_compact(vid, bound);
@@ -166,7 +175,10 @@ impl EdgeStore {
                         self.mvcc.record_deletion(edge_id, delete_ts);
                     });
             }
-            if group_done {
+            // Keep the hint while any tombstone physically remains, even when
+            // the current bound covers nothing yet. Clearing early would drop
+            // tail groups that a later watermark could still reclaim.
+            if group_done && !any_dead {
                 if out_scan {
                     self.out_csr.clear_reclaim_hint(gid);
                 }
@@ -267,14 +279,12 @@ impl EdgeStore {
 
     /// Get deletion statistics for the sharded table.
     pub fn deletion_stats(&self) -> DeletionStats {
-        let tombstone_ts = self.mvcc.tombstones.values().copied();
-        let oldest = tombstone_ts.clone().min();
-        let newest = tombstone_ts.max();
+        let stats = self.mvcc.tombstone_stats();
         DeletionStats {
             total_live_edges: self.out_csr.edge_count(),
-            total_deleted_edges: self.mvcc.tombstones.len() as u64,
-            oldest_deletion_ts: oldest,
-            newest_deletion_ts: newest,
+            total_deleted_edges: stats.count as u64,
+            oldest_deletion_ts: stats.oldest_delete_ts,
+            newest_deletion_ts: stats.newest_delete_ts,
         }
     }
 }
