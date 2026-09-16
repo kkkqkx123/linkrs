@@ -261,6 +261,22 @@ fn scan_mutable(args: ScanArgs) {
         }
     }
 
+        // Column pruning: fetch the projection plus any predicate-only columns
+    // in one storage read instead of decoding every column per edge.
+    // `None` still means all columns.
+    let fetch_columns: Option<Vec<String>> = match *args.projection {
+        None => None,
+        Some(ref names) => {
+            let mut cols = names.clone();
+            for extra in args.predicate_columns.iter() {
+                if !cols.iter().any(|c| c == extra) {
+                    cols.push(extra.clone());
+                }
+            }
+            Some(cols)
+        }
+    };
+
     for (src_vid, nbr) in iter {
         args.state.mutable_consumed += 1;
         if !args
@@ -287,8 +303,7 @@ fn scan_mutable(args: ScanArgs) {
             args.store,
             nbr.edge_id,
             args.ts,
-            args.projection,
-            args.predicate_columns,
+            fetch_columns.as_deref(),
         );
         if !args
             .predicate
@@ -391,8 +406,8 @@ fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Tim
     }
 }
 
-/// Decode edge properties keeping projected columns plus any extra columns
-/// required by pushed scan predicates.
+/// Decode edge properties for the precomputed fetch set (projection plus
+/// any extra columns required by pushed scan predicates).
 ///
 /// MVCCManager is the single visibility authority; the property row
 /// timestamps are physical replicas and must not decide visibility here.
@@ -400,26 +415,19 @@ fn decode_edge_properties(
     store: &EdgeStore,
     edge_id: graphdb_core::types::EdgeId,
     ts: Timestamp,
-    projection: &Option<Vec<String>>,
-    predicate_columns: &[String],
+    fetch: Option<&[String]>,
 ) -> Vec<(String, Value)> {
     if !store.mvcc.is_edge_visible(edge_id, ts) {
         return Vec::new();
     }
     // Snapshot read through the property version chain so old readers see
     // the before-image instead of the latest write.
-    let props_opt = store.properties.get_by_edge_id(edge_id, ts);
+    let props_opt = store.properties.get_projected_by_edge_id(edge_id, ts, fetch);
     props_opt
         .map(|props| {
             props
                 .into_iter()
                 .filter_map(|(k, v)| v.map(|value| (k, value)))
-                .filter(|(k, _)| {
-                    projection.as_ref().is_none_or(|names| {
-                        names.iter().any(|name| name == k)
-                            || predicate_columns.iter().any(|name| name == k)
-                    })
-                })
                 .collect()
         })
         .unwrap_or_default()

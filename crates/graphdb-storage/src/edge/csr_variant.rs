@@ -14,17 +14,13 @@
 //!
 //! - `CsrVariant::Multiple`: Mutable CSR with dynamic capacity growth
 //! - `CsrVariant::Single`: Mutable single-edge CSR
-//! - `CsrVariant::MultiSingle`: Multi-single mutable CSR
-//! - `CsrVariant::Labeled`: Label-aware mutable CSR
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
 
 use graphdb_core::{StorageError, StorageResult};
 
 use super::{
-    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr,
-    LabeledMutableCsrIterator, MultiSingleMutableCsr, MultiSingleMutableCsrIterator, MutableCsr,
-    MutableCsrIterator, MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator,
-    Timestamp, VertexId,
+    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, MutableCsr, MutableCsrIterator,
+    MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator, Timestamp, VertexId,
 };
 
 /// Macro for dispatching method calls to the underlying CSR variant (mutable methods).
@@ -50,8 +46,6 @@ macro_rules! dispatch {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method($($arg),+),
             CsrVariant::Single(csr) => csr.$method($($arg),+),
-            CsrVariant::MultiSingle(csr) => csr.$method($($arg),+),
-            CsrVariant::Labeled(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -61,8 +55,6 @@ macro_rules! dispatch {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method(),
             CsrVariant::Single(csr) => csr.$method(),
-            CsrVariant::MultiSingle(csr) => csr.$method(),
-            CsrVariant::Labeled(csr) => csr.$method(),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -76,8 +68,6 @@ macro_rules! dispatch_immutable {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method($($arg),+),
             CsrVariant::Single(csr) => csr.$method($($arg),+),
-            CsrVariant::MultiSingle(csr) => csr.$method($($arg),+),
-            CsrVariant::Labeled(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -87,8 +77,6 @@ macro_rules! dispatch_immutable {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method(),
             CsrVariant::Single(csr) => csr.$method(),
-            CsrVariant::MultiSingle(csr) => csr.$method(),
-            CsrVariant::Labeled(csr) => csr.$method(),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -127,10 +115,6 @@ pub enum CsrVariant {
     Multiple(MutableCsr),
     /// Single-edge mutable CSR: each vertex has at most one outgoing edge
     Single(SingleMutableCsr),
-    /// Multi-single mutable CSR: each vertex has multiple outgoing edges (limited by capacity)
-    MultiSingle(MultiSingleMutableCsr),
-    /// Label-aware mutable CSR: edges grouped by label for fast label-based queries
-    Labeled(LabeledMutableCsr),
     /// No-edge placeholder: vertices exist but have no outgoing edges
     None { vertex_capacity: usize },
 }
@@ -153,13 +137,6 @@ impl CsrVariant {
             EdgeStrategy::Single => Ok(CsrVariant::Single(SingleMutableCsr::with_capacity(
                 vertex_capacity,
             ))),
-            EdgeStrategy::MultiSingle { max_edges } => Ok(CsrVariant::MultiSingle(
-                MultiSingleMutableCsr::with_capacity(vertex_capacity, max_edges),
-            )),
-            EdgeStrategy::Labeled => Ok(CsrVariant::Labeled(LabeledMutableCsr::with_capacity(
-                vertex_capacity,
-                edge_capacity,
-            ))),
             EdgeStrategy::None => Ok(CsrVariant::None { vertex_capacity }),
         }
     }
@@ -169,8 +146,6 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.clear(),
             CsrVariant::Single(csr) => csr.clear(),
-            CsrVariant::MultiSingle(csr) => csr.clear(),
-            CsrVariant::Labeled(csr) => csr.clear(),
             CsrVariant::None { .. } => {}
         }
     }
@@ -179,7 +154,7 @@ impl CsrVariant {
     ///
     /// Returns:
     /// - `Multiple(ratio)`: Fragmentation ratio of the CSR
-    /// - `Single/MultiSingle/Labeled/None`: 0.0 (no fragmentation)
+    /// - `Single/None`: 0.0 (no fragmentation)
     pub fn fragmentation_ratio(&self) -> f32 {
         match self {
             CsrVariant::Multiple(csr) => csr.fragmentation_ratio(),
@@ -224,10 +199,9 @@ impl CsrVariant {
         let bpe = bytes / edges;
         if bpe == 0 {
             let fallback = match self {
-                CsrVariant::Multiple(_)
-                | CsrVariant::Single(_)
-                | CsrVariant::MultiSingle(_)
-                | CsrVariant::Labeled(_) => std::mem::size_of::<super::Nbr>(),
+                CsrVariant::Multiple(_) | CsrVariant::Single(_) => {
+                    std::mem::size_of::<super::Nbr>()
+                }
                 CsrVariant::None { .. } => 0,
             };
             log::warn!(
@@ -249,8 +223,6 @@ impl CsrBase for CsrVariant {
             CsrVariant::None { vertex_capacity } => *vertex_capacity,
             CsrVariant::Multiple(csr) => csr.vertex_capacity(),
             CsrVariant::Single(csr) => csr.vertex_capacity(),
-            CsrVariant::MultiSingle(csr) => csr.vertex_capacity(),
-            CsrVariant::Labeled(csr) => csr.vertex_capacity(),
         }
     }
 
@@ -272,16 +244,6 @@ impl CsrBase for CsrVariant {
             }
             CsrVariant::Single(csr) => {
                 let mut result = vec![2u8];
-                result.extend(csr.dump());
-                result
-            }
-            CsrVariant::MultiSingle(csr) => {
-                let mut result = vec![3u8];
-                result.extend(csr.dump());
-                result
-            }
-            CsrVariant::Labeled(csr) => {
-                let mut result = vec![4u8];
                 result.extend(csr.dump());
                 result
             }
@@ -320,18 +282,6 @@ impl CsrBase for CsrVariant {
                 *self = CsrVariant::Single(csr);
                 Ok(())
             }
-            3 => {
-                let mut csr = MultiSingleMutableCsr::new();
-                csr.load(&data[1..])?;
-                *self = CsrVariant::MultiSingle(csr);
-                Ok(())
-            }
-            4 => {
-                let mut csr = LabeledMutableCsr::new();
-                csr.load(&data[1..])?;
-                *self = CsrVariant::Labeled(csr);
-                Ok(())
-            }
             _ => Err(graphdb_core::StorageError::deserialize_error(
                 "Invalid CSR variant tag in serialized data",
             )),
@@ -350,8 +300,6 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::None { .. } => Err(StorageError::invalid_operation(
                 "no edges stored for this edge type".to_string(),
             )),
@@ -401,21 +349,11 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::None { .. } => std::mem::size_of::<Self>(),
             CsrVariant::Multiple(csr) => csr.used_memory_size(),
             CsrVariant::Single(csr) => csr.used_memory_size(),
-            CsrVariant::MultiSingle(csr) => csr.used_memory_size(),
-            CsrVariant::Labeled(csr) => csr.used_memory_size(),
         }
     }
 }
 
 impl CsrVariant {
-    /// Get the configured max edges per vertex (only meaningful for MultiSingle).
-    pub fn edges_per_vertex(&self) -> usize {
-        match self {
-            CsrVariant::MultiSingle(csr) => csr.edges_per_vertex(),
-            _ => 0,
-        }
-    }
-
     /// Iterate edges of a vertex without allocating (only for Multiple strategy).
     pub fn iter_edges_of(
         &self,
@@ -433,8 +371,6 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter(ts)),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter(ts)),
-            CsrVariant::MultiSingle(csr) => CsrIterator::MultiSingle(csr.iter(ts)),
-            CsrVariant::Labeled(csr) => CsrIterator::Labeled(csr.iter(ts)),
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
@@ -447,8 +383,6 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter_all()),
-            CsrVariant::MultiSingle(csr) => CsrIterator::MultiSingle(csr.iter_all()),
-            CsrVariant::Labeled(csr) => CsrIterator::Labeled(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
@@ -494,10 +428,6 @@ pub enum CsrIterator<'a> {
     Multiple(MutableCsrIterator<'a>),
     /// Iterator over single-edge CSR
     Single(SingleMutableCsrIterator<'a>),
-    /// Iterator over multi-single CSR
-    MultiSingle(MultiSingleMutableCsrIterator<'a>),
-    /// Iterator over labeled CSR
-    Labeled(LabeledMutableCsrIterator<'a>),
     /// Empty iterator
     None,
 }
@@ -509,8 +439,6 @@ impl<'a> Iterator for CsrIterator<'a> {
         match self {
             CsrIterator::Multiple(iter) => iter.next(),
             CsrIterator::Single(iter) => iter.next(),
-            CsrIterator::MultiSingle(iter) => iter.next(),
-            CsrIterator::Labeled(iter) => iter.next(),
             CsrIterator::None => None,
         }
     }
@@ -541,28 +469,19 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_single_csr_variant() {
-        let mut csr = CsrVariant::from_strategy_with_overflow(
-            EdgeStrategy::MultiSingle { max_edges: 4 },
-            10,
-            100,
-            4096,
-        )
-        .unwrap();
-
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    fn test_removed_variant_tags_are_rejected() {
+        for tag in [3u8, 4u8] {
+            let mut payload = vec![tag];
+            payload.extend_from_slice(&[0u8; 8]);
+            let mut csr = CsrVariant::from_strategy_with_overflow(
+                EdgeStrategy::Multiple,
+                10,
+                100,
+                4096,
+            )
             .unwrap();
-        assert_eq!(csr.edge_count(), 1);
-    }
-
-    #[test]
-    fn test_labeled_csr_variant() {
-        let mut csr =
-            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
-
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        assert_eq!(csr.edge_count(), 1);
+            assert!(csr.load(&payload).is_err());
+        }
     }
 
     #[test]

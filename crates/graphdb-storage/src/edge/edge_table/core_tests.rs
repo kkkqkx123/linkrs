@@ -496,3 +496,170 @@ fn test_with_gate_methods_hide_foreign_pending_edge() {
     assert_eq!(table.in_edges_with_gate(1, foreign, &gate).len(), 1);
     assert_eq!(table.scan_with_gate(foreign, &gate).len(), 1);
 }
+
+/// Unified row space invariant: property mappings never outlive the
+/// authority, and every live edge owns a property row.
+fn assert_row_space_unified(table: &EdgeTable) {
+    for edge_id in table.properties.edge_ids() {
+        assert!(
+            table.mvcc.edge_timestamps.contains_key(&edge_id),
+            "orphan property mapping for {:?}",
+            edge_id
+        );
+    }
+    for (edge_id, ts) in table.mvcc.edge_timestamps.iter() {
+        if ts.delete_ts == Timestamp::MAX {
+            assert!(
+                table.properties.get_row_for_edge(*edge_id).is_some(),
+                "live edge {:?} without property row",
+                edge_id
+            );
+        }
+    }
+    for (_, nbr) in table.out_csr.iter_all().chain(table.in_csr.iter_all()) {
+        assert!(
+            table.mvcc.edge_timestamps.contains_key(&nbr.edge_id),
+            "orphan CSR row for {:?}",
+            nbr.edge_id
+        );
+    }
+}
+
+#[test]
+fn test_unified_row_space_insert_delete_reclaim_remap() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table.insert_edge(0, 2, 0, &[], 100).unwrap();
+    table.insert_edge(1, 2, 0, &[], 110).unwrap();
+    // Edges without properties own rows too.
+    assert_eq!(table.properties.row_count(), 3);
+    assert_row_space_unified(&table);
+
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert_row_space_unified(&table);
+
+    table.compact_properties(200);
+    assert_eq!(table.properties.row_count(), 2);
+    assert_row_space_unified(&table);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+
+    // Rebuilding the topology rows keeps the unified mapping intact.
+    let mapping = std::collections::HashMap::from([(5u32, 6u32)]);
+    table
+        .remap_vertex_ids(Some(&mapping), Some(&mapping))
+        .unwrap();
+    assert_row_space_unified(&table);
+    assert!(table.get_edge(0, 2, 0, 250).is_some());
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_authority_overrules_stale_tombstone() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    // A tombstone entry without an authority deletion must not hide a live edge.
+    table.mvcc.record_deletion(EdgeId(0), 150);
+    assert!(table.mvcc.is_edge_visible(EdgeId(0), 200));
+    assert!(table.has_edge(0, 1, 0, 200));
+}
+
+#[test]
+fn test_single_time_travel_survives_flush_load() {
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "spouse".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![StoragePropertyDef::new(
+            "weight".to_string(),
+            DataType::Double,
+        )],
+        oe_strategy: EdgeStrategy::Single,
+        ie_strategy: EdgeStrategy::Single,
+        schema_version: 1,
+    };
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(!table.has_edge(1, 2, 0, 99));
+    assert!(table.has_edge(1, 2, 0, 100));
+
+    let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            temp_dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("flush should succeed");
+
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "spouse".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![StoragePropertyDef::new(
+            "weight".to_string(),
+            DataType::Double,
+        )],
+        oe_strategy: EdgeStrategy::Single,
+        ie_strategy: EdgeStrategy::Single,
+        schema_version: 1,
+    };
+    let mut loaded = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    loaded.load(temp_dir.path()).expect("load should succeed");
+    assert!(!loaded.has_edge(1, 2, 0, 99));
+    assert!(loaded.has_edge(1, 2, 0, 100));
+    let edge = loaded.get_edge(1, 2, 0, 100).unwrap();
+    assert_eq!(
+        edge.properties
+            .iter()
+            .find(|(k, _)| k == "weight")
+            .map(|(_, v)| v),
+        Some(&Value::Double(1.5))
+    );
+    assert_eq!(loaded.loaded_copy_mismatches(), (0, 0, 0));
+}
+
+#[test]
+fn test_scan_iterator_applies_limit_while_advancing() {
+    use crate::edge::edge_table::iterator::EdgeTableScanIterator;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for dst in 1..=5u32 {
+        table.insert_edge(0, dst, 0, &[], 100).unwrap();
+    }
+
+    let limited: Vec<_> = EdgeTableScanIterator::with_limit(&table, 200, Some(2)).collect();
+    assert_eq!(limited.len(), 2);
+
+    let streamed: Vec<_> = table.iter(200).collect();
+    assert_eq!(streamed.len(), 5);
+    assert_eq!(table.scan(200).len(), streamed.len());
+
+    let mut partial = table.iter(200);
+    assert!(partial.next().is_some());
+    assert!(partial.next().is_some());
+}
+
+#[test]
+fn test_visibility_consistent_across_point_adjacency_and_scan() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    assert!(table.get_edge(0, 1, 0, 199).is_some());
+    assert_eq!(table.out_edges(0, 199).len(), 1);
+    assert_eq!(table.scan(199).len(), 1);
+
+    assert!(table.get_edge(0, 1, 0, 200).is_none());
+    assert!(table.out_edges(0, 200).is_empty());
+    assert!(table.scan(200).is_empty());
+}

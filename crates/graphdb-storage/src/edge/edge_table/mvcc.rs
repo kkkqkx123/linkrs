@@ -1,10 +1,12 @@
 //! MVCC and tombstone management: snapshot isolation and garbage collection.
 //!
-//! Authority order for edge liveness: `edge_timestamps` first, the tombstone
-//! table second, CSR row stamps and adjacency `Nbr` stamps only as physical
-//! projections. No read path may consult a single copy alone; every
-//! visibility decision goes through [`MVCCManager::is_edge_visible`] (or its
-//! pending-aware overload) so the copies cannot drift apart.
+//! Visibility authority is `edge_timestamps` alone. The tombstone table is a
+//! derived index for garbage-collection enumeration, maintained through the
+//! record/remove entry points; it never overrules the authority. CSR row
+//! stamps and adjacency `Nbr` stamps are physical projections for collection
+//! only. Every visibility decision goes through
+//! [`MVCCManager::is_edge_visible`] (or its pending-aware overload) so the
+//! copies cannot drift apart.
 
 use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
@@ -228,29 +230,27 @@ impl MVCCManager {
 
     /// Check if an edge is visible at a given timestamp.
     ///
-    /// This is the single entry point for all MVCC visibility decisions:
-    /// per-edge timestamps first, then the authoritative tombstone table.
+    /// This is the single entry point for all MVCC visibility decisions.
+    /// When the authority record exists it decides alone; the tombstone
+    /// table is consulted only for edges without an authority record.
     pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
-            if !crate::mvcc_visibility::Visibility::is_edge_visible(
+            return crate::mvcc_visibility::Visibility::is_edge_visible(
                 ts,
                 ts_info.create_ts,
                 ts_info.delete_ts,
-            ) {
-                return false;
-            }
+            );
         }
         !self.is_tombstoned(edge_id, ts)
     }
 
     /// Pending-aware overload of [`Self::is_edge_visible`].
     ///
-    /// Same authority order, but creation/deletion stamps owned by foreign
+    /// Same single authority, but creation/deletion stamps owned by foreign
     /// uncommitted transactions are filtered through `gate`: a foreign
-    /// pending creation hides the edge, a foreign pending deletion (in
-    /// either the authoritative stamps or a tombstone-only entry) is
-    /// ignored. The original function is retained for bare-table callers
-    /// without a transaction slot view. Operation-layer scans funnel through
+    /// pending creation hides the edge, a foreign pending deletion in the
+    /// authority stamps is ignored. Edges without an authority record fall
+    /// back to the tombstone table. Operation-layer scans funnel through
     /// the table `*_with_gate` methods.
     pub fn is_edge_visible_with_gate(
         &self,
@@ -259,16 +259,15 @@ impl MVCCManager {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
     ) -> bool {
         if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
-            if !gate.is_edge_visible(ts, ts_info.create_ts, ts_info.delete_ts) {
-                return false;
-            }
             if ts_info.delete_ts != Timestamp::MAX
                 && ts_info.delete_ts <= ts
                 && gate.is_foreign_pending(ts, ts_info.delete_ts)
             {
                 return true;
             }
-        } else if let Some(delete_ts) = self.tombstones.get(&edge_id) {
+            return gate.is_edge_visible(ts, ts_info.create_ts, ts_info.delete_ts);
+        }
+        if let Some(delete_ts) = self.tombstones.get(&edge_id) {
             if *delete_ts <= ts && gate.is_foreign_pending(ts, *delete_ts) {
                 return true;
             }

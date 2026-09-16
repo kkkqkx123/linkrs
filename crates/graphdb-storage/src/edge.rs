@@ -31,8 +31,6 @@ pub mod csr_variant;
 pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
-pub mod labeled_mutable_csr;
-pub mod multi_single_mutable_csr;
 pub mod mutable_csr;
 pub mod property_schema;
 pub mod single_mutable_csr;
@@ -47,8 +45,6 @@ pub use fragmentation_stats::FragmentationStats;
 pub use graphdb_core::types::EdgeStrategy;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
-pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
-pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
@@ -224,9 +220,9 @@ impl EdgeSchema {
 /// compaction and debugging. `delete_ts` is the deletion timestamp
 /// (`Timestamp::MAX` means alive), also maintained as physical state.
 ///
-/// Visibility authority lives in `MVCCManager` (`edge_timestamps` plus the
-/// tombstone table): query paths must decide visibility through
-/// `is_edge_visible`, never by reading these row fields directly.
+/// Visibility authority lives in `MVCCManager` (`edge_timestamps`): query
+/// paths must decide visibility through `is_edge_visible`, never by reading
+/// these row fields directly.
 ///
 /// Topology and properties are decoupled: the CSR entry carries only the
 /// topology (endpoint, rank, edge_id, timestamps). Edge properties are

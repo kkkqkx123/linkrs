@@ -102,7 +102,7 @@ impl EdgeStore {
                     .nullable(p.nullable)
             })
             .collect();
-        let properties = CsrWithProperties::new(config.initial_vertex_capacity, prop_schemas);
+        let properties = CsrWithProperties::new(prop_schemas);
 
         let label_id = schema.label_id;
         let label_name = schema.label_name.clone();
@@ -173,6 +173,10 @@ impl EdgeStore {
         self.stats_manager = Some(stats);
     }
 
+    /// Single row-location entry for point lookups: topology lookup via the
+    /// CSR plus the authoritative MVCC visibility check. Adjacency, existence
+    /// and record reads must funnel through here rather than reading CSR
+    /// timestamps directly.
     fn merged_get_edge(
         &self,
         csr: &CsrVariant,
@@ -282,9 +286,19 @@ impl EdgeStore {
         nbr: Nbr,
         query_ts: Timestamp,
     ) -> EdgeRecord {
+        self.edge_record_from_nbr_projected(src, nbr, query_ts, None)
+    }
+
+    pub(crate) fn edge_record_from_nbr_projected(
+        &self,
+        src: u32,
+        nbr: Nbr,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> EdgeRecord {
         let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
         let rank = nbr.rank;
-        let properties = self.properties_for_edge(nbr.edge_id, query_ts);
+        let properties = self.properties_for_edge_projected(nbr.edge_id, query_ts, projection);
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
@@ -294,6 +308,18 @@ impl EdgeStore {
     }
 
     fn properties_for_edge(&self, edge_id: EdgeId, query_ts: Timestamp) -> Vec<(String, Value)> {
+        self.properties_for_edge_projected(edge_id, query_ts, None)
+    }
+
+    /// Topology-first property read: MVCC authority decides visibility,
+    /// then only the projected columns are decoded. `None` decodes all
+    /// columns, `Some(&[])` decodes none.
+    fn properties_for_edge_projected(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
         // MVCCManager is the single visibility authority. The CSR row
         // timestamps are physical replicas kept in sync on the write path;
         // they must not decide query visibility here.
@@ -303,7 +329,7 @@ impl EdgeStore {
         // Snapshot read through the property version chain so an old reader
         // observes the before-image, not the latest write.
         self.properties
-            .get_by_edge_id(edge_id, query_ts)
+            .get_projected_by_edge_id(edge_id, query_ts, projection)
             .map(|rows| {
                 rows.into_iter()
                     .filter_map(|(name, value)| value.map(|v| (name, v)))
@@ -324,9 +350,7 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
 
-        if self.schema.oe_strategy == super::super::EdgeStrategy::Multiple {
-            // Multiple-edge strategy always stores out edges; no extra check.
-        } else if self.schema.oe_strategy == super::super::EdgeStrategy::None {
+        if self.schema.oe_strategy == super::super::EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
                 "Cannot insert edge: out-edge strategy is None".to_string(),
             ));
@@ -362,17 +386,16 @@ impl EdgeStore {
         // Record edge creation in the centralized MVCC store.
         self.mvcc.record_creation(edge_id, ts);
 
-        // Insert property rows and the out-direction CSR entry. Each fallible
-        // step rolls back everything it already touched on failure so a failed
-        // insert leaves no half-visible edge behind.
-        if !converted_values.is_empty() {
-            if let Err(e) = self
-                .properties
-                .insert_for_edge(edge_id, &converted_values, ts)
-            {
-                self.mvcc.remove_edge_timestamps(edge_id);
-                return Err(e);
-            }
+        // Insert the property row for every edge, including edges without
+        // properties, so the property mapping always covers the live edges.
+        // Each fallible step rolls back everything it already touched on
+        // failure so a failed insert leaves no half-visible edge behind.
+        if let Err(e) = self
+            .properties
+            .insert_for_edge(edge_id, &converted_values, ts)
+        {
+            self.mvcc.remove_edge_timestamps(edge_id);
+            return Err(e);
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
@@ -1089,21 +1112,7 @@ impl EdgeStore {
     }
 
     pub fn memory_size(&self) -> usize {
-        let total = self.used_memory_size();
-        let mutable = self.mutable_csr_memory_size();
-        let out_epv = self.out_csr.edges_per_vertex();
-        let in_epv = self.in_csr.edges_per_vertex();
-        if out_epv > 0 || in_epv > 0 {
-            log::trace!(
-                "EdgeTable[{}] memory: {} bytes (mutable={}), MultiSingle edges_per_vertex (out={}, in={})",
-                self.label,
-                total,
-                mutable,
-                out_epv,
-                in_epv
-            );
-        }
-        total
+        self.used_memory_size()
     }
 
     pub fn used_memory_size(&self) -> usize {
@@ -1379,8 +1388,8 @@ impl EdgeStore {
         )?;
 
         let mut props_payload = Vec::new();
-        super::persistence::serialize_csr_properties(&mut self.properties, &mut props_payload)?;
-        let edge_count = self.next_edge_id.0 as u32;
+        super::persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
+        let edge_count = self.properties.row_count() as u32;
         super::persistence::write_pages_to_file(
             &path.join("properties.bin"),
             &props_payload,
@@ -1452,36 +1461,17 @@ impl EdgeStore {
 
         let props_path = path.join("properties.bin");
         self.properties = {
-            let p = super::persistence::load_csr_properties(&props_path)?;
-            let mut new_props = p;
-            // Rebuild columns to match current schema if needed
-            let current_schema_names: std::collections::HashSet<_> =
-                self.schema.properties.iter().map(|p| &p.name).collect();
-            let existing_names: std::collections::HashSet<_> = new_props
-                .property_schema()
+            let prop_schemas: Vec<PropertySchema> = self
+                .schema
+                .properties
                 .iter()
-                .map(|s| &s.name)
-                .collect();
-            if current_schema_names != existing_names {
-                // Schema mismatch: rebuild from schema
-                let prop_schemas: Vec<crate::edge::property_schema::PropertySchema> = self
-                    .schema
-                    .properties
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        crate::edge::property_schema::PropertySchema::new(
-                            p.name.clone(),
-                            i as i32,
-                            p.data_type.clone(),
-                        )
+                .enumerate()
+                .map(|(i, p)| {
+                    PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
                         .nullable(p.nullable)
-                    })
-                    .collect();
-                new_props =
-                    crate::edge::CsrWithProperties::new(new_props.vertex_capacity(), prop_schemas);
-            }
-            new_props
+                })
+                .collect();
+            super::persistence::load_csr_properties(&props_path, prop_schemas)?
         };
 
         if self.next_edge_id.0 == 0 {

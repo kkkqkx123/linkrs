@@ -1,16 +1,15 @@
 //! CSR with Properties — ladybug-style columnar storage.
 //!
-//! Properties are stored in parallel column arrays aligned with CSR row
-//! positions. Row `pos = offsets[src] + edge_index` gives the column row for
-//! that edge's properties — no `prop_offset` indirection inside Nbr.
+//! Properties are stored in parallel column arrays keyed by `EdgeId` through
+//! the edge-to-row map. The topology CSR owns the only adjacency index; this
+//! store keeps no per-vertex offsets, lengths, or append heads.
 //!
 //! This implementation uses `Column` (continuous arrays) instead of
 //! `HashMap<u32, Value>` for cache-friendly scans and lower memory overhead.
 //!
-//! Authority order for edge liveness (see `edge_table::mvcc`):
-//! `edge_timestamps` first, the tombstone table second, these CSR row stamps
-//! only as a physical projection. Row stamps are kept in sync on the write
-//! path but must never decide query visibility alone.
+//! Visibility authority lives in `MVCCManager` (`edge_timestamps`): these CSR
+//! row stamps are only a physical projection kept in sync on the write path
+//! for garbage collection. They must never decide query visibility alone.
 
 use std::collections::{HashMap, HashSet};
 
@@ -54,18 +53,12 @@ impl RowVisibility {
     }
 }
 
-/// Columnar property storage aligned with CSR row positions.
+/// Columnar property storage keyed by edge id.
+///
+/// Every edge owns exactly one row, including edges without properties.
+/// Row identity is the edge-to-row map; there is no per-vertex addressing.
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {
-    offsets: Vec<u32>,
-    lengths: Vec<u32>,
-    /// Current append position per vertex (`offsets[v] + lengths[v]`), kept
-    /// exact on every insert so `offsets` can be rebuilt lazily.
-    heads: Vec<u32>,
-    /// Whether `offsets` is stale (inserts happened since the last rebuild).
-    offsets_dirty: bool,
-    total_edges: u64,
-    vertex_capacity: usize,
     property_schema: Vec<PropertySchema>,
     property_columns: Vec<Column>,
     visibility: Vec<RowVisibility>,
@@ -75,8 +68,7 @@ pub struct CsrWithProperties {
 }
 
 impl CsrWithProperties {
-    pub fn new(vertex_capacity: usize, property_schema: Vec<PropertySchema>) -> Self {
-        let vc = vertex_capacity.max(1);
+    pub fn new(property_schema: Vec<PropertySchema>) -> Self {
         let mut property_columns = Vec::with_capacity(property_schema.len());
         for schema in &property_schema {
             let col = Column::new(
@@ -88,12 +80,6 @@ impl CsrWithProperties {
             property_columns.push(col);
         }
         Self {
-            offsets: vec![0; vc + 1],
-            lengths: vec![0; vc],
-            heads: vec![0; vc],
-            offsets_dirty: false,
-            total_edges: 0,
-            vertex_capacity: vc,
             property_schema,
             property_columns,
             visibility: Vec::new(),
@@ -107,52 +93,8 @@ impl CsrWithProperties {
         &self.property_schema
     }
 
-    pub fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
-    }
-
-    pub fn edge_count(&self) -> u64 {
-        self.total_edges
-    }
-
     pub fn row_count(&self) -> usize {
         self.row_count
-    }
-
-    fn ensure_vertex_capacity(&mut self, min: usize) {
-        if min <= self.vertex_capacity {
-            return;
-        }
-        let new_cap = (min as f64 * 1.25).ceil() as usize;
-        self.offsets.resize(new_cap + 1, 0);
-        self.lengths.resize(new_cap, 0);
-        self.heads.resize(new_cap, 0);
-        self.vertex_capacity = new_cap;
-    }
-
-    /// Rebuild the materialized `offsets` prefix array from `lengths` and
-    /// refresh the per-vertex append heads. Called lazily at freeze/checkpoint
-    /// boundaries (and serialization) instead of after every insert.
-    fn rebuild_offsets(&mut self) {
-        if self.offsets.len() < self.lengths.len() + 1 {
-            self.offsets.resize(self.lengths.len() + 1, 0);
-        }
-        if self.heads.len() < self.lengths.len() {
-            self.heads.resize(self.lengths.len(), 0);
-        }
-        self.offsets[0] = 0;
-        for i in 0..self.lengths.len() {
-            self.offsets[i + 1] = self.offsets[i] + self.lengths[i];
-            self.heads[i] = self.offsets[i + 1];
-        }
-        self.offsets_dirty = false;
-    }
-
-    /// Ensure the materialized offsets array reflects all inserts so far.
-    pub fn ensure_offsets(&mut self) {
-        if self.offsets_dirty {
-            self.rebuild_offsets();
-        }
     }
 
     /// Allocate a new row and populate it with the given values.
@@ -220,101 +162,61 @@ impl CsrWithProperties {
         }
     }
 
-    /// Insert an edge's properties at the CSR position for `src`.
-    pub fn insert_properties(
-        &mut self,
-        src: u32,
-        edge_id: EdgeId,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-    ) -> StorageResult<u32> {
-        self.ensure_vertex_capacity(src as usize + 1);
-        // The append head is kept exact on every insert, so the materialized
-        // offsets array can stay stale until the next rebuild.
-        let pos = self.heads[src as usize] as usize;
-        if pos >= self.visibility.len() {
-            self.visibility.resize(pos + 1, RowVisibility::new(0));
-        }
-        self.visibility[pos] = RowVisibility::new(ts);
-        // Columns grow inside `set_versioned` below; pre-sizing here would
-        // record a spurious [0, ts) baseline version for every fresh row.
-        self.row_count += 1;
-
-        for (i, schema) in self.property_schema.iter().enumerate() {
-            let col = &mut self.property_columns[i];
-            if let Some((_, v)) = properties.iter().find(|(k, _)| k == &schema.name) {
-                col.set_versioned(pos, Some(v), ts)?;
-            } else {
-                let _ = col.set_versioned(pos, None, ts);
-            }
-        }
-
-        self.edge_to_row.insert(edge_id, pos as u32);
-        self.lengths[src as usize] += 1;
-        self.heads[src as usize] += 1;
-        self.total_edges += 1;
-        self.offsets_dirty = true;
-        Ok(pos as u32)
-    }
-
-    /// Positional property read — fast path for scans.
-    pub fn get_properties(
-        &self,
-        src: u32,
-        edge_index: usize,
-        query_ts: Timestamp,
-    ) -> Option<Vec<(String, Option<Value>)>> {
-        let start = self.positional_start(src)?;
-        let len = *self.lengths.get(src as usize)? as usize;
-        if edge_index >= len {
-            return None;
-        }
-        let pos = start + edge_index;
-        let vis = self.visibility.get(pos)?;
-        if !vis.is_visible_at(query_ts) {
-            return None;
-        }
-        Some(
-            self.property_schema
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                    (s.name.clone(), v)
-                })
-                .collect(),
-        )
-    }
-
-    /// Start CSR row position for `src`, derived from the always-exact heads
-    /// and lengths arrays so it stays correct while offsets are stale.
-    fn positional_start(&self, src: u32) -> Option<usize> {
-        let head = *self.heads.get(src as usize)? as usize;
-        let len = *self.lengths.get(src as usize)? as usize;
-        Some(head - len)
-    }
-
-    /// Lookup by `EdgeId`.
-    pub fn get_by_edge_id(
+    /// Read the property row for `edge_id` at `query_ts`, decoding only the
+    /// projected columns.
+    ///
+    /// `projection` selects which columns to decode: `None` decodes every
+    /// column, `Some(&[])` decodes none (topology-only read). Unknown names
+    /// are skipped. Visibility is still enforced: an invisible edge yields
+    /// `None`, a visible one yields `Some` (possibly empty).
+    pub fn get_projected_by_edge_id(
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
+        projection: Option<&[String]>,
     ) -> Option<Vec<(String, Option<Value>)>> {
         let pos = *self.edge_to_row.get(&edge_id)? as usize;
         let vis = self.visibility.get(pos)?;
         if !vis.is_visible_at(query_ts) {
             return None;
         }
-        Some(
-            self.property_schema
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                    (s.name.clone(), v)
-                })
-                .collect(),
-        )
+        match projection {
+            None => Some(
+                self.property_schema
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                        (s.name.clone(), v)
+                    })
+                    .collect(),
+            ),
+            Some(names) => {
+                if names.is_empty() {
+                    return Some(Vec::new());
+                }
+                Some(
+                    self.property_schema
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| names.iter().any(|n| n == &s.name))
+                        .map(|(i, s)| {
+                            let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                            (s.name.clone(), v)
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Insert properties for an edge and associate the row with `edge_id`.
+    pub fn get_by_edge_id(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+    ) -> Option<Vec<(String, Option<Value>)>> {
+        self.get_projected_by_edge_id(edge_id, query_ts, None)
     }
 
     /// Read non-nullable properties for an edge by its EdgeId (no MVCC filtering).
@@ -471,37 +373,6 @@ impl CsrWithProperties {
             }
         }
         false
-    }
-
-    pub fn delete_edge(&mut self, src: u32, edge_index: usize, ts: Timestamp) -> bool {
-        let start = match self.positional_start(src) {
-            Some(v) => v,
-            None => return false,
-        };
-        let len = match self.lengths.get(src as usize) {
-            Some(v) => *v as usize,
-            None => return false,
-        };
-        if edge_index >= len {
-            return false;
-        }
-        let pos = start + edge_index;
-        if let Some(vis) = self.visibility.get_mut(pos) {
-            if vis.delete_ts.is_some() {
-                return false;
-            }
-            vis.mark_deleted(ts);
-            return true;
-        }
-        false
-    }
-
-    pub fn offsets(&self) -> &[u32] {
-        &self.offsets
-    }
-
-    pub fn lengths(&self) -> &[u32] {
-        &self.lengths
     }
 
     pub fn has_property(&self, name: &str) -> bool {
@@ -690,9 +561,6 @@ impl CsrWithProperties {
 
     pub fn used_memory_size(&self) -> usize {
         let mut total = std::mem::size_of::<Self>();
-        total += self.offsets.capacity() * std::mem::size_of::<u32>();
-        total += self.lengths.capacity() * std::mem::size_of::<u32>();
-        total += self.heads.capacity() * std::mem::size_of::<u32>();
         total += self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
         total +=
             self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
@@ -704,10 +572,9 @@ impl CsrWithProperties {
         total
     }
 
-    pub fn dump(&mut self) -> Vec<u8> {
-        self.ensure_offsets();
+    pub fn dump(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.push(1u8); // version
+        buf.push(2u8); // version
         buf.extend_from_slice(&(self.visibility.len() as u32).to_le_bytes());
         for vis in &self.visibility {
             buf.extend_from_slice(&vis.create_ts.to_le_bytes());
@@ -728,16 +595,6 @@ impl CsrWithProperties {
         for &off in &self.free_list {
             buf.extend_from_slice(&off.to_le_bytes());
         }
-        buf.extend_from_slice(&(self.offsets.len() as u32).to_le_bytes());
-        for &o in &self.offsets {
-            buf.extend_from_slice(&o.to_le_bytes());
-        }
-        buf.extend_from_slice(&(self.lengths.len() as u32).to_le_bytes());
-        for &l in &self.lengths {
-            buf.extend_from_slice(&l.to_le_bytes());
-        }
-        buf.extend_from_slice(&self.total_edges.to_le_bytes());
-        buf.extend_from_slice(&(self.vertex_capacity as u32).to_le_bytes());
         // Serialize current column values (without version history).
         buf.extend_from_slice(&(self.property_columns.len() as u32).to_le_bytes());
         for col in &self.property_columns {
@@ -774,9 +631,9 @@ impl CsrWithProperties {
         }
         let version = data[offset];
         offset += 1;
-        if version != 1 {
+        if version != 2 {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported CsrWithProperties version: {}",
+                "Unsupported CsrWithProperties version: {}, only version 2 is accepted",
                 version
             )));
         }
@@ -847,41 +704,6 @@ impl CsrWithProperties {
                 offset += 4;
                 self.free_list.push(off);
             }
-        }
-        if offset + 4 <= data.len() {
-            let off_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            self.offsets.clear();
-            for _ in 0..off_len {
-                if offset + 4 > data.len() {
-                    break;
-                }
-                let o = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                self.offsets.push(o);
-            }
-        }
-        if offset + 4 <= data.len() {
-            let len_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            self.lengths.clear();
-            for _ in 0..len_len {
-                if offset + 4 > data.len() {
-                    break;
-                }
-                let l = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                self.lengths.push(l);
-            }
-        }
-        if offset + 8 <= data.len() {
-            self.total_edges = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-        }
-        if offset + 4 <= data.len() {
-            self.vertex_capacity =
-                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
         }
         if offset + 4 <= data.len() {
             let col_count =
@@ -962,15 +784,12 @@ impl CsrWithProperties {
                 }
             }
         }
-        self.recompute_heads();
+        if offset != data.len() {
+            return Err(StorageError::deserialize_error(
+                "unexpected trailing data in properties payload".to_string(),
+            ));
+        }
         Ok(())
-    }
-
-    /// Re-derive the append heads from the loaded offsets/lengths arrays.
-    pub fn recompute_heads(&mut self) {
-        self.heads.clear();
-        self.heads.resize(self.lengths.len(), 0);
-        self.rebuild_offsets();
     }
 
     pub fn reclaim_slots(
@@ -1033,46 +852,43 @@ mod tests {
     }
 
     #[test]
-    fn csr_positional_access() {
-        let mut csr = CsrWithProperties::new(4, schema());
+    fn edge_id_access() {
+        let mut csr = CsrWithProperties::new(schema());
         let eid0 = EdgeId(1);
         let eid1 = EdgeId(2);
-        csr.insert_properties(0, eid0, &[("weight".to_string(), Value::Double(1.5))], 10)
+        csr.insert_for_edge(eid0, &[("weight".to_string(), Value::Double(1.5))], 10)
             .unwrap();
-        csr.insert_properties(0, eid1, &[("weight".to_string(), Value::Double(2.5))], 10)
+        csr.insert_for_edge(eid1, &[("weight".to_string(), Value::Double(2.5))], 10)
             .unwrap();
-        let p0 = csr.get_properties(0, 0, 10).unwrap();
+        let p0 = csr.get_by_edge_id(eid0, 10).unwrap();
         assert!(p0
             .iter()
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.5))));
-        let p1 = csr.get_properties(0, 1, 10).unwrap();
-        assert!(p1
-            .iter()
-            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
         let by_id = csr.get_by_edge_id(eid1, 10).unwrap();
         assert!(by_id
             .iter()
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
+        assert_eq!(csr.row_count(), 2);
     }
 
     #[test]
     fn visibility() {
-        let mut csr = CsrWithProperties::new(2, schema());
+        let mut csr = CsrWithProperties::new(schema());
         let eid = EdgeId(99);
-        csr.insert_properties(1, eid, &[("weight".to_string(), Value::Double(3.0))], 100)
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(3.0))], 100)
             .unwrap();
-        assert!(csr.get_properties(1, 0, 99).is_none());
-        assert!(csr.get_properties(1, 0, 100).is_some());
+        assert!(csr.get_by_edge_id(eid, 99).is_none());
+        assert!(csr.get_by_edge_id(eid, 100).is_some());
         csr.mark_deleted(eid, 150);
-        assert!(csr.get_properties(1, 0, 149).is_some());
-        assert!(csr.get_properties(1, 0, 150).is_none());
+        assert!(csr.get_by_edge_id(eid, 149).is_some());
+        assert!(csr.get_by_edge_id(eid, 150).is_none());
     }
 
     #[test]
     fn columnar_repeatable_read() {
-        let mut csr = CsrWithProperties::new(2, schema());
+        let mut csr = CsrWithProperties::new(schema());
         let eid = EdgeId(42);
-        csr.insert_properties(0, eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
         csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
             .unwrap();
@@ -1090,9 +906,9 @@ mod tests {
 
     #[test]
     fn columnar_property_version_gc_keeps_visible_snapshots() {
-        let mut csr = CsrWithProperties::new(2, schema());
+        let mut csr = CsrWithProperties::new(schema());
         let eid = EdgeId(7);
-        csr.insert_properties(0, eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
         csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
             .unwrap();
@@ -1115,37 +931,91 @@ mod tests {
     }
 
     #[test]
-    fn lazy_offsets_roundtrip() {
-        let mut csr = CsrWithProperties::new(3, schema());
+    fn projected_read_returns_only_requested_columns() {
+        let mut csr = CsrWithProperties::new(schema());
+        let eid = EdgeId(5);
+        csr.insert_for_edge(
+            eid,
+            &[
+                ("weight".to_string(), Value::Double(1.5)),
+                ("label".to_string(), Value::String("a".into())),
+            ],
+            100,
+        )
+        .unwrap();
+
+        let all = csr.get_projected_by_edge_id(eid, 100, None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let subset = csr
+            .get_projected_by_edge_id(eid, 100, Some(&["label".to_string()]))
+            .unwrap();
+        assert_eq!(
+            subset,
+            vec![("label".to_string(), Some(Value::String("a".into())))]
+        );
+
+        let topology_only = csr.get_projected_by_edge_id(eid, 100, Some(&[])).unwrap();
+        assert!(topology_only.is_empty());
+
+        let unknown = csr
+            .get_projected_by_edge_id(eid, 100, Some(&["missing".to_string()]))
+            .unwrap();
+        assert!(unknown.is_empty());
+
+        assert!(csr.get_projected_by_edge_id(eid, 99, None).is_none());
+        assert!(
+            csr.get_projected_by_edge_id(eid, 99, Some(&["weight".to_string()]))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn dump_load_roundtrip() {
+        let mut csr = CsrWithProperties::new(schema());
         let eid0 = EdgeId(10);
         let eid1 = EdgeId(11);
 
-        csr.insert_properties(2, eid0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        csr.insert_for_edge(eid0, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
-        csr.insert_properties(2, eid1, &[("weight".to_string(), Value::Double(2.0))], 100)
+        csr.insert_for_edge(eid1, &[("weight".to_string(), Value::Double(2.0))], 100)
             .unwrap();
-
-        // Inserts keep the append heads exact but avoid rebuilding offsets.
-        assert_eq!(csr.offsets(), &[0, 0, 0, 0]);
-        assert!(csr
-            .get_properties(2, 1, 100)
-            .unwrap()
-            .iter()
-            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
-
-        csr.ensure_offsets();
-        assert_eq!(csr.offsets(), &[0, 0, 0, 2]);
+        csr.mark_deleted(eid0, 150);
 
         let bytes = csr.dump();
-        let mut loaded = CsrWithProperties::new(3, schema());
+        let mut loaded = CsrWithProperties::new(schema());
         loaded.load(&bytes).unwrap();
 
-        assert_eq!(loaded.offsets(), &[0, 0, 0, 2]);
-        assert_eq!(loaded.edge_count(), 2);
+        assert_eq!(loaded.row_count(), 2);
         assert!(loaded
-            .get_properties(2, 1, 100)
+            .get_by_edge_id(eid1, 100)
             .unwrap()
             .iter()
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        assert!(loaded.get_by_edge_id(eid0, 149).is_some());
+        assert!(loaded.get_by_edge_id(eid0, 150).is_none());
+    }
+
+    #[test]
+    fn legacy_version_is_rejected() {
+        let mut csr = CsrWithProperties::new(schema());
+        let eid = EdgeId(10);
+        csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let mut bytes = csr.dump();
+        bytes[0] = 1;
+        let mut loaded = CsrWithProperties::new(schema());
+        assert!(loaded.load(&bytes).is_err());
+    }
+
+    #[test]
+    fn trailing_bytes_are_rejected() {
+        let mut csr = CsrWithProperties::new(schema());
+        csr.insert_for_edge(EdgeId(10), &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let mut bytes = csr.dump();
+        bytes.push(0xff);
+        let mut loaded = CsrWithProperties::new(schema());
+        assert!(loaded.load(&bytes).is_err());
     }
 }

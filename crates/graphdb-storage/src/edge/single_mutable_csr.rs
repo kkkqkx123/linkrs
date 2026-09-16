@@ -348,6 +348,7 @@ impl SingleMutableCsr {
         for nbr in &self.nbr_list {
             write_vertex_id(&mut result, nbr.to_vertex_id());
             result.extend_from_slice(&nbr.edge_id.to_le_bytes());
+            result.extend_from_slice(&nbr.create_ts.to_le_bytes());
             result.extend_from_slice(&nbr.delete_ts.to_le_bytes());
         }
 
@@ -373,15 +374,23 @@ impl SingleMutableCsr {
         while offset < data.len() {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
+            let create_ts = read_u64_le(data, &mut offset)?;
             let delete_ts = read_u64_le(data, &mut offset)?;
 
             let edge_id = EdgeId(raw_edge_id);
             let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
-            nbr_list.push(Nbr::with_timestamps(
+            let mut nbr = Nbr::with_timestamps(
                 endpoint_vid.as_int64().unwrap_or(0) as u32,
                 rank,
                 edge_id,
                 delete_ts,
+            );
+            nbr.create_ts = create_ts;
+            nbr_list.push(nbr);
+        }
+        if offset != data.len() {
+            return Err(StorageError::deserialize_error(
+                "Single CSR has trailing bytes: unsupported format",
             ));
         }
 
@@ -556,9 +565,43 @@ mod tests {
         let data = csr1.dump();
 
         let mut csr2 = SingleMutableCsr::new();
-        let _ = csr2.load(&data);
+        csr2.load(&data).unwrap();
 
         assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
         assert_eq!(csr2.edge_count(), csr1.edge_count());
+    }
+
+    #[test]
+    fn test_dump_and_load_preserves_create_ts() {
+        let mut csr1 = SingleMutableCsr::with_capacity(10);
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+
+        let data = csr1.dump();
+        let mut csr2 = SingleMutableCsr::new();
+        csr2.load(&data).unwrap();
+
+        // Time travel survives the roundtrip: invisible before creation.
+        assert!(csr2.get_edge(0, VertexId::from_int64(10), 99).is_none());
+        assert!(csr2.get_edge(0, VertexId::from_int64(10), 100).is_some());
+        assert_eq!(csr2.edges_of(0, 99).len(), 0);
+        assert_eq!(csr2.edges_of(0, 100).len(), 1);
+    }
+
+    #[test]
+    fn test_load_rejects_truncated_and_trailing_data() {
+        let mut csr1 = SingleMutableCsr::with_capacity(4);
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        let data = csr1.dump();
+
+        // Truncated payload (old format without create_ts is one such case).
+        let mut csr2 = SingleMutableCsr::new();
+        assert!(csr2.load(&data[..data.len() - 8]).is_err());
+
+        // Trailing bytes.
+        let mut trailing = data.clone();
+        trailing.push(0xff);
+        assert!(csr2.load(&trailing).is_err());
     }
 }

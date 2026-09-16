@@ -1,11 +1,19 @@
 use graphdb_core::types::Timestamp;
 
 use super::core::EdgeStore;
+use crate::edge::csr_variant::CsrIterator;
 use crate::edge::EdgeRecord;
 
+/// Streaming full-table edge scan.
+///
+/// Holds the underlying row iterator and decodes one record per `next()`
+/// call: no record vector is materialized at construction time, so peak
+/// memory stays proportional to a single record. The `max_records` limit
+/// is enforced on the advancing side inside `next()`.
 pub struct EdgeTableScanIterator<'a> {
-    _table: &'a EdgeStore,
-    records: std::vec::IntoIter<EdgeRecord>,
+    table: &'a EdgeStore,
+    inner: CsrIterator<'a>,
+    ts: Timestamp,
     /// Maximum number of records to return (None = unlimited)
     max_records: Option<usize>,
     /// Current record count
@@ -17,32 +25,17 @@ impl<'a> EdgeTableScanIterator<'a> {
         Self::with_limit(table, ts, None)
     }
 
-    /// Create a scan iterator with a maximum record limit
+    /// Create a scan iterator with a maximum record limit.
+    ///
+    /// The limit is enforced while advancing, not at construction:
+    /// constructing this iterator performs no table access.
     pub fn with_limit(table: &'a EdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
         // Single-segment scan: every live entry in the CSR is visited once,
         // so no cross-segment deduplication is needed.
-        let mut records = Vec::new();
-
-        for (src_vid, nbr) in table.out_csr.iter(ts) {
-            if !table.mvcc.is_edge_visible(nbr.edge_id, ts) {
-                continue;
-            }
-            records.push(table.edge_record_from_nbr(
-                src_vid.as_int64().unwrap_or(0) as u32,
-                nbr,
-                ts,
-            ));
-
-            if let Some(max) = max_records {
-                if records.len() >= max {
-                    break;
-                }
-            }
-        }
-
         Self {
-            _table: table,
-            records: records.into_iter(),
+            table,
+            inner: table.out_csr.iter(ts),
+            ts,
             max_records,
             current_count: 0,
         }
@@ -59,11 +52,17 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
             }
         }
 
-        if let Some(record) = self.records.next() {
+        for (src_vid, nbr) in self.inner.by_ref() {
+            if !self.table.mvcc.is_edge_visible(nbr.edge_id, self.ts) {
+                continue;
+            }
             self.current_count += 1;
-            Some(record)
-        } else {
-            None
+            return Some(self.table.edge_record_from_nbr(
+                src_vid.as_int64().unwrap_or(0) as u32,
+                nbr,
+                self.ts,
+            ));
         }
+        None
     }
 }
