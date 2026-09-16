@@ -39,6 +39,11 @@ const DEFAULT_VERTEX_DEGREE: usize = 4;
 const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
+/// Target density for packed rows: live entries per unit of reserved row
+/// capacity. Rebuilds size rows to `ceil(live / PACKED_CSR_DENSITY)` so
+/// everyday writes land in row gaps before spilling to overflow.
+pub(crate) const PACKED_CSR_DENSITY: f32 = 0.8;
+
 pub struct MutableCsr {
     nbr_list: Vec<Nbr>,
     adj_offsets: Vec<u32>,
@@ -1138,16 +1143,211 @@ impl MutableCsr {
         removed_count
     }
 
+    /// Count entries of one vertex reclaimable at `cutoff`.
+    ///
+    /// Only tombstones eligible under the shared collection predicate
+    /// count; tombstones pinned by older snapshots are left alone.
+    pub fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return 0;
+        }
+        let mut count = 0;
+        let degree = self.degrees[idx] as usize;
+        let offset = self.adj_offsets[idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if nbr.delete_ts != Timestamp::MAX
+                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
+                {
+                    count += 1;
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.delete_ts != Timestamp::MAX
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                            nbr.delete_ts,
+                            cutoff,
+                        )
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Whether one vertex holds anything reclaimable at `cutoff`.
+    pub fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
+        self.reclaimable_count(vid, cutoff) > 0
+    }
+
+    /// Physical entry census of one vertex: `(live, dead, capacity)`.
+    ///
+    /// `live` counts entries with no deletion stamp, `dead` counts
+    /// tombstoned entries regardless of eligibility, and `capacity` is the
+    /// reserved row capacity plus allocated overflow chunks.
+    pub fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return (0, 0, 0);
+        }
+        let mut live = 0usize;
+        let mut dead = 0usize;
+        let degree = self.degrees[idx] as usize;
+        let offset = self.adj_offsets[idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if nbr.delete_ts == Timestamp::MAX {
+                    live += 1;
+                } else {
+                    dead += 1;
+                }
+            }
+        }
+        let mut capacity = self.primary_capacities[idx] as usize;
+        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+            capacity += chunks.len() * self.overflow_chunk_edges;
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.delete_ts == Timestamp::MAX {
+                        live += 1;
+                    } else {
+                        dead += 1;
+                    }
+                }
+            }
+        }
+        (live, dead, capacity)
+    }
+
+    /// Reclaim one vertex in place, leaving every other row untouched.
+    ///
+    /// Eligible tombstones are dropped and reported through
+    /// `on_edge_removed`; live entries and pinned tombstones are tightened
+    /// to the front of their current slots. Row offsets and capacities of
+    /// other vertices never move, so the work stays proportional to the
+    /// degree of `vid` instead of the size of the table.
+    pub fn compact_vertex_with_reporting(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return 0;
+        }
+        let mut removed = 0usize;
+
+        let degree = self.degrees[idx] as usize;
+        let offset = self.adj_offsets[idx] as usize;
+        let mut keep = 0usize;
+        for i in 0..degree {
+            let drop = self.nbr_list.get(offset + i).is_some_and(|nbr| {
+                nbr.delete_ts != Timestamp::MAX
+                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
+            });
+            if drop {
+                let nbr = self.nbr_list[offset + i];
+                on_edge_removed(nbr.edge_id, nbr.delete_ts);
+                removed += 1;
+            } else {
+                if keep != i {
+                    self.nbr_list[offset + keep] = self.nbr_list[offset + i];
+                }
+                keep += 1;
+            }
+        }
+        self.degrees[idx] = keep as u32;
+
+        if self.overflow_chunks.get(&vid).is_some() {
+            let chunks = self
+                .overflow_chunks
+                .get(&vid)
+                .cloned()
+                .unwrap_or_default();
+            let old_chunk_count = chunks.len();
+            let mut kept: Vec<Nbr> = Vec::new();
+            for chunk in &chunks {
+                for nbr in chunk {
+                    if nbr.delete_ts != Timestamp::MAX
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                            nbr.delete_ts,
+                            cutoff,
+                        )
+                    {
+                        on_edge_removed(nbr.edge_id, nbr.delete_ts);
+                        removed += 1;
+                    } else {
+                        kept.push(*nbr);
+                    }
+                }
+            }
+            if kept.is_empty() {
+                self.overflow_chunks.remove(&vid);
+                self.total_edge_capacity = self
+                    .total_edge_capacity
+                    .saturating_sub(old_chunk_count * self.overflow_chunk_edges);
+                self.overflow_live_sets.remove(&vid);
+            } else {
+                let mut repacked: Vec<Vec<Nbr>> = Vec::new();
+                for piece in kept.chunks(self.overflow_chunk_edges) {
+                    let mut v = Vec::with_capacity(self.overflow_chunk_edges);
+                    v.extend_from_slice(piece);
+                    repacked.push(v);
+                }
+                let new_chunk_count = repacked.len();
+                self.total_edge_capacity = self
+                    .total_edge_capacity
+                    .saturating_sub(old_chunk_count * self.overflow_chunk_edges)
+                    .saturating_add(new_chunk_count * self.overflow_chunk_edges);
+                if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
+                    *slot = repacked;
+                }
+                let mut set = HashSet::new();
+                if let Some(current) = self.overflow_chunks.get(&vid) {
+                    for chunk in current {
+                        for nbr in chunk {
+                            if nbr.delete_ts == Timestamp::MAX {
+                                set.insert((nbr.endpoint, nbr.rank));
+                            }
+                        }
+                    }
+                }
+                if set.is_empty() {
+                    self.overflow_live_sets.remove(&vid);
+                } else {
+                    self.overflow_live_sets.insert(vid, set);
+                }
+            }
+        }
+
+        removed
+    }
+
     /// Get used memory size (active edges only)
     pub fn used_memory_size(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
         active_edges * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }
 
-    /// Compute fragmentation ratio: nbr_list.len() / active_edges
+    /// Compute fragmentation ratio: reserved capacity over live edges.
     ///
-    /// A ratio > 1.5 indicates moderate fragmentation; > 2.0 suggests compaction.
-    /// Returns 0.0 if no active edges.
+    /// A ratio > 1.5 indicates moderate fragmentation; > 2.0 suggests
+    /// collection. Returns 0.0 if no live edges. This whole-table ratio is
+    /// an observation metric; the write path triggers on per-vertex
+    /// reclaimable counts instead.
     pub fn fragmentation_ratio(&self) -> f32 {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
         if active_edges == 0 {
@@ -1162,30 +1362,33 @@ impl MutableCsr {
         self.total_edge_capacity.saturating_sub(active_edges) * std::mem::size_of::<Nbr>()
     }
 
-    /// Get detailed fragmentation statistics
+    /// Get detailed fragmentation statistics.
+    ///
+    /// Both counters derive from the live structures: dead entries are the
+    /// physically stored entries minus live edges (primary tombstones plus
+    /// overflow dead entries), and wasted capacity is the reserved capacity
+    /// minus live edges (row gaps plus tombstone slots).
     pub fn get_fragmentation_stats(&self) -> super::FragmentationStats {
-        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
+        let live_edges = self.edge_count.load(Ordering::Relaxed) as usize;
 
-        let zombie_blocks = 0;
-        let mut total_wasted = 0;
-
+        let mut physical_entries = 0usize;
         for vid in 0..self.vertex_capacity() {
-            let primary_cap = self.primary_capacities[vid] as usize;
-            let primary_degree = self.degrees[vid] as usize;
-            total_wasted += primary_cap.saturating_sub(primary_degree);
-            if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
-                total_wasted += chunks
-                    .iter()
-                    .map(|chunk| chunk.capacity().saturating_sub(chunk.len()))
-                    .sum::<usize>();
+            physical_entries += self.degrees[vid] as usize;
+        }
+        for (_, chunks) in self.overflow_chunks.iter() {
+            for chunk in chunks {
+                physical_entries += chunk.len();
             }
         }
 
+        let dead_entries = physical_entries.saturating_sub(live_edges);
+        let wasted_capacity = self.total_edge_capacity.saturating_sub(live_edges);
+
         super::FragmentationStats::with_zombie_info(
             self.total_edge_capacity,
-            active_edges,
-            zombie_blocks,
-            total_wasted,
+            live_edges,
+            dead_entries,
+            wasted_capacity,
         )
     }
 }
@@ -1259,6 +1462,27 @@ impl MutableCsrTrait for MutableCsr {
 
     fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
         MutableCsr::compact_with_ts(self, ts, reserve_ratio)
+    }
+
+    fn compact_vertex_with_reporting(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        MutableCsr::compact_vertex_with_reporting(self, vid, cutoff, on_edge_removed)
+    }
+
+    fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        MutableCsr::reclaimable_count(self, vid, cutoff)
+    }
+
+    fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
+        MutableCsr::vertex_needs_compact(self, vid, cutoff)
+    }
+
+    fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
+        MutableCsr::vertex_census(self, vid)
     }
 
     fn used_memory_size(&self) -> usize {
@@ -1801,5 +2025,90 @@ mod tests {
         csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
         assert!(csr.overflow_index().is_empty());
         assert_eq!(csr.overflow_index_stats().total_overflow_vertices, 0);
+    }
+
+    #[test]
+    fn test_compact_vertex_is_row_scoped() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+            .unwrap();
+        csr.insert_edge(5u32, VertexId::from_int64(6), EdgeId(102), 1)
+            .unwrap();
+        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
+
+        assert_eq!(csr.reclaimable_count(0, 3), 1);
+        assert_eq!(csr.reclaimable_count(5, 3), 0);
+        assert!(csr.vertex_needs_compact(0, 3));
+        assert!(!csr.vertex_needs_compact(5, 3));
+
+        let mut reported = Vec::new();
+        let removed =
+            csr.compact_vertex_with_reporting(0, 3, &mut |id, ts| reported.push((id, ts)));
+        assert_eq!(removed, 1);
+        assert_eq!(reported, vec![(EdgeId(100), 2)]);
+
+        // Target row reclaimed, other row untouched.
+        assert_eq!(csr.reclaimable_count(0, 3), 0);
+        assert_eq!(csr.edges_of(5, 3).len(), 1);
+        assert_eq!(csr.edges_of(0, 3).len(), 1);
+        let (live, dead, _) = csr.vertex_census(0);
+        assert_eq!((live, dead), (1, 0));
+    }
+
+    #[test]
+    fn test_compact_vertex_keeps_pinned_tombstones() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+            .unwrap();
+        assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
+
+        // Cutoff below the deletion stamp: nothing is eligible.
+        assert_eq!(csr.reclaimable_count(0, 5), 0);
+        assert!(!csr.vertex_needs_compact(0, 5));
+        let removed = csr.compact_vertex_with_reporting(0, 5, &mut |_, _| {});
+        assert_eq!(removed, 0);
+        // The tombstone stays readable for older snapshots.
+        assert_eq!(csr.edges_of(0, 9).len(), 1);
+        assert_eq!(csr.edges_of(0, 10).len(), 0);
+    }
+
+    #[test]
+    fn test_compact_vertex_repacks_overflow() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        for i in 0..6u64 {
+            let dst = VertexId::from_int64(100 + i as i64);
+            csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
+        }
+        // 4 primary + 2 overflow.
+        assert!(csr.get_overflow_chunks(0).is_some());
+        assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
+        assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
+
+        let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+        assert_eq!(removed, 2);
+        assert_eq!(csr.edges_of(0, 3).len(), 4);
+        assert_eq!(csr.reclaimable_count(0, 3), 0);
+    }
+
+    #[test]
+    fn test_fragmentation_stats_report_dead_entries() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        for i in 0..3u64 {
+            let dst = VertexId::from_int64(10 + i as i64);
+            csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
+        }
+        assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
+
+        let stats = csr.get_fragmentation_stats();
+        assert_eq!(stats.reachable_edges, 2);
+        assert_eq!(stats.zombie_blocks, 1);
+        assert_eq!(
+            stats.wasted_capacity,
+            stats.total_capacity.saturating_sub(2)
+        );
+        let (live, dead, _) = csr.vertex_census(0);
+        assert_eq!((live, dead), (2, 1));
     }
 }

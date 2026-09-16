@@ -1,13 +1,14 @@
 //! Core EdgeStore operations: CRUD, properties, queries, and compaction.
 //!
-//! Single-segment edge table: one mutable CSR per direction plus centralized
-//! row-level timestamps. There are no frozen segments, no merges, and no
-//! cross-segment deduplication.
+//! Node-group sharded edge table: one sharded CSR per direction plus
+//! centralized row-level timestamps. There are no frozen segments, no
+//! merges, and no cross-segment deduplication.
 
-use super::super::{CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
+use super::super::{CsrBase, CsrShardSet, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::mvcc::MVCCManager;
+use super::staging::EdgeStagingBatch;
 use crate::edge::property_schema::PropertySchema;
-use crate::edge::CsrWithProperties;
+use crate::edge::{CsrWithProperties, VertexFragmentation};
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType};
 use crate::types::{PropertyId, StoragePropertyDef};
@@ -19,17 +20,20 @@ use std::sync::{Arc, Mutex};
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByOffsetParams};
 pub use super::iterator::EdgeTableScanIterator;
 
-/// Single-segment edge store: one CSR per direction with MVCC row timestamps.
+/// Node-group sharded edge store: one sharded CSR per direction with MVCC
+/// row timestamps.
 pub struct EdgeStore {
     pub label: LabelId,
     pub label_name: String,
     pub src_label: LabelId,
     pub dst_label: LabelId,
     pub schema: EdgeSchema,
-    pub out_csr: CsrVariant,
-    pub in_csr: CsrVariant,
+    pub out_csr: CsrShardSet,
+    pub in_csr: CsrShardSet,
     pub mvcc: MVCCManager,
     pub properties: CsrWithProperties,
+    /// Whether property columns changed since the last checkpoint.
+    pub properties_dirty: bool,
     pub is_open: bool,
     pub next_edge_id: EdgeId,
     pub config: EdgeTableConfig,
@@ -80,18 +84,28 @@ impl EdgeStore {
             ));
         }
 
-        let out_csr = CsrVariant::from_strategy_with_overflow(
+        let mut out_csr = CsrShardSet::new(
             schema.oe_strategy,
-            config.initial_vertex_capacity,
-            config.initial_edge_capacity,
+            config.node_group_bits,
             config.overflow_chunk_edges,
         )?;
-        let in_csr = CsrVariant::from_strategy_with_overflow(
+        let mut in_csr = CsrShardSet::new(
             schema.ie_strategy,
-            config.initial_vertex_capacity,
-            config.initial_edge_capacity,
+            config.node_group_bits,
             config.overflow_chunk_edges,
         )?;
+        // Pre-create groups covering the configured initial row space so
+        // small tables start with their full address range addressable.
+        let initial_groups = config
+            .initial_vertex_capacity
+            .div_ceil(out_csr.group_size())
+            .max(1);
+        if schema.oe_strategy != super::super::EdgeStrategy::None {
+            out_csr.resize_groups(initial_groups)?;
+        }
+        if schema.ie_strategy != super::super::EdgeStrategy::None {
+            in_csr.resize_groups(initial_groups)?;
+        }
 
         let prop_schemas: Vec<PropertySchema> = schema
             .properties
@@ -128,6 +142,7 @@ impl EdgeStore {
             in_csr,
             mvcc: MVCCManager::new(),
             properties,
+            properties_dirty: false,
             is_open: true,
             next_edge_id: EdgeId(0),
             config,
@@ -179,7 +194,7 @@ impl EdgeStore {
     /// timestamps directly.
     fn merged_get_edge(
         &self,
-        csr: &CsrVariant,
+        csr: &CsrShardSet,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
@@ -192,7 +207,7 @@ impl EdgeStore {
         }
     }
 
-    fn merged_edges_of(&self, csr: &CsrVariant, src: u32, ts: Timestamp) -> Vec<Nbr> {
+    fn merged_edges_of(&self, csr: &CsrShardSet, src: u32, ts: Timestamp) -> Vec<Nbr> {
         csr.edges_of(src, ts)
             .into_iter()
             .filter(|nbr| self.mvcc.is_edge_visible(nbr.edge_id, ts))
@@ -201,7 +216,7 @@ impl EdgeStore {
 
     fn merged_edges_of_with_gate(
         &self,
-        csr: &CsrVariant,
+        csr: &CsrShardSet,
         src: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
@@ -356,7 +371,113 @@ impl EdgeStore {
             ));
         }
 
-        let mut converted_values: Vec<(String, Value)> = Vec::with_capacity(property_values.len());
+        // Single-entry staging commit: the batch owns the whole multi-step
+        // write, so failure handling lives in one place below instead of in
+        // per-step compensation branches here.
+        let mut batch = EdgeStagingBatch::new();
+        batch.stage_insert(src, dst, rank, property_values, ts);
+        self.commit_staging_batch(batch).map(|_| ())
+    }
+
+    /// Create an empty staging batch for one atomic group of edge writes.
+    pub fn staging_batch() -> EdgeStagingBatch {
+        EdgeStagingBatch::new()
+    }
+
+    /// Commit one staging batch atomically.
+    ///
+    /// Entries are validated and moved into the committed topology, property
+    /// rows, and visibility records in order. When any entry fails, only the
+    /// entries this batch already applied are rolled back; committed data
+    /// from other batches is never touched. Dropping a batch without
+    /// committing discards it with no residue.
+    ///
+    /// Returns the number of applied entries (inserts plus deletes).
+    pub fn commit_staging_batch(
+        &mut self,
+        mut batch: EdgeStagingBatch,
+    ) -> StorageResult<usize> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        if batch.insert_count() > 0
+            && self.schema.oe_strategy == super::super::EdgeStrategy::None
+        {
+            return Err(StorageError::invalid_operation(
+                "Cannot insert edge: out-edge strategy is None".to_string(),
+            ));
+        }
+        let max_ts = batch.max_timestamp();
+        let inserts = batch.take_inserts();
+        let deletes = batch.take_deletes();
+        if inserts.is_empty() && deletes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut applied_inserts: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
+            Vec::with_capacity(inserts.len());
+        for ins in &inserts {
+            match self.apply_staged_insert(
+                ins.src,
+                ins.dst,
+                ins.rank,
+                &ins.properties,
+                ins.create_ts,
+            ) {
+                Ok(edge_id) => {
+                    applied_inserts.push((ins.src, ins.dst, ins.rank, edge_id, ins.create_ts));
+                }
+                Err(e) => {
+                    for (src, dst, rank, edge_id, ts) in applied_inserts {
+                        self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        let mut applied_deletes: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
+            Vec::with_capacity(deletes.len());
+        for del in &deletes {
+            match self.apply_staged_delete(del.src, del.dst, del.rank, del.delete_ts) {
+                Ok(Some(edge_id)) => {
+                    applied_deletes.push((del.src, del.dst, del.rank, edge_id, del.delete_ts));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    for (src, dst, _rank, edge_id, ts) in applied_deletes {
+                        self.revert_applied_delete(src, dst, edge_id, ts);
+                    }
+                    for (src, dst, rank, edge_id, ts) in applied_inserts {
+                        self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        let applied = applied_inserts.len() + applied_deletes.len();
+        if applied > 0 {
+            if let Some(ts) = max_ts {
+                self.check_and_apply_write_backpressure(ts);
+            }
+            self.maybe_run_auto_maintenance();
+            for (_, _, _, edge_id, _) in applied_inserts
+                .iter()
+                .chain(applied_deletes.iter())
+            {
+                self.debug_assert_copies_consistent(*edge_id);
+            }
+        }
+        Ok(applied)
+    }
+
+    fn convert_property_values(
+        &self,
+        property_values: &[(String, Value)],
+    ) -> StorageResult<Vec<(String, Value)>> {
+        let mut converted_values: Vec<(String, Value)> =
+            Vec::with_capacity(property_values.len());
         for (name, value) in property_values {
             let prop_idx = self
                 .property_index_cache
@@ -371,11 +492,26 @@ impl EdgeStore {
                 converted_values.push((name.clone(), value.clone()));
             }
         }
+        Ok(converted_values)
+    }
 
+    /// Move one staged insert into the committed structures.
+    ///
+    /// Self-contained: a failure cleans up only this entry, so the batch
+    /// rollback above only handles entries that fully applied.
+    fn apply_staged_insert(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        property_values: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<EdgeId> {
+        let converted_values = self.convert_property_values(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 
         // Pre-flight duplicate check before touching any shared state so a
-        // failed insert leaves no partial MVCC/CSR record behind.
+        // failed insert leaves no partial record behind.
         if self.has_edge(src, dst, rank, ts) {
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {}@{}",
@@ -383,13 +519,8 @@ impl EdgeStore {
             )));
         }
 
-        // Record edge creation in the centralized MVCC store.
         self.mvcc.record_creation(edge_id, ts);
 
-        // Insert the property row for every edge, including edges without
-        // properties, so the property mapping always covers the live edges.
-        // Each fallible step rolls back everything it already touched on
-        // failure so a failed insert leaves no half-visible edge behind.
         if let Err(e) = self
             .properties
             .insert_for_edge(edge_id, &converted_values, ts)
@@ -405,6 +536,7 @@ impl EdgeStore {
                 self.properties.release_row(row);
             }
             self.mvcc.remove_edge_timestamps(edge_id);
+            self.mark_properties_dirty();
             self.debug_assert_copies_consistent(edge_id);
             return Err(e);
         }
@@ -412,7 +544,7 @@ impl EdgeStore {
         if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
             // Roll back the out-direction insertion physically so no
             // tombstone residue remains; fall back to logical deletion if
-            // the entry cannot be located (e.g. strategy mismatch).
+            // the entry cannot be located.
             if !self.out_csr.remove_edge(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
@@ -420,26 +552,126 @@ impl EdgeStore {
                 self.properties.release_row(row);
             }
             let _ = self.properties.mark_deleted(edge_id, ts);
-            // Remove the centralized MVCC creation record so the failed edge
-            // does not survive as a phantom entry in timestamp lookups.
             self.mvcc.remove_edge_timestamps(edge_id);
+            self.mark_properties_dirty();
             self.debug_assert_copies_consistent(edge_id);
             return Err(e);
         }
 
-        // Update property index if enabled
         if let Some(ref mut index) = self.property_index {
             for (prop_name, prop_value) in &converted_values {
                 let _ = index.insert(prop_name, prop_value, src, dst, rank, self.label, ts);
             }
         }
 
-        // Check write backpressure after successful insertion
-        self.check_and_apply_write_backpressure(ts);
-        self.maybe_run_auto_maintenance();
+        self.mark_properties_dirty();
         self.debug_assert_copies_consistent(edge_id);
+        Ok(edge_id)
+    }
 
-        Ok(())
+    /// Move one staged delete into the committed structures.
+    ///
+    /// Returns the deleted edge id, or `None` when no edge matched.
+    fn apply_staged_delete(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> StorageResult<Option<EdgeId>> {
+        let dst_key = Self::edge_endpoint_key(dst, rank);
+        let src_key = Self::edge_endpoint_key(src, rank);
+
+        let edge_properties = if self.property_index.is_some() {
+            self.get_edge(src, dst, rank, ts).map(|e| e.properties)
+        } else {
+            None
+        };
+
+        if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
+            let edge_id = nbr.edge_id;
+
+            if !self.out_csr.delete_edge(src, edge_id, ts)? {
+                return Ok(None);
+            }
+            if !self.in_csr.delete_edge_by_dst(dst, src_key, ts) {
+                // Roll back the out-direction deletion to keep both sides
+                // consistent.
+                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+                return Ok(None);
+            }
+
+            self.mvcc.record_edge_deletion(edge_id, ts);
+            let _ = self.properties.mark_deleted(edge_id, ts);
+            self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
+            self.mark_properties_dirty();
+            self.debug_assert_copies_consistent(edge_id);
+            return Ok(Some(edge_id));
+        }
+
+        Ok(None)
+    }
+
+    /// Erase one batch-applied insert during batch rollback.
+    ///
+    /// Physical removal across all copies; tolerates absence so rollback
+    /// stays total even under partial application.
+    fn erase_applied_insert(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) {
+        let properties = self
+            .properties
+            .read_properties_by_edge_id(edge_id)
+            .unwrap_or_default();
+        self.out_csr.remove_edge(src, edge_id);
+        self.in_csr.remove_edge(dst, edge_id);
+        if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+            self.properties.release_row(row);
+        }
+        self.mvcc.remove_edge_timestamps(edge_id);
+        self.mvcc.remove_deletion(edge_id);
+        if let Some(ref mut index) = self.property_index {
+            for (prop_name, prop_value) in &properties {
+                let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
+            }
+        }
+        self.mark_properties_dirty();
+        self.debug_assert_copies_consistent(edge_id);
+    }
+
+    /// Revert one batch-applied delete during batch rollback.
+    fn revert_applied_delete(&mut self, src: u32, dst: u32, edge_id: EdgeId, ts: Timestamp) {
+        self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+        self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        self.mvcc.remove_deletion(edge_id);
+        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
+            ts_info.delete_ts = Timestamp::MAX;
+        }
+        let _ = self.properties.revert_deletion_for_edge(edge_id);
+        self.mark_properties_dirty();
+        self.debug_assert_copies_consistent(edge_id);
+    }
+
+    /// Per-vertex fragmentation view combining both directions.
+    ///
+    /// Backs the per-vertex collection trigger with one observation entry
+    /// per row; `cutoff` decides the reclaimable count.
+    pub fn vertex_fragmentation(&self, vid: u32, cutoff: Timestamp) -> VertexFragmentation {
+        let (out_live, out_dead, out_cap) = self.out_csr.vertex_census(vid);
+        let (in_live, in_dead, in_cap) = self.in_csr.vertex_census(vid);
+        VertexFragmentation {
+            vertex: vid,
+            live_edges: out_live + in_live,
+            dead_entries: out_dead + in_dead,
+            capacity: out_cap + in_cap,
+            reclaimable: self.out_csr.reclaimable_count(vid, cutoff)
+                + self.in_csr.reclaimable_count(vid, cutoff),
+        }
     }
 
     pub fn delete_edge(
@@ -453,43 +685,11 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
 
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        let src_key = Self::edge_endpoint_key(src, rank);
-
-        // Look up edge properties before deletion for index maintenance
-        let edge_properties = if self.property_index.is_some() {
-            self.get_edge(src, dst, rank, ts).map(|e| e.properties)
-        } else {
-            None
-        };
-
-        if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
-            let edge_id = nbr.edge_id;
-
-            if !self.out_csr.delete_edge(src, edge_id, ts)? {
-                // Defensive: the out side could not be deleted.
-                return Ok(false);
-            }
-            if !self.in_csr.delete_edge_by_dst(dst, src_key, ts) {
-                // Roll back the out-direction deletion to keep both sides
-                // consistent.
-                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
-                return Ok(false);
-            }
-
-            // Record deletion in the centralized MVCC store.
-            self.mvcc.record_edge_deletion(edge_id, ts);
-
-            // Mark the property record deleted once both sides are gone so
-            // the row is reclaimable by compact_properties.
-            let _ = self.properties.mark_deleted(edge_id, ts);
-            self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
-            self.maybe_run_auto_maintenance();
-            self.debug_assert_copies_consistent(edge_id);
-            return Ok(true);
-        }
-
-        Ok(false)
+        // Single-entry staging commit: the batch owns the two-direction
+        // write, so the out/in rollback lives in one place.
+        let mut batch = EdgeStagingBatch::new();
+        batch.stage_delete(src, dst, rank, ts);
+        Ok(self.commit_staging_batch(batch)? > 0)
     }
 
     /// Physically erase an edge inserted by an uncommitted transaction.
@@ -602,6 +802,7 @@ impl EdgeStore {
             // Mark the property record deleted once both sides are gone so
             // the row is reclaimable by compact_properties.
             let _ = self.properties.mark_deleted(nbr.edge_id, ts);
+            self.mark_properties_dirty();
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -645,6 +846,7 @@ impl EdgeStore {
                             index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
                     }
                 }
+                self.mark_properties_dirty();
                 self.debug_assert_copies_consistent(nbr.edge_id);
             }
             return Ok(true);
@@ -687,6 +889,7 @@ impl EdgeStore {
                 let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
             }
         }
+        self.mark_properties_dirty();
         self.debug_assert_copies_consistent(edge_id);
         Ok(true)
     }
@@ -918,6 +1121,7 @@ impl EdgeStore {
             nullable,
             default_value: None,
         })?;
+        self.mark_properties_dirty();
 
         Ok(())
     }
@@ -962,6 +1166,7 @@ impl EdgeStore {
             name: removed_prop.name,
             data_type: removed_prop.data_type,
         })?;
+        self.mark_properties_dirty();
 
         Ok(())
     }
@@ -1000,6 +1205,7 @@ impl EdgeStore {
             old_name: old_name.to_string(),
             new_name: new_name.to_string(),
         })?;
+        self.mark_properties_dirty();
 
         Ok(())
     }
@@ -1028,6 +1234,7 @@ impl EdgeStore {
             self.properties
                 .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
                 .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
+            self.mark_properties_dirty();
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -1055,6 +1262,7 @@ impl EdgeStore {
                 .map_err(|_| {
                     StorageError::column_not_found(format!("prop_id={}", params.prop_id))
                 })?;
+            self.mark_properties_dirty();
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(&self.in_csr, params.dst, src_key, params.ts)
@@ -1150,14 +1358,22 @@ impl EdgeStore {
         let in_bytes_per_edge = self.in_csr.bytes_per_edge();
         let estimated = out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge;
 
-        let total_capacity = out_edges + in_edges;
-        let frag_stats =
-            crate::edge::FragmentationStats::new(total_capacity, out_edges.min(in_edges));
-        if frag_stats.fragmentation_ratio() > 2.0 {
+        // Whole-table waste is an observation metric from the live
+        // structures, never estimated from empty counters.
+        let mut total_capacity = 0usize;
+        let mut total_wasted = 0usize;
+        for csr in [&self.out_csr, &self.in_csr] {
+            if let Some(stats) = csr.fragmentation_stats() {
+                total_capacity += stats.total_capacity;
+                total_wasted += stats.wasted_capacity;
+            }
+        }
+        if total_capacity > 0 && total_wasted as f32 / total_capacity as f32 > 0.5 {
             log::debug!(
-                "EdgeTable[{}] high fragmentation: {:.2}",
+                "EdgeTable[{}] high waste: {}/{} slots",
                 self.label,
-                frag_stats.fragmentation_ratio()
+                total_wasted,
+                total_capacity
             );
         }
 
@@ -1227,6 +1443,7 @@ impl EdgeStore {
         if bound != Timestamp::MAX && (cooldown_due || cfg.gc_min_serial == 0) {
             let removed = self.properties.gc_property_versions(bound);
             if removed > 0 {
+                self.mark_properties_dirty();
                 maintenance_ran += 1;
             }
         }
@@ -1240,6 +1457,14 @@ impl EdgeStore {
                 self.compact_properties(bound);
                 maintenance_ran += 1;
             }
+        }
+
+        // Incremental row reclaim on the write path: only rows holding
+        // entries eligible at this cutoff are visited, and each pass stops
+        // after a bounded row count so small writes never cause large
+        // rebuilds. Skipped entirely while no tombstone exists.
+        if self.run_vertex_reclaim_pass(bound) {
+            maintenance_ran += 1;
         }
 
         maintenance_ran
@@ -1323,178 +1548,14 @@ impl EdgeStore {
         path: P,
         compression: crate::compression::CompressionType,
     ) -> StorageResult<()> {
-        use std::fs;
         let path = path.as_ref();
-        fs::create_dir_all(path)?;
-        crate::compression::cleanup_shadow_files(path)?;
-
         let crate::compression::CompressionType::Zstd { level } = compression;
         let page_size = crate::compression::DEFAULT_PAGE_SIZE;
-
-        let mut meta_payload = Vec::new();
-        crate::persistence::write_header_to(
-            &mut meta_payload,
-            crate::persistence::section::EDGE_META,
-        )
-        .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
-
-        super::persistence::flush_metadata(
-            &mut meta_payload,
-            self.label,
-            self.src_label,
-            self.dst_label,
-            &self.label_name,
-            self.is_open,
-            &self.schema,
-            self.next_edge_id,
-            &self.mvcc.edge_timestamps,
-        )?;
-        super::persistence::write_pages_to_file(
-            &path.join("meta.bin"),
-            &meta_payload,
-            page_size,
-            level,
-            1,
-        )?;
-
-        let mut out_csr_payload = Vec::new();
-        super::persistence::serialize_csr(
-            &self.out_csr,
-            crate::persistence::section::EDGE_OUT_CSR,
-            &mut out_csr_payload,
-        )?;
-        let out_edge_count = self.out_csr.edge_count() as u32;
-        super::persistence::write_pages_to_file(
-            &path.join("out_csr.bin"),
-            &out_csr_payload,
-            page_size,
-            level,
-            out_edge_count,
-        )?;
-
-        let mut in_csr_payload = Vec::new();
-        super::persistence::serialize_csr(
-            &self.in_csr,
-            crate::persistence::section::EDGE_IN_CSR,
-            &mut in_csr_payload,
-        )?;
-        let in_edge_count = self.in_csr.edge_count() as u32;
-        super::persistence::write_pages_to_file(
-            &path.join("in_csr.bin"),
-            &in_csr_payload,
-            page_size,
-            level,
-            in_edge_count,
-        )?;
-
-        let mut props_payload = Vec::new();
-        super::persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
-        let edge_count = self.properties.row_count() as u32;
-        super::persistence::write_pages_to_file(
-            &path.join("properties.bin"),
-            &props_payload,
-            page_size,
-            level,
-            edge_count,
-        )?;
-
-        Ok(())
+        self.flush_incremental(path, page_size, level)
     }
 
     pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> StorageResult<()> {
-        use std::io::Read;
-        let path = path.as_ref();
-
-        let meta_path = path.join("meta.bin");
-        let (meta_data, _meta_rows) = super::persistence::read_pages_from_file(&meta_path)?;
-        let mut meta_cursor = &meta_data[..];
-        let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
-        meta_cursor.read_exact(&mut header_buf)?;
-        {
-            let mut slice = &header_buf[..];
-            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
-            if sid != crate::persistence::section::EDGE_META {
-                return Err(StorageError::deserialize_error(format!(
-                    "unexpected section id in edge meta: expected {:#06x}, got {:#06x}",
-                    crate::persistence::section::EDGE_META,
-                    sid
-                )));
-            }
-        }
-
-        let mut version_bytes = [0u8; 4];
-        meta_cursor.read_exact(&mut version_bytes)?;
-        let version = u32::from_le_bytes(version_bytes);
-        if version != super::persistence::EDGE_META_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported edge meta version: {}",
-                version
-            )));
-        }
-
-        let meta = super::persistence::load_metadata(&mut meta_cursor)?;
-
-        self.label = meta.label;
-        self.src_label = meta.src_label;
-        self.dst_label = meta.dst_label;
-        self.label_name = meta.label_name;
-        self.is_open = meta.is_open;
-        self.set_schema(meta.schema);
-        self.next_edge_id = meta.next_edge_id;
-        self.mvcc.edge_timestamps = meta.edge_timestamps;
-        // The tombstone table is rebuilt from persisted deletion timestamps;
-        // the GC watermark itself is runtime-only.
-        self.mvcc.tombstones.clear();
-        for (edge_id, ts) in self.mvcc.edge_timestamps.iter() {
-            if ts.delete_ts != Timestamp::MAX {
-                self.mvcc.tombstones.insert(*edge_id, ts.delete_ts);
-            }
-        }
-        self.mvcc.min_active_snapshot_ts = Timestamp::MAX;
-        self.mvcc.active_snapshots.clear();
-
-        let out_csr_path = path.join("out_csr.bin");
-        super::persistence::load_csr(&out_csr_path, &mut self.out_csr)?;
-
-        let in_csr_path = path.join("in_csr.bin");
-        super::persistence::load_csr(&in_csr_path, &mut self.in_csr)?;
-
-        let props_path = path.join("properties.bin");
-        self.properties = {
-            let prop_schemas: Vec<PropertySchema> = self
-                .schema
-                .properties
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
-                        .nullable(p.nullable)
-                })
-                .collect();
-            super::persistence::load_csr_properties(&props_path, prop_schemas)?
-        };
-
-        if self.next_edge_id.0 == 0 {
-            let max_id = self
-                .out_csr
-                .iter_all()
-                .map(|(_, nbr)| nbr.edge_id.0 + 1)
-                .max()
-                .unwrap_or(0);
-            self.next_edge_id = EdgeId(max_id);
-        }
-        let (orphan_mappings, orphan_csr_rows, tombstone_mismatches) =
-            self.loaded_copy_mismatches();
-        if orphan_mappings + orphan_csr_rows + tombstone_mismatches > 0 {
-            return Err(crate::StorageError::db_error(format!(
-                "edge table {} loaded with copy mismatches: \
-                 orphan property mappings={}, orphan CSR rows={}, \
-                 tombstone/authority mismatches={}",
-                self.label_name, orphan_mappings, orphan_csr_rows, tombstone_mismatches,
-            )));
-        }
-        self.is_open = true;
-        Ok(())
+        self.load_incremental(path.as_ref())
     }
 
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].

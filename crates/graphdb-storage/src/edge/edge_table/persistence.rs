@@ -1,13 +1,15 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
-//! Single-segment layout, version 1:
+//! Node-group sharded layout, version 2:
 //! - `meta.bin`: header + label ids + label name + schema + next edge id +
 //!   row-level edge timestamps (creation/deletion authority).
-//! - `out_csr.bin` / `in_csr.bin`: header + single `CsrVariant` dump.
+//! - `groups_manifest.bin`: group address width plus out/in group counts.
+//! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
+//!   group, written only for dirty groups.
 //! - `properties.bin`: current property values plus row visibility.
 //!
-//! Old multi-segment files are rejected: after the single CSR payload the
-//! loader errors on trailing bytes instead of interpreting segment blocks.
+//! Old single-file layouts are rejected: loading requires the manifest, and
+//! trailing bytes after any payload fail loudly instead of loading partially.
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;

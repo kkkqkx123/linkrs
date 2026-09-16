@@ -6,7 +6,9 @@
 mod common;
 
 use graphdb_core::Value;
-use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{
+    StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
+};
 
 /// Verify that a single rebuild cycle preserves indexed data and the
 /// rebuilt index returns correct results for both old and new data.
@@ -67,6 +69,13 @@ fn barrier_fence_survives_restart_after_rebuild() {
         assert!(storage
             .rebuild_tag_index("test_space", "person_name_idx")
             .expect("rebuild should succeed"));
+
+        storage
+            .save_to_disk()
+            .expect("persist state before restart");
+        storage
+            .create_checkpoint()
+            .expect("establish WAL baseline before restart");
 
         drop(storage);
     }

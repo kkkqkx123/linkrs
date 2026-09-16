@@ -344,6 +344,41 @@ impl MutableCsrTrait for CsrVariant {
         dispatch!(self, compact_with_ts(ts, reserve_ratio) -> 0)
     }
 
+    fn compact_vertex_with_reporting(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
+            }
+            CsrVariant::Single(_) | CsrVariant::None { .. } => 0,
+        }
+    }
+
+    fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.reclaimable_count(vid, cutoff),
+            _ => 0,
+        }
+    }
+
+    fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
+            _ => false,
+        }
+    }
+
+    fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
+        match self {
+            CsrVariant::Multiple(csr) => csr.vertex_census(vid),
+            _ => (0, 0, 0),
+        }
+    }
+
     fn used_memory_size(&self) -> usize {
         match self {
             CsrVariant::None { .. } => std::mem::size_of::<Self>(),

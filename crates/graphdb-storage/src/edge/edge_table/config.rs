@@ -7,6 +7,10 @@ pub struct EdgeTableConfig {
     pub initial_edge_capacity: usize,
     /// Fixed number of edges allocated per high-degree overflow chunk.
     pub overflow_chunk_edges: usize,
+    /// Address bits per topology node group: one group covers
+    /// `1 << node_group_bits` bound-endpoint rows. Out groups partition by
+    /// source, in groups by destination.
+    pub node_group_bits: u32,
     /// Write backpressure: max size of the single-segment CSR (in bytes)
     /// before background compaction is requested. Set to 0 to disable.
     pub max_mutable_csr_bytes: usize,
@@ -48,6 +52,7 @@ impl Default for EdgeTableConfig {
             initial_vertex_capacity: 4096,
             initial_edge_capacity: 4096,
             overflow_chunk_edges: 4096,
+            node_group_bits: crate::edge::node_group::DEFAULT_NODE_GROUP_BITS,
             max_mutable_csr_bytes: 100 * 1024 * 1024,
             auto_maintenance: AutoMaintenanceConfig::default(),
         }

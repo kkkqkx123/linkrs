@@ -2,9 +2,20 @@ use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::params::EdgeOperationParams;
 use crate::engine::transaction::{AddEdgeParams, TransactionOps};
 use graphdb_core::metadata::IndexMetadataManager;
-use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::types::{LabelId, Timestamp, UndoLogError, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
 use graphdb_transaction::wal::{DeleteEdgeRedo, InsertEdgeRedo, UpdateEdgePropRedo};
+
+/// Whether an edge-insert replay failure is a benign duplicate.
+///
+/// Replay is idempotent: a crash between commit and checkpoint replays an
+/// insert the table already holds. The duplicate surfaces as an
+/// already-exists failure rendered with either separator spelling, so both
+/// spellings are accepted here instead of a single fragile substring.
+fn is_replayable_edge_duplicate(err: &UndoLogError) -> bool {
+    let text = err.to_string();
+    text.contains("already exists") || text.contains("already_exists")
+}
 
 pub(crate) fn replay_insert_vertex(
     ctx: &GraphStorageContext,
@@ -231,8 +242,7 @@ impl GraphStorageContext {
                 &redo.properties,
                 ts,
             ) {
-                if e.to_string().contains("already exists") {
-                } else {
+                if !is_replayable_edge_duplicate(&e) {
                     return Err(StorageError::db_error(format!(
                         "Failed to replay insert edge: {}",
                         e
@@ -342,5 +352,20 @@ impl GraphStorageContext {
             self.delete_vertex_indexes_mvcc(space_id, &vid_value, &index_names, ts)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replayable_duplicate_accepts_both_spellings() {
+        let spaced = UndoLogError::UndoFailed("Resource already exists: 0 -> 1".to_string());
+        let underscored = UndoLogError::UndoFailed("[edge_already_exists] 0 -> 1@0".to_string());
+        assert!(is_replayable_edge_duplicate(&spaced));
+        assert!(is_replayable_edge_duplicate(&underscored));
+        let conflict = UndoLogError::UndoFailed("Write-write conflict: e".to_string());
+        assert!(!is_replayable_edge_duplicate(&conflict));
     }
 }

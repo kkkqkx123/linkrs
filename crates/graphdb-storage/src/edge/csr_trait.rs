@@ -105,6 +105,42 @@ pub trait MutableCsrTrait: CsrBase {
         0
     }
 
+    /// Reclaim one vertex in place, dropping entries eligible for collection
+    /// at `cutoff` and tightening live entries without touching other rows.
+    ///
+    /// Returns the number of removed entries. Reported removals flow through
+    /// `on_edge_removed` so tombstone promotion stays centralized.
+    /// Strategies without per-row fragmentation default to no-op.
+    fn compact_vertex_with_reporting(
+        &mut self,
+        _vid: u32,
+        _cutoff: Timestamp,
+        _on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        0
+    }
+
+    /// Count entries of one vertex that are reclaimable at `cutoff`.
+    ///
+    /// The write-path trigger consults this per-vertex count instead of a
+    /// whole-table ratio, so small writes never cause large rebuilds.
+    fn reclaimable_count(&self, _vid: u32, _cutoff: Timestamp) -> usize {
+        0
+    }
+
+    /// Whether one vertex holds anything reclaimable at `cutoff`.
+    fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
+        self.reclaimable_count(vid, cutoff) > 0
+    }
+
+    /// Physical entry census of one vertex: `(live, dead, capacity)`.
+    ///
+    /// Backs the per-vertex fragmentation view; strategies without rows
+    /// report zeros.
+    fn vertex_census(&self, _vid: u32) -> (usize, usize, usize) {
+        (0, 0, 0)
+    }
+
     /// Return the approximate memory usage in bytes.
     fn used_memory_size(&self) -> usize;
 }

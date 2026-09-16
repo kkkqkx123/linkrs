@@ -124,10 +124,13 @@ impl CsrWithProperties {
             // before-image through the column version chain.
             // (`set_versioned` grows the column itself; pre-sizing here
             // would record a spurious [0, create_ts) baseline entry.)
+            // An absent property is not a null value: leave the column cell
+            // empty instead of writing `None` (non-nullable columns reject a
+            // None write). Reads already treat an empty cell as null.
             let write = if let Some((_, v)) = values.iter().find(|(k, _)| k == &schema.name) {
                 col.set_versioned(row_idx, Some(v), create_ts)
             } else {
-                col.set_versioned(row_idx, None, create_ts)
+                Ok(())
             };
             if let Err(error) = write {
                 // A failed insert must leave no orphan row behind: clear the

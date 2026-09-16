@@ -1,33 +1,30 @@
 //! Fragmentation statistics and observability for CSR structures.
 //!
-//! Tracks internal fragmentation caused by the two-level overflow design:
-//! - Primary blocks remain fixed in size
-//! - Overflow blocks are appended to nbr_list when vertices expand
-//! - Old overflow blocks become unreachable but still occupy space ("zombie blocks")
+//! Tracks waste from row gaps and tombstoned entries:
+//! - Primary rows reserve gaps for everyday writes; the unused slots are waste.
+//! - Deleted entries stay physically present until the collection cutoff
+//!   passes; those tombstone slots are waste as well.
+//! - Overflow chunks are appended per vertex and repacked per vertex; empty
+//!   chunks are detached immediately, so no unreachable-block accounting
+//!   remains.
 //!
-//! # Fragmentation Sources
+//! # Collection
 //!
-//! When a vertex's overflow block expands multiple times via `expand_vertex_capacity()`:
-//! 1. New data is appended to the end of `nbr_list`
-//! 2. Old overflow block becomes unreachable (zombie)
-//! 3. Repeated expansions accumulate zombie blocks
-//!
-//! # Recovery Strategy
-//!
-//! Call `compact_with_ts()` to:
-//! - Merge primary + overflow into flat CSR layout
-//! - Reclaim all zombie block space
-//! - Remove logically deleted edges
+//! Per-vertex counts drive incremental collection: a vertex is a candidate
+//! exactly when it holds entries eligible at the current cutoff. Whole-table
+//! ratios below are observation metrics, not collection triggers.
 
 #[derive(Debug, Clone, Copy)]
 pub struct FragmentationStats {
-    /// Total capacity allocated in nbr_list
+    /// Total reserved capacity (primary rows plus overflow chunks).
     pub total_capacity: usize,
-    /// Number of actively reachable edges (primary + current overflow)
+    /// Number of live edges.
     pub reachable_edges: usize,
-    /// Number of zombie blocks (unreachable overflow blocks)
+    /// Number of dead entries awaiting collection (primary tombstones plus
+    /// overflow dead entries). The historical field name is retained; no
+    /// unreachable overflow blocks exist anymore.
     pub zombie_blocks: usize,
-    /// Approximate wasted capacity in zombie blocks
+    /// Reserved capacity minus live edges (row gaps plus tombstone slots).
     pub wasted_capacity: usize,
 }
 
@@ -62,9 +59,10 @@ impl FragmentationStats {
     ///
     /// - 0.0 = no fragmentation (perfect packing)
     /// - 0.5 = 50% wasted space
-    /// - 1.0 = 100% wasted space (all capacity is zombie blocks)
+    /// - 1.0 = all reserved capacity is waste
     ///
-    /// Typical threshold for compaction: ratio > 2.0 (200% overhead)
+    /// Observation metric for dashboards; collection triggers use the
+    /// per-vertex reclaimable counts instead.
     pub fn fragmentation_ratio(&self) -> f32 {
         if self.total_capacity == 0 {
             0.0
@@ -97,9 +95,48 @@ impl FragmentationStats {
 
     /// Check if compaction is recommended
     ///
-    /// Default threshold: fragmentation_ratio >= 2.0
+    /// Threshold applies to the waste ratio above.
     pub fn should_compact(&self, threshold: f32) -> bool {
         self.fragmentation_ratio() >= threshold
+    }
+}
+
+/// Per-vertex fragmentation view driving incremental collection.
+///
+/// A vertex is a collection candidate exactly when `reclaimable` is
+/// nonzero: it holds tombstones the current cutoff already covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VertexFragmentation {
+    /// Row under observation.
+    pub vertex: u32,
+    /// Live entries of the row.
+    pub live_edges: usize,
+    /// Tombstoned entries of the row, regardless of eligibility.
+    pub dead_entries: usize,
+    /// Reserved row capacity (primary slots plus overflow chunks).
+    pub capacity: usize,
+    /// Entries of the row eligible at the current cutoff.
+    pub reclaimable: usize,
+}
+
+impl VertexFragmentation {
+    /// Reserved slots minus live entries (gaps plus tombstone slots).
+    pub fn waste(&self) -> usize {
+        self.capacity.saturating_sub(self.live_edges)
+    }
+
+    /// Live entries per unit of reserved capacity.
+    pub fn density(&self) -> f32 {
+        if self.capacity == 0 {
+            1.0
+        } else {
+            self.live_edges as f32 / self.capacity as f32
+        }
+    }
+
+    /// Whether incremental collection should visit this row.
+    pub fn needs_compact(&self) -> bool {
+        self.reclaimable > 0
     }
 }
 
@@ -172,5 +209,28 @@ mod tests {
 
         assert!(stats.should_compact(1.0)); // ratio = 1.5, threshold = 1.0
         assert!(!stats.should_compact(2.0)); // ratio = 1.5, threshold = 2.0
+    }
+
+    #[test]
+    fn test_vertex_fragmentation_view() {
+        let view = VertexFragmentation {
+            vertex: 3,
+            live_edges: 4,
+            dead_entries: 1,
+            capacity: 8,
+            reclaimable: 1,
+        };
+        assert_eq!(view.waste(), 4);
+        assert_eq!(view.density(), 0.5);
+        assert!(view.needs_compact());
+
+        let clean = VertexFragmentation {
+            vertex: 4,
+            live_edges: 4,
+            dead_entries: 0,
+            capacity: 8,
+            reclaimable: 0,
+        };
+        assert!(!clean.needs_compact());
     }
 }

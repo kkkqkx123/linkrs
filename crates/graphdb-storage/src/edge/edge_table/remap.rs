@@ -1,15 +1,15 @@
 //! Vertex ID remapping.
 //!
 //! When a vertex table is compacted, surviving vertices receive new internal
-//! IDs (densified). Edge CSRs index rows by internal IDs and store neighbors
+//! IDs (densified). Edge shards index rows by internal IDs and store neighbors
 //! as encoded `(internal_id, rank)` keys, so the old-to-new mapping must be
 //! propagated here or every edge reference to compacted vertices breaks.
 //!
-//! Rows and neighbors are rebuilt by reconstructing the single-segment CSR
-//! from all physically present entries (including tombstoned ones, preserving
-//! snapshot visibility). Rebuilding also truncates the row space to the
-//! highest edge-bearing row plus one, reclaiming space left behind by deleted
-//! vertices (Ladybug `getMaxOffsetWithRels() + 1` semantics).
+//! Entries are collected per group (including tombstoned ones, preserving
+//! snapshot visibility), translated, and routed into fresh shard sets: a
+//! translated endpoint may land in a different group than its source.
+//! Trailing empty groups are dropped. Rebuilding also drops the
+//! pre-compaction group space left behind by deleted vertices.
 //!
 //! Vertex internal ID spaces are per-label, so an edge table must be given
 //! two separate mappings: one for its `src_label` space and one for its
@@ -18,7 +18,7 @@
 
 use super::core::EdgeStore;
 use crate::edge::csr_trait::MutableCsrTrait;
-use crate::edge::{CsrBase, CsrVariant, EdgeStrategy, Nbr};
+use crate::edge::{CsrShardSet, EdgeStrategy, Nbr};
 use graphdb_core::types::{Timestamp, VertexId};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
@@ -43,58 +43,65 @@ fn remapped_row(id: u32, mapping: Option<&HashMap<u32, u32>>) -> u32 {
     }
 }
 
-/// Rebuild a single-segment CSR with translated rows/neighbors and a
-/// truncated row space (max translated row + 1). Tombstoned entries are
-/// re-marked so snapshot visibility is preserved. An empty CSR is rebuilt
-/// with a single row: after a compaction remap the pre-compaction capacity
-/// must not linger.
-fn remap_variant(
-    old: CsrVariant,
+/// Rebuild one direction into a fresh shard set with translated rows and
+/// neighbors. Tombstoned entries are re-marked so snapshot visibility is
+/// preserved. Trailing empty groups are dropped; non-empty strategies keep
+/// at least one group.
+fn remap_direction(
+    old: &CsrShardSet,
     row_mapping: Option<&HashMap<u32, u32>>,
     neighbor_mapping: Option<&HashMap<u32, u32>>,
     strategy: EdgeStrategy,
+    group_bits: u32,
     overflow_chunk_edges: usize,
-) -> StorageResult<CsrVariant> {
-    let entries: Vec<(u32, Nbr)> = old
-        .iter_all()
-        .map(|(src, nbr)| {
-            let src_u32 = src.as_int64().unwrap_or(0) as u32;
-            (src_u32, nbr)
-        })
-        .collect();
-
-    let mut max_row = 0u32;
-    let mut new_entries = Vec::with_capacity(entries.len());
-    for (src, nbr) in entries {
-        let new_src = remapped_row(src, row_mapping);
-        let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
-        let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
-        max_row = max_row.max(new_src);
-        new_entries.push((
-            new_src,
-            Nbr {
+) -> StorageResult<CsrShardSet> {
+    let mut rebuilt = CsrShardSet::new(strategy, group_bits, overflow_chunk_edges)?;
+    if strategy == EdgeStrategy::None {
+        return Ok(rebuilt);
+    }
+    // Drain per group so a single group never has to hold the whole table;
+    // routing decides the target group of each translated entry, which may
+    // differ from its source group after densification.
+    for gid in 0..old.group_count() {
+        let entries: Vec<(u32, Nbr)> = old
+            .group_variant(gid)
+            .map(|variant| {
+                variant
+                    .iter_all()
+                    .map(|(src, nbr)| {
+                        let base = crate::edge::node_group::group_base(gid, old.group_bits());
+                        let global = src.as_int64().unwrap_or(0) + base as i64;
+                        (global as u32, nbr)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (src, nbr) in entries {
+            let new_src = remapped_row(src, row_mapping);
+            let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
+            let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
+            let new_nbr = Nbr {
                 endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
                 rank: ep_rank,
                 ..nbr
-            },
-        ));
-    }
-
-    let capacity = (max_row as usize).saturating_add(1);
-    let mut csr = CsrVariant::from_strategy_with_overflow(
-        strategy,
-        capacity,
-        new_entries.len(),
-        overflow_chunk_edges,
-    )?;
-    for (src, nbr) in &new_entries {
-        let create_ts = nbr.create_ts;
-        csr.insert_edge(*src, nbr.to_vertex_id(), nbr.edge_id, create_ts)?;
-        if nbr.delete_ts != Timestamp::MAX {
-            let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
+            };
+            rebuilt.insert_edge(
+                new_src,
+                new_nbr.to_vertex_id(),
+                new_nbr.edge_id,
+                new_nbr.create_ts,
+            )?;
+            if new_nbr.delete_ts != Timestamp::MAX {
+                let _ = rebuilt.delete_edge(new_src, new_nbr.edge_id, new_nbr.delete_ts);
+            }
         }
     }
-    Ok(csr)
+    // Freshly routed rows are clean by construction for checkpoint purposes,
+    // but keep the reclaim hints: tombstoned entries survived the rebuild and
+    // the next reclaim pass must inspect their groups once.
+    rebuilt.clear_all_dirty();
+    rebuilt.truncate_trailing_empty_groups();
+    Ok(rebuilt)
 }
 
 impl EdgeStore {
@@ -102,12 +109,12 @@ impl EdgeStore {
     /// edge table.
     ///
     /// The table references two vertex label ID spaces:
-    /// - `src_mapping` applies to out CSR rows and in CSR neighbor keys
-    /// - `dst_mapping` applies to in CSR rows and out CSR neighbor keys
+    /// - `src_mapping` applies to out shard rows and in shard neighbor keys
+    /// - `dst_mapping` applies to in shard rows and out shard neighbor keys
     ///
-    /// Both single-segment CSRs are rebuilt with a truncated row space. The
-    /// property index encodes (src, dst) internal IDs in its keys and is
-    /// rebuilt from the remapped data when enabled.
+    /// Both directions are rebuilt group by group with trailing empty groups
+    /// dropped. The property index encodes (src, dst) internal IDs in its keys
+    /// and is rebuilt from the remapped data when enabled.
     pub fn remap_vertex_ids(
         &mut self,
         src_mapping: Option<&HashMap<u32, u32>>,
@@ -122,18 +129,20 @@ impl EdgeStore {
             return Ok(());
         }
 
-        self.out_csr = remap_variant(
-            std::mem::replace(&mut self.out_csr, CsrVariant::None { vertex_capacity: 0 }),
+        self.out_csr = remap_direction(
+            &self.out_csr,
             src_mapping,
             dst_mapping,
             self.schema.oe_strategy,
+            self.config.node_group_bits,
             self.config.overflow_chunk_edges,
         )?;
-        self.in_csr = remap_variant(
-            std::mem::replace(&mut self.in_csr, CsrVariant::None { vertex_capacity: 0 }),
+        self.in_csr = remap_direction(
+            &self.in_csr,
             dst_mapping,
             src_mapping,
             self.schema.ie_strategy,
+            self.config.node_group_bits,
             self.config.overflow_chunk_edges,
         )?;
 
@@ -149,12 +158,12 @@ impl EdgeStore {
         }
 
         log::debug!(
-            "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_csr capacity={}, in_csr capacity={}",
+            "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_groups={}, in_groups={}",
             self.label,
             src_mapping.map(|m| m.len()).unwrap_or(0),
             dst_mapping.map(|m| m.len()).unwrap_or(0),
-            self.out_csr.vertex_capacity(),
-            self.in_csr.vertex_capacity(),
+            self.out_csr.group_count(),
+            self.in_csr.group_count(),
         );
 
         Ok(())
@@ -224,11 +233,11 @@ mod tests {
         assert!(table.get_edge(2, 3, 2, 200).is_some());
         assert!(table.get_edge(3, 0, 3, 200).is_some());
 
-        // Rows beyond the highest edge-bearing row are gone.
+        // Single-group table: one group per direction, trailing groups gone.
+        assert_eq!(table.out_csr.group_count(), 1);
+        assert_eq!(table.in_csr.group_count(), 1);
         assert!(table.get_edge(4, 0, 0, 200).is_none());
         assert_eq!(table.out_edges(4, 200).len(), 0);
-        assert_eq!(table.out_csr.vertex_capacity(), 4);
-        assert_eq!(table.in_csr.vertex_capacity(), 4);
     }
 
     #[test]
@@ -254,8 +263,8 @@ mod tests {
         assert_eq!(table.out_edges(0, 200).len(), 0);
         // Second edge: src 3 -> 2, dst 4 -> 3 (dense).
         assert!(table.get_edge(2, 3, 1, 200).is_some());
-        // Max edge-bearing row is 2 (src 3 -> 2); row space truncated to 3.
-        assert_eq!(table.out_csr.vertex_capacity(), 3);
+        // Highest edge-bearing row is 2; a single group remains.
+        assert_eq!(table.out_csr.group_count(), 1);
     }
 
     #[test]
@@ -270,7 +279,7 @@ mod tests {
 
         assert!(table.get_edge(1, 0, 0, 200).is_some());
         assert!(table.get_edge(1, 4, 0, 200).is_none());
-        assert_eq!(table.out_csr.vertex_capacity(), 2);
+        assert_eq!(table.out_csr.group_count(), 1);
     }
 
     #[test]
@@ -285,17 +294,35 @@ mod tests {
 
         assert!(table.get_edge(0, 1, 0, 200).is_some());
         assert!(table.get_edge(4, 1, 0, 200).is_none());
-        assert_eq!(table.out_csr.vertex_capacity(), 1);
-        assert_eq!(table.in_csr.vertex_capacity(), 2);
+        assert_eq!(table.out_csr.group_count(), 1);
+        assert_eq!(table.in_csr.group_count(), 1);
     }
 
     #[test]
     fn test_remap_empty_mapping_is_noop() {
         let mut table = make_table();
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
-        let cap_before = table.out_csr.vertex_capacity();
+        let groups_before = table.out_csr.group_count();
         table.remap_vertex_ids(Some(&HashMap::new()), None).unwrap();
-        assert_eq!(table.out_csr.vertex_capacity(), cap_before);
+        assert_eq!(table.out_csr.group_count(), groups_before);
         assert!(table.get_edge(0, 1, 0, 200).is_some());
+    }
+
+    #[test]
+    fn test_remap_moves_edges_across_groups() {
+        let mut table = make_table();
+        table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
+        assert_eq!(table.out_csr.group_count(), 2);
+
+        // Densify 5000 -> 1 and 6000 -> 2: the edge moves into group 0.
+        let src_mapping = HashMap::from([(5000u32, 1u32)]);
+        let dst_mapping = HashMap::from([(6000u32, 2u32)]);
+        table
+            .remap_vertex_ids(Some(&src_mapping), Some(&dst_mapping))
+            .unwrap();
+
+        assert!(table.get_edge(1, 2, 0, 200).is_some());
+        assert!(table.get_edge(5000, 6000, 0, 200).is_none());
+        assert_eq!(table.out_csr.group_count(), 1);
     }
 }

@@ -1,18 +1,19 @@
 use graphdb_core::types::Timestamp;
 
 use super::core::EdgeStore;
-use crate::edge::csr_variant::CsrIterator;
+use crate::edge::node_group::ShardCsrIterator;
 use crate::edge::EdgeRecord;
 
 /// Streaming full-table edge scan.
 ///
-/// Holds the underlying row iterator and decodes one record per `next()`
-/// call: no record vector is materialized at construction time, so peak
-/// memory stays proportional to a single record. The `max_records` limit
-/// is enforced on the advancing side inside `next()`.
+/// Holds the underlying sharded row iterator and decodes one record per
+/// `next()` call: no record vector is materialized at construction time, so
+/// peak memory stays proportional to a single record. The `max_records`
+/// limit is enforced on the advancing side inside `next()`. Groups are
+/// visited in group order.
 pub struct EdgeTableScanIterator<'a> {
     table: &'a EdgeStore,
-    inner: CsrIterator<'a>,
+    inner: ShardCsrIterator<'a>,
     ts: Timestamp,
     /// Maximum number of records to return (None = unlimited)
     max_records: Option<usize>,
@@ -30,8 +31,8 @@ impl<'a> EdgeTableScanIterator<'a> {
     /// The limit is enforced while advancing, not at construction:
     /// constructing this iterator performs no table access.
     pub fn with_limit(table: &'a EdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
-        // Single-segment scan: every live entry in the CSR is visited once,
-        // so no cross-segment deduplication is needed.
+        // Sharded scan: every live entry in every group is visited once in
+        // group order, so no cross-group deduplication is needed.
         Self {
             table,
             inner: table.out_csr.iter(ts),

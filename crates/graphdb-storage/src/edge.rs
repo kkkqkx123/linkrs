@@ -8,7 +8,8 @@
 //! - `SingleMutableCsr`: Optimized mutable CSR for single-edge scenarios
 //! - `CsrVariant`: Enum wrapper for runtime CSR selection (mutable variants only)
 //! - `CsrWithProperties`: Ladybug-style columnar property storage
-//! - `EdgeStore`: Single-segment edge table combining out/in CSRs and property storage
+//! - `CsrShardSet`: Node-group sharded topology container routing by endpoint interval
+//! - `EdgeStore`: Node-group sharded edge table combining out/in shards and property storage
 //!
 //! ## CSR Type Selection
 //!
@@ -32,6 +33,7 @@ pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
 pub mod mutable_csr;
+pub mod node_group;
 pub mod property_schema;
 pub mod single_mutable_csr;
 
@@ -41,11 +43,16 @@ pub use csr_variant::CsrVariant;
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
 pub use edge_table::EdgeStore;
-pub use fragmentation_stats::FragmentationStats;
+pub use fragmentation_stats::{FragmentationStats, VertexFragmentation};
 pub use graphdb_core::types::EdgeStrategy;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator};
+pub use node_group::{
+    CsrShardSet, GroupDirty, NodeGroupStats, ShardCsrIterator, TableShardManifest,
+    DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION, NODE_GROUP_DENSITY_FLOOR,
+    NODE_GROUP_LEAF_ROWS,
+};
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use graphdb_core::types::INVALID_EDGE_ID;
