@@ -393,8 +393,7 @@ impl GraphStorageContext {
             .publish(commit_ts, write_set, horizon);
     }
 
-    fn unregister_statement_snapshots(&self, _operation: &StorageOperationContext) {
-    }
+    fn unregister_statement_snapshots(&self, _operation: &StorageOperationContext) {}
 
     pub fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
         self.runtime.start_index_gc()

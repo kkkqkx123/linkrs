@@ -339,12 +339,10 @@ impl ShardedVertexTable {
     pub fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
-        table
-            .get_by_internal_id(local_id, ts)
-            .map(|mut record| {
-                record.internal_id = global_id;
-                record
-            })
+        table.get_by_internal_id(local_id, ts).map(|mut record| {
+            record.internal_id = global_id;
+            record
+        })
     }
 
     /// Row survival stamps for pending-aware rechecks (shard-decoded).
@@ -1275,7 +1273,9 @@ mod tests {
 
         // Physical removal + compaction re-densifies local IDs and resets
         // the allocation counters (same path as compact_vertex_remap).
-        let (removed, mapping) = table.compact_with_cutoff_collect_mapping(ts_insert).unwrap();
+        let (removed, mapping) = table
+            .compact_with_cutoff_collect_mapping(ts_insert)
+            .unwrap();
         assert_eq!(removed.len(), 30);
         assert!(!mapping.is_empty());
 

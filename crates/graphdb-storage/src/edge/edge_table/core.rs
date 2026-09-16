@@ -6,12 +6,13 @@
 
 use super::super::{CsrBase, CsrShardSet, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::mvcc::MVCCManager;
+use super::schema_add_column::PendingAddColumn;
 use super::staging::EdgeStagingBatch;
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::{CsrWithProperties, VertexFragmentation};
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::{ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType};
-use crate::types::{PropertyId, StoragePropertyDef};
+use crate::types::PropertyId;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use std::collections::HashMap;
@@ -54,6 +55,10 @@ pub struct EdgeStore {
     /// Snapshot timestamp used by the last automatic GC run. Used to avoid
     /// re-running GC when `min_active_snapshot_ts` has not advanced.
     pub last_gc_min_snapshot_ts: Timestamp,
+    /// In-flight staged add-column change. Memory-only: a crash before
+    /// publishing is equivalent to aborting, because reload rebuilds the
+    /// property store from the published schema.
+    pub(crate) pending_add_column: Option<PendingAddColumn>,
 }
 
 impl std::fmt::Debug for EdgeStore {
@@ -114,6 +119,7 @@ impl EdgeStore {
             .map(|(i, p)| {
                 PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
                     .nullable(p.nullable)
+                    .with_default_value(p.default_value.clone())
             })
             .collect();
         let properties = CsrWithProperties::new(prop_schemas);
@@ -152,6 +158,7 @@ impl EdgeStore {
             property_index: None,
             maintenance_serial: 0,
             last_gc_min_snapshot_ts: 0,
+            pending_add_column: None,
         })
     }
 
@@ -393,16 +400,11 @@ impl EdgeStore {
     /// committing discards it with no residue.
     ///
     /// Returns the number of applied entries (inserts plus deletes).
-    pub fn commit_staging_batch(
-        &mut self,
-        mut batch: EdgeStagingBatch,
-    ) -> StorageResult<usize> {
+    pub fn commit_staging_batch(&mut self, mut batch: EdgeStagingBatch) -> StorageResult<usize> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        if batch.insert_count() > 0
-            && self.schema.oe_strategy == super::super::EdgeStrategy::None
-        {
+        if batch.insert_count() > 0 && self.schema.oe_strategy == super::super::EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
                 "Cannot insert edge: out-edge strategy is None".to_string(),
             ));
@@ -462,10 +464,7 @@ impl EdgeStore {
                 self.check_and_apply_write_backpressure(ts);
             }
             self.maybe_run_auto_maintenance();
-            for (_, _, _, edge_id, _) in applied_inserts
-                .iter()
-                .chain(applied_deletes.iter())
-            {
+            for (_, _, _, edge_id, _) in applied_inserts.iter().chain(applied_deletes.iter()) {
                 self.debug_assert_copies_consistent(*edge_id);
             }
         }
@@ -476,8 +475,7 @@ impl EdgeStore {
         &self,
         property_values: &[(String, Value)],
     ) -> StorageResult<Vec<(String, Value)>> {
-        let mut converted_values: Vec<(String, Value)> =
-            Vec::with_capacity(property_values.len());
+        let mut converted_values: Vec<(String, Value)> = Vec::with_capacity(property_values.len());
         for (name, value) in property_values {
             let prop_idx = self
                 .property_index_cache
@@ -1071,7 +1069,7 @@ impl EdgeStore {
     /// 1. Computing next version number from history
     /// 2. Creating a PropertyChange event
     /// 3. Recording it in the version history
-    fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
+    pub(crate) fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
         let mut history_guard = self
             .version_history
             .lock()
@@ -1099,31 +1097,34 @@ impl EdgeStore {
         data_type: DataType,
         nullable: bool,
     ) -> StorageResult<()> {
-        if !self.is_open {
-            return Err(StorageError::storage_not_open());
+        // Single code path: the immediate add is prepare + fill + publish of
+        // the staged state machine, so no second column-construction
+        // implementation exists.
+        self.prepare_add_property(name.clone(), data_type.clone(), nullable, None)?;
+        if let Err(error) = self.fill_pending_add_property() {
+            let _ = self.abort_pending_add_property();
+            return Err(error);
         }
+        self.publish_pending_add_property()
+    }
 
-        if self.properties.has_property(&name) {
-            return Err(StorageError::column_already_exists(name));
+    /// Select and persist encodings for every property column.
+    ///
+    /// Explicit maintenance operation shared with the checkpoint path: hot
+    /// columns stay unencoded between runs by design so everyday writes never
+    /// pay re-encoding. Returns the number of columns that received an
+    /// encoding and marks properties dirty when at least one did.
+    pub fn encode_property_columns(&mut self) -> usize {
+        let encoded = self.properties.auto_encode_properties();
+        if encoded > 0 {
+            self.mark_properties_dirty();
         }
+        encoded
+    }
 
-        self.properties
-            .add_property(name.clone(), data_type.clone(), nullable)?;
-
-        let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
-        let new_idx = self.schema.properties.len();
-        self.schema.properties.push(prop_def);
-        self.property_index_cache.insert(name.clone(), new_idx);
-
-        self.record_schema_change(ChangeDetails::PropertyAdded {
-            name,
-            data_type,
-            nullable,
-            default_value: None,
-        })?;
-        self.mark_properties_dirty();
-
-        Ok(())
+    /// Recompute persisted per-column statistics from current contents.
+    pub fn refresh_property_stats(&mut self) {
+        self.properties.refresh_column_stats();
     }
 
     /// Rebuild schema change record during WAL recovery

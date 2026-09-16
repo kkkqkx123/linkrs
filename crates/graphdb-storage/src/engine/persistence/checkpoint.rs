@@ -812,18 +812,18 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             }
         }
 
-        if !matches!(
-            format_version,
-            Some(CHECKPOINT_FORMAT_VERSION) | Some(INCREMENTAL_CHECKPOINT_FORMAT_VERSION)
-        ) {
-            // For backward compatibility, allow missing format_version to be treated as 1
-            // but if present and unsupported, error.
-            if format_version.is_some() {
-                return Err(StorageError::deserialize_error(format!(
-                    "Unsupported checkpoint format version: {:?}",
-                    format_version
-                )));
-            }
+        let format_version = format_version.ok_or_else(|| {
+            StorageError::deserialize_error(
+                "Missing format_version in checkpoint metadata: old format without version is not supported".to_string(),
+            )
+        })?;
+        if format_version != CHECKPOINT_FORMAT_VERSION
+            && format_version != INCREMENTAL_CHECKPOINT_FORMAT_VERSION
+        {
+            return Err(StorageError::deserialize_error(format!(
+                "Unsupported checkpoint format version: {}",
+                format_version
+            )));
         }
         if files.is_empty() {
             return Err(StorageError::deserialize_error(

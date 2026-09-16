@@ -1,5 +1,5 @@
-use graphdb_core::types::TransactionId;
 use graphdb_core::types::Timestamp;
+use graphdb_core::types::TransactionId;
 use graphdb_transaction::TransactionMutationRecorder;
 
 use std::sync::Arc;

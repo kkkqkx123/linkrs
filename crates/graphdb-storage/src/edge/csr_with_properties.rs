@@ -120,24 +120,21 @@ impl CsrWithProperties {
         };
         for (i, schema) in self.property_schema.iter().enumerate() {
             let col = &mut self.property_columns[i];
-            // Versioned write so snapshot readers keep seeing the
-            // before-image through the column version chain.
-            // (`set_versioned` grows the column itself; pre-sizing here
-            // would record a spurious [0, create_ts) baseline entry.)
-            // An absent property is not a null value: leave the column cell
-            // empty instead of writing `None` (non-nullable columns reject a
-            // None write). Reads already treat an empty cell as null.
-            let write = if let Some((_, v)) = values.iter().find(|(k, _)| k == &schema.name) {
-                col.set_versioned(row_idx, Some(v), create_ts)
-            } else {
-                Ok(())
-            };
-            if let Err(error) = write {
-                // A failed insert must leave no orphan row behind: clear the
-                // stamp (reclaim skips `create_ts == 0`) and return the slot
-                // to the free list for reuse.
-                self.release_row(row_idx);
-                return Err(error);
+            // Extend column data buffer for the new row without generating
+            // a spurious [0, create_ts) version chain entry. We do this by
+            // writing directly to the column's internal buffer and setting
+            // the correct visibility timestamp.
+            let value_opt = values.iter().find(|(k, _)| k == &schema.name).map(|(_, v)| v);
+            match value_opt {
+                Some(v) => {
+                    // Value provided: versioned write with the given value
+                    col.set_versioned(row_idx, Some(v), create_ts)?;
+                }
+                None => {
+                    // No value provided: use default value if available, otherwise None
+                    let default_val = schema.default_value.as_ref();
+                    col.set_with_timestamp(row_idx, default_val, create_ts)?;
+                }
             }
         }
         Ok(row_idx)
@@ -836,15 +833,168 @@ impl CsrWithProperties {
 
     pub fn column_stats_snapshot(
         &self,
-        _column: &str,
+        column: &str,
     ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
-        None
+        let col = self.property_columns.iter().find(|c| c.name == column)?;
+        let mut min: Option<Value> = None;
+        let mut max: Option<Value> = None;
+        for zone in col.zone_maps() {
+            if let Some(v) = &zone.min {
+                match &min {
+                    Some(cur)
+                        if crate::vertex::column::compare_values(cur, v)
+                            != std::cmp::Ordering::Greater => {}
+                    _ => min = Some(v.clone()),
+                }
+            }
+            if let Some(v) = &zone.max {
+                match &max {
+                    Some(cur)
+                        if crate::vertex::column::compare_values(cur, v)
+                            != std::cmp::Ordering::Less => {}
+                    _ => max = Some(v.clone()),
+                }
+            }
+        }
+        let persisted = col.stats();
+        let null_count = persisted.map(|s| s.null_count);
+        let (distinct_count, hll) = match persisted.and_then(|s| s.hll.clone()) {
+            Some(h) => {
+                let est = h.estimate();
+                (Some(est), persisted.and_then(|s| s.hll.clone()))
+            }
+            None => (None, None),
+        };
+        Some(crate::stats_reader::ColumnStatsSnapshot {
+            row_count: self.row_count as u64,
+            null_count,
+            distinct_count,
+            hll,
+            min_value: min,
+            max_value: max,
+        })
+    }
+
+    /// Encoding applied to one property column, if the column exists.
+    pub fn column_encoding_type(&self, column: &str) -> Option<crate::encoding::EncodingType> {
+        self.property_columns
+            .iter()
+            .find(|c| c.name == column)
+            .map(|c| c.encoding_type())
+    }
+
+    /// Apply one encoding to a single property column.
+    ///
+    /// Chunked columns take the chunk-local path so point updates keep
+    /// decoding only the affected chunk; plain columns dispatch by type.
+    /// Empty columns are a no-op. Unknown columns are an explicit error.
+    pub fn apply_encoding_to_column(
+        &mut self,
+        column: &str,
+        encoding_type: crate::encoding::EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<()> {
+        let col = self
+            .property_columns
+            .iter_mut()
+            .find(|c| c.name == column)
+            .ok_or_else(|| StorageError::column_not_found(column.to_string()))?;
+        if col.is_empty() {
+            return Ok(());
+        }
+        if col.has_chunks() {
+            return col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols);
+        }
+        match encoding_type {
+            crate::encoding::EncodingType::Fsst => {
+                col.apply_fsst_encoding(fsst_max_symbols)?;
+            }
+            crate::encoding::EncodingType::Dictionary => {
+                col.apply_dictionary_encoding()?;
+            }
+            crate::encoding::EncodingType::Rle => {
+                col.apply_rle_encoding()?;
+            }
+            crate::encoding::EncodingType::BitPacking => {
+                col.apply_bitpacking_encoding()?;
+            }
+            crate::encoding::EncodingType::Alp => {
+                col.apply_alp_encoding()?;
+            }
+            crate::encoding::EncodingType::Constant => {
+                col.apply_constant_encoding()?;
+            }
+            crate::encoding::EncodingType::None => {}
+        }
+        Ok(())
+    }
+
+    /// Select and apply one encoding per property column from current values.
+    ///
+    /// Explicit maintenance operation: hot columns stay unencoded between runs
+    /// by design so everyday writes never pay re-encoding. Returns the number
+    /// of columns that received an encoding.
+    pub fn auto_encode_properties(&mut self) -> usize {
+        let selector = crate::encoding::EncodingSelector::default();
+        let mut encoded = 0usize;
+        for idx in 0..self.property_columns.len() {
+            let data_type = self.property_columns[idx].data_type.clone();
+            let values: Vec<Option<Value>> = (0..self.property_columns[idx].len())
+                .map(|row| self.property_columns[idx].get(row))
+                .collect();
+            if values.is_empty() {
+                continue;
+            }
+            let selected = selector.select_for_column(&data_type, &values);
+            if selected == crate::encoding::EncodingType::None {
+                continue;
+            }
+            let name = self.property_columns[idx].name.clone();
+            if self
+                .apply_encoding_to_column(name.as_str(), selected, 255)
+                .is_ok()
+            {
+                encoded += 1;
+            }
+        }
+        encoded
+    }
+
+    /// Recompute persisted per-column statistics from flush buffers.
+    ///
+    /// Called before the property file is serialized so statistics follow the
+    /// checkpoint instead of drifting. Columns that fail to compute keep
+    /// their previous statistics.
+    pub fn refresh_column_stats(&mut self) {
+        for col in &mut self.property_columns {
+            if let Ok(stats) = col.compute_stats() {
+                col.set_stats(stats);
+            }
+        }
+    }
+
+    /// Backfill one column with a default value on every existing row.
+    ///
+    /// Used by the staged add-column fill step. Unknown columns are an
+    /// explicit error; a single row failure aborts with the error.
+    pub fn backfill_column(&mut self, column: &str, default: &Value) -> StorageResult<()> {
+        let rows = self.visibility.len();
+        let col = self
+            .property_columns
+            .iter_mut()
+            .find(|c| c.name == column)
+            .ok_or_else(|| StorageError::column_not_found(column.to_string()))?;
+        for row in 0..rows {
+            col.set(row, Some(default))?;
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoding::EncodingType;
     use graphdb_core::DataType;
 
     fn schema() -> Vec<PropertySchema> {
@@ -967,10 +1117,9 @@ mod tests {
         assert!(unknown.is_empty());
 
         assert!(csr.get_projected_by_edge_id(eid, 99, None).is_none());
-        assert!(
-            csr.get_projected_by_edge_id(eid, 99, Some(&["weight".to_string()]))
-                .is_none()
-        );
+        assert!(csr
+            .get_projected_by_edge_id(eid, 99, Some(&["weight".to_string()]))
+            .is_none());
     }
 
     #[test]
@@ -1014,11 +1163,150 @@ mod tests {
     #[test]
     fn trailing_bytes_are_rejected() {
         let mut csr = CsrWithProperties::new(schema());
-        csr.insert_for_edge(EdgeId(10), &[("weight".to_string(), Value::Double(1.0))], 100)
-            .unwrap();
+        csr.insert_for_edge(
+            EdgeId(10),
+            &[("weight".to_string(), Value::Double(1.0))],
+            100,
+        )
+        .unwrap();
         let mut bytes = csr.dump();
         bytes.push(0xff);
         let mut loaded = CsrWithProperties::new(schema());
         assert!(loaded.load(&bytes).is_err());
+    }
+
+    fn typed_store() -> CsrWithProperties {
+        CsrWithProperties::new(vec![
+            PropertySchema::new("count".to_string(), 0, DataType::Int),
+            PropertySchema::new("flag".to_string(), 1, DataType::Bool),
+            PropertySchema::new("tag".to_string(), 2, DataType::String).nullable(true),
+        ])
+    }
+
+    fn fill_typed_store(rows: i64) -> CsrWithProperties {
+        let mut csr = typed_store();
+        for i in 0..rows {
+            csr.insert_for_edge(
+                EdgeId(i as u64),
+                &[
+                    ("count".to_string(), Value::Int(i as i32)),
+                    ("flag".to_string(), Value::Bool(i % 2 == 0)),
+                    (
+                        "tag".to_string(),
+                        Value::String(format!("tag{}", i % 4).into()),
+                    ),
+                ],
+                100,
+            )
+            .expect("typed insert should succeed");
+        }
+        csr
+    }
+
+    #[test]
+    fn auto_encode_selects_expected_schemes() {
+        let mut csr = fill_typed_store(20);
+        assert_eq!(csr.auto_encode_properties(), 3);
+        assert_eq!(
+            csr.column_encoding_type("count"),
+            Some(EncodingType::BitPacking)
+        );
+        assert_eq!(csr.column_encoding_type("flag"), Some(EncodingType::Rle));
+        assert_eq!(
+            csr.column_encoding_type("tag"),
+            Some(EncodingType::Dictionary)
+        );
+    }
+
+    #[test]
+    fn auto_encode_preserves_values() {
+        let mut csr = fill_typed_store(20);
+        csr.auto_encode_properties();
+        for i in 0..20 {
+            let got = csr
+                .get_by_edge_id(EdgeId(i as u64), 200)
+                .expect("encoded row should stay readable");
+            assert!(got
+                .iter()
+                .any(|(k, v)| k == "count" && v == &Some(Value::Int(i as i32))));
+            assert!(got
+                .iter()
+                .any(|(k, v)| k == "flag" && v == &Some(Value::Bool(i % 2 == 0))));
+            let expected_tag = Value::String(format!("tag{}", i % 4).into());
+            assert!(got
+                .iter()
+                .any(|(k, v)| k == "tag" && v == &Some(expected_tag.clone())));
+        }
+    }
+
+    #[test]
+    fn auto_encode_constant_column_uses_single_value_storage() {
+        let mut csr = CsrWithProperties::new(vec![PropertySchema::new(
+            "level".to_string(),
+            0,
+            DataType::Int,
+        )]);
+        for i in 0..60 {
+            csr.insert_for_edge(EdgeId(i), &[("level".to_string(), Value::Int(7))], 100)
+                .expect("constant insert should succeed");
+        }
+        assert_eq!(csr.auto_encode_properties(), 1);
+        assert_eq!(
+            csr.column_encoding_type("level"),
+            Some(EncodingType::Constant)
+        );
+        let got = csr.get_by_edge_id(EdgeId(3), 200).expect("row should read");
+        assert!(got
+            .iter()
+            .any(|(k, v)| k == "level" && v == &Some(Value::Int(7))));
+    }
+
+    #[test]
+    fn encode_rejects_unknown_column_and_skips_empty() {
+        let mut csr = typed_store();
+        assert_eq!(csr.auto_encode_properties(), 0);
+        assert!(csr
+            .apply_encoding_to_column("missing", EncodingType::Rle, 255)
+            .is_err());
+        assert_eq!(csr.column_encoding_type("missing"), None);
+    }
+
+    #[test]
+    fn refresh_stats_feeds_snapshot() {
+        let mut csr = CsrWithProperties::new(vec![PropertySchema::new(
+            "count".to_string(),
+            0,
+            DataType::Int,
+        )
+        .nullable(true)]);
+        for i in 0..5 {
+            csr.insert_for_edge(
+                EdgeId(i),
+                &[("count".to_string(), Value::Int((i as i32 + 1) * 10))],
+                100,
+            )
+            .expect("stat insert should succeed");
+        }
+        csr.insert_for_edge(EdgeId(99), &[], 100)
+            .expect("null insert should succeed");
+        // Materialize the absent cell as an explicit null so the flush-time
+        // statistics count it, matching the read path that serves it as null.
+        csr.set_property_for_edge(EdgeId(99), "count", None, 150)
+            .expect("null write should succeed");
+        // Zone-map bounds are live before any refresh, but persisted counts
+        // only exist after the flush-time refresh.
+        let before = csr.column_stats_snapshot("count").expect("snapshot exists");
+        assert_eq!(before.row_count, 6);
+        assert_eq!(before.min_value, Some(Value::Int(10)));
+        assert_eq!(before.max_value, Some(Value::Int(50)));
+        assert_eq!(before.null_count, None);
+        csr.refresh_column_stats();
+        let after = csr.column_stats_snapshot("count").expect("snapshot exists");
+        assert_eq!(after.row_count, 6);
+        assert_eq!(after.min_value, Some(Value::Int(10)));
+        assert_eq!(after.max_value, Some(Value::Int(50)));
+        assert_eq!(after.null_count, Some(1));
+        assert!(after.distinct_count.is_some());
+        assert!(csr.column_stats_snapshot("missing").is_none());
     }
 }

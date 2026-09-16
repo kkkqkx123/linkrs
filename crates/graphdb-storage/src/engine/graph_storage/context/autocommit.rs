@@ -362,8 +362,7 @@ impl AutoCommitBatchWindow {
         Ok(())
     }
 
-    fn unregister_snapshots(&self) {
-    }
+    fn unregister_snapshots(&self) {}
 }
 
 impl Drop for AutoCommitBatchWindow {

@@ -462,20 +462,20 @@ impl CsrShardSet {
         }
         let mut total_capacity = 0usize;
         let mut reachable_edges = 0usize;
-        let mut zombie_blocks = 0usize;
+        let mut dead_entries = 0usize;
         let mut wasted_capacity = 0usize;
         for shard in &self.shards {
             if let Some(stats) = shard.variant.fragmentation_stats() {
                 total_capacity += stats.total_capacity;
                 reachable_edges += stats.reachable_edges;
-                zombie_blocks += stats.zombie_blocks;
+                dead_entries += stats.dead_entries;
                 wasted_capacity += stats.wasted_capacity;
             }
         }
-        Some(FragmentationStats::with_zombie_info(
+        Some(FragmentationStats::with_dead_info(
             total_capacity,
             reachable_edges,
-            zombie_blocks,
+            dead_entries,
             wasted_capacity,
         ))
     }
@@ -518,11 +518,10 @@ impl CsrShardSet {
     ) -> usize {
         let mut removed = 0usize;
         for shard in &mut self.shards {
-            removed += shard.variant.compact_with_ts_reporting(
-                cutoff,
-                reserve_ratio,
-                on_edge_removed,
-            );
+            removed +=
+                shard
+                    .variant
+                    .compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
             if removed > 0 {
                 shard.dirty.deleted = true;
             }
@@ -560,11 +559,7 @@ impl CsrShardSet {
     }
 
     /// Iterate edges of a vertex without allocating (Multiple only).
-    pub fn iter_edges_of(
-        &self,
-        src_vid: u32,
-        ts: Timestamp,
-    ) -> Option<VertexEdgesIter<'_>> {
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<VertexEdgesIter<'_>> {
         let (gid, local) = self.route(src_vid)?;
         self.shards[gid].variant.iter_edges_of(local, ts)
     }
@@ -619,11 +614,13 @@ impl CsrBase for CsrShardSet {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        fn take_bytes<'a>(data: &'a [u8], cursor: &mut usize, len: usize) -> StorageResult<&'a [u8]> {
+        fn take_bytes<'a>(
+            data: &'a [u8],
+            cursor: &mut usize,
+            len: usize,
+        ) -> StorageResult<&'a [u8]> {
             if data.len() - *cursor < len {
-                return Err(StorageError::deserialize_error(
-                    "shard set data too short",
-                ));
+                return Err(StorageError::deserialize_error("shard set data too short"));
             }
             let slice = &data[*cursor..*cursor + len];
             *cursor += len;
@@ -687,7 +684,9 @@ impl MutableCsrTrait for CsrShardSet {
     ) -> StorageResult<()> {
         let gid = self.ensure_group_for(src_vid)?;
         let local = local_vid(src_vid, self.group_bits);
-        self.shards[gid].variant.insert_edge(local, dst, edge_id, ts)?;
+        self.shards[gid]
+            .variant
+            .insert_edge(local, dst, edge_id, ts)?;
         self.shards[gid].dirty.inserted = true;
         Ok(())
     }
@@ -955,7 +954,8 @@ mod tests {
     fn dirty_tracking_per_group() {
         let mut set = multi_set();
         assert!(set.dirty_group_ids().is_empty());
-        set.insert_edge(5000, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.insert_edge(5000, endpoint(1, 0), EdgeId(0), 100)
+            .unwrap();
         assert_eq!(set.dirty_group_ids(), vec![1]);
         assert!(!set.needs_checkpoint(0));
         assert!(set.needs_checkpoint(1));
@@ -1025,9 +1025,7 @@ mod tests {
         let mut set = CsrShardSet::new(EdgeStrategy::None, 12, 4096).unwrap();
         assert_eq!(set.group_count(), 0);
         assert_eq!(set.vertex_capacity(), 0);
-        assert!(set
-            .insert_edge(0, endpoint(1, 0), EdgeId(0), 100)
-            .is_err());
+        assert!(set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).is_err());
         assert!(set.delete_edge(0, EdgeId(0), 100).is_err());
         assert!(!set.delete_edge_by_dst(0, endpoint(1, 0), 100));
     }

@@ -177,10 +177,10 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => {
                 let stats = csr.get_fragmentation_stats();
-                Some(FragmentationStats::with_zombie_info(
+                Some(FragmentationStats::with_dead_info(
                     stats.total_capacity,
                     stats.reachable_edges,
-                    stats.zombie_blocks,
+                    stats.dead_entries,
                     stats.wasted_capacity,
                 ))
             }
@@ -508,13 +508,9 @@ mod tests {
         for tag in [3u8, 4u8] {
             let mut payload = vec![tag];
             payload.extend_from_slice(&[0u8; 8]);
-            let mut csr = CsrVariant::from_strategy_with_overflow(
-                EdgeStrategy::Multiple,
-                10,
-                100,
-                4096,
-            )
-            .unwrap();
+            let mut csr =
+                CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096)
+                    .unwrap();
             assert!(csr.load(&payload).is_err());
         }
     }

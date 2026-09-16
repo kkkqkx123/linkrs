@@ -21,36 +21,35 @@ pub struct FragmentationStats {
     /// Number of live edges.
     pub reachable_edges: usize,
     /// Number of dead entries awaiting collection (primary tombstones plus
-    /// overflow dead entries). The historical field name is retained; no
-    /// unreachable overflow blocks exist anymore.
-    pub zombie_blocks: usize,
+    /// overflow dead entries).
+    pub dead_entries: usize,
     /// Reserved capacity minus live edges (row gaps plus tombstone slots).
     pub wasted_capacity: usize,
 }
 
 impl FragmentationStats {
-    /// Create basic stats without zombie block information.
-    /// Use `compute()` for full analysis including zombie blocks.
+    /// Create basic stats without dead-entry information.
+    /// Use `compute()` for full analysis including dead entries.
     pub fn new(total_capacity: usize, reachable_edges: usize) -> Self {
         Self {
             total_capacity,
             reachable_edges,
-            zombie_blocks: 0,
+            dead_entries: 0,
             wasted_capacity: 0,
         }
     }
 
     /// Compute detailed fragmentation stats from edge counts.
-    pub fn with_zombie_info(
+    pub fn with_dead_info(
         total_capacity: usize,
         reachable_edges: usize,
-        zombie_blocks: usize,
+        dead_entries: usize,
         wasted_capacity: usize,
     ) -> Self {
         Self {
             total_capacity,
             reachable_edges,
-            zombie_blocks,
+            dead_entries,
             wasted_capacity,
         }
     }
@@ -149,7 +148,7 @@ mod tests {
         let stats = FragmentationStats {
             total_capacity: 100,
             reachable_edges: 100,
-            zombie_blocks: 0,
+            dead_entries: 0,
             wasted_capacity: 0,
         };
 
@@ -164,7 +163,7 @@ mod tests {
         let stats = FragmentationStats {
             total_capacity: 100,
             reachable_edges: 30,
-            zombie_blocks: 2,
+            dead_entries: 2,
             wasted_capacity: 50,
         };
 
@@ -179,7 +178,7 @@ mod tests {
         let stats = FragmentationStats {
             total_capacity: 100,
             reachable_edges: 20,
-            zombie_blocks: 3,
+            dead_entries: 3,
             wasted_capacity: 250, // 250% overhead
         };
 
@@ -203,7 +202,7 @@ mod tests {
         let stats = FragmentationStats {
             total_capacity: 100,
             reachable_edges: 50,
-            zombie_blocks: 1,
+            dead_entries: 1,
             wasted_capacity: 150,
         };
 

@@ -1,4 +1,5 @@
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::types::Timestamp;
 
 use crate::column_stats::ColumnStats;
 use crate::encoding::ColumnEncoding;
@@ -446,6 +447,26 @@ impl Column {
             }
         });
         self.visibility.mark_created(row_idx, 0);
+        self.write_value(row_idx, value)
+    }
+
+    /// Write a value with a specific creation timestamp without generating
+    /// a version chain entry. This is used when initializing a new row where
+    /// the initial value should be visible from `create_ts` onward and no
+    /// before-image exists.
+    pub fn set_with_timestamp(&mut self, row_idx: usize, value: Option<&Value>, create_ts: Timestamp) -> StorageResult<()> {
+        self.ensure_row_meta(row_idx + 1);
+        // Clear any existing version chain for this row
+        self.with_version_chains_write(|chains| {
+            if let Some(chains) = chains.as_mut() {
+                if row_idx < chains.len() {
+                    chains[row_idx].clear();
+                }
+            }
+        });
+        // Set the correct creation timestamp
+        self.visibility.mark_created(row_idx, create_ts);
+        // Write the value without generating a version chain entry
         self.write_value(row_idx, value)
     }
 

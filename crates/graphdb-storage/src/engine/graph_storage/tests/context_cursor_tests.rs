@@ -282,18 +282,16 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
 }
 
 #[test]
-fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
+fn edge_column_stats_snapshot_matches_inserted_range() {
     use crate::stats_reader::ColumnStatsReader;
     use graphdb_core::vertex_edge_path::Edge;
-
     let mut storage = create_test_storage();
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
     setup_knows_edge(&mut storage);
 
-    // Insert two vertices and two edges.  The edge columnar store is
-    // not populated until flush/compaction, so the snapshot should
-    // gracefully return None rather than panicking.
+    // Insert two vertices and two edges, then verify the edge statistics
+    // snapshot covers the inserted range.
     let mut writer =
         storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
             graphdb_core::types::TransactionId::from(1),
@@ -363,11 +361,17 @@ fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
         .commit_staged_writes(graphdb_core::types::TransactionId::from(1), &[])
         .expect("commit");
 
-    // The edge columnar store is not populated until flush, so the
-    // snapshot gracefully returns None (conservative fallback).
+    // Edge zone-map bounds follow writes, so the snapshot carries the
+    // inserted envelope without waiting for a flush; persisted counts
+    // (null/distinct) only appear after the flush-time stats refresh.
     let snap = storage.edge_column_stats("test_space", "KNOWS", "since");
-    assert!(
-        snap.is_none() || !snap.as_ref().unwrap().has_envelope(),
-        "edge snapshot should be None or empty when columnar store is unpopulated"
-    );
+    let snap = snap.expect("edge snapshot should cover the inserted range");
+    assert_eq!(snap.row_count, 2);
+    assert_eq!(snap.min_value, Some(Value::Int(2020)));
+    assert_eq!(snap.max_value, Some(Value::Int(2025)));
+    assert!(snap.has_envelope());
+    // Unknown columns still fall back conservatively.
+    assert!(storage
+        .edge_column_stats("test_space", "KNOWS", "missing")
+        .is_none());
 }

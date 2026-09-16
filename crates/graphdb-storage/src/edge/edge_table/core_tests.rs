@@ -18,10 +18,12 @@ fn create_test_schema() -> EdgeSchema {
         label_name: "knows".to_string(),
         src_label: 0,
         dst_label: 0,
-        properties: vec![StoragePropertyDef::new(
-            "weight".to_string(),
-            DataType::Double,
-        )],
+        properties: vec![StoragePropertyDef {
+            name: "weight".to_string(),
+            data_type: DataType::Double,
+            nullable: false,
+            default_value: Some(Value::Double(0.0)),
+        }],
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,

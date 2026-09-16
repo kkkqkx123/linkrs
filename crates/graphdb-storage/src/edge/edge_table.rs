@@ -8,7 +8,16 @@
 //! - `mvcc`: centralized timestamps, tombstones, and GC watermarks
 //! - `persistence`: version-2 serialization (flush/load)
 //! - `remap`: vertex ID remapping across node groups
+//! - `schema_add_column`: staged add-column state machine (prepare/fill/publish/abort)
 //! - `stats`: tombstone and deletion statistics
+//!
+//! Write batching contract: the engine layer currently commits one edge per
+//! staging batch (`insert_edge`/`delete_edge` each wrap a single staged
+//! entry in `commit_staging_batch`). A multi-entry `EdgeStagingBatch` is
+//! supported by `commit_staging_batch` for future transaction-layer batching,
+//! but no engine path builds one today. Each single-entry commit is atomic
+//! with concentrated rollback; multi-edge transaction atomicity still relies
+//! on the undo-log replay above this layer.
 
 pub mod checkpoint;
 pub mod compaction;
@@ -18,6 +27,7 @@ pub mod iterator;
 pub mod mvcc;
 pub mod persistence;
 pub mod remap;
+pub mod schema_add_column;
 pub mod staging;
 pub mod stats;
 

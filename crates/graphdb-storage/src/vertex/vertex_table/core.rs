@@ -790,7 +790,10 @@ impl VertexTable {
     /// global GC watermarks. External callers must go through the
     /// watermark-gated compaction entry points instead of calling this
     /// directly.
-    pub(crate) fn compact_timestamps(&mut self, cutoff: Timestamp) -> std::collections::HashMap<u32, u32> {
+    pub(crate) fn compact_timestamps(
+        &mut self,
+        cutoff: Timestamp,
+    ) -> std::collections::HashMap<u32, u32> {
         self.timestamps.compact_with_cutoff(cutoff)
     }
 }

@@ -261,7 +261,7 @@ fn scan_mutable(args: ScanArgs) {
         }
     }
 
-        // Column pruning: fetch the projection plus any predicate-only columns
+    // Column pruning: fetch the projection plus any predicate-only columns
     // in one storage read instead of decoding every column per edge.
     // `None` still means all columns.
     let fetch_columns: Option<Vec<String>> = match *args.projection {
@@ -299,12 +299,8 @@ fn scan_mutable(args: ScanArgs) {
         // Decode once with predicate columns included so pushed predicates
         // can be evaluated; matching rows are then trimmed back to the
         // projection. Filtering happens before offset/limit accounting.
-        let mut properties = decode_edge_properties(
-            args.store,
-            nbr.edge_id,
-            args.ts,
-            fetch_columns.as_deref(),
-        );
+        let mut properties =
+            decode_edge_properties(args.store, nbr.edge_id, args.ts, fetch_columns.as_deref());
         if !args
             .predicate
             .iter()
@@ -422,7 +418,9 @@ fn decode_edge_properties(
     }
     // Snapshot read through the property version chain so old readers see
     // the before-image instead of the latest write.
-    let props_opt = store.properties.get_projected_by_edge_id(edge_id, ts, fetch);
+    let props_opt = store
+        .properties
+        .get_projected_by_edge_id(edge_id, ts, fetch);
     props_opt
         .map(|props| {
             props

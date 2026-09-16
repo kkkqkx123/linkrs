@@ -43,10 +43,12 @@ mod tests {
             label_name: name.to_string(),
             src_label,
             dst_label,
-            properties: vec![StoragePropertyDef::new(
-                "since".to_string(),
-                graphdb_core::DataType::Int,
-            )],
+            properties: vec![StoragePropertyDef {
+                name: "since".to_string(),
+                data_type: graphdb_core::DataType::Int,
+                nullable: false,
+                default_value: Some(Value::Int(0)),
+            }],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,

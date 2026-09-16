@@ -4,7 +4,7 @@
 //! These types are separated from the table implementation for better modularity.
 
 use crate::encoding::EncodingType;
-use graphdb_core::DataType;
+use graphdb_core::{DataType, Value};
 
 /// Default version chain capacity for property storage
 pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
@@ -17,6 +17,7 @@ pub struct PropertySchema {
     pub data_type: DataType,
     pub nullable: bool,
     pub encoding_type: EncodingType,
+    pub default_value: Option<Value>,
 }
 
 impl PropertySchema {
@@ -27,6 +28,7 @@ impl PropertySchema {
             data_type,
             nullable: false,
             encoding_type: EncodingType::None,
+            default_value: None,
         }
     }
 
@@ -37,6 +39,11 @@ impl PropertySchema {
 
     pub fn with_encoding(mut self, encoding_type: EncodingType) -> Self {
         self.encoding_type = encoding_type;
+        self
+    }
+
+    pub fn with_default_value(mut self, default_value: Option<Value>) -> Self {
+        self.default_value = default_value;
         self
     }
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
-use crate::edge::bloom_filter::EdgeDeletionBloomFilter;
 use crate::index::chunk::chunked_index::ChunkedIndex;
 use crate::index::cursor::ChainForwardIterator;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
@@ -292,7 +291,6 @@ fn value_to_vertex_id(v: &Value) -> Option<graphdb_core::types::storage_ids::Ver
 /// - The edge identity suffix ensures unique keys within the same value
 pub struct EdgePropertyIndex {
     indexes: HashMap<String, ChunkedIndex>,
-    deleted_filter: EdgeDeletionBloomFilter,
     pool_capacity: u64,
 }
 
@@ -300,7 +298,6 @@ impl EdgePropertyIndex {
     pub fn new(pool_capacity: u64) -> Self {
         Self {
             indexes: HashMap::new(),
-            deleted_filter: EdgeDeletionBloomFilter::with_capacity(1000),
             pool_capacity,
         }
     }
@@ -407,8 +404,6 @@ impl EdgePropertyIndex {
         }
         let new_index = ChunkedIndex::from_btree(prefix, &map, pool_capacity);
         self.indexes.insert(prop_name.to_string(), new_index);
-        let edge_id = ((src as u64) << 32) | (dst as u64);
-        self.deleted_filter.insert(edge_id);
         Ok(())
     }
 
@@ -427,8 +422,7 @@ impl EdgePropertyIndex {
     }
 
     pub fn memory_usage(&self) -> u64 {
-        let index_mem: u64 = self.indexes.values().map(|idx| idx.memory_usage()).sum();
-        index_mem + self.deleted_filter.memory_bytes() as u64
+        self.indexes.values().map(|idx| idx.memory_usage()).sum()
     }
 }
 

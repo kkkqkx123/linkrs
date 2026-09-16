@@ -15,6 +15,34 @@ use graphdb_core::types::Timestamp;
 pub(crate) const MAX_VERTEX_RECLAIM_PER_PASS: usize = 32;
 
 impl EdgeStore {
+    /// Whether any group is fragmented enough to justify a rebuild.
+    ///
+    /// Scans each group with its own capacity/live ratio; the whole-table
+    /// ratio stays an observation metric and never triggers collection.
+    /// A fragmented clean group still triggers, so a dirty group cannot
+    /// drag clean groups into the rebuild set.
+    pub fn has_fragmented_group(&self, threshold: f32) -> bool {
+        for gid in 0..self.out_csr.group_count() {
+            if self
+                .out_csr
+                .group_variant(gid)
+                .is_some_and(|variant| variant.fragmentation_ratio() >= threshold)
+            {
+                return true;
+            }
+        }
+        for gid in 0..self.in_csr.group_count() {
+            if self
+                .in_csr
+                .group_variant(gid)
+                .is_some_and(|variant| variant.fragmentation_ratio() >= threshold)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Compact every group, sharing one pass cutoff across all sub-systems.
     /// Deletions are promoted into the tombstone layer. Explicit maintenance
     /// only; the write path uses the bounded reclaim pass below.
@@ -85,18 +113,11 @@ impl EdgeStore {
     /// Groups without delete history are skipped without per-row
     /// inspection, so the pause stays proportional to the dirty groups
     /// rather than the size of the table.
-    pub fn compact_reclaimable_vertices(
-        &mut self,
-        bound: Timestamp,
-        max_vertices: usize,
-    ) -> usize {
+    pub fn compact_reclaimable_vertices(&mut self, bound: Timestamp, max_vertices: usize) -> usize {
         if bound == Timestamp::MAX || max_vertices == 0 {
             return 0;
         }
-        let group_count = self
-            .out_csr
-            .group_count()
-            .max(self.in_csr.group_count());
+        let group_count = self.out_csr.group_count().max(self.in_csr.group_count());
         let group_bits = self.out_csr.group_bits();
         let mut removed_edges = std::collections::HashSet::new();
         let mut visited = 0usize;
@@ -131,11 +152,14 @@ impl EdgeStore {
                     continue;
                 }
                 visited += 1;
-                self.out_csr
-                    .compact_vertex_with_reporting(vid, bound, &mut |edge_id, delete_ts| {
+                self.out_csr.compact_vertex_with_reporting(
+                    vid,
+                    bound,
+                    &mut |edge_id, delete_ts| {
                         removed_edges.insert(edge_id);
                         self.mvcc.record_deletion(edge_id, delete_ts);
-                    });
+                    },
+                );
                 self.in_csr
                     .compact_vertex_with_reporting(vid, bound, &mut |edge_id, delete_ts| {
                         removed_edges.insert(edge_id);

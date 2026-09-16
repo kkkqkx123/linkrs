@@ -965,10 +965,7 @@ mod revalidation_tests {
         let first = write_ts(&ctx);
         insert_person(&ctx, label, "alice", "A", first);
         commit_ts(&ctx, first);
-        assert_eq!(
-            read_name(&ctx, label, "alice", first),
-            Value::string("A")
-        );
+        assert_eq!(read_name(&ctx, label, "alice", first), Value::string("A"));
         let second = write_ts(&ctx);
         ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), second)
             .expect("update");

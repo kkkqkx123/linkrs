@@ -47,6 +47,12 @@ fn manifest_path(dir: &Path) -> PathBuf {
     dir.join(GROUPS_MANIFEST_FILE)
 }
 
+/// File size for checkpoint byte accounting. Metrics must never fail a
+/// checkpoint, so a missing file reports zero instead of an error.
+fn file_bytes(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+}
+
 impl EdgeStore {
     /// Mark property columns dirty. Every operation mutating property state
     /// calls this so checkpoints can skip the property file when clean.
@@ -56,25 +62,31 @@ impl EdgeStore {
 
     /// Flush dirty state incrementally: metadata always, property columns
     /// only when dirty, topology groups only when dirty or missing.
+    ///
+    /// Property statistics are refreshed before the property payload is
+    /// serialized so they follow the checkpoint. Flushed bytes and elapsed
+    /// time are reported to the shared metrics registry when one is set.
     pub(crate) fn flush_incremental(
         &mut self,
         dir: &Path,
         page_size: usize,
         level: i32,
     ) -> StorageResult<()> {
+        let started = std::time::Instant::now();
         std::fs::create_dir_all(dir)?;
         crate::compression::cleanup_shadow_files(dir)?;
 
-        self.flush_metadata_file(dir, page_size, level)?;
-        self.flush_properties_file(dir, page_size, level)?;
-        self.flush_group_set(
+        let mut flushed_bytes = 0u64;
+        flushed_bytes += self.flush_metadata_file(dir, page_size, level)?;
+        flushed_bytes += self.flush_properties_file(dir, page_size, level)?;
+        flushed_bytes += self.flush_group_set(
             dir,
             page_size,
             level,
             true,
             crate::persistence::section::EDGE_OUT_CSR,
         )?;
-        self.flush_group_set(
+        flushed_bytes += self.flush_group_set(
             dir,
             page_size,
             level,
@@ -82,18 +94,26 @@ impl EdgeStore {
             crate::persistence::section::EDGE_IN_CSR,
         )?;
         self.write_manifest(dir)?;
+        flushed_bytes += file_bytes(&manifest_path(dir));
 
         self.properties_dirty = false;
         self.out_csr.clear_all_dirty();
         self.in_csr.clear_all_dirty();
         self.remove_orphan_group_files(dir);
+        if let Some(stats) = &self.stats_manager {
+            stats.record_incremental_checkpoint(started.elapsed(), flushed_bytes);
+            stats.record_checkpoint_strategy_by_name("incremental");
+        }
         Ok(())
     }
 
-    fn flush_metadata_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<()> {
+    fn flush_metadata_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<u64> {
         let mut meta_payload = Vec::new();
-        crate::persistence::write_header_to(&mut meta_payload, crate::persistence::section::EDGE_META)
-            .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
+        crate::persistence::write_header_to(
+            &mut meta_payload,
+            crate::persistence::section::EDGE_META,
+        )
+        .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
         persistence::flush_metadata(
             &mut meta_payload,
             self.label,
@@ -105,27 +125,33 @@ impl EdgeStore {
             self.next_edge_id,
             &self.mvcc.edge_timestamps,
         )?;
-        persistence::write_pages_to_file(
-            &dir.join("meta.bin"),
-            &meta_payload,
-            page_size,
-            level,
-            1,
-        )
+        let path = dir.join("meta.bin");
+        persistence::write_pages_to_file(&path, &meta_payload, page_size, level, 1)?;
+        Ok(file_bytes(&path))
     }
 
-    fn flush_properties_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<()> {
+    fn flush_properties_file(
+        &mut self,
+        dir: &Path,
+        page_size: usize,
+        level: i32,
+    ) -> StorageResult<u64> {
         let path = dir.join("properties.bin");
         if !self.properties_dirty && path.exists() {
-            return Ok(());
+            return Ok(0);
         }
+        self.properties.refresh_column_stats();
         let mut props_payload = Vec::new();
         persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
         let edge_count = self.properties.row_count() as u32;
-        persistence::write_pages_to_file(&path, &props_payload, page_size, level, edge_count)
+        persistence::write_pages_to_file(&path, &props_payload, page_size, level, edge_count)?;
+        Ok(file_bytes(&path))
     }
 
     /// Write one direction. `outgoing` selects the out shard set.
+    ///
+    /// Returns the bytes written for groups actually flushed; clean groups
+    /// whose files are skipped contribute zero.
     fn flush_group_set(
         &self,
         dir: &Path,
@@ -133,12 +159,13 @@ impl EdgeStore {
         level: i32,
         outgoing: bool,
         section_id: u32,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<u64> {
         let shards = if outgoing {
             &self.out_csr
         } else {
             &self.in_csr
         };
+        let mut written = 0u64;
         for gid in 0..shards.group_count() {
             let path = if outgoing {
                 out_group_path(dir, gid)
@@ -160,8 +187,9 @@ impl EdgeStore {
                 level,
                 variant.edge_count() as u32,
             )?;
+            written += file_bytes(&path);
         }
-        Ok(())
+        Ok(written)
     }
 
     fn write_manifest(&self, dir: &Path) -> StorageResult<()> {
@@ -247,6 +275,10 @@ impl EdgeStore {
         self.properties_dirty = false;
         self.out_csr.clear_all_dirty();
         self.in_csr.clear_all_dirty();
+        // Pending staged schema changes are memory-only: a reload after any
+        // crash is equivalent to aborting them, because the property store is
+        // rebuilt from the published schema below.
+        self.pending_add_column = None;
         self.is_open = true;
         Ok(())
     }
@@ -333,6 +365,7 @@ impl EdgeStore {
                 .map(|(i, p)| {
                     PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
                         .nullable(p.nullable)
+                        .with_default_value(p.default_value.clone())
                 })
                 .collect();
             persistence::load_csr_properties(&props_path, prop_schemas)?
@@ -355,10 +388,12 @@ mod tests {
             label_name: "knows".to_string(),
             src_label: 0,
             dst_label: 0,
-            properties: vec![StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: graphdb_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
@@ -441,7 +476,9 @@ mod tests {
         .unwrap();
 
         let mut loaded = make_table();
-        let err = loaded.load(dir.path()).expect_err("legacy layout must be rejected");
+        let err = loaded
+            .load(dir.path())
+            .expect_err("legacy layout must be rejected");
         assert!(err.to_string().contains("legacy single-file"));
     }
 
@@ -465,5 +502,132 @@ mod tests {
             )
             .expect("second flush should succeed");
         assert_eq!(props.metadata().unwrap().modified().unwrap(), stamp);
+    }
+
+    #[test]
+    fn flush_records_incremental_checkpoint_metrics() {
+        use graphdb_metrics::{MetricType, StatsManager};
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let stats = std::sync::Arc::new(StatsManager::new());
+        table.set_stats_manager(stats.clone());
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        let bytes = stats
+            .get_value(MetricType::CheckpointIncrementalBytesFlushed)
+            .unwrap_or(0);
+        assert!(bytes > 0, "flushed bytes should be recorded");
+        assert_eq!(
+            stats.get_value(MetricType::CheckpointStrategyIncremental),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn flush_without_metrics_registry_behaves_the_same() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush without a registry should succeed");
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+    }
+
+    #[test]
+    fn unpublished_column_is_dropped_on_reload() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        // Fill the physical column but never publish: a crash here must be
+        // equivalent to aborting the staged change.
+        table
+            .prepare_add_property("score".to_string(), graphdb_core::DataType::Int, true, None)
+            .unwrap();
+        table.fill_pending_add_property().unwrap();
+        assert!(table.properties.has_property("score"));
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(!loaded.properties.has_property("score"));
+        assert!(!loaded.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.pending_add_column().is_none());
+    }
+
+    #[test]
+    fn published_column_survives_reload_with_stats() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(3.0))], 100)
+            .unwrap();
+        table
+            .prepare_add_property(
+                "score".to_string(),
+                graphdb_core::DataType::Int,
+                true,
+                Some(Value::Int(7)),
+            )
+            .unwrap();
+        table.fill_pending_add_property().unwrap();
+        table.publish_pending_add_property().unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        // A fresh table only knows the published schema when loading.
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![
+                StoragePropertyDef::new(
+                    "weight".to_string(),
+                    graphdb_core::types::DataType::Double,
+                ),
+                StoragePropertyDef::new("score".to_string(), graphdb_core::types::DataType::Int),
+            ],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+        };
+        let mut loaded =
+            EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds");
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.properties.has_property("score"));
+        let snapshot = loaded
+            .column_stats_snapshot("weight")
+            .expect("flushed stats should be queryable");
+        assert_eq!(snapshot.row_count, 1);
+        assert_eq!(snapshot.min_value, Some(Value::Double(3.0)));
+        assert_eq!(snapshot.max_value, Some(Value::Double(3.0)));
     }
 }

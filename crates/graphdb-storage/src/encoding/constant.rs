@@ -252,50 +252,51 @@ impl ConstantColumn {
             })?;
             Some(v)
         };
-        // Try to read overrides; old files without this section will hit EOF,
-        // in which case we treat overrides as empty for backward compatibility.
+        // Overrides section is mandatory; files without it are rejected,
+        // never silently accepted as empty.
         let mut overrides = HashMap::new();
         let mut ov_count_bytes = [0u8; 4];
-        match reader.read_exact(&mut ov_count_bytes) {
-            Ok(()) => {
-                let ov_count = u32::from_le_bytes(ov_count_bytes) as usize;
-                for _ in 0..ov_count {
-                    let mut idx_bytes = [0u8; 4];
-                    reader
-                        .read_exact(&mut idx_bytes)
-                        .map_err(|e| StorageError::io_error(e.to_string()))?;
-                    let idx = u32::from_le_bytes(idx_bytes) as usize;
-                    let mut has_ov = [0u8; 1];
-                    reader
-                        .read_exact(&mut has_ov)
-                        .map_err(|e| StorageError::io_error(e.to_string()))?;
-                    let val = if has_ov[0] == 0 {
-                        None
-                    } else {
-                        let mut len_bytes = [0u8; 4];
-                        reader
-                            .read_exact(&mut len_bytes)
-                            .map_err(|e| StorageError::io_error(e.to_string()))?;
-                        let len = u32::from_le_bytes(len_bytes) as usize;
-                        let mut buf = vec![0u8; len];
-                        reader
-                            .read_exact(&mut buf)
-                            .map_err(|e| StorageError::io_error(e.to_string()))?;
-                        let v: Value = postcard::from_bytes(&buf).map_err(|e| {
-                            StorageError::deserialize_error(format!(
-                                "ConstantColumn deserialize override value: {}",
-                                e
-                            ))
-                        })?;
-                        Some(v)
-                    };
-                    overrides.insert(idx, val);
-                }
+        reader.read_exact(&mut ov_count_bytes).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                StorageError::deserialize_error(
+                    "ConstantColumn missing overrides section: old format without overrides is not supported".to_string(),
+                )
+            } else {
+                StorageError::io_error(e.to_string())
             }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // Old file without overrides section.
-            }
-            Err(e) => return Err(StorageError::io_error(e.to_string())),
+        })?;
+        let ov_count = u32::from_le_bytes(ov_count_bytes) as usize;
+        for _ in 0..ov_count {
+            let mut idx_bytes = [0u8; 4];
+            reader
+                .read_exact(&mut idx_bytes)
+                .map_err(|e| StorageError::io_error(e.to_string()))?;
+            let idx = u32::from_le_bytes(idx_bytes) as usize;
+            let mut has_ov = [0u8; 1];
+            reader
+                .read_exact(&mut has_ov)
+                .map_err(|e| StorageError::io_error(e.to_string()))?;
+            let val = if has_ov[0] == 0 {
+                None
+            } else {
+                let mut len_bytes = [0u8; 4];
+                reader
+                    .read_exact(&mut len_bytes)
+                    .map_err(|e| StorageError::io_error(e.to_string()))?;
+                let len = u32::from_le_bytes(len_bytes) as usize;
+                let mut buf = vec![0u8; len];
+                reader
+                    .read_exact(&mut buf)
+                    .map_err(|e| StorageError::io_error(e.to_string()))?;
+                let v: Value = postcard::from_bytes(&buf).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "ConstantColumn deserialize override value: {}",
+                        e
+                    ))
+                })?;
+                Some(v)
+            };
+            overrides.insert(idx, val);
         }
         Ok(Self {
             value,
@@ -408,7 +409,7 @@ mod tests {
         assert_eq!(restored.get(1), Some(Value::Int(2)));
         assert_eq!(restored.get(2), Some(Value::Int(1)));
         assert_eq!(restored.get(3), Some(Value::Int(3)));
-        // Old format without overrides section should still load.
+        // Old format without overrides section is rejected.
         let mut old_buf = Vec::new();
         // Manually write old format without overrides tail
         old_buf.extend_from_slice(&(5u32.to_le_bytes()));
@@ -417,10 +418,7 @@ mod tests {
         old_buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
         old_buf.extend_from_slice(&bytes);
         // No overrides count appended
-        let restored_old = ConstantColumn::deserialize_meta(&mut &old_buf[..]).unwrap();
-        assert_eq!(restored_old.len(), 5);
-        assert_eq!(restored_old.get(0), Some(Value::Int(7)));
-        assert!(restored_old.overrides.is_empty());
+        assert!(ConstantColumn::deserialize_meta(&mut &old_buf[..]).is_err());
     }
 
     #[test]

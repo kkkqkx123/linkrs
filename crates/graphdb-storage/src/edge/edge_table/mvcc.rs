@@ -317,10 +317,12 @@ mod tests {
             label_name: "knows".to_string(),
             src_label: 0,
             dst_label: 0,
-            properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
+            properties: vec![crate::types::StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: graphdb_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,

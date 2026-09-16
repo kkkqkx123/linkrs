@@ -849,16 +849,21 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
         StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
     })?;
     // Accept both v1 (full) and v2 (incremental) checkpoints.
-    // Missing format_version is treated as v1 for backward compatibility.
-    if let Some(v) = format_version {
-        if v != CHECKPOINT_FORMAT_VERSION
-            && v != crate::engine::persistence_coordinator::INCREMENTAL_CHECKPOINT_FORMAT_VERSION
-        {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported checkpoint format version: {:?}",
-                format_version
-            )));
-        }
+    // A missing format_version is rejected: old files without a version
+    // marker are never silently treated as v1.
+    let format_version = format_version.ok_or_else(|| {
+        StorageError::deserialize_error(
+            "Missing format_version in checkpoint metadata: old format without version is not supported".to_string(),
+        )
+    })?;
+    if format_version != CHECKPOINT_FORMAT_VERSION
+        && format_version
+            != crate::engine::persistence_coordinator::INCREMENTAL_CHECKPOINT_FORMAT_VERSION
+    {
+        return Err(StorageError::deserialize_error(format!(
+            "Unsupported checkpoint format version: {}",
+            format_version
+        )));
     }
 
     Ok(CheckpointInfo {

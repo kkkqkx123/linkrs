@@ -176,6 +176,7 @@ mod tests {
     use crate::edge::edge_table::config::EdgeTableConfig;
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
+    use graphdb_core::Value;
 
     fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
@@ -183,10 +184,12 @@ mod tests {
             label_name: "knows".to_string(),
             src_label: 0,
             dst_label: 0,
-            properties: vec![StoragePropertyDef::new(
-                "weight".to_string(),
-                graphdb_core::types::DataType::Double,
-            )],
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: graphdb_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,

@@ -147,40 +147,36 @@ impl ColumnStats {
         reader.read_exact(&mut nb)?;
         let raw_size = u64::from_le_bytes(nb);
 
-        // Tail added later; old files end here.
+        // HLL tail and null flags are mandatory; truncated old files are
+        // rejected, never silently defaulted.
         let mut tail = [0u8; 1];
-        let hll = match reader.read_exact(&mut tail) {
-            Ok(()) => {
-                if tail[0] != 0 {
-                    Some(HyperLogLog::deserialize(reader)?)
-                } else {
-                    None
-                }
+        reader.read_exact(&mut tail).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                graphdb_core::StorageError::deserialize_error(
+                    "ColumnStats truncated: missing HLL tail, old format is not supported"
+                        .to_string(),
+                )
+            } else {
+                graphdb_core::StorageError::io_error(e.to_string())
             }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => None,
-            Err(e) => return Err(graphdb_core::StorageError::io_error(e.to_string())),
+        })?;
+        let hll = if tail[0] != 0 {
+            Some(HyperLogLog::deserialize(reader)?)
+        } else {
+            None
         };
-        let (guaranteed_no_nulls, all_null) = match hll {
-            Some(_) => {
-                let mut flags = [0u8; 2];
-                match reader.read_exact(&mut flags) {
-                    Ok(()) => (flags[0] != 0, flags[1] != 0),
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => (false, false),
-                    Err(e) => return Err(graphdb_core::StorageError::io_error(e.to_string())),
-                }
+        let mut flags = [0u8; 2];
+        reader.read_exact(&mut flags).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                graphdb_core::StorageError::deserialize_error(
+                    "ColumnStats truncated: missing null flags, old format is not supported"
+                        .to_string(),
+                )
+            } else {
+                graphdb_core::StorageError::io_error(e.to_string())
             }
-            None => {
-                // Old file without HLL: try to read flags, tolerate EOF.
-                let mut flags = [0u8; 2];
-                match reader.read_exact(&mut flags) {
-                    Ok(()) => (flags[0] != 0, flags[1] != 0),
-                    Err(_) => (
-                        false,
-                        null_count > 0 && min_value.is_none() && max_value.is_none(),
-                    ),
-                }
-            }
-        };
+        })?;
+        let (guaranteed_no_nulls, all_null) = (flags[0] != 0, flags[1] != 0);
 
         Ok(Self {
             min_value,

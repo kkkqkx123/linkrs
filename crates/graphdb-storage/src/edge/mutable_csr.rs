@@ -1171,10 +1171,7 @@ impl MutableCsr {
             for chunk in chunks {
                 for nbr in chunk {
                     if nbr.delete_ts != Timestamp::MAX
-                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
-                            nbr.delete_ts,
-                            cutoff,
-                        )
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
                     {
                         count += 1;
                     }
@@ -1272,20 +1269,13 @@ impl MutableCsr {
         self.degrees[idx] = keep as u32;
 
         if self.overflow_chunks.get(&vid).is_some() {
-            let chunks = self
-                .overflow_chunks
-                .get(&vid)
-                .cloned()
-                .unwrap_or_default();
+            let chunks = self.overflow_chunks.get(&vid).cloned().unwrap_or_default();
             let old_chunk_count = chunks.len();
             let mut kept: Vec<Nbr> = Vec::new();
             for chunk in &chunks {
                 for nbr in chunk {
                     if nbr.delete_ts != Timestamp::MAX
-                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
-                            nbr.delete_ts,
-                            cutoff,
-                        )
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
                     {
                         on_edge_removed(nbr.edge_id, nbr.delete_ts);
                         removed += 1;
@@ -1384,7 +1374,7 @@ impl MutableCsr {
         let dead_entries = physical_entries.saturating_sub(live_edges);
         let wasted_capacity = self.total_edge_capacity.saturating_sub(live_edges);
 
-        super::FragmentationStats::with_zombie_info(
+        super::FragmentationStats::with_dead_info(
             self.total_edge_capacity,
             live_edges,
             dead_entries,
@@ -2103,7 +2093,7 @@ mod tests {
 
         let stats = csr.get_fragmentation_stats();
         assert_eq!(stats.reachable_edges, 2);
-        assert_eq!(stats.zombie_blocks, 1);
+        assert_eq!(stats.dead_entries, 1);
         assert_eq!(
             stats.wasted_capacity,
             stats.total_capacity.saturating_sub(2)
