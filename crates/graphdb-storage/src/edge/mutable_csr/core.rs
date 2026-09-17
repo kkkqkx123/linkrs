@@ -3,13 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::MutableCsr;
 use super::overflow::OverflowStorage;
+use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
 use super::super::{EdgeId, Nbr};
 
-pub(crate) const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 pub(crate) const DEFAULT_EDGE_CAPACITY: usize = 4096;
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 pub(crate) const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
-pub(crate) const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 impl MutableCsr {
     pub fn new() -> Self {
@@ -68,9 +67,7 @@ impl MutableCsr {
     /// Ensure vertex capacity (grows if needed)
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
         if min_capacity > self.vertex_capacity() {
-            let new_capacity =
-                ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
-            self.resize(new_capacity);
+            self.resize(grown_vertex_capacity(min_capacity));
         }
     }
 

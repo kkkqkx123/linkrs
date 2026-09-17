@@ -31,6 +31,10 @@ use super::mutable_csr::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
+use super::csr_shared::{
+    DeleteSlotOutcome, can_revert_delete, decide_slot_delete, decode_endpoint_pair,
+    grown_vertex_capacity, is_reclaimable_slot, DEFAULT_VERTEX_CAPACITY,
+};
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
 
 /// Persistence version for the single-edge topology columns. Version 2
@@ -38,8 +42,10 @@ use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_
 /// version header; versionless payloads are rejected, never converted.
 pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 2;
 
-const DEFAULT_VERTEX_CAPACITY: usize = 1024;
-const VERTEX_GROWTH_FACTOR: f64 = 1.25;
+/// Unassigned single slot: no edge id, never alive at any timestamp.
+fn empty_slot() -> Nbr {
+    Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0)
+}
 
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
@@ -71,7 +77,7 @@ impl SingleMutableCsr {
 
     pub fn with_capacity(vertex_capacity: usize) -> Self {
         let vertex_cap = vertex_capacity.max(1);
-        let nbr_list = vec![Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0); vertex_cap];
+        let nbr_list = vec![empty_slot(); vertex_cap];
 
         Self {
             nbr_list,
@@ -93,17 +99,13 @@ impl SingleMutableCsr {
         }
 
         let additional = new_vertex_capacity - self.vertex_capacity();
-        self.nbr_list.extend(std::iter::repeat_n(
-            Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0),
-            additional,
-        ));
+        self.nbr_list
+            .extend(std::iter::repeat_n(empty_slot(), additional));
     }
 
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
         if min_capacity > self.vertex_capacity() {
-            let new_capacity =
-                ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
-            self.resize(new_capacity);
+            self.resize(grown_vertex_capacity(min_capacity));
         }
     }
 
@@ -144,8 +146,8 @@ impl SingleMutableCsr {
         }
 
         let was_empty = nbr.edge_id == INVALID_EDGE_ID || nbr.delete_ts != Timestamp::MAX;
-        let (endpoint_vid, rank) = dst.decode_edge_endpoint();
-        nbr.endpoint = endpoint_vid.as_int64().unwrap_or(0) as u32;
+        let (decoded_endpoint, rank) = decode_endpoint_pair(dst);
+        nbr.endpoint = decoded_endpoint;
         nbr.rank = rank;
         nbr.edge_id = edge_id;
         nbr.create_ts = ts;
@@ -171,19 +173,10 @@ impl SingleMutableCsr {
             return Ok(false);
         }
 
-        if nbr.delete_ts < Timestamp::MAX {
-            if nbr.delete_ts != ts {
-                return Err(StorageError::write_write_conflict(format!(
-                    "edge {:?} already deleted at ts={}, attempted delete at ts={}",
-                    nbr.edge_id, nbr.delete_ts, ts
-                )));
-            }
-            // Idempotent re-delete at the same timestamp.
-            return Ok(false);
-        }
-
-        let create_ts = nbr.create_ts;
-        if create_ts > ts {
+        if matches!(
+            decide_slot_delete(nbr, nbr.edge_id, ts)?,
+            DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated
+        ) {
             return Ok(false);
         }
 
@@ -207,8 +200,7 @@ impl SingleMutableCsr {
             return 0;
         }
 
-        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
-        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
         let nbr = &mut self.nbr_list[src_idx];
 
         if nbr.edge_id == INVALID_EDGE_ID
@@ -236,8 +228,7 @@ impl SingleMutableCsr {
             return None;
         }
 
-        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
-        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
         let nbr = &self.nbr_list[src_idx];
 
         if !nbr.is_alive_at(ts) {
@@ -265,7 +256,7 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Only revert deletions that happened at or before rollback time.
-        if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+        if can_revert_delete(nbr, ts) {
             nbr.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return true;
@@ -303,8 +294,7 @@ impl SingleMutableCsr {
         if slot.edge_id == INVALID_EDGE_ID {
             return None;
         }
-        let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
-        let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
         if slot.endpoint == dst_ep && slot.rank == dst_rank {
             Some(*slot)
         } else {
@@ -355,7 +345,7 @@ impl SingleMutableCsr {
             return false;
         }
         let was_live = slot.delete_ts == Timestamp::MAX;
-        *slot = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+        *slot = empty_slot();
         if was_live {
             self.edge_count.fetch_sub(1, Ordering::Relaxed);
         }
@@ -374,7 +364,7 @@ impl SingleMutableCsr {
         if slot.edge_id != edge_id {
             return false;
         }
-        if slot.delete_ts != Timestamp::MAX && slot.delete_ts <= ts {
+        if can_revert_delete(slot, ts) {
             slot.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return true;
@@ -389,10 +379,7 @@ impl SingleMutableCsr {
         let Some(slot) = self.nbr_list.get(vid as usize) else {
             return 0;
         };
-        if slot.edge_id != INVALID_EDGE_ID
-            && slot.delete_ts != Timestamp::MAX
-            && crate::mvcc_visibility::Visibility::is_gc_eligible(slot.delete_ts, cutoff)
-        {
+        if slot.edge_id != INVALID_EDGE_ID && is_reclaimable_slot(slot, cutoff) {
             1
         } else {
             0
@@ -428,7 +415,7 @@ impl SingleMutableCsr {
             self.nbr_list[src_idx].delete_ts,
         );
         on_edge_removed(edge_id, delete_ts);
-        self.nbr_list[src_idx] = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+        self.nbr_list[src_idx] = empty_slot();
         1
     }
 
@@ -443,12 +430,9 @@ impl SingleMutableCsr {
         let mut removed = 0usize;
         for idx in 0..self.nbr_list.len() {
             let slot = self.nbr_list[idx];
-            if slot.edge_id != INVALID_EDGE_ID
-                && slot.delete_ts != Timestamp::MAX
-                && crate::mvcc_visibility::Visibility::is_gc_eligible(slot.delete_ts, cutoff)
-            {
+            if slot.edge_id != INVALID_EDGE_ID && is_reclaimable_slot(&slot, cutoff) {
                 on_edge_removed(slot.edge_id, slot.delete_ts);
-                self.nbr_list[idx] = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+                self.nbr_list[idx] = empty_slot();
                 removed += 1;
             }
         }
@@ -489,7 +473,7 @@ impl SingleMutableCsr {
 
     pub fn clear(&mut self) {
         for nbr in &mut self.nbr_list {
-            *nbr = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
+            *nbr = empty_slot();
         }
         self.edge_count.store(0, Ordering::Relaxed);
     }

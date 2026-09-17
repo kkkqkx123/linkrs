@@ -3,6 +3,9 @@ use std::sync::atomic::Ordering;
 
 use super::MutableCsr;
 use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
+use super::super::csr_shared::{
+    DeleteSlotOutcome, can_revert_delete, decide_slot_delete, decode_endpoint_pair,
+};
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
@@ -63,8 +66,7 @@ impl MutableCsr {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
 
         let src_idx = src_vid as usize;
 
@@ -139,8 +141,7 @@ impl MutableCsr {
     }
 
     fn scan_overflow_for_dst(&self, src_vid: u32, dst: VertexId) -> Vec<(usize, usize)> {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         self.find_overflow_positions(src_vid, |nbr| {
             nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank
         })
@@ -170,26 +171,17 @@ impl MutableCsr {
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
             if nbr.edge_id == edge_id {
-                if nbr.delete_ts != Timestamp::MAX {
-                    if nbr.delete_ts != ts {
-                        return Err(StorageError::write_write_conflict(format!(
-                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
-                            edge_id, nbr.delete_ts, ts
-                        )));
+                match decide_slot_delete(nbr, edge_id, ts)? {
+                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                        return Ok(false);
                     }
-                    // Idempotent re-delete at the same timestamp.
-                    return Ok(false);
+                    DeleteSlotOutcome::Stamped => {}
                 }
-                let create_ts = nbr.create_ts;
-                if create_ts <= ts {
-                    let (endpoint, rank) = (nbr.endpoint, nbr.rank);
-                    nbr.delete_ts = ts;
-                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                    self.track_live_remove(src_vid, endpoint, rank);
-                    return Ok(true);
-                }
-                // Cannot delete an edge that is not yet created at `ts`.
-                return Ok(false);
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
+                nbr.delete_ts = ts;
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.track_live_remove(src_vid, endpoint, rank);
+                return Ok(true);
             }
         }
 
@@ -203,23 +195,16 @@ impl MutableCsr {
             };
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
-                if nbr.delete_ts != Timestamp::MAX {
-                    if nbr.delete_ts != ts {
-                        return Err(StorageError::write_write_conflict(format!(
-                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
-                            edge_id, nbr.delete_ts, ts
-                        )));
+                match decide_slot_delete(nbr, edge_id, ts)? {
+                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                        return Ok(false);
                     }
-                    return Ok(false);
+                    DeleteSlotOutcome::Stamped => {}
                 }
-                let create_ts = nbr.create_ts;
-                if create_ts <= ts {
-                    nbr.delete_ts = ts;
-                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                    self.track_live_remove(src_vid, endpoint, rank);
-                    return Ok(true);
-                }
-                return Ok(false);
+                nbr.delete_ts = ts;
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.track_live_remove(src_vid, endpoint, rank);
+                return Ok(true);
             }
         }
 
@@ -231,8 +216,7 @@ impl MutableCsr {
     /// Deletes every live match and returns the deleted count so table
     /// rollback can reconcile by count. One call deletes the whole match.
     pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return 0;
@@ -347,7 +331,7 @@ impl MutableCsr {
         let nbr = &mut self.nbr_list[idx];
         // Only revert deletions that happened at or before rollback time.
         // Prevents rolling back deletions that occur after the rollback point.
-        if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+        if can_revert_delete(nbr, ts) {
             let (endpoint, rank) = (nbr.endpoint, nbr.rank);
             nbr.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
@@ -454,7 +438,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
-            if nbr.edge_id == edge_id && nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
+            if nbr.edge_id == edge_id && can_revert_delete(nbr, ts) {
                 let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = Timestamp::MAX;
                 self.edge_count.fetch_add(1, Ordering::Relaxed);
@@ -472,7 +456,7 @@ impl MutableCsr {
             };
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
-                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
+                if can_revert_delete(nbr, ts) {
                     nbr.delete_ts = Timestamp::MAX;
                     self.edge_count.fetch_add(1, Ordering::Relaxed);
                     self.track_live_insert(src_vid, endpoint, rank);

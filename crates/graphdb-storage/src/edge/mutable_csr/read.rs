@@ -1,4 +1,5 @@
 use super::MutableCsr;
+use super::super::csr_shared::decode_endpoint_pair;
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
 
 impl MutableCsr {
@@ -26,8 +27,7 @@ impl MutableCsr {
     /// Physical addressing only; visibility is decided by the version
     /// authority above this layer.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;
@@ -185,8 +185,7 @@ impl MutableCsr {
 
     /// Get a specific edge
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;

@@ -1,6 +1,7 @@
 use super::MutableCsr;
 use super::overflow::OverflowStorage;
 use super::row::PACKED_CSR_DENSITY;
+use super::super::csr_shared::is_reclaimable_slot;
 use super::super::{EdgeId, Nbr, Timestamp};
 
 impl MutableCsr {
@@ -32,10 +33,7 @@ impl MutableCsr {
             // Collect active edges from primary (not deleted)
             for i in 0..degree {
                 let nbr = &self.nbr_list[start + i];
-                if nbr.delete_ts != Timestamp::MAX
-                    && removals_enabled
-                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
-                {
+                if removals_enabled && is_reclaimable_slot(nbr, cutoff) {
                     on_edge_removed(nbr.edge_id, nbr.delete_ts);
                     removed_count += 1;
                 } else {
@@ -47,13 +45,7 @@ impl MutableCsr {
             if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
                 for chunk in chunks {
                     for nbr in chunk {
-                        if nbr.delete_ts != Timestamp::MAX
-                            && removals_enabled
-                            && crate::mvcc_visibility::Visibility::is_gc_eligible(
-                                nbr.delete_ts,
-                                cutoff,
-                            )
-                        {
+                        if removals_enabled && is_reclaimable_slot(nbr, cutoff) {
                             on_edge_removed(nbr.edge_id, nbr.delete_ts);
                             removed_count += 1;
                         } else {
@@ -136,9 +128,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[idx] as usize;
         for i in 0..degree {
             if let Some(nbr) = self.nbr_list.get(offset + i) {
-                if nbr.delete_ts != Timestamp::MAX
-                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
-                {
+                if is_reclaimable_slot(nbr, cutoff) {
                     count += 1;
                 }
             }
@@ -146,9 +136,7 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(&vid) {
             for chunk in chunks {
                 for nbr in chunk {
-                    if nbr.delete_ts != Timestamp::MAX
-                        && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
-                    {
+                    if is_reclaimable_slot(nbr, cutoff) {
                         count += 1;
                     }
                 }
@@ -227,10 +215,10 @@ impl MutableCsr {
         let offset = self.adj_offsets[idx] as usize;
         let mut keep = 0usize;
         for i in 0..degree {
-            let drop = self.nbr_list.get(offset + i).is_some_and(|nbr| {
-                nbr.delete_ts != Timestamp::MAX
-                    && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
-            });
+            let drop = self
+                .nbr_list
+                .get(offset + i)
+                .is_some_and(|nbr| is_reclaimable_slot(nbr, cutoff));
             if drop {
                 let nbr = self.nbr_list[offset + i];
                 on_edge_removed(nbr.edge_id, nbr.delete_ts);
@@ -249,9 +237,7 @@ impl MutableCsr {
             let mut kept: Vec<Nbr> = Vec::new();
             for chunk in &chunks {
                 for nbr in chunk {
-                    if nbr.delete_ts != Timestamp::MAX
-                        && crate::mvcc_visibility::Visibility::is_gc_eligible(nbr.delete_ts, cutoff)
-                    {
+                    if is_reclaimable_slot(nbr, cutoff) {
                         on_edge_removed(nbr.edge_id, nbr.delete_ts);
                         removed += 1;
                     } else {

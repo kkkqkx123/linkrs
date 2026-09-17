@@ -26,6 +26,7 @@
 //! | `Single` | `SingleMutableCsr` | One-to-one relationships (spouse, current_employer) | O(1) |
 //! | `None` | - | No edges stored | - |
 
+pub(crate) mod csr_shared;
 pub mod csr_trait;
 pub mod csr_variant;
 pub mod csr_with_properties;
