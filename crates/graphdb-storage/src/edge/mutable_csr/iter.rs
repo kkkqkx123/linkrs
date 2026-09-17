@@ -4,6 +4,26 @@ use super::MutableCsr;
 use crate::edge::Nbr;
 use graphdb_core::types::Timestamp;
 
+impl MutableCsr {
+    /// Create iterator over all edges
+    pub fn iter(&self, ts: Timestamp) -> MutableCsrIterator<'_> {
+        MutableCsrIterator::new(self, ts)
+    }
+
+    /// Create an iterator over all physically present edges, including
+    /// entries marked as deleted (delete_ts != MAX). Used when rebuilding the
+    /// CSR so tombstoned entries survive remapping.
+    pub fn iter_all(&self) -> MutableCsrIterator<'_> {
+        MutableCsrIterator::new_all(self)
+    }
+
+    /// Iterate edges of a vertex without collecting into a Vec.
+    /// Test-only row-stamp filtered iterator; production scans go through the version authority.
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
+        VertexEdgesIter::new(self, src_vid, ts)
+    }
+}
+
 /// Iterator over edges of a single vertex in MutableCsr.
 pub struct VertexEdgesIter<'a> {
     csr: &'a MutableCsr,
