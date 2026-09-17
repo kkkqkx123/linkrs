@@ -29,6 +29,10 @@ pub mod section {
     pub const EDGE_OUT_CSR: u32 = 0x0202;
     pub const EDGE_IN_CSR: u32 = 0x0203;
     pub const EDGE_PROPERTIES: u32 = 0x0204;
+    /// Committed append-log sidecar of one out group since its base rewrite.
+    pub const EDGE_OUT_APPEND: u32 = 0x0205;
+    /// Committed append-log sidecar of one in group since its base rewrite.
+    pub const EDGE_IN_APPEND: u32 = 0x0206;
 
     #[allow(unused)]
     // reserved for future property-table file

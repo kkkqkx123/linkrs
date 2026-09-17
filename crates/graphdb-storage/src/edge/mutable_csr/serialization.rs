@@ -4,7 +4,7 @@ use crate::persistence::{read_u32_le, read_u64_le};
 
 use super::super::{EdgeId, Nbr};
 
-pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 1;
+pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 
 pub(crate) fn write_nbr(out: &mut Vec<u8>, nbr: &Nbr) {
     out.extend_from_slice(&nbr.endpoint.to_le_bytes());

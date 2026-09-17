@@ -422,6 +422,27 @@ impl MutableCsrTrait for CsrVariant {
         }
     }
 
+    fn row_gap(&self, vid: u32) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.row_gap(vid),
+            _ => 0,
+        }
+    }
+
+    fn row_density(&self, vid: u32) -> f32 {
+        match self {
+            CsrVariant::Multiple(csr) => csr.row_density(vid),
+            _ => 1.0,
+        }
+    }
+
+    fn rebalance_row(&mut self, vid: u32) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.rebalance_row(vid),
+            _ => true,
+        }
+    }
+
     fn used_memory_size(&self) -> usize {
         match self {
             CsrVariant::None { .. } => std::mem::size_of::<Self>(),

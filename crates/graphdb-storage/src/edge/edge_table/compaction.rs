@@ -1,9 +1,11 @@
-//! Compaction: per-group CSR rebuilds and property slot reclamation.
+//! Compaction: per-region CSR rebuilds and property slot reclamation.
 //!
 //! All cutoffs derive from one per-pass `MvccWatermarks` capture plus margin;
 //! eligibility uses `Visibility::is_gc_eligible`. Reclaim passes skip groups
-//! without delete history; flush-time rebuilds touch only dirty or
-//! fragmented groups. Whole-table fragmentation stays an observation metric.
+//! without delete history; flush-time rebuilds touch only dirty regions at a
+//! density-tiered scope (row, region, group). Whole-table and whole-group
+//! fragmentation ratios stay observation metrics; only group-scope merges
+//! consult the caller fragmentation gate.
 
 use super::core::EdgeStore;
 use super::stats::DeletionStats;
@@ -173,9 +175,15 @@ impl EdgeStore {
         self.compact_reclaimable_vertices(bound, MAX_VERTEX_RECLAIM_PER_PASS) > 0
     }
 
-    /// Rebuild fragmented groups before flush, sharing the pass cutoff.
-    /// Clean groups are skipped, so a small dirty set never triggers a
+    /// Rebuild dense dirty regions before flush, sharing the pass cutoff.
+    /// Clean regions are skipped, so a small dirty set never triggers a
     /// large rebuild pause.
+    ///
+    /// Scope is tiered per region: rows holding reclaimable entries are the
+    /// only trigger, density only widens the scope from row to region to
+    /// group, and larger scopes require higher density. Row gaps kept at the
+    /// packed density target never trigger a rebuild on their own; only
+    /// tombstone dirt does.
     pub fn maybe_compact_for_flush_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
@@ -186,34 +194,138 @@ impl EdgeStore {
         // rebuilt rows keep everyday-write gaps instead of packing full.
         const RESERVE_RATIO: f32 = 1.0 - crate::edge::mutable_csr::PACKED_CSR_DENSITY;
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
-        for gid in 0..self.out_csr.group_count() {
-            let fragmented = self
-                .out_csr
-                .group_variant(gid)
-                .and_then(|variant| variant.fragmentation_stats())
-                .is_some_and(|stats| stats.should_compact(threshold));
-            if fragmented {
-                self.out_csr.compact_group_with_reporting(
-                    gid,
-                    cutoff,
-                    RESERVE_RATIO,
-                    &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-                );
-            }
-        }
-        for gid in 0..self.in_csr.group_count() {
-            let fragmented = self
-                .in_csr
-                .group_variant(gid)
-                .and_then(|variant| variant.fragmentation_stats())
-                .is_some_and(|stats| stats.should_compact(threshold));
-            if fragmented {
-                self.in_csr.compact_group_with_reporting(
-                    gid,
-                    cutoff,
-                    RESERVE_RATIO,
-                    &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
-                );
+        // Group-scope merges stay behind the caller fragmentation gate so a
+        // small flush never triggers an unbounded rebuild; row and region
+        // scopes trigger on per-row reclaimable counts alone.
+        let group_merge_allowed = |ratio: f32| ratio >= threshold;
+        for outgoing in [true, false] {
+            let group_count = if outgoing {
+                self.out_csr.group_count()
+            } else {
+                self.in_csr.group_count()
+            };
+            let group_size = if outgoing {
+                self.out_csr.group_size()
+            } else {
+                self.in_csr.group_size()
+            };
+            let regions = crate::edge::node_group::regions_per_group(group_size);
+            for gid in 0..group_count {
+                for rid in 0..regions {
+                    let shards = if outgoing {
+                        &self.out_csr
+                    } else {
+                        &self.in_csr
+                    };
+                    let scope = shards.select_merge_scope(gid, rid, cutoff);
+                    match scope {
+                        None => continue,
+                        Some(crate::edge::node_group::RegionMergeScope::Group) => {
+                            let ratio = if outgoing {
+                                self.out_csr
+                                    .group_variant(gid)
+                                    .map(|variant| {
+                                        variant
+                                            .fragmentation_stats()
+                                            .map_or(0.0, |stats| stats.fragmentation_ratio())
+                                    })
+                                    .unwrap_or(0.0)
+                            } else {
+                                self.in_csr
+                                    .group_variant(gid)
+                                    .map(|variant| {
+                                        variant
+                                            .fragmentation_stats()
+                                            .map_or(0.0, |stats| stats.fragmentation_ratio())
+                                    })
+                                    .unwrap_or(0.0)
+                            };
+                            if !group_merge_allowed(ratio) {
+                                let shards = if outgoing {
+                                    &mut self.out_csr
+                                } else {
+                                    &mut self.in_csr
+                                };
+                                shards.compact_region_with_reporting(
+                                    gid,
+                                    rid,
+                                    cutoff,
+                                    &mut |edge_id, delete_ts| {
+                                        self.mvcc.record_deletion(edge_id, delete_ts)
+                                    },
+                                );
+                                continue;
+                            }
+                            let shards = if outgoing {
+                                &mut self.out_csr
+                            } else {
+                                &mut self.in_csr
+                            };
+                            shards.compact_group_with_reporting(
+                                gid,
+                                cutoff,
+                                RESERVE_RATIO,
+                                &mut |edge_id, delete_ts| {
+                                    self.mvcc.record_deletion(edge_id, delete_ts)
+                                },
+                            );
+                            break;
+                        }
+                        Some(crate::edge::node_group::RegionMergeScope::Region) => {
+                            let shards = if outgoing {
+                                &mut self.out_csr
+                            } else {
+                                &mut self.in_csr
+                            };
+                            shards.compact_region_with_reporting(
+                                gid,
+                                rid,
+                                cutoff,
+                                &mut |edge_id, delete_ts| {
+                                    self.mvcc.record_deletion(edge_id, delete_ts)
+                                },
+                            );
+                        }
+                        Some(crate::edge::node_group::RegionMergeScope::Row) => {
+                            let (start, end) =
+                                crate::edge::node_group::region_local_range(rid, group_size);
+                            let group_bits = if outgoing {
+                                self.out_csr.group_bits()
+                            } else {
+                                self.in_csr.group_bits()
+                            };
+                            let base = crate::edge::node_group::group_base(gid, group_bits);
+                            for local in start..end {
+                                let vid = base.saturating_add(local);
+                                let needs = if outgoing {
+                                    self.out_csr.vertex_needs_compact(vid, cutoff)
+                                } else {
+                                    self.in_csr.vertex_needs_compact(vid, cutoff)
+                                };
+                                if !needs {
+                                    continue;
+                                }
+                                if outgoing {
+                                    self.out_csr.compact_vertex_with_reporting(
+                                        vid,
+                                        cutoff,
+                                        &mut |edge_id, delete_ts| {
+                                            self.mvcc.record_deletion(edge_id, delete_ts)
+                                        },
+                                    );
+                                } else {
+                                    self.in_csr.compact_vertex_with_reporting(
+                                        vid,
+                                        cutoff,
+                                        &mut |edge_id, delete_ts| {
+                                            self.mvcc.record_deletion(edge_id, delete_ts)
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

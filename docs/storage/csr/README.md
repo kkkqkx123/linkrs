@@ -94,7 +94,6 @@ crates/graphdb-storage/src/storage/edge/
 │   ├── segment.rs
 │   └── snapshot.rs
 ├── property_table.rs           # Edge properties
-├── bloom_filter.rs             # Bloom filter
 └── mod.rs                      # Module re-exports
 ```
 

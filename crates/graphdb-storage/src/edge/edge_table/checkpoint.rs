@@ -1,30 +1,39 @@
 //! Incremental checkpoint: per-group topology files plus a manifest.
 //!
-//! Layout of one edge-table directory, version 2:
+//! Layout of one edge-table directory, version 3:
 //! - `meta.bin`: header section (label ids, schema, next edge id) plus the
 //!   authoritative edge timestamps, with the manifest commit tail appended
 //!   so metadata and manifest share one atomic unit.
 //! - `groups_manifest.bin`: group address width plus out/in group counts.
-//! - `out_g{gid}.bin` / `in_g{gid}.bin`: one page-compressed payload per
-//!   group, each self-validated by its row header on load.
+//! - `out_g{gid}.bin` / `in_g{gid}.bin`: one page-compressed base payload per
+//!   group, each self-validated by its row header on load. Rewritten only
+//!   for groups carrying delete dirt (base merges) or missing files.
+//! - `out_g{gid}.append.bin` / `in_g{gid}.append.bin`: committed append-log
+//!   sidecars holding the write-through delta since the group base rewrite.
+//!   Insert-only groups checkpoint by persisting the sidecar alone, so
+//!   flushed bytes stay proportional to the dirty regions instead of the
+//!   group size. The sidecar carries the active manifest and is rejected on
+//!   mismatch; it is cumulative across append-only flushes and deleted by
+//!   the base merge that absorbs it.
 //! - `properties.bin`: property columns plus row visibility.
 //!
-//! Commit protocol: group and property payloads are written first, then the
-//! metadata file carrying the manifest tail, and the manifest file is
-//! published last as the snapshot commit point. Loading requires the
-//! manifest tail embedded in `meta.bin` to equal `groups_manifest.bin`;
-//! a mismatch means a torn commit or file damage and the load is rejected.
-//! The manifest epoch is the snapshot epoch: shadow (`.tmp`) files written
-//! before the manifest commit are discardable uncommitted state reclaimed at
-//! startup by the shadow cleanup. Only groups holding uncheckpointed writes
-//! are rewritten; clean groups are skipped. Directories holding the old
-//! single-file layout (`out_csr.bin` without a manifest) or a version 1
-//! `meta.bin` without a commit tail are rejected explicitly, never
+//! Commit protocol: group bases, sidecars and property payloads are written
+//! first (all through atomic shadow files), then the metadata file carrying
+//! the manifest tail, and the manifest file is published last as the
+//! snapshot commit point. Loading requires the manifest tail embedded in
+//! `meta.bin` to equal `groups_manifest.bin`; a mismatch means a torn
+//! commit or file damage and the load is rejected. The manifest epoch is
+//! the snapshot epoch: shadow (`.tmp`) files written before the manifest
+//! commit are discardable uncommitted state reclaimed at startup by the
+//! shadow cleanup. Only groups holding uncheckpointed writes are written;
+//! clean groups are skipped. Directories holding the old single-file layout
+//! (`out_csr.bin` without a manifest), version 1 `meta.bin` without a
+//! commit tail, or a pre-version-3 manifest are rejected explicitly, never
 //! converted.
 
 use super::core::EdgeStore;
 use super::persistence;
-use crate::edge::node_group::{EdgeCheckpointKind, TableShardManifest};
+use crate::edge::node_group::{decode_append_ops, encode_append_ops, EdgeCheckpointKind, TableShardManifest};
 use crate::edge::CsrBase;
 use graphdb_core::{StorageError, StorageResult};
 use std::path::{Path, PathBuf};
@@ -43,12 +52,28 @@ pub fn in_group_file(group: usize) -> String {
     format!("in_g{}.bin", group)
 }
 
+pub fn out_append_file(group: usize) -> String {
+    format!("out_g{}.append.bin", group)
+}
+
+pub fn in_append_file(group: usize) -> String {
+    format!("in_g{}.append.bin", group)
+}
+
 fn out_group_path(dir: &Path, group: usize) -> PathBuf {
     dir.join(out_group_file(group))
 }
 
 fn in_group_path(dir: &Path, group: usize) -> PathBuf {
     dir.join(in_group_file(group))
+}
+
+fn out_append_path(dir: &Path, group: usize) -> PathBuf {
+    dir.join(out_append_file(group))
+}
+
+fn in_append_path(dir: &Path, group: usize) -> PathBuf {
+    dir.join(in_append_file(group))
 }
 
 fn manifest_path(dir: &Path) -> PathBuf {
@@ -81,19 +106,25 @@ impl EdgeStore {
         self.in_csr.mark_column_updated_for(dst);
     }
 
-    /// Flush dirty state incrementally: topology groups and property columns
-    /// first, metadata carrying the manifest tail second, manifest last.
+    /// Flush dirty state incrementally: topology group bases or append
+    /// sidecars plus property columns first, metadata carrying the manifest
+    /// tail second, manifest last.
     ///
-    /// Groups and properties land in shadow files before the metadata commit
-    /// so a crash before the manifest publish leaves only discardable
-    /// `.tmp` state plus the previous consistent snapshot. Property
-    /// statistics are refreshed before the property payload is serialized so
-    /// they follow the checkpoint. The checkpoint kind is derived from the
-    /// dirt before it is cleared: any delete dirt makes a rebalance,
-    /// otherwise the flush only lands the memory append layer. Flushed
-    /// bytes, elapsed time and authority tombstone totals are reported to
-    /// the shared metrics registry when one is set. Returns the checkpoint
-    /// kind for engine-side logging.
+    /// Each group picks its own mode: groups carrying delete dirt rewrite
+    /// the base and absorb (then delete) their sidecar; insert-only groups
+    /// persist the cumulative append sidecar alone, so small writes never
+    /// trigger a whole-group rewrite and flushed bytes stay proportional to
+    /// the dirty regions. In-memory append row indexes are dropped after the
+    /// flush that persists them; the on-disk sidecar stays cumulative until
+    /// a base merge absorbs it. Groups and properties land in shadow files
+    /// before the metadata commit so a crash before the manifest publish
+    /// leaves only discardable `.tmp` state plus the previous consistent
+    /// snapshot. Property statistics are refreshed before the property
+    /// payload is serialized so they follow the checkpoint. The checkpoint
+    /// kind is Rebalance when any group merged a base, AppendOnly otherwise.
+    /// Flushed bytes, elapsed time and authority tombstone totals are
+    /// reported to the shared metrics registry when one is set. Returns the
+    /// checkpoint kind for engine-side logging.
     pub(crate) fn flush_incremental(
         &mut self,
         dir: &Path,
@@ -104,46 +135,48 @@ impl EdgeStore {
         std::fs::create_dir_all(dir)?;
         crate::compression::cleanup_shadow_files(dir)?;
 
-        let kind = match (
-            self.out_csr.checkpoint_kind(),
-            self.in_csr.checkpoint_kind(),
-        ) {
-            (EdgeCheckpointKind::Rebalance, _) | (_, EdgeCheckpointKind::Rebalance) => {
-                EdgeCheckpointKind::Rebalance
-            }
-            _ => EdgeCheckpointKind::AppendOnly,
-        };
-        let dirty_groups =
-            self.out_csr.dirty_group_ids().len() + self.in_csr.dirty_group_ids().len();
         let manifest = TableShardManifest {
             group_bits: self.config.node_group_bits,
             out_groups: self.out_csr.group_count() as u32,
             in_groups: self.in_csr.group_count() as u32,
         };
+        let dirty_groups =
+            self.out_csr.dirty_group_ids().len() + self.in_csr.dirty_group_ids().len();
 
         let mut flushed_bytes = 0u64;
-        flushed_bytes += self.flush_group_set(
+        let (out_bytes, out_rebalanced) = self.flush_group_set(
             dir,
             page_size,
             level,
             true,
             crate::persistence::section::EDGE_OUT_CSR,
+            crate::persistence::section::EDGE_OUT_APPEND,
+            &manifest,
         )?;
-        flushed_bytes += self.flush_group_set(
+        flushed_bytes += out_bytes;
+        let (in_bytes, in_rebalanced) = self.flush_group_set(
             dir,
             page_size,
             level,
             false,
             crate::persistence::section::EDGE_IN_CSR,
+            crate::persistence::section::EDGE_IN_APPEND,
+            &manifest,
         )?;
+        flushed_bytes += in_bytes;
+        let kind = if out_rebalanced || in_rebalanced {
+            EdgeCheckpointKind::Rebalance
+        } else {
+            EdgeCheckpointKind::AppendOnly
+        };
         flushed_bytes += self.flush_properties_file(dir, page_size, level)?;
         flushed_bytes += self.flush_metadata_file(dir, page_size, level, &manifest)?;
         self.write_manifest(dir, &manifest)?;
         flushed_bytes += file_bytes(&manifest_path(dir));
 
         self.properties_dirty = false;
-        self.out_csr.clear_all_dirty();
-        self.in_csr.clear_all_dirty();
+        self.out_csr.clear_all_column_dirty();
+        self.in_csr.clear_all_column_dirty();
         self.remove_orphan_group_files(dir);
         log::debug!(
             "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={}",
@@ -229,48 +262,154 @@ impl EdgeStore {
         Ok(file_bytes(&path))
     }
 
-    /// Write one direction. `outgoing` selects the out shard set.
+    /// Write one direction group by group, each in its own mode.
     ///
-    /// Returns the bytes written for groups actually flushed; clean groups
-    /// whose files are skipped contribute zero.
+    /// Groups carrying delete dirt rewrite the base file and absorb (then
+    /// delete) their append sidecar. Insert-only groups persist the
+    /// cumulative append sidecar alone: the on-disk sidecar is read back,
+    /// merged with the in-memory log, and rewritten, then the memory row
+    /// index is dropped. Clean groups whose base files exist are skipped
+    /// and contribute zero bytes. Returns `(bytes, rebalanced_any)`.
     fn flush_group_set(
-        &self,
+        &mut self,
         dir: &Path,
         page_size: usize,
         level: i32,
         outgoing: bool,
         section_id: u32,
-    ) -> StorageResult<u64> {
-        let shards = if outgoing {
-            &self.out_csr
+        append_section_id: u32,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<(u64, bool)> {
+        let group_count = if outgoing {
+            self.out_csr.group_count()
         } else {
-            &self.in_csr
+            self.in_csr.group_count()
         };
         let mut written = 0u64;
-        for gid in 0..shards.group_count() {
-            let path = if outgoing {
+        let mut rebalanced = false;
+        for gid in 0..group_count {
+            let base_path = if outgoing {
                 out_group_path(dir, gid)
             } else {
                 in_group_path(dir, gid)
             };
-            if !shards.needs_checkpoint(gid) && path.exists() {
+            let append_path = if outgoing {
+                out_append_path(dir, gid)
+            } else {
+                in_append_path(dir, gid)
+            };
+            let shards = if outgoing {
+                &self.out_csr
+            } else {
+                &self.in_csr
+            };
+            if !shards.needs_checkpoint(gid)
+                && !shards.group_has_append_log(gid)
+                && base_path.exists()
+            {
                 continue;
             }
-            let Some(variant) = shards.group_variant(gid) else {
-                continue;
-            };
-            let mut payload = Vec::new();
-            persistence::serialize_csr(variant, section_id, &mut payload)?;
-            persistence::write_pages_to_file(
-                &path,
-                &payload,
-                page_size,
-                level,
-                variant.edge_count() as u32,
-            )?;
-            written += file_bytes(&path);
+            if shards.group_needs_rebalance(gid) || !base_path.exists() {
+                let had_delete_dirt = shards.group_needs_rebalance(gid);
+                let variant = shards.group_variant(gid).cloned().ok_or_else(|| {
+                    StorageError::deserialize_error(format!("group {} missing on flush", gid))
+                })?;
+                let mut payload = Vec::new();
+                persistence::serialize_csr(&variant, section_id, &mut payload)?;
+                persistence::write_pages_to_file(
+                    &base_path,
+                    &payload,
+                    page_size,
+                    level,
+                    variant.edge_count() as u32,
+                )?;
+                written += file_bytes(&base_path);
+                if append_path.exists() {
+                    let _ = std::fs::remove_file(&append_path);
+                }
+                let shards = if outgoing {
+                    &mut self.out_csr
+                } else {
+                    &mut self.in_csr
+                };
+                shards.clear_group_dirty(gid);
+                shards.clear_group_append_log(gid);
+                rebalanced |= had_delete_dirt;
+            } else {
+                let shards = if outgoing {
+                    &self.out_csr
+                } else {
+                    &self.in_csr
+                };
+                let mut merged_inserts = Vec::new();
+                let mut merged_deletes = Vec::new();
+                if append_path.exists() {
+                    let (raw, _) = persistence::read_pages_from_file(&append_path)?;
+                    let carried = Self::unwrap_append_sidecar(&raw, append_section_id)?;
+                    let (prior_inserts, prior_deletes) =
+                        decode_append_ops(&carried, manifest)?;
+                    merged_inserts = prior_inserts;
+                    merged_deletes = prior_deletes;
+                }
+                let (mem_inserts, mem_deletes) = shards.group_append_ops(gid);
+                merged_inserts.extend(mem_inserts);
+                merged_deletes.extend(mem_deletes);
+                let ops = encode_append_ops(manifest, &merged_inserts, &merged_deletes);
+                let mut payload = Vec::new();
+                crate::persistence::write_header_to(&mut payload, append_section_id).map_err(
+                    |e| StorageError::io_error(format!("Failed to write append header: {}", e)),
+                )?;
+                payload.extend_from_slice(&(ops.len() as u64).to_le_bytes());
+                payload.extend_from_slice(&ops);
+                let op_count = merged_inserts.len() + merged_deletes.len();
+                persistence::write_pages_to_file(
+                    &append_path,
+                    &payload,
+                    page_size,
+                    level,
+                    op_count as u32,
+                )?;
+                written += file_bytes(&append_path);
+                let shards = if outgoing {
+                    &mut self.out_csr
+                } else {
+                    &mut self.in_csr
+                };
+                shards.clear_group_dirty(gid);
+                shards.clear_group_append_log(gid);
+            }
         }
-        Ok(written)
+        Ok((written, rebalanced))
+    }
+
+    /// Unwrap one append-sidecar page payload: checks the section header,
+    /// length prefix and trailing bytes, returning the append-op bytes.
+    fn unwrap_append_sidecar(raw: &[u8], expected_section: u32) -> StorageResult<Vec<u8>> {
+        use std::io::Read;
+        let mut cursor = &raw[..];
+        let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
+        cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+            if sid != expected_section {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in append sidecar: expected {:#06x}, got {:#06x}",
+                    expected_section, sid
+                )));
+            }
+        }
+        let mut len_bytes = [0u8; 8];
+        cursor.read_exact(&mut len_bytes)?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        let mut data = vec![0u8; len];
+        cursor.read_exact(&mut data)?;
+        if !cursor.is_empty() {
+            return Err(StorageError::deserialize_error(
+                "unexpected trailing data in append sidecar".to_string(),
+            ));
+        }
+        Ok(data)
     }
 
     /// Publish the manifest as the snapshot commit point. Must be called
@@ -282,16 +421,26 @@ impl EdgeStore {
     fn remove_orphan_group_files(&self, dir: &Path) {
         let mut gid = self.out_csr.group_count();
         loop {
-            let path = out_group_path(dir, gid);
-            if !path.exists() || std::fs::remove_file(&path).is_err() {
+            let base = out_group_path(dir, gid);
+            let append = out_append_path(dir, gid);
+            let base_gone = !base.exists() || std::fs::remove_file(&base).is_err();
+            if append.exists() {
+                let _ = std::fs::remove_file(&append);
+            }
+            if base_gone {
                 break;
             }
             gid += 1;
         }
         let mut gid = self.in_csr.group_count();
         loop {
-            let path = in_group_path(dir, gid);
-            if !path.exists() || std::fs::remove_file(&path).is_err() {
+            let base = in_group_path(dir, gid);
+            let append = in_append_path(dir, gid);
+            let base_gone = !base.exists() || std::fs::remove_file(&base).is_err();
+            if append.exists() {
+                let _ = std::fs::remove_file(&append);
+            }
+            if base_gone {
                 break;
             }
             gid += 1;
@@ -299,16 +448,19 @@ impl EdgeStore {
     }
 
     /// Load an incremental checkpoint. Directories in the old single-file
-    /// layout and version 1 metadata without a commit tail are rejected
-    /// explicitly, never converted.
+    /// layout, version 1 metadata without a commit tail, and pre-version-3
+    /// manifests are rejected explicitly, never converted.
     ///
-    /// Damage detection only: version, section, trailing-byte and
+    /// Group bases load first, then append sidecars replay on top; sidecar
+    /// version, manifest, section and trailing-byte mismatches fail the
+    /// load. Damage detection only: version, section, trailing-byte and
     /// manifest-tail mismatches fail the load. Crash consistency comes from
-    /// the commit protocol (groups and properties before metadata, manifest
-    /// published last with its tail embedded in `meta.bin`), covered by the
-    /// crash-injection tests below instead of by the orphan audit. The
-    /// orphan audit stays as file-damage detection: a nonzero mismatch
-    /// means torn or corrupt files, not a recoverable crash window.
+    /// the commit protocol (group bases, sidecars and properties before
+    /// metadata, manifest published last with its tail embedded in
+    /// `meta.bin`), covered by the crash-injection tests below instead of by
+    /// the orphan audit. The orphan audit stays as file-damage detection: a
+    /// nonzero mismatch means torn or corrupt files, not a recoverable crash
+    /// window.
     pub(crate) fn load_incremental(&mut self, dir: &Path) -> StorageResult<()> {
         let manifest_file = manifest_path(dir);
         if !manifest_file.exists() {
@@ -336,8 +488,8 @@ impl EdgeStore {
         self.load_metadata_file(dir, &manifest)?;
         self.out_csr.resize_groups(manifest.out_groups as usize)?;
         self.in_csr.resize_groups(manifest.in_groups as usize)?;
-        self.load_group_set(dir, true, manifest.out_groups as usize)?;
-        self.load_group_set(dir, false, manifest.in_groups as usize)?;
+        self.load_group_set(dir, true, manifest.out_groups as usize, &manifest)?;
+        self.load_group_set(dir, false, manifest.in_groups as usize, &manifest)?;
         self.load_properties_file(dir)?;
 
         if self.next_edge_id.0 == 0 {
@@ -442,12 +594,28 @@ impl EdgeStore {
         Ok(())
     }
 
-    fn load_group_set(&mut self, dir: &Path, outgoing: bool, count: usize) -> StorageResult<()> {
+    fn load_group_set(
+        &mut self,
+        dir: &Path,
+        outgoing: bool,
+        count: usize,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<()> {
+        let append_section = if outgoing {
+            crate::persistence::section::EDGE_OUT_APPEND
+        } else {
+            crate::persistence::section::EDGE_IN_APPEND
+        };
         for gid in 0..count {
             let path = if outgoing {
                 out_group_path(dir, gid)
             } else {
                 in_group_path(dir, gid)
+            };
+            let append_path = if outgoing {
+                out_append_path(dir, gid)
+            } else {
+                in_append_path(dir, gid)
             };
             let expected = if outgoing {
                 crate::persistence::section::EDGE_OUT_CSR
@@ -463,6 +631,15 @@ impl EdgeStore {
                 StorageError::deserialize_error(format!("group {} missing on load", gid))
             })?;
             persistence::load_csr(&path, variant, expected)?;
+            // Sidecars replay the write-through delta on top of the base;
+            // the memory row index stays empty because the base now carries
+            // the merged state.
+            if append_path.exists() {
+                let (raw, _) = persistence::read_pages_from_file(&append_path)?;
+                let carried = Self::unwrap_append_sidecar(&raw, append_section)?;
+                shards.replay_group_append_log(gid, &carried, manifest)?;
+                shards.clear_group_append_log(gid);
+            }
             shards.clear_group_dirty(gid);
         }
         Ok(())
@@ -1155,5 +1332,252 @@ mod tests {
         reloaded.load(dir.path()).expect("load should succeed");
         assert!(reloaded.has_edge(0, 1, 0, 200));
         assert!(reloaded.has_edge(5000, 6000, 0, 200));
+    }
+
+    #[test]
+    fn append_only_flush_skips_base_rewrite() {
+        use crate::edge::EdgeCheckpointKind;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("first flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::AppendOnly);
+        // First flush of a new group writes the base; no sidecar exists yet.
+        let base_path = dir.path().join(out_group_file(0));
+        assert!(base_path.exists());
+        assert!(!dir.path().join(out_append_file(0)).exists());
+        let stamp = base_path.metadata().unwrap().modified().unwrap();
+
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+            .unwrap();
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("second flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::AppendOnly);
+        // Insert-only groups persist the sidecar alone: the base is untouched.
+        assert_eq!(base_path.metadata().unwrap().modified().unwrap(), stamp);
+        assert!(dir.path().join(out_append_file(0)).exists());
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(0, 2, 0, 200));
+        assert_eq!(loaded.edge_count(), 2);
+    }
+
+    #[test]
+    fn cumulative_sidecars_survive_two_append_flushes() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("first flush should succeed");
+        // Two insert-only batches with a flush each: the second sidecar must
+        // accumulate the first, never overwrite it.
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("second flush should succeed");
+        table
+            .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 120)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("third flush should succeed");
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(0, 2, 0, 200));
+        assert!(loaded.has_edge(0, 3, 0, 200));
+        assert_eq!(loaded.edge_count(), 3);
+    }
+
+    #[test]
+    fn delete_flush_rewrites_base_and_drops_sidecar() {
+        use crate::edge::EdgeCheckpointKind;
+
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("first flush should succeed");
+        table
+            .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 110)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("append flush should succeed");
+        assert!(dir.path().join(out_append_file(0)).exists());
+
+        table.delete_edge(0, 1, 0, 200).unwrap();
+        let kind = table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("delete flush should succeed");
+        assert_eq!(kind, EdgeCheckpointKind::Rebalance);
+        // The base merge absorbs the sidecar: no append file remains.
+        assert!(!dir.path().join(out_append_file(0)).exists());
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(!loaded.has_edge(0, 1, 0, 250));
+        assert!(loaded.has_edge(0, 2, 0, 250));
+        assert!(loaded.has_edge(0, 3, 0, 250));
+        assert_eq!(loaded.edge_count(), 2);
+    }
+
+    #[test]
+    fn small_write_sidecar_stays_proportional_to_dirty_scale() {
+        let mut table = make_table();
+        for i in 0..200u32 {
+            table
+                .insert_edge(i, i + 1000, 0, &[], 100)
+                .unwrap();
+        }
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+        let base_len = std::fs::metadata(dir.path().join(out_group_file(0)))
+            .expect("base readable")
+            .len();
+
+        table.insert_edge(0, 2001, 0, &[], 110).unwrap();
+        table.insert_edge(1, 2002, 0, &[], 110).unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("small flush should succeed");
+        let sidecar_len = std::fs::metadata(dir.path().join(out_append_file(0)))
+            .expect("sidecar readable")
+            .len();
+        // Two fresh edges persist as a small delta, not a group rewrite.
+        assert!(
+            (sidecar_len as f64) < (base_len as f64) / 4.0,
+            "sidecar {} must stay far below base {}",
+            sidecar_len,
+            base_len
+        );
+        // Region dirt is cleared by the flush that persists it.
+        assert!(table.out_csr.dirty_region_ids(0).is_empty());
+    }
+
+    #[test]
+    fn torn_sidecar_is_rejected_not_replayed() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("first flush should succeed");
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("append flush should succeed");
+        let sidecar = dir.path().join(out_append_file(0));
+        assert!(sidecar.exists());
+        // Corrupt the sidecar payload (valid pages, broken ops section).
+        let (mut raw, _) =
+            persistence::read_pages_from_file(&sidecar).expect("sidecar readable");
+        assert!(raw.len() > 32);
+        raw.truncate(raw.len() - 4);
+        persistence::write_pages_to_file(
+            &sidecar,
+            &raw,
+            crate::compression::DEFAULT_PAGE_SIZE,
+            3,
+            1,
+        )
+        .expect("torn sidecar writable");
+
+        let mut loaded = make_table();
+        assert!(
+            loaded.load(dir.path()).is_err(),
+            "torn sidecar must fail the load"
+        );
+    }
+
+    #[test]
+    fn pre_v3_manifest_is_rejected() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        // Hand-craft a version 2 manifest: same body, old version.
+        let mut legacy = 2u32.to_le_bytes().to_vec();
+        let current = std::fs::read(dir.path().join(GROUPS_MANIFEST_FILE))
+            .expect("manifest readable");
+        legacy.extend_from_slice(&current[4..]);
+        std::fs::write(dir.path().join(GROUPS_MANIFEST_FILE), &legacy)
+            .expect("legacy manifest writable");
+
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("pre-v3 manifest must be rejected");
+        assert!(err.to_string().contains("unsupported group manifest version"));
     }
 }

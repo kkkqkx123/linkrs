@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use super::super::Nbr;
 
-pub(crate) const MAX_OVERFLOW_CHUNKS_PER_VERTEX: usize = 32;
+/// Single benchmarked per-vertex overflow bound. Past this many chunks a row
+/// holding dead entries is repacked on the write path; a row holding only
+/// live entries waits for a region or full compaction instead of repeatedly
+/// repacking live data. No alternative threshold set is retained.
+pub(crate) const OVERFLOW_REPACK_CHUNKS_PER_VERTEX: usize = 8;
 
 /// Per-vertex overflow storage keyed by vertex id for constant-time lookup.
 ///

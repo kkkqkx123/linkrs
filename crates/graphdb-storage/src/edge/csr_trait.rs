@@ -186,6 +186,27 @@ pub trait MutableCsrTrait: CsrBase {
         (0, 0, 0)
     }
 
+    /// Reserved primary slots minus live primary entries of one row.
+    ///
+    /// Steady-state write gaps; strategies without rows report zero.
+    fn row_gap(&self, _vid: u32) -> usize {
+        0
+    }
+
+    /// Live primary entries per unit of reserved primary capacity.
+    ///
+    /// Strategies without rows report full density.
+    fn row_density(&self, _vid: u32) -> f32 {
+        1.0
+    }
+
+    /// Rebalance one row in place, pulling overflow entries into primary
+    /// gaps and repacking leftover overflow. Returns true when the row no
+    /// longer holds overflow. Strategies without rows report true.
+    fn rebalance_row(&mut self, _vid: u32) -> bool {
+        true
+    }
+
     /// Return the approximate memory usage in bytes.
     fn used_memory_size(&self) -> usize;
 }

@@ -242,7 +242,8 @@ pub trait MutableCsrTrait: CsrBase {
 | `fragmentation_stats.rs` | Metrics collection |
 | `edge_table/mod.rs` | EdgeTable (out_csr + in_csr + segments + properties) |
 | `property_table.rs` | Edge property storage |
-| `bloom_filter.rs` | Bloom filter |
+
+> 删除定位不经过布隆：边 CSR 读路径无任何布隆咨询；如未来需要删除定位加速，重新立项并附命中率度量。
 
 ## Common Pitfalls
 

@@ -159,8 +159,11 @@ fn remap_direction(
     // Rebuilt rows must reach the next checkpoint: mark every surviving
     // group dirty so incremental flush cannot skip them. Reclaim hints are
     // preserved: tombstoned entries survived the rebuild and the next
-    // reclaim pass must inspect their groups once.
+    // reclaim pass must inspect their groups once. The rebuild-time append
+    // logs are dropped because the delete dirt above forces a base merge
+    // that carries the same states.
     rebuilt.mark_all_dirty();
+    rebuilt.clear_all_append_logs();
     rebuilt.truncate_trailing_empty_groups();
     Ok(rebuilt)
 }
