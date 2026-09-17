@@ -126,13 +126,19 @@ fn segment_stats_path(dir: &Path) -> PathBuf {
 
 /// Parse `"<prefix>{gid}.bin"` or `"<prefix>{gid}.append.bin"` into the gid.
 /// Returns `None` for foreign files so orphan cleanup never deletes them.
+/// The match is exact: a shared numeric prefix with a foreign suffix (for
+/// example `out_g3_evil.bin`) is third-party and skipped.
 fn parse_group_file(name: &str, prefix: &str) -> Option<u32> {
     let rest = name.strip_prefix(prefix)?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return None;
+    for suffix in [".append.bin", ".bin"] {
+        if let Some(digits) = rest.strip_suffix(suffix) {
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                return digits.parse::<u32>().ok();
+            }
+            return None;
+        }
     }
-    digits.parse::<u32>().ok()
+    None
 }
 
 /// File size for checkpoint byte accounting. Metrics must never fail a
@@ -1175,9 +1181,25 @@ impl EdgeStore {
             }
             for edge_id in shard.edge_ids().collect::<Vec<_>>() {
                 if let Some((create_ts, delete_ts, values)) = shard.export_row(edge_id) {
-                    let _ = self
-                        .properties
-                        .import_row(edge_id, create_ts, delete_ts, &values);
+                    // Cross-shard repeats must agree byte for byte: a repeat
+                    // with different stamps or values is damage and fails the
+                    // load instead of silently letting the first shard win.
+                    if let Some((prev_create, prev_delete, prev_values)) =
+                        self.properties.export_row(edge_id)
+                    {
+                        if prev_create != create_ts
+                            || prev_delete != delete_ts
+                            || prev_values != values
+                        {
+                            return Err(StorageError::deserialize_error(format!(
+                                "duplicate property shard entry for edge {:?}",
+                                edge_id
+                            )));
+                        }
+                        continue;
+                    }
+                    self.properties
+                        .import_row(edge_id, create_ts, delete_ts, &values)?;
                     self.edge_owner.entry(edge_id).or_insert(*gid);
                 }
             }
@@ -1765,7 +1787,9 @@ mod tests {
             .expect("torn manifest writable");
 
         let mut loaded = make_table();
-        loaded.load(dir.path()).expect("torn commit recovers via tail");
+        loaded
+            .load(dir.path())
+            .expect("torn commit recovers via tail");
         assert!(loaded.has_edge(0, 1, 0, 200));
     }
 
@@ -2283,12 +2307,7 @@ mod tests {
             .read_dir()
             .expect("read dir")
             .flatten()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("props_g")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("props_g"))
             .map(|entry| entry.metadata().map(|meta| meta.len()).unwrap_or(0))
             .sum();
         assert!(baseline_props > 0);

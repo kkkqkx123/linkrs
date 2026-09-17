@@ -1,6 +1,6 @@
-use super::MutableCsr;
 use super::super::csr_shared::decode_endpoint_pair;
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
+use super::MutableCsr;
 
 impl MutableCsr {
     /// Read-only view of one primary slot without mutating state.

@@ -80,6 +80,16 @@ pub struct EdgeStore {
     /// stays conservative for every snapshot; counts are exact-current for
     /// observability.
     pub(crate) segment_stats: HashMap<u32, GroupSegmentStats>,
+    /// Reusable commit working buffers, cleared and recycled every commit so
+    /// small batches pay no per-commit allocation for bookkeeping.
+    pub(crate) commit_scratch: super::staging::CommitScratch,
+    /// Watermark bound of the last executed reclaim pass. The write-path
+    /// reclaim pass is skipped while the bound is unchanged and the tombstone
+    /// heap stays below threshold, so insert-heavy commits pay no scan.
+    pub(crate) last_reclaim_bound: Timestamp,
+    /// Tombstone count seen by the last executed reclaim pass. Growth past
+    /// this baseline re-arms the pass even when the watermark stands still.
+    pub(crate) last_reclaim_tombstones: usize,
 }
 
 impl std::fmt::Debug for EdgeStore {
@@ -182,6 +192,9 @@ impl EdgeStore {
             pending_drop_column: None,
             edge_owner: HashMap::new(),
             segment_stats: HashMap::new(),
+            commit_scratch: super::staging::CommitScratch::default(),
+            last_reclaim_bound: Timestamp::MAX,
+            last_reclaim_tombstones: 0,
         })
     }
 
@@ -778,12 +791,13 @@ impl EdgeStore {
             return Ok(0);
         }
 
-        let mut applied_inserts: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
-            Vec::with_capacity(inserts.len());
-        let mut insert_by_key: HashMap<(u32, u32, i64), (u32, u32, i64, EdgeId, Timestamp)> =
-            HashMap::with_capacity(inserts.len());
-        let mut applied_deletes: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
-            Vec::with_capacity(deletes.len());
+        // Recycled working buffers: cleared, not reallocated, and handed
+        // back on every exit path below so the next commit reuses them.
+        let mut scratch = self.commit_scratch.take();
+        scratch.reset(inserts.len(), deletes.len());
+        let applied_inserts = &mut scratch.applied_inserts;
+        let insert_by_key = &mut scratch.insert_by_key;
+        let applied_deletes = &mut scratch.applied_deletes;
         for ord in &order {
             if ord.is_insert {
                 let ins = &inserts[ord.slot];
@@ -800,12 +814,13 @@ impl EdgeStore {
                         insert_by_key.insert((ins.src, ins.dst, ins.rank), entry);
                     }
                     Err(e) => {
-                        for (src, dst, _rank, edge_id, ts) in applied_deletes {
+                        for (src, dst, _rank, edge_id, ts) in applied_deletes.drain(..) {
                             self.revert_applied_delete(src, dst, edge_id, ts);
                         }
-                        for (src, dst, rank, edge_id, ts) in applied_inserts {
+                        for (src, dst, rank, edge_id, ts) in applied_inserts.drain(..) {
                             self.erase_applied_insert(src, dst, rank, edge_id, ts);
                         }
+                        self.commit_scratch = scratch;
                         return Err(e);
                     }
                 }
@@ -823,12 +838,13 @@ impl EdgeStore {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        for (src, dst, _rank, edge_id, ts) in applied_deletes {
+                        for (src, dst, _rank, edge_id, ts) in applied_deletes.drain(..) {
                             self.revert_applied_delete(src, dst, edge_id, ts);
                         }
-                        for (src, dst, rank, edge_id, ts) in applied_inserts {
+                        for (src, dst, rank, edge_id, ts) in applied_inserts.drain(..) {
                             self.erase_applied_insert(src, dst, rank, edge_id, ts);
                         }
+                        self.commit_scratch = scratch;
                         return Err(e);
                     }
                 }
@@ -837,14 +853,24 @@ impl EdgeStore {
 
         let applied = applied_inserts.len() + applied_deletes.len();
         if applied > 0 {
+            // Backpressure is observed, not dropped: an over-limit commit
+            // warns and the maintenance pass below runs synchronously.
+            let mut pressured = false;
             if let Some(ts) = max_ts {
-                self.check_and_apply_write_backpressure(ts);
+                pressured = self.check_and_apply_write_backpressure(ts);
             }
             self.maybe_run_auto_maintenance();
+            if pressured {
+                log::warn!(
+                    "edge table '{}' over mutable CSR budget, synchronous maintenance ran",
+                    self.label_name
+                );
+            }
             for (_, _, _, edge_id, _) in applied_inserts.iter().chain(applied_deletes.iter()) {
                 self.debug_assert_copies_consistent(*edge_id);
             }
         }
+        self.commit_scratch = scratch;
         Ok(applied)
     }
 
@@ -982,33 +1008,12 @@ impl EdgeStore {
         let converted_values = self.convert_property_values(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 
-        // Pre-flight duplicate check before touching any shared state so a
-        // failed insert leaves no partial record behind.
-        if self.has_edge(src, dst, rank, ts) {
-            return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}",
-                src, dst, rank
-            )));
-        }
-        // Single strategy holds at most one live edge per bound endpoint.
-        // Reject a second live edge explicitly instead of silently
-        // overwriting the slot and orphaning authority plus property rows.
-        if self.schema.oe_strategy == super::super::EdgeStrategy::Single
-            && !self.merged_edges_of(&self.out_csr, src, ts).is_empty()
-        {
-            return Err(StorageError::conflict(format!(
-                "Single out-edge strategy already holds a live edge for src={}",
-                src
-            )));
-        }
-        if self.schema.ie_strategy == super::super::EdgeStrategy::Single
-            && !self.merged_edges_of(&self.in_csr, dst, ts).is_empty()
-        {
-            return Err(StorageError::conflict(format!(
-                "Single in-edge strategy already holds a live edge for dst={}",
-                dst
-            )));
-        }
+        // No existence re-check here by design. The batch prevalidation is
+        // the single main existence check: it already rejected duplicate keys
+        // and occupied Single slots for this batch. The topology insert
+        // below is the light recheck: its live-set/slot guard rejects the
+        // same conflicts in O(1) without another row scan, and the failure
+        // path underneath cleans up the record staged above.
 
         self.mvcc.record_creation(edge_id, ts);
 
@@ -1611,14 +1616,115 @@ impl EdgeStore {
     /// Filter edge ids by pushed predicates at the column-scan layer.
     ///
     /// Hits look up topology afterwards; misses never decode a record.
+    /// Index first, segment statistics second, full walk last: an
+    /// every-equality conjunction over lag-free indexed columns resolves to
+    /// index candidates (verified back against the columns), otherwise whole
+    /// owner groups provably excluding the predicates are skipped before the
+    /// property walk. A full walk without either aid logs an observation so
+    /// operators know an index would help.
     pub fn filter_edge_ids(
         &self,
         predicates: &[ScanPredicate],
         query_ts: Timestamp,
         candidates: Option<&[EdgeId]>,
     ) -> Vec<EdgeId> {
+        if let Some(ids) = candidates {
+            return self
+                .properties
+                .filter_edge_ids_by_predicates(predicates, query_ts, Some(ids));
+        }
+        if predicates.is_empty() {
+            return self
+                .properties
+                .filter_edge_ids_by_predicates(predicates, query_ts, None);
+        }
+        if let Some(indexed) = self.index_candidate_edge_ids(predicates, query_ts) {
+            return self.properties.filter_edge_ids_by_predicates(
+                predicates,
+                query_ts,
+                Some(&indexed),
+            );
+        }
+        let pruned = self.pruned_owner_groups(predicates);
+        if pruned.is_empty() {
+            log::debug!(
+                "filter_edge_ids: no usable index or segment prune, full property walk over {} rows",
+                self.properties.row_count()
+            );
+            return self
+                .properties
+                .filter_edge_ids_by_predicates(predicates, query_ts, None);
+        }
+        let survivors: Vec<EdgeId> = self
+            .properties
+            .edge_ids()
+            .filter(|edge_id| {
+                self.edge_owner
+                    .get(edge_id)
+                    .is_none_or(|owner| !pruned.contains(owner))
+            })
+            .collect();
         self.properties
-            .filter_edge_ids_by_predicates(predicates, query_ts, candidates)
+            .filter_edge_ids_by_predicates(predicates, query_ts, Some(&survivors))
+    }
+
+    /// Owner groups provably excluding the pushed predicates.
+    ///
+    /// Dirty groups never prune: their uncheckpointed writes are not covered
+    /// by the flushed statistics, mirroring `segment_may_contain`.
+    fn pruned_owner_groups(&self, predicates: &[ScanPredicate]) -> HashSet<u32> {
+        let mut pruned = HashSet::new();
+        for gid in self.owner_group_ids() {
+            if !self.segment_may_contain(gid, predicates) {
+                pruned.insert(gid);
+            }
+        }
+        pruned
+    }
+
+    /// Candidate edges from the secondary property index for one filter.
+    ///
+    /// Serves only every-equality conjunctions whose columns all carry an
+    /// index, and only while the index carries no write lag: the index is
+    /// best-effort, so any recorded failure falls back to the segment path
+    /// instead of risking dropped hits. Stale entries resolve through the
+    /// visibility authority, and the caller verifies every candidate back
+    /// against the property columns.
+    fn index_candidate_edge_ids(
+        &self,
+        predicates: &[ScanPredicate],
+        query_ts: Timestamp,
+    ) -> Option<Vec<EdgeId>> {
+        let index = self.property_index.as_ref()?;
+        if self.index_write_failures > 0 {
+            return None;
+        }
+        let mut merged: Option<HashSet<EdgeId>> = None;
+        for predicate in predicates {
+            let (column, value) = match predicate {
+                ScanPredicate::ColumnEqual { column, value } => (column, value),
+                ScanPredicate::ColumnRange { .. } => return None,
+            };
+            if !index.has_index(column) {
+                return None;
+            }
+            let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
+            let (lower, upper) = codec.prefix_bounds(value).ok()?;
+            let mut hits = HashSet::new();
+            for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
+                if let Some(edge_id) = self.edge_id_of(src, dst, rank, query_ts) {
+                    hits.insert(edge_id);
+                }
+            }
+            merged = Some(match merged {
+                None => hits,
+                Some(prev) => prev.intersection(&hits).copied().collect(),
+            });
+            if merged.as_ref().is_some_and(HashSet::is_empty) {
+                break;
+            }
+        }
+        merged.map(|set| set.into_iter().collect())
     }
 
     /// Whether one owner group may contain rows matching the predicates.
@@ -2142,9 +2248,9 @@ impl EdgeStore {
 
         total += self.out_csr.used_memory_size();
         total += self.in_csr.used_memory_size();
-        total += self.mvcc.total_tombstone_count() * std::mem::size_of::<(EdgeId, Timestamp)>();
-        total += self.mvcc.edge_timestamps.len()
-            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<super::mvcc::EdgeTimestamps>());
+        // Authority records share the tombstone per-record estimate so live
+        // and deleted entries use one caliber including hash overhead.
+        total += super::stats::TombstoneStats::estimate_memory(self.mvcc.edge_timestamps.len());
         total += self.properties.used_memory_size();
 
         // Account for property_index_cache

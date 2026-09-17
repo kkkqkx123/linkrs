@@ -288,6 +288,22 @@ impl Nbr {
         }
     }
 
+    /// Gap-fill sentinel for rebuilt rows: never alive at any timestamp.
+    ///
+    /// Uses the unassignable edge id with an empty `[create, delete)` window,
+    /// so an overrun scan reports absence instead of a ghost live edge. This
+    /// is the only sanctioned filler for reserved primary slots; every CSR
+    /// shape shares it.
+    pub fn dead_gap() -> Self {
+        Self {
+            endpoint: 0,
+            rank: 0,
+            edge_id: INVALID_EDGE_ID,
+            create_ts: 0,
+            delete_ts: 0,
+        }
+    }
+
     /// Check if this edge is alive at the given timestamp.
     /// An edge is alive when: create_ts <= ts AND ts < delete_ts.
     #[inline]

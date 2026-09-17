@@ -148,6 +148,11 @@ pub struct EdgeTableScanIterator<'a> {
     segments_pruned: usize,
     rows_scanned: usize,
     rows_filtered: usize,
+    /// Row id of the last visited entry plus its prune verdict. Physical
+    /// entries arrive row by row, so the group routing plus prune lookup
+    /// runs once per row instead of once per entry.
+    last_row: Option<u32>,
+    last_row_pruned: bool,
 }
 
 impl<'a> EdgeTableScanIterator<'a> {
@@ -199,6 +204,8 @@ impl<'a> EdgeTableScanIterator<'a> {
             segments_pruned,
             rows_scanned: 0,
             rows_filtered: 0,
+            last_row: None,
+            last_row_pruned: false,
         }
     }
 
@@ -236,6 +243,8 @@ impl<'a> EdgeTableScanIterator<'a> {
             segments_pruned: 0,
             rows_scanned: 0,
             rows_filtered: 0,
+            last_row: None,
+            last_row_pruned: false,
         }
     }
 }
@@ -253,10 +262,25 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
         for (src_vid, nbr) in self.inner.by_ref() {
             self.rows_scanned += 1;
             let src = src_vid.as_int64().unwrap_or(0) as u32;
-            if let Some(gid) = self.table.out_csr.group_of(src) {
-                if self.pruned_groups.contains(&gid) {
-                    continue;
+            // Row-granular prune verdict: entries arrive row by row, so a
+            // pruned row skips every remaining entry without another group
+            // lookup, and the limit below stops the walk as soon as enough
+            // records are collected.
+            let pruned = match self.last_row {
+                Some(cached) if cached == src => self.last_row_pruned,
+                _ => {
+                    let pruned = self
+                        .table
+                        .out_csr
+                        .group_of(src)
+                        .is_some_and(|gid| self.pruned_groups.contains(&gid));
+                    self.last_row = Some(src);
+                    self.last_row_pruned = pruned;
+                    pruned
                 }
+            };
+            if pruned {
+                continue;
             }
             if !self.table.is_visible(nbr.edge_id, self.ts) {
                 continue;

@@ -1,8 +1,8 @@
-use super::MutableCsr;
-use super::overflow::OverflowStorage;
-use super::row::PACKED_CSR_DENSITY;
 use super::super::csr_shared::is_reclaimable_slot;
 use super::super::{EdgeId, Nbr, Timestamp};
+use super::overflow::OverflowStorage;
+use super::row::PACKED_CSR_DENSITY;
+use super::MutableCsr;
 
 impl MutableCsr {
     /// Compact with per-edge removal reporting (`on_edge_removed` receives
@@ -91,10 +91,11 @@ impl MutableCsr {
             let cap = new_capacities[vid] as usize;
 
             new_nbr_list.extend_from_slice(&new_edges[off..off + deg]);
-            // Fill remaining capacity with empty Nbr
+            // Fill remaining capacity with the never-alive gap sentinel so
+            // an overrun scan reports absence instead of a ghost live edge.
             let remaining = cap - deg;
             if remaining > 0 {
-                new_nbr_list.resize(new_nbr_list.len() + remaining, Nbr::new(0, 0, EdgeId(0)));
+                new_nbr_list.resize(new_nbr_list.len() + remaining, Nbr::dead_gap());
             }
         }
 
@@ -148,6 +149,47 @@ impl MutableCsr {
     /// Whether one vertex holds anything reclaimable at `cutoff`.
     pub fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
         self.reclaimable_count(vid, cutoff) > 0
+    }
+
+    /// Single-walk reclaim probe of one vertex: `(dead, reclaimable)`.
+    ///
+    /// Fuses the census and eligibility walks so maintenance passes pay one
+    /// row scan instead of two. `dead` counts every tombstoned entry
+    /// regardless of eligibility; `reclaimable` counts only entries the
+    /// current cutoff already covers.
+    pub fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return (0, 0);
+        }
+        let eligible = cutoff != Timestamp::MAX;
+        let mut dead = 0usize;
+        let mut reclaimable = 0usize;
+        let degree = self.degrees[idx] as usize;
+        let offset = self.adj_offsets[idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if nbr.delete_ts != Timestamp::MAX {
+                    dead += 1;
+                    if eligible && is_reclaimable_slot(nbr, cutoff) {
+                        reclaimable += 1;
+                    }
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.delete_ts != Timestamp::MAX {
+                        dead += 1;
+                        if eligible && is_reclaimable_slot(nbr, cutoff) {
+                            reclaimable += 1;
+                        }
+                    }
+                }
+            }
+        }
+        (dead, reclaimable)
     }
 
     /// Physical entry census of one vertex: `(live, dead, capacity)`.
@@ -248,7 +290,7 @@ impl MutableCsr {
             if kept.is_empty() {
                 let freed: usize = chunks.iter().map(|c| c.capacity()).sum();
                 self.overflow_chunks.remove(&vid);
-                self.total_edge_capacity = self.total_edge_capacity.saturating_sub(freed);
+                self.sub_capacity(freed);
             } else {
                 let chunk_edges = self.effective_chunk_edges(keep);
                 let mut repacked: Vec<Vec<Nbr>> = Vec::new();
@@ -259,10 +301,8 @@ impl MutableCsr {
                 }
                 let freed: usize = chunks.iter().map(|c| c.capacity()).sum();
                 let added: usize = repacked.iter().map(|c| c.capacity()).sum();
-                self.total_edge_capacity = self
-                    .total_edge_capacity
-                    .saturating_sub(freed)
-                    .saturating_add(added);
+                self.sub_capacity(freed);
+                self.add_capacity(added);
                 if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
                     *slot = repacked;
                 }

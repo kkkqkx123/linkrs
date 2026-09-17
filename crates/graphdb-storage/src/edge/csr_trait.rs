@@ -66,6 +66,23 @@ pub trait MutableCsrTrait: CsrBase {
     /// - `SingleMutableCsr`: deletes the single edge if dst matches (0 or 1).
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize;
 
+    /// Delete all edges matching (src, dst), reporting every stamped id.
+    ///
+    /// Same single-pass semantics as `delete_edge_by_dst`, plus one
+    /// `on_deleted` call per stamped edge so callers needing the ids (append
+    /// logs, audits) skip their own collection scan. The default routes
+    /// through `delete_edge_by_dst` and reports nothing; row stores override
+    /// it with an in-place reporting pass.
+    fn delete_edge_by_dst_reporting(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        _on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
+        self.delete_edge_by_dst(src_vid, dst, ts)
+    }
+
     /// Delete an edge by its offset position in the primary block.
     ///
     /// Offset indexes into the live row degree, never into reserved capacity.
@@ -175,6 +192,16 @@ pub trait MutableCsrTrait: CsrBase {
     /// report zeros.
     fn vertex_census(&self, _vid: u32) -> (usize, usize, usize) {
         (0, 0, 0)
+    }
+
+    /// Single-walk reclaim probe of one vertex: `(dead, reclaimable)`.
+    ///
+    /// Fuses the census and eligibility walks so maintenance passes pay one
+    /// row scan instead of two. The default derives both from the separate
+    /// primitives; row stores override it with one fused walk.
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        let (_, dead, _) = self.vertex_census(vid);
+        (dead, self.reclaimable_count(vid, cutoff))
     }
 
     /// Reserved primary slots minus live primary entries of one row.

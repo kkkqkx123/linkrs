@@ -1,891 +1,892 @@
-use super::row::{
-    graded_overflow_chunk_edges, OVERFLOW_CHUNK_LARGE, OVERFLOW_CHUNK_MEDIUM,
-    OVERFLOW_CHUNK_SMALL, OVERFLOW_MEDIUM_LIVE_BOUND, OVERFLOW_SMALL_LIVE_BOUND,
-    PACKED_CSR_DENSITY,
-};
-use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
-use super::MutableCsr;
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
+use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
+use super::row::{
+    graded_overflow_chunk_edges, OVERFLOW_CHUNK_LARGE, OVERFLOW_CHUNK_MEDIUM, OVERFLOW_CHUNK_SMALL,
+    OVERFLOW_MEDIUM_LIVE_BOUND, OVERFLOW_SMALL_LIVE_BOUND, PACKED_CSR_DENSITY,
+};
+use super::MutableCsr;
 
-    #[test]
-    fn test_basic_insert_and_query() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+#[test]
+fn test_basic_insert_and_query() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
-            .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+        .unwrap();
 
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(103), 1)
-            .is_err());
+    assert!(csr
+        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(103), 1)
+        .is_err());
 
-        assert_eq!(csr.edge_count(), 3);
+    assert_eq!(csr.edge_count(), 3);
+}
+
+#[test]
+fn test_delete_edge() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+
+    assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
+
+    assert_eq!(csr.edge_count(), 1);
+}
+
+#[test]
+fn test_double_delete_conflict() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+        .unwrap();
+
+    // First delete succeeds.
+    assert!(csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
+    // Idempotent re-delete at the same timestamp is a no-op, not a conflict.
+    assert!(!csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
+    // Deleting the same edge at a different timestamp is a write-write
+    // conflict, surfaced at the storage write path.
+    let err = csr.delete_edge(0u32, EdgeId(100), 200).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        graphdb_core::error::storage::StorageErrorKind::Conflict
+    );
+
+    // The edge is still logically deleted at the original timestamp.
+    assert_eq!(csr.edges_of(0u32, 50).len(), 1);
+    assert_eq!(csr.edges_of(0u32, 150).len(), 0);
+}
+
+#[test]
+fn test_dump_and_load() {
+    let mut csr1 = MutableCsr::with_capacity(10, 100);
+
+    csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr1.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+        .unwrap();
+
+    let data = csr1.dump();
+
+    let mut csr2 = MutableCsr::new();
+    let _ = csr2.load(&data);
+
+    assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
+    assert_eq!(csr2.edge_count(), csr1.edge_count());
+}
+
+#[test]
+fn test_resize() {
+    let mut csr = MutableCsr::with_capacity(2, 10);
+
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(100u32, VertexId::from_int64(1), EdgeId(101), 1)
+        .unwrap();
+
+    assert!(csr.vertex_capacity() >= 101);
+}
+
+#[test]
+fn test_iterator() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+        .unwrap();
+
+    let edges: Vec<_> = csr.iter(1).collect();
+    assert_eq!(edges.len(), 3);
+}
+
+#[test]
+fn test_overflow_insert() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
+        .unwrap();
+
+    assert_eq!(csr.edge_count(), 5);
+
+    let edges = csr.edges_of(0u32, 1);
+    assert_eq!(edges.len(), 5);
+
+    assert!(csr
+        .insert_edge(0u32, VertexId::from_int64(5), EdgeId(105), 1)
+        .is_err());
+
+    assert!(csr.delete_edge(0u32, EdgeId(104), 2).unwrap());
+}
+
+#[test]
+fn test_overflow_dump_and_load() {
+    let mut csr1 = MutableCsr::with_capacity(10, 100);
+
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr1.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_delete_edge() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    let data = csr1.dump();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
+    let mut csr2 = MutableCsr::new();
+    let _ = csr2.load(&data);
 
-        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
+    assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
+    assert_eq!(csr2.edge_count(), csr1.edge_count());
+    assert_eq!(
+        csr2.overflow_chunks
+            .get(&0)
+            .map_or(0, |chunks| { chunks.iter().map(Vec::len).sum::<usize>() }),
+        2
+    );
+}
 
-        assert_eq!(csr.edge_count(), 1);
+#[test]
+fn test_compact_with_ts_merges_overflow() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_double_delete_conflict() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+    csr.delete_edge(0u32, EdgeId(3), 5).unwrap();
+    csr.delete_edge(0u32, EdgeId(5), 5).unwrap();
+    csr.delete_edge(0u32, EdgeId(6), 5).unwrap();
+
+    // Cutoff 6: deletions at 5 predate the cutoff, so they are removed.
+    let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
+    assert_eq!(removed, 3);
+
+    assert!(csr.overflow_chunks.get(&0).is_none_or(Vec::is_empty));
+
+    let edges = csr.edges_of(0u32, 3);
+    assert_eq!(edges.len(), 3);
+}
+
+#[test]
+fn test_compact_with_ts_keeps_deleted_entries_without_cutoff() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    for i in 1..=3 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
+    }
+    csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
+
+    // cutoff == MAX (no active snapshot): the deletion history must be
+    // preserved for time-travel queries before the deletion.
+    let removed = csr.compact_with_ts_reporting(Timestamp::MAX, 0.25, &mut |_, _| {});
+    assert_eq!(removed, 0);
+
+    assert_eq!(csr.edges_of(0u32, 3).len(), 3);
+    assert_eq!(csr.edges_of(0u32, 6).len(), 2);
+
+    // A real cutoff drops the entry again.
+    let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
+    assert_eq!(removed, 1);
+    assert_eq!(csr.edges_of(0u32, 3).len(), 2);
+}
+
+#[test]
+fn test_compact_with_ts_reporting_reports_removed_edges() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    for i in 1..=3 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
+    }
+    csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
+
+    let mut reported = Vec::new();
+    let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |edge_id, delete_ts| {
+        reported.push((edge_id, delete_ts));
+    });
+    assert_eq!(removed, 1);
+    assert_eq!(reported, vec![(EdgeId(2), 5)]);
+}
+
+#[test]
+fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
+    // reserve_ratio >= 1.0 used to produce valid / 0.0 = inf, saturating
+    // the cast to u32::MAX per vertex and exploding the rebuilt CSR
+    // allocation (OOM on ~800k+ edge partitions under background freeze).
+    let mut csr = MutableCsr::with_capacity(4, 100);
+    for i in 1..=6i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
             .unwrap();
+    }
+    csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 1)
+        .unwrap();
 
-        // First delete succeeds.
-        assert!(csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
-        // Idempotent re-delete at the same timestamp is a no-op, not a conflict.
-        assert!(!csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
-        // Deleting the same edge at a different timestamp is a write-write
-        // conflict, surfaced at the storage write path.
-        let err = csr.delete_edge(0u32, EdgeId(100), 200).unwrap_err();
-        assert_eq!(
-            err.kind(),
-            graphdb_core::error::storage::StorageErrorKind::Conflict
-        );
+    let removed = csr.compact_with_ts_reporting(3, 1.0, &mut |_, _| {});
+    assert_eq!(removed, 0);
 
-        // The edge is still logically deleted at the original timestamp.
-        assert_eq!(csr.edges_of(0u32, 50).len(), 1);
-        assert_eq!(csr.edges_of(0u32, 150).len(), 0);
+    let capacity = csr.total_edge_capacity;
+    assert!(
+        capacity <= 7 + 4,
+        "capacity must stay bounded, got {}",
+        capacity
+    );
+    assert_eq!(csr.edges_of(0u32, 3).len(), 6);
+    assert_eq!(csr.edges_of(1u32, 3).len(), 1);
+}
+
+#[test]
+fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
+    let mut csr = MutableCsr::with_capacity(4, 100);
+    for i in 1..=3i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    let removed = csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
+    assert_eq!(removed, 0);
+    assert_eq!(csr.total_edge_capacity, 3);
+    assert_eq!(csr.edges_of(0u32, 3).len(), 3);
+}
+
+#[test]
+fn test_overflow_iterator() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_dump_and_load() {
-        let mut csr1 = MutableCsr::with_capacity(10, 100);
+    let all_edges: Vec<_> = csr.iter(1).collect();
+    assert_eq!(all_edges.len(), 6);
+}
 
-        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+#[test]
+fn test_supernode_overflow_uses_fixed_chunks_without_recopying() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(1, 4, 32);
+    for i in 0..4_096u64 {
+        csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i + 1), 1)
             .unwrap();
-        csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
-            .unwrap();
-
-        let data = csr1.dump();
-
-        let mut csr2 = MutableCsr::new();
-        let _ = csr2.load(&data);
-
-        assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
-        assert_eq!(csr2.edge_count(), csr1.edge_count());
     }
 
-    #[test]
-    fn test_resize() {
-        let mut csr = MutableCsr::with_capacity(2, 10);
+    let chunks = csr.overflow_chunks.get(&0).expect("vertex 0 has overflow");
+    assert!(chunks.iter().all(|chunk| chunk.capacity() == 32));
+    assert!(chunks.iter().all(|chunk| chunk.len() <= 32));
+    assert_eq!(csr.edges_of(0, 1).len(), 4_096);
+}
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(100u32, VertexId::from_int64(1), EdgeId(101), 1)
-            .unwrap();
+#[test]
+fn test_zero_degree_rows_hold_no_slots() {
+    let mut csr = MutableCsr::with_capacity(1024, 4096);
+    assert_eq!(csr.total_edge_capacity, 0);
 
-        assert!(csr.vertex_capacity() >= 101);
+    // A single edge allocates exactly one primary block
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    assert_eq!(csr.total_edge_capacity, 4);
+
+    // Sparse high vertex ids allocate blocks only for themselves
+    csr.insert_edge(10_000u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    assert_eq!(csr.vertex_capacity(), 12_502);
+    assert_eq!(csr.total_edge_capacity, 8);
+
+    // Growth is proportional (1.25x), not power-of-two doubling
+    assert_eq!(csr.vertex_capacity(), (10_001.0_f64 * 1.25).ceil() as usize);
+
+    // Compact reclaims slots of rows whose edges were all removed
+    csr.delete_edge(0u32, EdgeId(100), 2).unwrap();
+    csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
+    assert_eq!(csr.total_edge_capacity, 1);
+    assert_eq!(csr.primary_capacities[0], 0);
+}
+
+#[test]
+fn test_fragmentation_ratio() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+
+    // No edges - ratio should be 0.0
+    assert_eq!(csr.fragmentation_ratio(), 0.0);
+
+    // Insert edges to trigger overflow
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_iterator() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    // After overflow the table holds mostly reserved waste: the wasted
+    // share sits strictly between empty and fully wasted.
+    let ratio = csr.fragmentation_ratio();
+    assert!(
+        ratio > 0.0 && ratio < 1.0,
+        "Expected wasted share in (0, 1), got {}",
+        ratio
+    );
+}
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
-            .unwrap();
+#[test]
+fn test_wasted_bytes_estimate() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
 
-        let edges: Vec<_> = csr.iter(1).collect();
-        assert_eq!(edges.len(), 3);
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_overflow_insert() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    let wasted = csr.wasted_bytes_estimate();
+    let active = csr.edge_count() as usize;
+    let total_capacity = csr.total_edge_capacity;
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
-            .unwrap();
+    // Wasted should be roughly (total - active) * sizeof(Nbr)
+    let expected_wasted = (total_capacity - active) * std::mem::size_of::<Nbr>();
+    assert_eq!(wasted, expected_wasted, "Wasted bytes estimate mismatch");
+}
 
-        assert_eq!(csr.edge_count(), 5);
+#[test]
+fn test_compact_reduces_fragmentation() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
 
-        let edges = csr.edges_of(0u32, 1);
-        assert_eq!(edges.len(), 5);
-
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(5), EdgeId(105), 1)
-            .is_err());
-
-        assert!(csr.delete_edge(0u32, EdgeId(104), 2).unwrap());
+    for i in 1..=6 {
+        let dst = VertexId::from_int64(i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
-    #[test]
-    fn test_overflow_dump_and_load() {
-        let mut csr1 = MutableCsr::with_capacity(10, 100);
+    let ratio_before = csr.fragmentation_ratio();
+    assert!(
+        ratio_before > 0.5,
+        "Setup failed: insufficient fragmentation"
+    );
 
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr1.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
+    csr.compact_with_ts_reporting(1, 0.25, &mut |_, _| {});
 
-        let data = csr1.dump();
+    let ratio_after = csr.fragmentation_ratio();
+    assert!(
+        ratio_after < ratio_before,
+        "Compact did not reduce fragmentation: before={}, after={}",
+        ratio_before,
+        ratio_after
+    );
+}
 
-        let mut csr2 = MutableCsr::new();
-        let _ = csr2.load(&data);
+#[test]
+fn test_vertex_edges_iter_no_allocation() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
 
-        assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
-        assert_eq!(csr2.edge_count(), csr1.edge_count());
-        assert_eq!(
-            csr2.overflow_chunks
-                .get(&0)
-                .map_or(0, |chunks| { chunks.iter().map(Vec::len).sum::<usize>() }),
-            2
-        );
-    }
+    // Insert multiple edges for vertex 0
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
+        .unwrap();
 
-    #[test]
-    fn test_compact_with_ts_merges_overflow() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    // Test iter_edges_of yields same neighbors as edges_of without allocation
+    let iter_neighbors: Vec<_> = csr
+        .iter_edges_of(0u32, 1)
+        .map(|nbr| nbr.to_vertex_id())
+        .collect();
+    let vec_neighbors: Vec<_> = csr
+        .edges_of(0u32, 1)
+        .iter()
+        .map(|nbr| nbr.to_vertex_id())
+        .collect();
 
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
+    assert_eq!(iter_neighbors.len(), vec_neighbors.len());
+    assert_eq!(iter_neighbors, vec_neighbors);
+}
 
-        csr.delete_edge(0u32, EdgeId(3), 5).unwrap();
-        csr.delete_edge(0u32, EdgeId(5), 5).unwrap();
-        csr.delete_edge(0u32, EdgeId(6), 5).unwrap();
+#[test]
+fn test_vertex_edges_iter_respects_timestamp() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
 
-        // Cutoff 6: deletions at 5 predate the cutoff, so they are removed.
-        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
-        assert_eq!(removed, 3);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 2)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 3)
+        .unwrap();
 
-        assert!(csr.overflow_chunks.get(&0).is_none_or(Vec::is_empty));
+    // Delete the second edge at ts=2
+    csr.delete_edge(0u32, EdgeId(101), 2).unwrap();
 
-        let edges = csr.edges_of(0u32, 3);
-        assert_eq!(edges.len(), 3);
-    }
+    // At ts=1, only first edge should be visible
+    let edges_ts1: Vec<_> = csr.iter_edges_of(0u32, 1).collect();
+    assert_eq!(edges_ts1.len(), 1);
+    assert_eq!(edges_ts1[0].edge_id, EdgeId(100));
 
-    #[test]
-    fn test_compact_with_ts_keeps_deleted_entries_without_cutoff() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    // At ts=2, first two edges are visible (but second is deleted)
+    let edges_ts2: Vec<_> = csr.iter_edges_of(0u32, 2).collect();
+    assert_eq!(edges_ts2.len(), 1);
 
-        for i in 1..=3 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
-        csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
+    // At ts=3, all three are visible (but second is deleted)
+    let edges_ts3: Vec<_> = csr.iter_edges_of(0u32, 3).collect();
+    assert_eq!(edges_ts3.len(), 2);
+}
 
-        // cutoff == MAX (no active snapshot): the deletion history must be
-        // preserved for time-travel queries before the deletion.
-        let removed = csr.compact_with_ts_reporting(Timestamp::MAX, 0.25, &mut |_, _| {});
-        assert_eq!(removed, 0);
-
-        assert_eq!(csr.edges_of(0u32, 3).len(), 3);
-        assert_eq!(csr.edges_of(0u32, 6).len(), 2);
-
-        // A real cutoff drops the entry again.
-        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
-        assert_eq!(removed, 1);
-        assert_eq!(csr.edges_of(0u32, 3).len(), 2);
-    }
-
-    #[test]
-    fn test_compact_with_ts_reporting_reports_removed_edges() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-
-        for i in 1..=3 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
-        csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
-
-        let mut reported = Vec::new();
-        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |edge_id, delete_ts| {
-            reported.push((edge_id, delete_ts));
-        });
-        assert_eq!(removed, 1);
-        assert_eq!(reported, vec![(EdgeId(2), 5)]);
-    }
-
-    #[test]
-    fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
-        // reserve_ratio >= 1.0 used to produce valid / 0.0 = inf, saturating
-        // the cast to u32::MAX per vertex and exploding the rebuilt CSR
-        // allocation (OOM on ~800k+ edge partitions under background freeze).
-        let mut csr = MutableCsr::with_capacity(4, 100);
-        for i in 1..=6i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+#[test]
+fn test_overflow_storage_lookup() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for vid in 0..5u32 {
+        for i in 0..6 {
+            let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+            csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }
-        csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 1)
-            .unwrap();
-
-        let removed = csr.compact_with_ts_reporting(3, 1.0, &mut |_, _| {});
-        assert_eq!(removed, 0);
-
-        let capacity = csr.total_edge_capacity;
-        assert!(
-            capacity <= 7 + 4,
-            "capacity must stay bounded, got {}",
-            capacity
-        );
-        assert_eq!(csr.edges_of(0u32, 3).len(), 6);
-        assert_eq!(csr.edges_of(1u32, 3).len(), 1);
     }
+    assert!(csr.get_overflow_chunks(0).is_some());
+    assert!(csr.get_overflow_chunks(999).is_none());
+}
 
-    #[test]
-    fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
-        let mut csr = MutableCsr::with_capacity(4, 100);
-        for i in 1..=3i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+#[test]
+fn test_overflow_get_chunks_transparent() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for vid in 0..20u32 {
+        for i in 0..6 {
+            let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+            csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }
-        let removed = csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
-        assert_eq!(removed, 0);
-        assert_eq!(csr.total_edge_capacity, 3);
-        assert_eq!(csr.edges_of(0u32, 3).len(), 3);
     }
-
-    #[test]
-    fn test_overflow_iterator() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
-
-        let all_edges: Vec<_> = csr.iter(1).collect();
-        assert_eq!(all_edges.len(), 6);
+    // All chunks should still be accessible via get_overflow_chunks
+    for vid in 0..20u32 {
+        let chunks = csr.get_overflow_chunks(vid).expect("should have overflow");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 2);
     }
+    for vid in 0..20u32 {
+        let edges = csr.edges_of(vid, 1);
+        assert_eq!(edges.len(), 6);
+    }
+}
 
-    #[test]
-    fn test_supernode_overflow_uses_fixed_chunks_without_recopying() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(1, 4, 32);
-        for i in 0..4_096u64 {
-            csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i + 1), 1)
+#[test]
+fn test_overflow_cleared_after_compact() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for vid in 0..20u32 {
+        for i in 0..8 {
+            let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+            csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }
-
-        let chunks = csr.overflow_chunks.get(&0).expect("vertex 0 has overflow");
-        assert!(chunks.iter().all(|chunk| chunk.capacity() == 32));
-        assert!(chunks.iter().all(|chunk| chunk.len() <= 32));
-        assert_eq!(csr.edges_of(0, 1).len(), 4_096);
     }
+    assert!(!csr.overflow_chunks.is_empty());
+    let mut removed = Vec::new();
+    csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
+    assert!(csr.overflow_chunks.is_empty());
+}
 
-    #[test]
-    fn test_zero_degree_rows_hold_no_slots() {
-        let mut csr = MutableCsr::with_capacity(1024, 4096);
-        assert_eq!(csr.total_edge_capacity, 0);
+#[test]
+fn test_compact_vertex_is_row_scoped() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    csr.insert_edge(5u32, VertexId::from_int64(6), EdgeId(102), 1)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
 
-        // A single edge allocates exactly one primary block
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        assert_eq!(csr.total_edge_capacity, 4);
+    assert_eq!(csr.reclaimable_count(0, 3), 1);
+    assert_eq!(csr.reclaimable_count(5, 3), 0);
+    assert!(csr.vertex_needs_compact(0, 3));
+    assert!(!csr.vertex_needs_compact(5, 3));
 
-        // Sparse high vertex ids allocate blocks only for themselves
-        csr.insert_edge(10_000u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        assert_eq!(csr.vertex_capacity(), 12_502);
-        assert_eq!(csr.total_edge_capacity, 8);
+    let mut reported = Vec::new();
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |id, ts| reported.push((id, ts)));
+    assert_eq!(removed, 1);
+    assert_eq!(reported, vec![(EdgeId(100), 2)]);
 
-        // Growth is proportional (1.25x), not power-of-two doubling
-        assert_eq!(csr.vertex_capacity(), (10_001.0_f64 * 1.25).ceil() as usize);
+    // Target row reclaimed, other row untouched.
+    assert_eq!(csr.reclaimable_count(0, 3), 0);
+    assert_eq!(csr.edges_of(5, 3).len(), 1);
+    assert_eq!(csr.edges_of(0, 3).len(), 1);
+    let (live, dead, _) = csr.vertex_census(0);
+    assert_eq!((live, dead), (1, 0));
+}
 
-        // Compact reclaims slots of rows whose edges were all removed
-        csr.delete_edge(0u32, EdgeId(100), 2).unwrap();
-        csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
-        assert_eq!(csr.total_edge_capacity, 1);
-        assert_eq!(csr.primary_capacities[0], 0);
+#[test]
+fn test_compact_vertex_keeps_pinned_tombstones() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
+
+    // Cutoff below the deletion stamp: nothing is eligible.
+    assert_eq!(csr.reclaimable_count(0, 5), 0);
+    assert!(!csr.vertex_needs_compact(0, 5));
+    let removed = csr.compact_vertex_with_reporting(0, 5, &mut |_, _| {});
+    assert_eq!(removed, 0);
+    // The tombstone stays readable for older snapshots.
+    assert_eq!(csr.edges_of(0, 9).len(), 1);
+    assert_eq!(csr.edges_of(0, 10).len(), 0);
+}
+
+#[test]
+fn test_compact_vertex_repacks_overflow() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..6u64 {
+        let dst = VertexId::from_int64(100 + i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
     }
+    // 4 primary + 2 overflow.
+    assert!(csr.get_overflow_chunks(0).is_some());
+    assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
 
-    #[test]
-    fn test_fragmentation_ratio() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+    assert_eq!(removed, 2);
+    assert_eq!(csr.edges_of(0, 3).len(), 4);
+    assert_eq!(csr.reclaimable_count(0, 3), 0);
+}
 
-        // No edges - ratio should be 0.0
-        assert_eq!(csr.fragmentation_ratio(), 0.0);
-
-        // Insert edges to trigger overflow
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
-
-        // After overflow, ratio should be > 1.0
-        let ratio = csr.fragmentation_ratio();
-        assert!(ratio > 1.0, "Expected ratio > 1.0, got {}", ratio);
+#[test]
+fn test_fragmentation_stats_report_dead_entries() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 0..3u64 {
+        let dst = VertexId::from_int64(10 + i as i64);
+        csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
     }
+    assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
 
-    #[test]
-    fn test_wasted_bytes_estimate() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    let stats = csr.get_fragmentation_stats();
+    assert_eq!(stats.reachable_edges, 2);
+    assert_eq!(stats.dead_entries, 1);
+    assert_eq!(
+        stats.wasted_capacity,
+        stats.total_capacity.saturating_sub(2)
+    );
+    let (live, dead, _) = csr.vertex_census(0);
+    assert_eq!((live, dead), (2, 1));
+}
 
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
+#[test]
+fn test_remove_after_delete_does_not_double_count() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
+    assert_eq!(csr.edge_count(), 1);
+    assert!(csr.remove_edge(0u32, EdgeId(100)));
+    assert_eq!(csr.edge_count(), 1);
+    assert!(csr.remove_edge(0u32, EdgeId(101)));
+    assert_eq!(csr.edge_count(), 0);
+}
 
-        let wasted = csr.wasted_bytes_estimate();
-        let active = csr.edge_count() as usize;
-        let total_capacity = csr.total_edge_capacity;
-
-        // Wasted should be roughly (total - active) * sizeof(Nbr)
-        let expected_wasted = (total_capacity - active) * std::mem::size_of::<Nbr>();
-        assert_eq!(wasted, expected_wasted, "Wasted bytes estimate mismatch");
+#[test]
+fn test_remove_after_delete_overflow_does_not_double_count() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..6u64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+            .unwrap();
     }
+    assert_eq!(csr.edge_count(), 6);
+    assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
+    assert_eq!(csr.edge_count(), 5);
+    assert!(csr.remove_edge(0u32, EdgeId(5)));
+    assert_eq!(csr.edge_count(), 5);
+}
 
-    #[test]
-    fn test_compact_reduces_fragmentation() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+#[test]
+fn test_offset_delete_rejects_out_of_degree() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(1u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    // Row 0 holds one live entry; offset 1 addresses reserved capacity.
+    assert!(!csr.delete_edge_by_offset(0u32, 1, 2).unwrap());
+    assert_eq!(csr.edges_of(0u32, 2).len(), 1);
+    assert_eq!(csr.edges_of(1u32, 2).len(), 1);
+    assert!(!csr.revert_delete_by_offset(0u32, 1, 2));
+    // Valid offset still works.
+    assert!(csr.delete_edge_by_offset(0u32, 0, 2).unwrap());
+    assert_eq!(csr.edges_of(0u32, 2).len(), 0);
+    assert!(csr.revert_delete_by_offset(0u32, 0, 2));
+    assert_eq!(csr.edges_of(0u32, 2).len(), 1);
+}
 
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
-        }
+#[test]
+fn test_nbr_at_offset_views_primary_slot() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(7), EdgeId(100), 1)
+        .unwrap();
+    let slot = csr.nbr_at_offset(0u32, 0).expect("slot exists");
+    assert_eq!(slot.edge_id, EdgeId(100));
+    assert!(csr.nbr_at_offset(0u32, 1).is_none());
+    assert!(csr.nbr_at_offset(0u32, -1).is_none());
+}
 
-        let ratio_before = csr.fragmentation_ratio();
-        assert!(
-            ratio_before > 1.5,
-            "Setup failed: insufficient fragmentation"
-        );
+#[test]
+fn test_physical_reads_ignore_timestamps() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 20).unwrap());
+    assert!(csr
+        .get_edge_physical(0u32, VertexId::from_int64(1))
+        .is_some());
+    assert_eq!(csr.physical_edges_of(0u32).len(), 1);
+    assert!(csr.has_physical_entries(0u32));
+    assert!(!csr.has_physical_entries(1u32));
+}
 
-        csr.compact_with_ts_reporting(1, 0.25, &mut |_, _| {});
-
-        let ratio_after = csr.fragmentation_ratio();
-        assert!(
-            ratio_after <= ratio_before * 0.9,
-            "Compact did not reduce fragmentation: before={}, after={}",
-            ratio_before,
-            ratio_after
-        );
+#[test]
+fn test_steady_state_gap_fill_before_overflow() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 1..=5i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
     }
+    // 4 primary slots plus one overflow entry.
+    assert!(csr.get_overflow_chunks(0).is_some());
+    let overflow_before: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(overflow_before, 1);
 
-    #[test]
-    fn test_vertex_edges_iter_no_allocation() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
+    // Reclaim two primary tombstones at an eligible cutoff so trailing
+    // gaps open without touching overflow.
+    assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(2), 2).unwrap());
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+    assert_eq!(removed, 2);
 
-        // Insert multiple edges for vertex 0
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
-            .unwrap();
+    // Everyday writes fill the freed primary gaps first even though
+    // overflow exists: overflow length stays put.
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(10), 3)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(11), 3)
+        .unwrap();
+    let overflow_after: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(overflow_after, overflow_before);
+    assert_eq!(csr.edges_of(0u32, 3).len(), 5);
+}
 
-        // Test iter_edges_of yields same neighbors as edges_of without allocation
-        let iter_neighbors: Vec<_> = csr
-            .iter_edges_of(0u32, 1)
-            .map(|nbr| nbr.to_vertex_id())
-            .collect();
-        let vec_neighbors: Vec<_> = csr
-            .edges_of(0u32, 1)
+#[test]
+fn test_single_live_set_rejects_duplicates_across_tiers() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 1..=6i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    // Primary-tier duplicate rejected without any scan fallback.
+    assert!(csr
+        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .is_err());
+    // Overflow-tier duplicate rejected through the same single set.
+    assert!(csr
+        .insert_edge(0u32, VertexId::from_int64(6), EdgeId(101), 1)
+        .is_err());
+    assert_eq!(csr.edge_count(), 6);
+}
+
+#[test]
+fn test_graded_overflow_tiers_bound_small_row_chunks() {
+    assert_eq!(graded_overflow_chunk_edges(0), OVERFLOW_CHUNK_SMALL);
+    assert_eq!(
+        graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND),
+        OVERFLOW_CHUNK_SMALL
+    );
+    assert_eq!(
+        graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND + 1),
+        OVERFLOW_CHUNK_MEDIUM
+    );
+    assert_eq!(
+        graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND),
+        OVERFLOW_CHUNK_MEDIUM
+    );
+    assert_eq!(
+        graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND + 1),
+        OVERFLOW_CHUNK_LARGE
+    );
+
+    // Small rows allocate small chunks: 300 edges stay far below the old
+    // fixed 4096-edge reservation per chunk.
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 1..=300i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    let chunks = csr.get_overflow_chunks(0).expect("vertex 0 has overflow");
+    assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_SMALL);
+    assert!(
+        chunks
             .iter()
-            .map(|nbr| nbr.to_vertex_id())
-            .collect();
+            .all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MEDIUM),
+        "graded chunks must stay at or below the medium tier for 300 live edges"
+    );
+    assert_eq!(csr.edges_of(0u32, 1).len(), 300);
+    // Single repack bound: small-row chunk counts stay bounded.
+    assert!(
+        chunks.len() <= OVERFLOW_REPACK_CHUNKS_PER_VERTEX + 1,
+        "overflow chunks must stay bounded, got {}",
+        chunks.len()
+    );
+}
 
-        assert_eq!(iter_neighbors.len(), vec_neighbors.len());
-        assert_eq!(iter_neighbors, vec_neighbors);
-    }
-
-    #[test]
-    fn test_vertex_edges_iter_respects_timestamp() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+#[test]
+fn test_rebalance_row_drains_overflow_into_gaps() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..6u64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 2)
+    }
+    assert!(csr.get_overflow_chunks(0).is_some());
+    // Reclaim primary tombstones so gaps open, then rebalance pulls the
+    // overflow live entries back into the primary row.
+    assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+    assert_eq!(removed, 2);
+    assert!(csr.rebalance_row(0));
+    assert!(csr.get_overflow_chunks(0).is_none_or(Vec::is_empty));
+    assert_eq!(csr.edges_of(0u32, 3).len(), 4);
+}
+
+#[test]
+fn test_row_gap_and_density_observe_reserve() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(1), 1)
+        .unwrap();
+    // One live entry in a 4-slot block: three write gaps remain.
+    assert_eq!(csr.row_gap(0), 3);
+    assert!((csr.row_density(0) - 0.25).abs() < 1e-6);
+    // Rebuilds size rows at the packed density target with gaps.
+    let removed = csr.compact_with_ts_reporting(2, 1.0 - PACKED_CSR_DENSITY, &mut |_, _| {});
+    assert_eq!(removed, 0);
+    assert_eq!(csr.row_gap(0), 1);
+    assert!((csr.row_density(0) - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn test_topology_encoding_roundtrip_keeps_snapshot_reads() {
+    let mut csr = MutableCsr::with_capacity(16, 64);
+    for i in 0..20u64 {
+        csr.insert_edge(
+            (i % 4) as u32,
+            VertexId::from_int64(100 + i as i64),
+            EdgeId(i),
+            10,
+        )
+        .unwrap();
+    }
+    assert!(csr.delete_edge(0u32, EdgeId(0), 20).unwrap());
+    let before: Vec<Nbr> = {
+        let mut all = csr.physical_edges_of(0);
+        all.extend(csr.physical_edges_of(1));
+        all
+    };
+    let live_before = csr.edges_of(1u32, 30);
+
+    let payload = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded.load(&payload).expect("encoded load must succeed");
+    let mut after = loaded.physical_edges_of(0);
+    after.extend(loaded.physical_edges_of(1));
+    assert_eq!(before, after);
+    assert_eq!(loaded.edges_of(1u32, 30), live_before);
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+
+    let report = loaded.topology_encoding_report();
+    assert_eq!(report.len(), 5);
+    assert!(report.iter().any(|(name, _, _, _)| name == "neighbor"));
+    assert!(report.iter().any(|(name, _, _, _)| name == "edge_id"));
+}
+
+#[test]
+fn test_topology_encoding_rejects_old_version() {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&2u32.to_le_bytes());
+    payload.extend_from_slice(&[0u8; 32]);
+    let mut csr = MutableCsr::new();
+    assert!(csr.load(&payload).is_err());
+}
+
+#[test]
+fn test_offset_delete_propagates_conflict() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
+    assert!(!csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(100), 160).is_err());
+    assert!(csr.delete_edge_by_offset(0, 0, 160).is_err());
+    assert!(!csr.delete_edge_by_offset(0, 1, 160).unwrap());
+    assert!(!csr.delete_edge_by_offset(0, 0, 150).unwrap());
+}
+
+#[test]
+fn test_single_generic_delete_consistency_on_missing_id() {
+    let mut multi = MutableCsr::with_capacity(10, 100);
+    multi
+        .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        .unwrap();
+    assert!(multi.delete_edge(0u32, EdgeId(100), 150).unwrap());
+    assert!(!multi.delete_edge(0u32, EdgeId(999), 160).unwrap());
+
+    let mut single = crate::edge::SingleMutableCsr::with_capacity(4);
+    single
+        .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        .unwrap();
+    assert!(single.delete_edge(0, EdgeId(100), 150).unwrap());
+    assert!(!single.delete_edge(0, EdgeId(999), 160).unwrap());
+}
+
+#[test]
+fn test_overflow_repack_preserves_unexpired_tombstones() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..8u64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
             .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 3)
-            .unwrap();
-
-        // Delete the second edge at ts=2
-        csr.delete_edge(0u32, EdgeId(101), 2).unwrap();
-
-        // At ts=1, only first edge should be visible
-        let edges_ts1: Vec<_> = csr.iter_edges_of(0u32, 1).collect();
-        assert_eq!(edges_ts1.len(), 1);
-        assert_eq!(edges_ts1[0].edge_id, EdgeId(100));
-
-        // At ts=2, first two edges are visible (but second is deleted)
-        let edges_ts2: Vec<_> = csr.iter_edges_of(0u32, 2).collect();
-        assert_eq!(edges_ts2.len(), 1);
-
-        // At ts=3, all three are visible (but second is deleted)
-        let edges_ts3: Vec<_> = csr.iter_edges_of(0u32, 3).collect();
-        assert_eq!(edges_ts3.len(), 2);
     }
+    assert!(csr.delete_edge(0u32, EdgeId(6), 10).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(7), 10).unwrap());
+    let overflow_before: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert!(overflow_before > 0);
 
-    #[test]
-    fn test_overflow_storage_lookup() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for vid in 0..5u32 {
-            for i in 0..6 {
-                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
-                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
-                    .unwrap();
-            }
-        }
-        assert!(csr.get_overflow_chunks(0).is_some());
-        assert!(csr.get_overflow_chunks(999).is_none());
-    }
+    let mut reported = Vec::new();
+    csr.compact_overflow_for_vertex(0, Timestamp::MAX, &mut |id, ts| reported.push((id, ts)));
+    assert!(reported.is_empty());
+    let kept: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(kept, overflow_before);
 
-    #[test]
-    fn test_overflow_get_chunks_transparent() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for vid in 0..20u32 {
-            for i in 0..6 {
-                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
-                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
-                    .unwrap();
-            }
-        }
-        // All chunks should still be accessible via get_overflow_chunks
-        for vid in 0..20u32 {
-            let chunks = csr.get_overflow_chunks(vid).expect("should have overflow");
-            assert_eq!(chunks.len(), 1);
-            assert_eq!(chunks[0].len(), 2);
-        }
-        for vid in 0..20u32 {
-            let edges = csr.edges_of(vid, 1);
-            assert_eq!(edges.len(), 6);
-        }
-    }
-
-    #[test]
-    fn test_overflow_cleared_after_compact() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for vid in 0..20u32 {
-            for i in 0..8 {
-                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
-                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
-                    .unwrap();
-            }
-        }
-        assert!(!csr.overflow_chunks.is_empty());
-        let mut removed = Vec::new();
-        csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
-        assert!(csr.overflow_chunks.is_empty());
-    }
-
-    #[test]
-    fn test_compact_vertex_is_row_scoped() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        csr.insert_edge(5u32, VertexId::from_int64(6), EdgeId(102), 1)
-            .unwrap();
-        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
-
-        assert_eq!(csr.reclaimable_count(0, 3), 1);
-        assert_eq!(csr.reclaimable_count(5, 3), 0);
-        assert!(csr.vertex_needs_compact(0, 3));
-        assert!(!csr.vertex_needs_compact(5, 3));
-
-        let mut reported = Vec::new();
-        let removed =
-            csr.compact_vertex_with_reporting(0, 3, &mut |id, ts| reported.push((id, ts)));
-        assert_eq!(removed, 1);
-        assert_eq!(reported, vec![(EdgeId(100), 2)]);
-
-        // Target row reclaimed, other row untouched.
-        assert_eq!(csr.reclaimable_count(0, 3), 0);
-        assert_eq!(csr.edges_of(5, 3).len(), 1);
-        assert_eq!(csr.edges_of(0, 3).len(), 1);
-        let (live, dead, _) = csr.vertex_census(0);
-        assert_eq!((live, dead), (1, 0));
-    }
-
-    #[test]
-    fn test_compact_vertex_keeps_pinned_tombstones() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
-
-        // Cutoff below the deletion stamp: nothing is eligible.
-        assert_eq!(csr.reclaimable_count(0, 5), 0);
-        assert!(!csr.vertex_needs_compact(0, 5));
-        let removed = csr.compact_vertex_with_reporting(0, 5, &mut |_, _| {});
-        assert_eq!(removed, 0);
-        // The tombstone stays readable for older snapshots.
-        assert_eq!(csr.edges_of(0, 9).len(), 1);
-        assert_eq!(csr.edges_of(0, 10).len(), 0);
-    }
-
-    #[test]
-    fn test_compact_vertex_repacks_overflow() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for i in 0..6u64 {
-            let dst = VertexId::from_int64(100 + i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
-        }
-        // 4 primary + 2 overflow.
-        assert!(csr.get_overflow_chunks(0).is_some());
-        assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
-        assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
-
-        let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
-        assert_eq!(removed, 2);
-        assert_eq!(csr.edges_of(0, 3).len(), 4);
-        assert_eq!(csr.reclaimable_count(0, 3), 0);
-    }
-
-    #[test]
-    fn test_fragmentation_stats_report_dead_entries() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        for i in 0..3u64 {
-            let dst = VertexId::from_int64(10 + i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
-        }
-        assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
-
-        let stats = csr.get_fragmentation_stats();
-        assert_eq!(stats.reachable_edges, 2);
-        assert_eq!(stats.dead_entries, 1);
-        assert_eq!(
-            stats.wasted_capacity,
-            stats.total_capacity.saturating_sub(2)
-        );
-        let (live, dead, _) = csr.vertex_census(0);
-        assert_eq!((live, dead), (2, 1));
-    }
-
-    #[test]
-    fn test_remove_after_delete_does_not_double_count() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
-        assert_eq!(csr.edge_count(), 1);
-        assert!(csr.remove_edge(0u32, EdgeId(100)));
-        assert_eq!(csr.edge_count(), 1);
-        assert!(csr.remove_edge(0u32, EdgeId(101)));
-        assert_eq!(csr.edge_count(), 0);
-    }
-
-    #[test]
-    fn test_remove_after_delete_overflow_does_not_double_count() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for i in 0..6u64 {
-            csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
-                .unwrap();
-        }
-        assert_eq!(csr.edge_count(), 6);
-        assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
-        assert_eq!(csr.edge_count(), 5);
-        assert!(csr.remove_edge(0u32, EdgeId(5)));
-        assert_eq!(csr.edge_count(), 5);
-    }
-
-    #[test]
-    fn test_offset_delete_rejects_out_of_degree() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .unwrap();
-        csr.insert_edge(1u32, VertexId::from_int64(2), EdgeId(101), 1)
-            .unwrap();
-        // Row 0 holds one live entry; offset 1 addresses reserved capacity.
-        assert!(!csr.delete_edge_by_offset(0u32, 1, 2).unwrap());
-        assert_eq!(csr.edges_of(0u32, 2).len(), 1);
-        assert_eq!(csr.edges_of(1u32, 2).len(), 1);
-        assert!(!csr.revert_delete_by_offset(0u32, 1, 2));
-        // Valid offset still works.
-        assert!(csr.delete_edge_by_offset(0u32, 0, 2).unwrap());
-        assert_eq!(csr.edges_of(0u32, 2).len(), 0);
-        assert!(csr.revert_delete_by_offset(0u32, 0, 2));
-        assert_eq!(csr.edges_of(0u32, 2).len(), 1);
-    }
-
-    #[test]
-    fn test_nbr_at_offset_views_primary_slot() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(7), EdgeId(100), 1)
-            .unwrap();
-        let slot = csr.nbr_at_offset(0u32, 0).expect("slot exists");
-        assert_eq!(slot.edge_id, EdgeId(100));
-        assert!(csr.nbr_at_offset(0u32, 1).is_none());
-        assert!(csr.nbr_at_offset(0u32, -1).is_none());
-    }
-
-    #[test]
-    fn test_physical_reads_ignore_timestamps() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
-            .unwrap();
-        assert!(csr.delete_edge(0u32, EdgeId(100), 20).unwrap());
-        assert!(csr
-            .get_edge_physical(0u32, VertexId::from_int64(1))
-            .is_some());
-        assert_eq!(csr.physical_edges_of(0u32).len(), 1);
-        assert!(csr.has_physical_entries(0u32));
-        assert!(!csr.has_physical_entries(1u32));
-    }
-
-    #[test]
-    fn test_steady_state_gap_fill_before_overflow() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        for i in 1..=5i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
-                .unwrap();
-        }
-        // 4 primary slots plus one overflow entry.
-        assert!(csr.get_overflow_chunks(0).is_some());
-        let overflow_before: usize = csr
-            .get_overflow_chunks(0)
-            .map(|chunks| chunks.iter().map(Vec::len).sum())
-            .unwrap_or(0);
-        assert_eq!(overflow_before, 1);
-
-        // Reclaim two primary tombstones at an eligible cutoff so trailing
-        // gaps open without touching overflow.
-        assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
-        assert!(csr.delete_edge(0u32, EdgeId(2), 2).unwrap());
-        let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
-        assert_eq!(removed, 2);
-
-        // Everyday writes fill the freed primary gaps first even though
-        // overflow exists: overflow length stays put.
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(10), 3)
-            .unwrap();
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(11), 3)
-            .unwrap();
-        let overflow_after: usize = csr
-            .get_overflow_chunks(0)
-            .map(|chunks| chunks.iter().map(Vec::len).sum())
-            .unwrap_or(0);
-        assert_eq!(overflow_after, overflow_before);
-        assert_eq!(csr.edges_of(0u32, 3).len(), 5);
-    }
-
-    #[test]
-    fn test_single_live_set_rejects_duplicates_across_tiers() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        for i in 1..=6i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
-                .unwrap();
-        }
-        // Primary-tier duplicate rejected without any scan fallback.
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
-            .is_err());
-        // Overflow-tier duplicate rejected through the same single set.
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(6), EdgeId(101), 1)
-            .is_err());
-        assert_eq!(csr.edge_count(), 6);
-    }
-
-    #[test]
-    fn test_graded_overflow_tiers_bound_small_row_chunks() {
-        assert_eq!(graded_overflow_chunk_edges(0), OVERFLOW_CHUNK_SMALL);
-        assert_eq!(
-            graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND),
-            OVERFLOW_CHUNK_SMALL
-        );
-        assert_eq!(
-            graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND + 1),
-            OVERFLOW_CHUNK_MEDIUM
-        );
-        assert_eq!(
-            graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND),
-            OVERFLOW_CHUNK_MEDIUM
-        );
-        assert_eq!(
-            graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND + 1),
-            OVERFLOW_CHUNK_LARGE
-        );
-
-        // Small rows allocate small chunks: 300 edges stay far below the old
-        // fixed 4096-edge reservation per chunk.
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        for i in 1..=300i64 {
-            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
-                .unwrap();
-        }
-        let chunks = csr.get_overflow_chunks(0).expect("vertex 0 has overflow");
-        assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_SMALL);
-        assert!(
-            chunks
-                .iter()
-                .all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MEDIUM),
-            "graded chunks must stay at or below the medium tier for 300 live edges"
-        );
-        assert_eq!(csr.edges_of(0u32, 1).len(), 300);
-        // Single repack bound: small-row chunk counts stay bounded.
-        assert!(
-            chunks.len() <= OVERFLOW_REPACK_CHUNKS_PER_VERTEX + 1,
-            "overflow chunks must stay bounded, got {}",
-            chunks.len()
-        );
-    }
-
-    #[test]
-    fn test_rebalance_row_drains_overflow_into_gaps() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for i in 0..6u64 {
-            csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
-                .unwrap();
-        }
-        assert!(csr.get_overflow_chunks(0).is_some());
-        // Reclaim primary tombstones so gaps open, then rebalance pulls the
-        // overflow live entries back into the primary row.
-        assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
-        assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
-        let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
-        assert_eq!(removed, 2);
-        assert!(csr.rebalance_row(0));
-        assert!(csr.get_overflow_chunks(0).is_none_or(Vec::is_empty));
-        assert_eq!(csr.edges_of(0u32, 3).len(), 4);
-    }
-
-    #[test]
-    fn test_row_gap_and_density_observe_reserve() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(1), 1)
-            .unwrap();
-        // One live entry in a 4-slot block: three write gaps remain.
-        assert_eq!(csr.row_gap(0), 3);
-        assert!((csr.row_density(0) - 0.25).abs() < 1e-6);
-        // Rebuilds size rows at the packed density target with gaps.
-        let removed = csr.compact_with_ts_reporting(2, 1.0 - PACKED_CSR_DENSITY, &mut |_, _| {});
-        assert_eq!(removed, 0);
-        assert_eq!(csr.row_gap(0), 1);
-        assert!((csr.row_density(0) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_topology_encoding_roundtrip_keeps_snapshot_reads() {
-        let mut csr = MutableCsr::with_capacity(16, 64);
-        for i in 0..20u64 {
-            csr.insert_edge(
-                (i % 4) as u32,
-                VertexId::from_int64(100 + i as i64),
-                EdgeId(i),
-                10,
-            )
-            .unwrap();
-        }
-        assert!(csr.delete_edge(0u32, EdgeId(0), 20).unwrap());
-        let before: Vec<Nbr> = {
-            let mut all = csr.physical_edges_of(0);
-            all.extend(csr.physical_edges_of(1));
-            all
-        };
-        let live_before = csr.edges_of(1u32, 30);
-
-        let payload = csr.dump();
-        let mut loaded = MutableCsr::new();
-        loaded.load(&payload).expect("encoded load must succeed");
-        let mut after = loaded.physical_edges_of(0);
-        after.extend(loaded.physical_edges_of(1));
-        assert_eq!(before, after);
-        assert_eq!(loaded.edges_of(1u32, 30), live_before);
-        assert_eq!(loaded.edge_count(), csr.edge_count());
-
-        let report = loaded.topology_encoding_report();
-        assert_eq!(report.len(), 5);
-        assert!(report.iter().any(|(name, _, _, _)| name == "neighbor"));
-        assert!(report.iter().any(|(name, _, _, _)| name == "edge_id"));
-    }
-
-    #[test]
-    fn test_topology_encoding_rejects_old_version() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&2u32.to_le_bytes());
-        payload.extend_from_slice(&[0u8; 32]);
-        let mut csr = MutableCsr::new();
-        assert!(csr.load(&payload).is_err());
-    }
-
-    #[test]
-    fn test_offset_delete_propagates_conflict() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
-            .unwrap();
-        assert!(csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
-        assert!(!csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
-        assert!(csr.delete_edge(0u32, EdgeId(100), 160).is_err());
-        assert!(csr.delete_edge_by_offset(0, 0, 160).is_err());
-        assert!(!csr.delete_edge_by_offset(0, 1, 160).unwrap());
-        assert!(!csr.delete_edge_by_offset(0, 0, 150).unwrap());
-    }
-
-    #[test]
-    fn test_single_generic_delete_consistency_on_missing_id() {
-        let mut multi = MutableCsr::with_capacity(10, 100);
-        multi
-            .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
-            .unwrap();
-        assert!(multi.delete_edge(0u32, EdgeId(100), 150).unwrap());
-        assert!(!multi.delete_edge(0u32, EdgeId(999), 160).unwrap());
-
-        let mut single = crate::edge::SingleMutableCsr::with_capacity(4);
-        single
-            .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
-            .unwrap();
-        assert!(single.delete_edge(0, EdgeId(100), 150).unwrap());
-        assert!(!single.delete_edge(0, EdgeId(999), 160).unwrap());
-    }
-
-    #[test]
-    fn test_overflow_repack_preserves_unexpired_tombstones() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        for i in 0..8u64 {
-            csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
-                .unwrap();
-        }
-        assert!(csr.delete_edge(0u32, EdgeId(6), 10).unwrap());
-        assert!(csr.delete_edge(0u32, EdgeId(7), 10).unwrap());
-        let overflow_before: usize = csr
-            .get_overflow_chunks(0)
-            .map(|chunks| chunks.iter().map(Vec::len).sum())
-            .unwrap_or(0);
-        assert!(overflow_before > 0);
-
-        let mut reported = Vec::new();
-        csr.compact_overflow_for_vertex(0, Timestamp::MAX, &mut |id, ts| {
-            reported.push((id, ts))
-        });
-        assert!(reported.is_empty());
-        let kept: usize = csr
-            .get_overflow_chunks(0)
-            .map(|chunks| chunks.iter().map(Vec::len).sum())
-            .unwrap_or(0);
-        assert_eq!(kept, overflow_before);
-
-        let mut reported = Vec::new();
-        csr.compact_overflow_for_vertex(0, 10, &mut |id, ts| reported.push((id, ts)));
-        assert_eq!(reported.len(), 2);
-        let kept: usize = csr
-            .get_overflow_chunks(0)
-            .map(|chunks| chunks.iter().map(Vec::len).sum())
-            .unwrap_or(0);
-        assert_eq!(kept, overflow_before - 2);
-    }
+    let mut reported = Vec::new();
+    csr.compact_overflow_for_vertex(0, 10, &mut |id, ts| reported.push((id, ts)));
+    assert_eq!(reported.len(), 2);
+    let kept: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(kept, overflow_before - 2);
+}

@@ -1,28 +1,53 @@
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
-use super::MutableCsr;
 use super::super::Nbr;
+use super::MutableCsr;
 use crate::edge::FragmentationStats;
 
 impl MutableCsr {
-    /// Get used memory size (active edges only)
+    /// Get used memory size, counting reserved topology plus indexes.
+    ///
+    /// Covers the primary neighbor list, the offset/degree/capacity arrays,
+    /// reserved overflow chunk buffers, the dedup live sets and this struct.
+    /// Tombstone authority memory is accounted by the table layer through
+    /// the shared tombstone estimate so both stay on one caliber.
     pub fn used_memory_size(&self) -> usize {
-        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
-        active_edges * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
+        let arrays = self.nbr_list.capacity() * std::mem::size_of::<Nbr>()
+            + self.adj_offsets.capacity() * std::mem::size_of::<u32>()
+            + self.degrees.capacity() * std::mem::size_of::<u32>()
+            + self.primary_capacities.capacity() * std::mem::size_of::<u32>();
+        let overflow_reserved: usize = self
+            .overflow_chunks
+            .iter()
+            .map(|(_, chunks)| chunks.iter().map(Vec::capacity).sum::<usize>())
+            .sum();
+        let overflow_entries = self.overflow_chunks.len()
+            * (std::mem::size_of::<u32>() + std::mem::size_of::<Vec<Vec<Nbr>>>());
+        let live_entries: usize = self.live_sets.values().map(HashSet::len).sum();
+        let live_sets = self.live_sets.len()
+            * (std::mem::size_of::<u32>() + std::mem::size_of::<HashSet<(u32, i64)>>())
+            + live_entries * (std::mem::size_of::<(u32, i64)>() + 8);
+        arrays
+            + overflow_reserved * std::mem::size_of::<Nbr>()
+            + overflow_entries
+            + live_sets
+            + std::mem::size_of::<Self>()
     }
 
-    /// Compute fragmentation ratio: reserved capacity over live edges.
+    /// Compute fragmentation ratio as wasted share of reserved capacity.
     ///
-    /// A ratio > 1.5 indicates moderate fragmentation; > 2.0 suggests
-    /// collection. Returns 0.0 if no live edges. This whole-table ratio is
-    /// an observation metric; the write path triggers on per-vertex
-    /// reclaimable counts instead.
+    /// Single caliber shared with `FragmentationStats`: `wasted / total`,
+    /// ranging from 0.0 (perfect packing) to below 1.0. A ratio above 0.5
+    /// marks a waste-dominated table worth a group merge; the write path
+    /// triggers on per-vertex reclaimable counts instead of this ratio.
     pub fn fragmentation_ratio(&self) -> f32 {
-        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
-        if active_edges == 0 {
+        if self.total_edge_capacity == 0 {
             return 0.0;
         }
-        self.total_edge_capacity as f32 / active_edges as f32
+        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
+        self.total_edge_capacity.saturating_sub(active_edges) as f32
+            / self.total_edge_capacity as f32
     }
 
     /// Estimate wasted memory due to fragmentation (in bytes)

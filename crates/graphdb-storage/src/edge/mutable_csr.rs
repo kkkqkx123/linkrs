@@ -32,15 +32,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::Nbr;
 
-pub mod iter;
-pub mod overflow;
-pub mod serialization;
 pub(crate) mod compaction;
 pub(crate) mod core;
+pub mod iter;
 pub(crate) mod live_set;
+pub mod overflow;
 pub(crate) mod persistence;
 pub(crate) mod read;
 pub(crate) mod row;
+pub mod serialization;
 pub(crate) mod stats;
 pub(crate) mod trait_impl;
 pub(crate) mod write;

@@ -3,7 +3,7 @@
 //! Provides statistics for tombstones and deletions to help track
 //! node-group sharded edge table behavior.
 
-use graphdb_core::types::Timestamp;
+use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 use std::collections::HashMap;
@@ -25,9 +25,17 @@ pub struct TombstoneStats {
 }
 
 impl TombstoneStats {
-    /// Estimate memory usage: EdgeId(u64) + Timestamp(u64) = 16 bytes per entry
+    /// Estimate memory usage per authority record.
+    ///
+    /// One record holds the edge id plus its create/delete stamps inside a
+    /// hash node. The estimate adds a fixed per-node hash overhead on top of
+    /// the entry payload so backpressure and maintenance triggers see the
+    /// map cost instead of a bare key size.
     pub fn estimate_memory(count: usize) -> usize {
-        count * std::mem::size_of::<(u64, u32)>()
+        const HASH_NODE_OVERHEAD: usize = 48;
+        const AUTHORITY_RECORD: usize =
+            std::mem::size_of::<EdgeId>() + 2 * std::mem::size_of::<Timestamp>();
+        count * (AUTHORITY_RECORD + HASH_NODE_OVERHEAD)
     }
 }
 

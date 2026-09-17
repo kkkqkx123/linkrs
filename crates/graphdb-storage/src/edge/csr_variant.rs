@@ -284,6 +284,24 @@ impl MutableCsrTrait for CsrVariant {
         dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> 0)
     }
 
+    fn delete_edge_by_dst_reporting(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
+            }
+            CsrVariant::Single(csr) => {
+                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
+            }
+            CsrVariant::None { .. } => 0,
+        }
+    }
+
     fn delete_edge_by_offset(
         &mut self,
         src_vid: u32,
@@ -383,6 +401,14 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.vertex_census(vid),
             CsrVariant::Single(csr) => csr.vertex_census(vid),
             CsrVariant::None { .. } => (0, 0, 0),
+        }
+    }
+
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        match self {
+            CsrVariant::Multiple(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::Single(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::None { .. } => (0, 0),
         }
     }
 

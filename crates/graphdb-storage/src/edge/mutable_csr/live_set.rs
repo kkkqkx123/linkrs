@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use super::MutableCsr;
 use super::super::Timestamp;
+use super::MutableCsr;
 
 impl MutableCsr {
     pub(crate) fn rebuild_live_sets(&mut self) {

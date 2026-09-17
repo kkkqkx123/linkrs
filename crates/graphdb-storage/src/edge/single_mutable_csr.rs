@@ -27,13 +27,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
 
+use super::csr_shared::{
+    can_revert_delete, decide_slot_delete, decode_endpoint_pair, grown_vertex_capacity,
+    is_reclaimable_slot, DeleteSlotOutcome, DEFAULT_VERTEX_CAPACITY,
+};
 use super::mutable_csr::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
-};
-use super::csr_shared::{
-    DeleteSlotOutcome, can_revert_delete, decide_slot_delete, decode_endpoint_pair,
-    grown_vertex_capacity, is_reclaimable_slot, DEFAULT_VERTEX_CAPACITY,
 };
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
 
@@ -44,7 +44,7 @@ pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 2;
 
 /// Unassigned single slot: no edge id, never alive at any timestamp.
 fn empty_slot() -> Nbr {
-    Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0)
+    Nbr::dead_gap()
 }
 
 pub struct SingleMutableCsr {
@@ -191,9 +191,16 @@ impl SingleMutableCsr {
 
     /// Delete the single matching live entry for full-match endpoint semantics.
     ///
-    /// Returns the deleted count (0 or 1) so table rollback can reconcile by
-    /// count. One call deletes the whole match; no first-only variant exists.
-    pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> usize {
+    /// Returns the deleted count (0 or 1) so callers can reconcile.
+    /// Reporting variant stamps the slot and hands the id to `on_deleted`
+    /// in the same step, so no second lookup is needed.
+    pub fn delete_edge_by_dst_reporting(
+        &mut self,
+        src: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
         let src_idx = src as usize;
 
         if src_idx >= self.vertex_capacity() {
@@ -216,9 +223,19 @@ impl SingleMutableCsr {
             return 0;
         }
 
+        let edge_id = nbr.edge_id;
         nbr.delete_ts = ts;
         self.edge_count.fetch_sub(1, Ordering::Relaxed);
+        on_deleted(edge_id);
         1
+    }
+
+    /// Delete the single matching live entry for full-match endpoint semantics.
+    ///
+    /// Returns the deleted count (0 or 1) so callers can reconcile.
+    pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> usize {
+        let mut noop = |_: EdgeId| {};
+        self.delete_edge_by_dst_reporting(src, dst, ts, &mut noop)
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
@@ -400,6 +417,19 @@ impl SingleMutableCsr {
         }
     }
 
+    /// Single-slot reclaim probe: `(dead, reclaimable)` in one slot read.
+    pub fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        let Some(slot) = self.nbr_list.get(vid as usize) else {
+            return (0, 0);
+        };
+        if slot.edge_id == INVALID_EDGE_ID || slot.delete_ts == Timestamp::MAX {
+            return (0, 0);
+        }
+        let reclaimable =
+            usize::from(cutoff != Timestamp::MAX && is_reclaimable_slot(slot, cutoff));
+        (1, reclaimable)
+    }
+
     pub fn compact_vertex_with_reporting(
         &mut self,
         vid: u32,
@@ -511,7 +541,7 @@ impl SingleMutableCsr {
     }
 
     pub fn used_memory_size(&self) -> usize {
-        self.nbr_list.len() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
+        self.nbr_list.capacity() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }
 
     /// Load version 2 only; versionless payloads fail closed.
@@ -678,6 +708,16 @@ impl MutableCsrTrait for SingleMutableCsr {
         SingleMutableCsr::delete_edge_by_dst(self, src, dst, ts)
     }
 
+    fn delete_edge_by_dst_reporting(
+        &mut self,
+        src: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
+        SingleMutableCsr::delete_edge_by_dst_reporting(self, src, dst, ts, on_deleted)
+    }
+
     fn delete_edge_by_offset(
         &mut self,
         src: u32,
@@ -733,6 +773,10 @@ impl MutableCsrTrait for SingleMutableCsr {
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
         SingleMutableCsr::vertex_census(self, vid)
+    }
+
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        SingleMutableCsr::vertex_reclaim_probe(self, vid, cutoff)
     }
 
     fn compact_vertex_with_reporting(

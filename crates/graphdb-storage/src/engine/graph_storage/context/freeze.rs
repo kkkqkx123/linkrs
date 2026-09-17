@@ -195,10 +195,10 @@ impl GraphStorageContext {
                     // when there are no tombstones and no group is fragmented.
                     // The check is per-group so a fragmented group cannot drag
                     // clean groups into the rebuild set; the whole-table ratio
-                    // stays an observation metric (2.0 is the documented
-                    // rebuild-worthy level, applied per group).
+                    // stays an observation metric (0.5 wasted share is the
+                    // documented rebuild-worthy level, applied per group).
                     let needs_reclaim = table.deletion_stats().total_deleted_edges > 0
-                        || table.has_fragmented_group(2.0);
+                        || table.has_fragmented_group(0.5);
                     if !needs_reclaim {
                         return Ok(());
                     }

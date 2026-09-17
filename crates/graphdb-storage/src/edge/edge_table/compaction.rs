@@ -86,7 +86,9 @@ impl EdgeStore {
     ///
     /// Groups without delete history are skipped without per-row
     /// inspection, so the pause stays proportional to the dirty groups
-    /// rather than the size of the table.
+    /// rather than the size of the table. Each visited row pays a single
+    /// fused dead/reclaimable probe instead of a census plus an eligibility
+    /// walk.
     pub fn compact_reclaimable_vertices(&mut self, bound: Timestamp, max_vertices: usize) -> usize {
         if bound == Timestamp::MAX || max_vertices == 0 {
             return 0;
@@ -120,22 +122,18 @@ impl EdgeStore {
                     break;
                 }
                 let vid = base.saturating_add(local as u32);
-                if out_scan {
-                    let (_, dead, _) = self.out_csr.vertex_census(vid);
-                    any_dead |= dead > 0;
-                }
-                if in_scan {
-                    let (_, dead, _) = self.in_csr.vertex_census(vid);
-                    any_dead |= dead > 0;
-                }
-                let mut needs = false;
-                if out_scan {
-                    needs |= self.out_csr.vertex_needs_compact(vid, bound);
-                }
-                if !needs && in_scan {
-                    needs |= self.in_csr.vertex_needs_compact(vid, bound);
-                }
-                if !needs {
+                let (out_dead, out_reclaimable) = if out_scan {
+                    self.out_csr.vertex_reclaim_probe(vid, bound)
+                } else {
+                    (0, 0)
+                };
+                let (in_dead, in_reclaimable) = if in_scan {
+                    self.in_csr.vertex_reclaim_probe(vid, bound)
+                } else {
+                    (0, 0)
+                };
+                any_dead |= out_dead + in_dead > 0;
+                if out_reclaimable + in_reclaimable == 0 {
                     continue;
                 }
                 visited += 1;
@@ -170,13 +168,28 @@ impl EdgeStore {
 
     /// Write-path incremental reclaim pass.
     ///
-    /// Returns true when any row was reclaimed. Skipped entirely while no
-    /// tombstone exists, so insert-only workloads pay no scan cost.
+    /// Gated by tombstone count and watermark movement: below the count
+    /// threshold with an unchanged watermark there is nothing newly
+    /// reclaimable, so the commit skips the group scan entirely. A watermark
+    /// advance or heap growth past the last pass re-arms it, and a full heap
+    /// always scans. Insert-only workloads therefore pay no scan cost.
     pub(crate) fn run_vertex_reclaim_pass(&mut self, bound: Timestamp) -> bool {
-        if bound == Timestamp::MAX || self.mvcc.total_tombstone_count() == 0 {
+        if bound == Timestamp::MAX {
             return false;
         }
-        self.compact_reclaimable_vertices(bound, MAX_VERTEX_RECLAIM_PER_PASS) > 0
+        const MIN_RECLAIM_TOMBSTONES: usize = 4;
+        let tombstones = self.mvcc.total_tombstone_count();
+        if tombstones == 0
+            || (tombstones < MIN_RECLAIM_TOMBSTONES
+                && bound == self.last_reclaim_bound
+                && tombstones <= self.last_reclaim_tombstones)
+        {
+            return false;
+        }
+        let reclaimed = self.compact_reclaimable_vertices(bound, MAX_VERTEX_RECLAIM_PER_PASS) > 0;
+        self.last_reclaim_bound = bound;
+        self.last_reclaim_tombstones = tombstones;
+        reclaimed
     }
 
     /// Rebuild dense dirty regions before flush, sharing the pass cutoff.

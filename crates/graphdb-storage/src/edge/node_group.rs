@@ -575,6 +575,21 @@ impl CsrShardSet {
         self.shards.keys().next_back().map_or(0, |max| max + 1)
     }
 
+    /// Address-span row count: highest group upper bound minus lowest group
+    /// lower bound, holes included.
+    ///
+    /// This is the true address upper bound for preallocation and range
+    /// validation. `vertex_capacity` instead reports materialized rows only
+    /// (memory-proportional); callers must pick by purpose and never mix the
+    /// two calibers.
+    pub fn address_span_rows(&self) -> usize {
+        let (Some(min), Some(max)) = (self.shards.keys().next(), self.shards.keys().next_back())
+        else {
+            return 0;
+        };
+        (max - min + 1) * self.group_size()
+    }
+
     fn fresh_variant(&self) -> StorageResult<CsrVariant> {
         CsrVariant::from_strategy_with_overflow(
             self.strategy,
@@ -1469,6 +1484,11 @@ impl CsrShardSet {
 }
 
 impl CsrBase for CsrShardSet {
+    /// Materialized rows only: existing groups times group size.
+    ///
+    /// Memory-proportional by design, so sparse tables stay proportional to
+    /// materialized groups. Not an address upper bound: holes are excluded,
+    /// use `address_span_rows` when a true bound is needed.
     fn vertex_capacity(&self) -> usize {
         self.shards.len() * self.group_size()
     }
@@ -1611,33 +1631,39 @@ impl MutableCsrTrait for CsrShardSet {
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+        let mut noop = |_: EdgeId| {};
+        self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut noop)
+    }
+
+    fn delete_edge_by_dst_reporting(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
         let Some((gid, local)) = self.route(src_vid) else {
             return 0;
         };
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
-        let doomed: Vec<EdgeId> = self
-            .shards
-            .get(&gid)
-            .map(|shard| {
-                shard
-                    .variant
-                    .physical_edges_of(local)
-                    .into_iter()
-                    .filter(|nbr| {
-                        nbr.endpoint == decoded_endpoint
-                            && nbr.rank == decoded_rank
-                            && nbr.delete_ts == Timestamp::MAX
-                            && nbr.create_ts <= ts
-                    })
-                    .map(|nbr| nbr.edge_id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Single pass: the variant stamps matches and reports their ids
+        // through the callback. Ids are parked locally so the append log is
+        // fed after the shard borrow ends, with no separate collection scan
+        // over the row first.
+        let mut doomed: Vec<EdgeId> = Vec::new();
         let deleted = self
             .shards
             .get_mut(&gid)
-            .map(|shard| shard.variant.delete_edge_by_dst(local, dst, ts))
+            .map(|shard| {
+                shard.variant.delete_edge_by_dst_reporting(
+                    local,
+                    dst,
+                    ts,
+                    &mut |edge_id: EdgeId| {
+                        on_deleted(edge_id);
+                        doomed.push(edge_id);
+                    },
+                )
+            })
             .unwrap_or(0);
         if deleted > 0 {
             self.mark_region_delete(gid, local);
@@ -1831,6 +1857,16 @@ impl MutableCsrTrait for CsrShardSet {
             .get(&gid)
             .map(|shard| shard.variant.vertex_census(local))
             .unwrap_or((0, 0, 0))
+    }
+
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        let Some((gid, local)) = self.route(vid) else {
+            return (0, 0);
+        };
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.vertex_reclaim_probe(local, cutoff))
+            .unwrap_or((0, 0))
     }
 
     fn row_gap(&self, vid: u32) -> usize {

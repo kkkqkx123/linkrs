@@ -1,14 +1,14 @@
 use std::sync::atomic::Ordering;
 
-use super::MutableCsr;
+use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowStorage;
 use super::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
-    MUTABLE_CSR_FORMAT_VERSION, TopologyColumnEncoding,
+    TopologyColumnEncoding, MUTABLE_CSR_FORMAT_VERSION,
 };
+use super::MutableCsr;
 use super::{read_nbr, write_nbr};
-use super::super::{EdgeId, Nbr};
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
 
@@ -195,6 +195,25 @@ impl MutableCsr {
             );
             nbr.create_ts = create_stamps[index];
             nbr_list.push(nbr);
+        }
+
+        // Addressing consistency: every row window must land inside the
+        // neighbor list and the degree must fit the reserved capacity. A
+        // length-aligned but out-of-range payload is damage, rejected here
+        // instead of panicking on the hot path later.
+        for vid in 0..vertex_capacity {
+            let offset = adj_offsets[vid] as usize;
+            let degree = degrees[vid] as usize;
+            let capacity = primary_capacities[vid] as usize;
+            if degree > capacity
+                || offset.saturating_add(degree) > primary_len
+                || offset.saturating_add(capacity) > primary_len
+            {
+                return Err(StorageError::deserialize_error(format!(
+                    "Mutable CSR row {} out of range: offset={} degree={} capacity={} primary_len={}",
+                    vid, offset, degree, capacity, primary_len
+                )));
+            }
         }
 
         let mut overflow_chunks = OverflowStorage::new();

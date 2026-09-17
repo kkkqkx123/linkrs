@@ -155,7 +155,7 @@ impl MutableCsr {
             .map_or(0, |chunks| chunks.iter().map(Vec::capacity).sum());
         if overflow_live.is_empty() && overflow_pinned.is_empty() {
             self.overflow_chunks.remove(&vid);
-            self.total_edge_capacity = self.total_edge_capacity.saturating_sub(old_overflow_cap);
+            self.sub_capacity(old_overflow_cap);
         } else {
             let mut rest: Vec<Nbr> =
                 Vec::with_capacity(overflow_live.len() + overflow_pinned.len());
@@ -169,10 +169,8 @@ impl MutableCsr {
                 repacked.push(v);
             }
             let new_overflow_cap: usize = repacked.iter().map(Vec::capacity).sum();
-            self.total_edge_capacity = self
-                .total_edge_capacity
-                .saturating_sub(old_overflow_cap)
-                .saturating_add(new_overflow_cap);
+            self.sub_capacity(old_overflow_cap);
+            self.add_capacity(new_overflow_cap);
             if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
                 *slot = repacked;
             }
@@ -205,7 +203,7 @@ impl MutableCsr {
         if kept.is_empty() {
             // Remove empty overflow entry entirely to reclaim metadata.
             self.overflow_chunks.remove(&vid);
-            self.total_edge_capacity = self.total_edge_capacity.saturating_sub(old_cap);
+            self.sub_capacity(old_cap);
             self.rebuild_live_set_for_vertex(vid);
             return;
         }
@@ -225,10 +223,8 @@ impl MutableCsr {
         }
         // Update capacity accounting: old capacity vs new.
         let new_cap: usize = new_chunks.iter().map(|c| c.capacity()).sum();
-        self.total_edge_capacity = self
-            .total_edge_capacity
-            .saturating_sub(old_cap)
-            .saturating_add(new_cap);
+        self.sub_capacity(old_cap);
+        self.add_capacity(new_cap);
         if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
             *slot = new_chunks;
         }

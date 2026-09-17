@@ -15,7 +15,7 @@
 //!   only guarantees monotonicity without collision; callers must not rely on
 //!   exact values across cancel or crash reload.
 
-use graphdb_core::types::Timestamp;
+use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
 
 /// One uncommitted edge insert held in a staging batch.
@@ -212,6 +212,37 @@ impl EdgeStagingBatch {
 
     pub(crate) fn take_order(&mut self) -> Vec<StagedOrder> {
         std::mem::take(&mut self.order)
+    }
+}
+
+/// Reusable commit working buffers owned by the table.
+///
+/// One commit pass needs an applied-insert list, an insert key index for
+/// same-batch cancel detection, and an applied-delete list. Keeping them on
+/// the table and clearing instead of reallocating removes three
+/// allocations plus repeated hash-table growth from every small commit.
+/// Buffers never cross a commit boundary with live contents: each commit
+/// takes them empty and returns them empty on every exit path.
+#[derive(Debug, Default)]
+pub(crate) struct CommitScratch {
+    pub applied_inserts: Vec<(u32, u32, i64, EdgeId, Timestamp)>,
+    pub insert_by_key:
+        std::collections::HashMap<(u32, u32, i64), (u32, u32, i64, EdgeId, Timestamp)>,
+    pub applied_deletes: Vec<(u32, u32, i64, EdgeId, Timestamp)>,
+}
+
+impl CommitScratch {
+    pub fn take(&mut self) -> CommitScratch {
+        std::mem::take(self)
+    }
+
+    pub fn reset(&mut self, inserts: usize, deletes: usize) {
+        self.applied_inserts.clear();
+        self.applied_inserts.reserve(inserts);
+        self.insert_by_key.clear();
+        self.insert_by_key.reserve(inserts);
+        self.applied_deletes.clear();
+        self.applied_deletes.reserve(deletes);
     }
 }
 

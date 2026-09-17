@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
-use super::MutableCsr;
-use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use super::super::csr_shared::{
-    DeleteSlotOutcome, can_revert_delete, decide_slot_delete, decode_endpoint_pair,
+    can_revert_delete, decide_slot_delete, decode_endpoint_pair, DeleteSlotOutcome,
 };
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
+use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
+use super::MutableCsr;
 use graphdb_core::{StorageError, StorageResult};
 
 impl MutableCsr {
@@ -17,19 +17,28 @@ impl MutableCsr {
             .map_or(1, HashSet::len)
             .saturating_add(1);
         let chunk_edges = self.effective_chunk_edges(live_hint);
-        let chunks = self.overflow_chunks.get_or_create(src_vid);
         // A chunk is full at its created capacity, so earlier small-tier
         // chunks never stretch into later tiers.
-        let needs_chunk = chunks
-            .last()
-            .is_none_or(|chunk| chunk.len() >= chunk.capacity().max(1));
+        let needs_chunk = self.overflow_chunks.get(&src_vid).is_none_or(|chunks| {
+            chunks
+                .last()
+                .is_none_or(|chunk| chunk.len() >= chunk.capacity().max(1))
+        });
         if needs_chunk {
-            chunks.push(Vec::with_capacity(chunk_edges));
-            let new_cap = chunks.last().map_or(chunk_edges, Vec::capacity);
-            self.total_edge_capacity = self.total_edge_capacity.saturating_add(new_cap);
+            self.overflow_chunks
+                .get_or_create(src_vid)
+                .push(Vec::with_capacity(chunk_edges));
+            let new_cap = self
+                .overflow_chunks
+                .get(&src_vid)
+                .and_then(|chunks| chunks.last())
+                .map_or(chunk_edges, Vec::capacity);
+            self.add_capacity(new_cap);
         }
-        if let Some(chunk) = chunks.last_mut() {
-            chunk.push(nbr);
+        if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+            if let Some(chunk) = chunks.last_mut() {
+                chunk.push(nbr);
+            }
         }
         if nbr.delete_ts == Timestamp::MAX {
             self.track_live_insert(src_vid, nbr.endpoint, nbr.rank);
@@ -122,35 +131,21 @@ impl MutableCsr {
         Ok(())
     }
 
-    fn find_overflow_positions<F>(&self, src_vid: u32, mut matches: F) -> Vec<(usize, usize)>
-    where
-        F: FnMut(&Nbr) -> bool,
-    {
-        let mut result = Vec::new();
-        let Some(chunks) = self.overflow_chunks.get(&src_vid) else {
-            return result;
-        };
+    /// Locate one overflow entry by edge id, stopping at the first match.
+    ///
+    /// Point-lookup fast path: never builds a match vector, so hot single
+    /// deletes pay no heap allocation. Callers needing every match use the
+    /// in-place stamping passes instead.
+    fn scan_overflow_for_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(usize, usize)> {
+        let chunks = self.overflow_chunks.get(&src_vid)?;
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             for (edge_idx, nbr) in chunk.iter().enumerate() {
-                if matches(nbr) {
-                    result.push((chunk_idx, edge_idx));
+                if nbr.edge_id == edge_id {
+                    return Some((chunk_idx, edge_idx));
                 }
             }
         }
-        result
-    }
-
-    fn scan_overflow_for_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(usize, usize)> {
-        self.find_overflow_positions(src_vid, |nbr| nbr.edge_id == edge_id)
-            .into_iter()
-            .next()
-    }
-
-    fn scan_overflow_for_dst(&self, src_vid: u32, dst: VertexId) -> Vec<(usize, usize)> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
-        self.find_overflow_positions(src_vid, |nbr| {
-            nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank
-        })
+        None
     }
 
     /// Delete an edge by edge_id.
@@ -221,7 +216,17 @@ impl MutableCsr {
     ///
     /// Deletes every live match and returns the deleted count so table
     /// rollback can reconcile by count. One call deletes the whole match.
-    pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+    /// Single pass: primary and overflow rows are stamped in place while
+    /// walking, so no match vector is materialized and no second scan runs.
+    /// Every stamped id is reported through `on_deleted` for append-log and
+    /// audit callers that previously paid a separate collection scan.
+    pub fn delete_edge_by_dst_reporting(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -230,7 +235,7 @@ impl MutableCsr {
 
         let mut deleted = 0usize;
 
-        // Scan primary
+        // Stamp primary matches in place.
         let degree = self.degrees[src_idx] as usize;
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
@@ -238,42 +243,48 @@ impl MutableCsr {
             if nbr.endpoint == decoded_endpoint
                 && nbr.rank == decoded_rank
                 && nbr.delete_ts == Timestamp::MAX
+                && nbr.create_ts <= ts
             {
-                let create_ts = nbr.create_ts;
-                if create_ts <= ts {
-                    nbr.delete_ts = ts;
-                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                    self.track_live_remove(src_vid, decoded_endpoint, decoded_rank);
-                    deleted += 1;
-                }
+                let edge_id = nbr.edge_id;
+                nbr.delete_ts = ts;
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                on_deleted(edge_id);
+                deleted += 1;
             }
         }
 
-        // Scan overflow
-        let indices = self.scan_overflow_for_dst(src_vid, dst);
-        // Collect endpoints for set removal before mutable borrow.
-        let mut overflow_deleted_endpoints: Vec<(u32, i64)> = Vec::new();
+        // Stamp overflow matches in the same pass.
         if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
-            for (chunk_idx, edge_idx) in indices {
-                let nbr = &mut chunks[chunk_idx][edge_idx];
-                if nbr.delete_ts == Timestamp::MAX {
-                    let create_ts = nbr.create_ts;
-                    if create_ts <= ts {
-                        let ep = nbr.endpoint;
-                        let rk = nbr.rank;
+            for chunk in chunks.iter_mut() {
+                for nbr in chunk.iter_mut() {
+                    if nbr.endpoint == decoded_endpoint
+                        && nbr.rank == decoded_rank
+                        && nbr.delete_ts == Timestamp::MAX
+                        && nbr.create_ts <= ts
+                    {
+                        let edge_id = nbr.edge_id;
                         nbr.delete_ts = ts;
                         self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                        overflow_deleted_endpoints.push((ep, rk));
+                        on_deleted(edge_id);
                         deleted += 1;
                     }
                 }
             }
         }
-        for (ep, rk) in overflow_deleted_endpoints {
-            self.track_live_remove(src_vid, ep, rk);
+        if deleted > 0 {
+            self.track_live_remove(src_vid, decoded_endpoint, decoded_rank);
         }
 
         deleted
+    }
+
+    /// Delete edges by destination vertex with full-match semantics.
+    ///
+    /// Deletes every live match and returns the deleted count so table
+    /// rollback can reconcile by count. One call deletes the whole match.
+    pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+        let mut noop = |_: EdgeId| {};
+        self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut noop)
     }
 
     pub fn delete_edge_by_offset(
@@ -407,31 +418,40 @@ impl MutableCsr {
                 let n = &chunks[chunk_idx][edge_idx];
                 (n.endpoint, n.rank)
             };
-            if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+            // Detach the entry, capturing the ledger delta before the shard
+            // borrow ends so the release routes through the ledger primitive.
+            // `Some((freed, emptied))` when an empty chunk detached.
+            let detached = if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 chunks[chunk_idx].remove(edge_idx);
                 // Clean up empty chunk vectors to keep per-vertex chunk count bounded.
                 if chunks[chunk_idx].is_empty() {
                     let removed = chunks.remove(chunk_idx);
-                    self.total_edge_capacity =
-                        self.total_edge_capacity.saturating_sub(removed.capacity());
-                    if chunks.is_empty() {
-                        // Drop the per-vertex entry so later lookups stay constant time.
-                        // The unified live set still covers primary rows, so
-                        // rebuild it instead of dropping the whole entry.
-                        if was_live {
-                            self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                        }
-                        self.overflow_chunks.remove(&src_vid);
-                        self.rebuild_live_set_for_vertex(src_vid);
-                        return true;
+                    Some((removed.capacity(), chunks.is_empty()))
+                } else {
+                    None
+                }
+            } else {
+                return false;
+            };
+            if let Some((freed, emptied)) = detached {
+                self.sub_capacity(freed);
+                if emptied {
+                    // Drop the per-vertex entry so later lookups stay constant time.
+                    // The unified live set still covers primary rows, so
+                    // rebuild it instead of dropping the whole entry.
+                    if was_live {
+                        self.edge_count.fetch_sub(1, Ordering::Relaxed);
                     }
+                    self.overflow_chunks.remove(&src_vid);
+                    self.rebuild_live_set_for_vertex(src_vid);
+                    return true;
                 }
-                if was_live {
-                    self.track_live_remove(src_vid, endpoint, rank);
-                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                }
-                return true;
             }
+            if was_live {
+                self.track_live_remove(src_vid, endpoint, rank);
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+            }
+            return true;
         }
 
         false

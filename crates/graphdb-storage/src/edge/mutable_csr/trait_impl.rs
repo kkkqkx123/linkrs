@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use super::MutableCsr;
 use super::super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
+use super::MutableCsr;
 use graphdb_core::StorageResult;
 
 impl CsrBase for MutableCsr {
@@ -39,6 +39,16 @@ impl MutableCsrTrait for MutableCsr {
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
         MutableCsr::delete_edge_by_dst(self, src_vid, dst, ts)
+    }
+
+    fn delete_edge_by_dst_reporting(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId),
+    ) -> usize {
+        MutableCsr::delete_edge_by_dst_reporting(self, src_vid, dst, ts, on_deleted)
     }
 
     fn delete_edge_by_offset(
@@ -109,6 +119,10 @@ impl MutableCsrTrait for MutableCsr {
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
         MutableCsr::vertex_census(self, vid)
+    }
+
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        MutableCsr::vertex_reclaim_probe(self, vid, cutoff)
     }
 
     fn row_gap(&self, vid: u32) -> usize {

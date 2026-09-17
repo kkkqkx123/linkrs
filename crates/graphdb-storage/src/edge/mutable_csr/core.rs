@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::MutableCsr;
-use super::overflow::OverflowStorage;
 use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
-use super::super::{EdgeId, Nbr};
+use super::super::Nbr;
+use super::overflow::OverflowStorage;
+use super::MutableCsr;
 
 pub(crate) const DEFAULT_EDGE_CAPACITY: usize = 4096;
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
@@ -80,15 +80,25 @@ impl MutableCsr {
     /// on its first edge. Zero-degree vertices hold no slots in `nbr_list`.
     pub(crate) fn allocate_primary_block(&mut self, src_idx: usize) {
         let block_offset = self.nbr_list.len();
-        self.nbr_list.resize(
-            block_offset + DEFAULT_VERTEX_DEGREE,
-            Nbr::new(0, 0, EdgeId(0)),
-        );
+        self.nbr_list
+            .resize(block_offset + DEFAULT_VERTEX_DEGREE, Nbr::dead_gap());
         self.adj_offsets[src_idx] = block_offset as u32;
         self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
-        self.total_edge_capacity = self
-            .total_edge_capacity
-            .saturating_add(DEFAULT_VERTEX_DEGREE);
+        self.add_capacity(DEFAULT_VERTEX_DEGREE);
+    }
+
+    /// Single entry point for capacity growth. Every branch that reserves
+    /// slots routes through here so the ledger cannot drift from actual
+    /// allocation.
+    pub(crate) fn add_capacity(&mut self, slots: usize) {
+        self.total_edge_capacity = self.total_edge_capacity.saturating_add(slots);
+    }
+
+    /// Single entry point for capacity release. Every branch that frees slots
+    /// routes through here; whole-table rebuilds rebase the ledger instead
+    /// (see `compact_with_ts_reporting` and `clear`).
+    pub(crate) fn sub_capacity(&mut self, slots: usize) {
+        self.total_edge_capacity = self.total_edge_capacity.saturating_sub(slots);
     }
 
     /// Clear all edges
