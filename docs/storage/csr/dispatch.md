@@ -87,8 +87,8 @@ macro_rules! dispatch {
     };
 }
 
-/// Same pattern for read-only (immutable borrow) dispatch
-macro_rules! dispatch_immutable { /* identical match structure */ }
+/// One macro serves both mutable and immutable call sites: mutability lives
+/// with the receiver, so no second macro is kept.
 ```
 
 ### Pattern 1: Mutable Operations
@@ -104,8 +104,8 @@ impl MutableCsrTrait for CsrVariant {
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
         dispatch!(self, delete_edge(src_vid, edge_id, ts) -> false)
     }
-    fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        dispatch!(self, compact_with_ts(ts, reserve_ratio) -> 0)
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+        dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> 0)
     }
     // ... all other mutable methods
 }
@@ -206,13 +206,9 @@ Query("traverse edges")
 
 ## Compaction & Maintenance
 
-`compact_with_ts()` is dispatched generically:
-
-```rust
-fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-    dispatch!(self, compact_with_ts(ts, reserve_ratio) -> 0)
-}
-```
+Full-table rebuild is not part of the storage interface: production
+compaction goes through per-row `compact_vertex_with_reporting`, and unit
+tests exercise the same reporting entry point directly.
 
 **Behavior per variant**:
 | Variant | Behavior |

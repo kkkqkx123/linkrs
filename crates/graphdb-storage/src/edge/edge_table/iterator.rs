@@ -74,12 +74,17 @@ impl<'a> AdjacencyBatchAccessor<'a> {
 
     /// Visit visible neighbors in fixed-size batches reusing one caller
     /// buffer. The callback receives each full batch slice and returns false
-    /// to stop early. Peak memory stays proportional to `batch_size`.
+    /// to stop early. Peak memory stays proportional to `batch_size`. A zero
+    /// `batch_size` selects the default adjacency batch.
     pub fn visit_batched<F>(&self, src: u32, scratch: &mut Vec<Nbr>, batch_size: usize, mut f: F)
     where
         F: FnMut(&[Nbr]) -> bool,
     {
-        let batch_size = batch_size.max(1);
+        let batch_size = if batch_size == 0 {
+            DEFAULT_ADJACENCY_BATCH
+        } else {
+            batch_size
+        };
         scratch.clear();
         let table = self.table;
         let ts = self.ts;

@@ -8,9 +8,10 @@
 //! addressing is local.
 //!
 //! Inside a group, fixed row windows form leaf regions carrying their own
-//! three-kind dirt. Group dirt is the OR over its regions; checkpoints and
-//! reclaim passes decide per region, so unchanged regions are skipped.
-//! Whole-group and whole-table ratios stay observability only.
+//! three-kind dirt. Group dirt is the OR over its regions; reclaim passes
+//! decide per region so unchanged regions are skipped, while checkpoints skip
+//! clean groups at group granularity. Whole-group and whole-table ratios stay
+//! observability only.
 //!
 //! Groups are sparse: only existing groups are materialized, the manifest
 //! records existing group ids rather than a contiguous count, missing groups
@@ -831,8 +832,8 @@ impl CsrShardSet {
         Ok(())
     }
 
-    /// Drop groups holding no physical entries. Tombstone-bearing groups are
-    /// retained so snapshot history before the cutoff survives. Non-empty
+    /// Drop every group holding no physical entries. Tombstone-bearing groups
+    /// are retained so snapshot history before the cutoff survives. Non-empty
     /// strategies keep at least group zero so an empty table stays
     /// addressable. Intermediate holes are never materialized, so only
     /// existing empty groups are dropped and no empty files are produced.
@@ -1343,20 +1344,10 @@ impl CsrShardSet {
     /// a degenerate zero measurement on a non-empty table reports zero with
     /// a debug line. Callers handle zero explicitly.
     pub fn bytes_per_edge(&self) -> usize {
-        let edges = self.edge_count();
-        if edges == 0 {
-            return 0;
-        }
-        let bytes = self.used_memory_size();
-        let bpe = bytes / edges as usize;
-        if bpe == 0 {
-            log::debug!(
-                "bytes_per_edge: measured zero ({} bytes / {} edges), reporting zero",
-                bytes,
-                edges,
-            );
-        }
-        bpe
+        super::FragmentationStats::measured_bytes_per_edge(
+            self.used_memory_size(),
+            self.edge_count(),
+        )
     }
 
     /// Whole-set fragmentation statistics, summed across groups.
@@ -1783,21 +1774,6 @@ impl MutableCsrTrait for CsrShardSet {
             .get(&gid)
             .map(|shard| shard.variant.edges_of(local, ts))
             .unwrap_or_default()
-    }
-
-    fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        let mut removed = 0usize;
-        for shard in self.shards.values_mut() {
-            let n = shard.variant.compact_with_ts(ts, reserve_ratio);
-            if n > 0 {
-                shard.dirty.deleted = true;
-                for region in shard.regions.iter_mut() {
-                    region.deleted = true;
-                }
-            }
-            removed += n;
-        }
-        removed
     }
 
     fn compact_vertex_with_reporting(

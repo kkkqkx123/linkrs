@@ -97,7 +97,7 @@ This design:
 - Preserves type safety at compile time
 - Allows runtime selection per relationship
 
-Dispatch is implemented via `dispatch!`/`dispatch_immutable!` macros to minimize boilerplate.
+Dispatch is implemented via a single `dispatch!` macro to minimize boilerplate.
 
 ## Timestamp & Versioning
 

@@ -147,26 +147,54 @@ impl EdgeStagingBatch {
             .max()
     }
 
-    /// Read-your-write check before commit: does the batch hold an insert
+    /// Read-your-write check before commit: does the batch net effect hold an insert
     /// for `(src, dst, rank)`?
     ///
-    /// Pre-commit helper only, never a read-path merge. Commit prevalidation
-    /// uses the same net-effect view over stage order, so these helpers stay
-    /// consistent with commit decisions instead of misleading callers.
+    /// Pre-commit helper only, never a read-path merge. The net effect walks
+    /// stage order: a later delete cancels an earlier insert of the same key,
+    /// and a later insert rebuilds after a delete, matching commit decisions.
     pub fn contains_insert(&self, src: u32, dst: u32, rank: i64) -> bool {
-        self.inserts
-            .iter()
-            .any(|ins| ins.src == src && ins.dst == dst && ins.rank == rank)
+        let mut net_insert = false;
+        let mut net_delete = false;
+        for ord in &self.order {
+            if ord.src != src || ord.dst != dst || ord.rank != rank {
+                continue;
+            }
+            if ord.is_insert {
+                net_insert = true;
+                net_delete = false;
+            } else if net_insert {
+                net_insert = false;
+            } else {
+                net_delete = true;
+            }
+        }
+        let _ = net_delete;
+        net_insert
     }
 
-    /// Check whether the batch holds a delete for `(src, dst, rank)`.
+    /// Check whether the batch net effect holds a delete for `(src, dst, rank)`.
     ///
     /// Same pre-commit scope as `contains_insert`: no read-path visibility,
-    /// only batch net-effect inspection.
+    /// only batch net-effect inspection. Cancelled pairs report false.
     pub fn contains_delete(&self, src: u32, dst: u32, rank: i64) -> bool {
-        self.deletes
-            .iter()
-            .any(|del| del.src == src && del.dst == dst && del.rank == rank)
+        let mut net_insert = false;
+        let mut net_delete = false;
+        for ord in &self.order {
+            if ord.src != src || ord.dst != dst || ord.rank != rank {
+                continue;
+            }
+            if ord.is_insert {
+                net_insert = true;
+                net_delete = false;
+            } else if net_insert {
+                net_insert = false;
+            } else {
+                net_delete = true;
+            }
+        }
+        let _ = net_insert;
+        net_delete
     }
 
     /// Stage order for sequential commit and net-effect prevalidation.
@@ -211,5 +239,21 @@ mod tests {
         let mut batch = EdgeStagingBatch::new();
         batch.stage_insert(0, 1, 0, &[], 100);
         drop(batch);
+    }
+
+    #[test]
+    fn staging_contains_follows_net_effect() {
+        let mut batch = EdgeStagingBatch::new();
+        batch.stage_insert(0, 1, 0, &[], 100);
+        assert!(batch.contains_insert(0, 1, 0));
+        assert!(!batch.contains_delete(0, 1, 0));
+        batch.stage_delete(0, 1, 0, 150);
+        assert!(!batch.contains_insert(0, 1, 0));
+        assert!(!batch.contains_delete(0, 1, 0));
+        batch.stage_delete(0, 2, 0, 150);
+        assert!(batch.contains_delete(0, 2, 0));
+        batch.stage_insert(0, 2, 0, &[], 160);
+        assert!(batch.contains_insert(0, 2, 0));
+        assert!(!batch.contains_delete(0, 2, 0));
     }
 }

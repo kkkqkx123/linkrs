@@ -165,24 +165,12 @@ pub enum MetricType {
     VectorEmbeddingErrors,
     VectorEmbeddingLatencyMs,
     VectorDisabledSkips,
-    // CSR (Compressed Sparse Row) metrics
-    CsrInsertions,
-    CsrDeletions,
-    CsrOverflowExpansions,
-    CsrCompactions,
-    CsrEdgesCompacted,
-    CsrBytesAllocated,
     // MVCC Tombstone metrics
     TombstoneCount,
     TombstoneMemoryBytes,
-    TombstoneGCCount,
     TombstoneOldestTsMin,
     TombstoneNewestTsMax,
     TombstoneActiveSnapshots,
-    // Write Backpressure metrics (Mutable CSR monitoring)
-    MutableCsrBytes,
-    MutableCsrFreezeCount,
-    MutableCsrPeakBytes,
     // Migration metrics
     MigrationTotalCount,
     MigrationRowsMigrated,
@@ -1242,40 +1230,6 @@ impl StatsManager {
         self.set_value(MetricType::IndexMemoryUsage, bytes);
     }
 
-    // ========== CSR (Compressed Sparse Row) Metrics ==========
-
-    /// Record a CSR edge insertion
-    pub fn record_csr_insertion(&self) {
-        self.add_value(MetricType::CsrInsertions);
-    }
-
-    /// Record a CSR edge deletion
-    pub fn record_csr_deletion(&self) {
-        self.add_value(MetricType::CsrDeletions);
-    }
-
-    /// Record a CSR overflow expansion (vertex capacity increase)
-    pub fn record_csr_overflow_expansion(&self) {
-        self.add_value(MetricType::CsrOverflowExpansions);
-    }
-
-    /// Record a CSR compaction operation
-    /// edges_removed: number of deleted edges actually removed
-    pub fn record_csr_compaction(&self, edges_removed: u64) {
-        self.add_value(MetricType::CsrCompactions);
-        self.add_value_with_amount(MetricType::CsrEdgesCompacted, edges_removed);
-    }
-
-    /// Record CSR memory allocation
-    pub fn record_csr_allocation(&self, bytes: u64) {
-        self.add_value_with_amount(MetricType::CsrBytesAllocated, bytes);
-    }
-
-    /// Set current CSR allocated bytes (snapshot of current state)
-    pub fn set_csr_bytes_allocated(&self, bytes: u64) {
-        self.set_value(MetricType::CsrBytesAllocated, bytes);
-    }
-
     /// Record tombstone statistics for MVCC observability
     pub fn record_tombstone_stats(
         &self,
@@ -1295,29 +1249,6 @@ impl StatsManager {
         if let Some(ts) = newest_ts_max {
             self.set_value(MetricType::TombstoneNewestTsMax, ts as u64);
         }
-    }
-
-    /// Increment tombstone garbage collection counter
-    pub fn record_tombstone_gc(&self) {
-        self.add_value(MetricType::TombstoneGCCount);
-    }
-
-    /// Record mutable CSR backpressure metrics
-    pub fn record_mutable_csr_backpressure(&self, current_bytes: u64, peak_bytes: u64) {
-        self.set_value(MetricType::MutableCsrBytes, current_bytes);
-        // Update peak if current exceeds previous peak
-        if let Some(prev_peak) = self.get_value(MetricType::MutableCsrPeakBytes) {
-            if current_bytes > prev_peak {
-                self.set_value(MetricType::MutableCsrPeakBytes, current_bytes);
-            }
-        } else {
-            self.set_value(MetricType::MutableCsrPeakBytes, peak_bytes);
-        }
-    }
-
-    /// Increment mutable CSR freeze counter
-    pub fn record_mutable_csr_freeze(&self) {
-        self.add_value(MetricType::MutableCsrFreezeCount);
     }
 
     // ========== Migration Metrics ==========

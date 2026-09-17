@@ -102,15 +102,4 @@ impl OverflowStorage {
             })
             .sum()
     }
-
-    /// Check whether merging overflow back into primary would be beneficial.
-    pub fn should_merge(&self, fragmentation_threshold: f32) -> bool {
-        let total: usize = self.total_nbr_count();
-        if total == 0 {
-            return false;
-        }
-        let wasted = self.wasted_capacity();
-        let ratio = wasted as f32 / (total + wasted) as f32;
-        ratio > fragmentation_threshold
-    }
 }

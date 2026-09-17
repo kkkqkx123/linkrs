@@ -301,9 +301,13 @@ pub fn decode_topology_u64_column(data: &[u8], offset: &mut usize) -> StorageRes
     }
 }
 
-pub fn encode_topology_u32_column(values: &[u32]) -> (TopologyEncodingChoice, Vec<u8>) {
-    let wide: Vec<u64> = values.iter().map(|&v| v as u64).collect();
+fn encode_topology_ints<I: Into<u64> + Copy>(values: &[I]) -> (TopologyEncodingChoice, Vec<u8>) {
+    let wide: Vec<u64> = values.iter().map(|&v| v.into()).collect();
     encode_topology_u64_column(&wide)
+}
+
+pub fn encode_topology_u32_column(values: &[u32]) -> (TopologyEncodingChoice, Vec<u8>) {
+    encode_topology_ints(values)
 }
 
 pub fn decode_topology_u32_column(data: &[u8], offset: &mut usize) -> StorageResult<Vec<u32>> {

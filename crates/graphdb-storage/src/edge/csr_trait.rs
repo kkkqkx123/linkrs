@@ -141,15 +141,6 @@ pub trait MutableCsrTrait: CsrBase {
     /// Test-only row-stamp filter; production reads go through the version authority.
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr>;
 
-    /// Compact with timestamp threshold and reserve ratio.
-    ///
-    /// Returns the number of removed edges.
-    /// Test-only direct row-stamp filter; production visibility goes through
-    /// the version authority plus `compact_with_ts_reporting`.
-    fn compact_with_ts(&mut self, _ts: Timestamp, _reserve_ratio: f32) -> usize {
-        0
-    }
-
     /// Reclaim one vertex in place, dropping entries eligible for collection
     /// at `cutoff` and tightening live entries without touching other rows.
     ///

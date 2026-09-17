@@ -241,6 +241,20 @@ impl EdgeStore {
         VertexId::edge_endpoint_key(endpoint, rank)
     }
 
+    pub(crate) fn resolve_owner_gid(
+        edge_id: &EdgeId,
+        edge_owner: &HashMap<EdgeId, u32>,
+        live: &HashSet<u32>,
+        fallback: Option<u32>,
+    ) -> (u32, bool) {
+        let owner = edge_owner.get(edge_id).copied().unwrap_or(0);
+        if live.contains(&owner) {
+            (owner, false)
+        } else {
+            (fallback.unwrap_or(0), true)
+        }
+    }
+
     pub(crate) fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
         let bytes = key.as_bytes();
         if bytes.len() != 16 {
@@ -249,18 +263,7 @@ impl EdgeStore {
                 bytes.len()
             );
         }
-        let mut buf = [0u8; 16];
-        let copy_len = bytes.len().min(16);
-        buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
-        let mut endpoint_bytes = [0u8; 8];
-        endpoint_bytes.copy_from_slice(&buf[..8]);
-        let mut rank_bytes = [0u8; 8];
-        rank_bytes.copy_from_slice(&buf[8..16]);
-
-        (
-            VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),
-            i64::from_be_bytes(rank_bytes),
-        )
+        key.decode_edge_endpoint()
     }
 
     pub fn set_stats_manager(&mut self, stats: std::sync::Arc<graphdb_metrics::StatsManager>) {
@@ -891,13 +894,13 @@ impl EdgeStore {
                     )));
                 }
                 if single_out && seen_single_src.contains(&ins.src) {
-                    return Err(StorageError::invalid_operation(format!(
+                    return Err(StorageError::conflict(format!(
                         "Single out-edge strategy already holds a live edge for src={}",
                         ins.src
                     )));
                 }
                 if single_in && seen_single_dst.contains(&ins.dst) {
-                    return Err(StorageError::invalid_operation(format!(
+                    return Err(StorageError::conflict(format!(
                         "Single in-edge strategy already holds a live edge for dst={}",
                         ins.dst
                     )));
@@ -909,7 +912,7 @@ impl EdgeStore {
                             .iter()
                             .all(|nbr| seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank)));
                     if !live.is_empty() && !covered {
-                        return Err(StorageError::invalid_operation(format!(
+                        return Err(StorageError::conflict(format!(
                             "Single out-edge strategy already holds a live edge for src={}",
                             ins.src
                         )));
@@ -922,7 +925,7 @@ impl EdgeStore {
                             .iter()
                             .all(|nbr| seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank)));
                     if !live.is_empty() && !covered {
-                        return Err(StorageError::invalid_operation(format!(
+                        return Err(StorageError::conflict(format!(
                             "Single in-edge strategy already holds a live edge for dst={}",
                             ins.dst
                         )));
@@ -993,7 +996,7 @@ impl EdgeStore {
         if self.schema.oe_strategy == super::super::EdgeStrategy::Single
             && !self.merged_edges_of(&self.out_csr, src, ts).is_empty()
         {
-            return Err(StorageError::invalid_operation(format!(
+            return Err(StorageError::conflict(format!(
                 "Single out-edge strategy already holds a live edge for src={}",
                 src
             )));
@@ -1001,7 +1004,7 @@ impl EdgeStore {
         if self.schema.ie_strategy == super::super::EdgeStrategy::Single
             && !self.merged_edges_of(&self.in_csr, dst, ts).is_empty()
         {
-            return Err(StorageError::invalid_operation(format!(
+            return Err(StorageError::conflict(format!(
                 "Single in-edge strategy already holds a live edge for dst={}",
                 dst
             )));
@@ -2136,11 +2139,6 @@ impl EdgeStore {
 
         let mutable_size = self.estimate_memory_usage();
 
-        // Record current metrics
-        if let Some(stats) = &self.stats_manager {
-            stats.record_mutable_csr_backpressure(mutable_size as u64, mutable_size as u64);
-        }
-
         if mutable_size > self.config.max_mutable_csr_bytes {
             return true;
         }
@@ -2307,27 +2305,47 @@ impl EdgeStore {
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
     /// Damage detection only: returns `(orphan property mappings, orphan CSR
-    /// rows)`. A nonzero count signals corrupt files or a write-path
-    /// regression; callers reject the load. Crash consistency itself comes
-    /// from the checkpoint commit protocol (groups before metadata,
-    /// manifest published last with its tail embedded in `meta.bin`), not
-    /// from this audit.
+    /// rows, live authority orphans)`. A nonzero count signals corrupt files
+    /// or a write-path regression; callers reject the load. Crash consistency
+    /// itself comes from the checkpoint commit protocol (groups before
+    /// metadata, manifest published last with its tail embedded in
+    /// `meta.bin`), not from this audit.
     ///
-    /// Live-authority orphans (a live authority entry with no CSR row, as
-    /// produced by a silent Single-slot overwrite) are reported separately
-    /// by [`EdgeStore::live_authority_orphans`] and also reject the load.
-    pub fn loaded_copy_mismatches(&self) -> (usize, usize) {
-        let orphan_mappings = self
-            .properties
-            .edge_ids()
-            .filter(|edge_id| !self.mvcc.edge_timestamps.contains_key(edge_id))
-            .count();
+    /// One CSR traversal feeds both the orphan-row count and the live
+    /// authority check, so the load path pays a single pass over both
+    /// directions instead of two.
+    pub(crate) fn copy_audit(&self) -> (usize, usize, usize) {
+        let mut csr_ids = HashSet::new();
         let mut orphan_csr_rows = 0;
         for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
             if !self.mvcc.edge_timestamps.contains_key(&nbr.edge_id) {
                 orphan_csr_rows += 1;
             }
+            csr_ids.insert(nbr.edge_id);
         }
+        let orphan_mappings = self
+            .properties
+            .edge_ids()
+            .filter(|edge_id| !self.mvcc.edge_timestamps.contains_key(edge_id))
+            .count();
+        let live_orphans = self
+            .mvcc
+            .edge_timestamps
+            .iter()
+            .filter(|(edge_id, ts)| ts.delete_ts == Timestamp::MAX && !csr_ids.contains(edge_id))
+            .count();
+        (orphan_mappings, orphan_csr_rows, live_orphans)
+    }
+
+    /// Orphan property mappings plus orphan CSR rows.
+    /// Audit-only (load path plus tests); a nonzero count means corrupt files
+    /// or a write-path regression.
+    ///
+    /// Live-authority orphans (a live authority entry with no CSR row, as
+    /// produced by a silent Single-slot overwrite) are reported separately
+    /// by [`EdgeStore::live_authority_orphans`] and also reject the load.
+    pub fn loaded_copy_mismatches(&self) -> (usize, usize) {
+        let (orphan_mappings, orphan_csr_rows, _) = self.copy_audit();
         (orphan_mappings, orphan_csr_rows)
     }
 
@@ -2335,15 +2353,8 @@ impl EdgeStore {
     /// Audit-only (load path plus tests); a nonzero count means a past
     /// silent overwrite orphaned the authority record.
     pub fn live_authority_orphans(&self) -> usize {
-        let mut csr_ids = HashSet::new();
-        for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
-            csr_ids.insert(nbr.edge_id);
-        }
-        self.mvcc
-            .edge_timestamps
-            .iter()
-            .filter(|(edge_id, ts)| ts.delete_ts == Timestamp::MAX && !csr_ids.contains(edge_id))
-            .count()
+        let (_, _, live_orphans) = self.copy_audit();
+        live_orphans
     }
 }
 

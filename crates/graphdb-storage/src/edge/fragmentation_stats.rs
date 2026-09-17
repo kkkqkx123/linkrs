@@ -59,11 +59,23 @@ impl FragmentationStats {
         }
     }
 
-    /// Check if compaction is recommended
+    /// Measured bytes per edge with no fallback.
     ///
-    /// Threshold applies to the waste ratio above.
-    pub fn should_compact(&self, threshold: f32) -> bool {
-        self.fragmentation_ratio() >= threshold
+    /// Empty tables report zero; degenerate zero measurements report zero.
+    /// Callers handle zero explicitly instead of relying on estimates.
+    pub fn measured_bytes_per_edge(used_bytes: usize, edges: u64) -> usize {
+        if edges == 0 {
+            return 0;
+        }
+        let bpe = used_bytes / edges as usize;
+        if bpe == 0 {
+            log::debug!(
+                "bytes_per_edge: measured zero ({} bytes / {} edges), reporting zero",
+                used_bytes,
+                edges,
+            );
+        }
+        bpe
     }
 }
 
@@ -120,7 +132,7 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.0);
-        assert!(!stats.should_compact(2.0));
+        assert!(stats.fragmentation_ratio() < 2.0);
     }
 
     #[test]
@@ -133,7 +145,7 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.5);
-        assert!(!stats.should_compact(2.0));
+        assert!(stats.fragmentation_ratio() < 2.0);
     }
 
     #[test]
@@ -146,7 +158,7 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 2.5);
-        assert!(stats.should_compact(2.0));
+        assert!(stats.fragmentation_ratio() >= 2.0);
     }
 
     #[test]
@@ -157,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_compact_threshold() {
+    fn test_fragmentation_ratio_threshold() {
         let stats = FragmentationStats {
             total_capacity: 100,
             reachable_edges: 50,
@@ -165,8 +177,16 @@ mod tests {
             wasted_capacity: 150,
         };
 
-        assert!(stats.should_compact(1.0)); // ratio = 1.5, threshold = 1.0
-        assert!(!stats.should_compact(2.0)); // ratio = 1.5, threshold = 2.0
+        assert!(stats.fragmentation_ratio() >= 1.0); // ratio = 1.5, threshold = 1.0
+        assert!(stats.fragmentation_ratio() < 2.0); // ratio = 1.5, threshold = 2.0
+    }
+
+    #[test]
+    fn test_measured_bytes_per_edge() {
+        assert_eq!(FragmentationStats::measured_bytes_per_edge(0, 0), 0);
+        assert_eq!(FragmentationStats::measured_bytes_per_edge(100, 0), 0);
+        assert_eq!(FragmentationStats::measured_bytes_per_edge(100, 10), 10);
+        assert_eq!(FragmentationStats::measured_bytes_per_edge(5, 10), 0);
     }
 
     #[test]

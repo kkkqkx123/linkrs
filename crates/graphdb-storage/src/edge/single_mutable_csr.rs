@@ -494,10 +494,6 @@ impl SingleMutableCsr {
         self.edge_count.store(0, Ordering::Relaxed);
     }
 
-    pub fn compact_with_ts(&mut self, cutoff: Timestamp, _reserve_ratio: f32) -> usize {
-        self.compact_with_ts_reporting(cutoff, &mut |_, _| {})
-    }
-
     /// Dump with integer column encoding for neighbor and edge-id columns.
     ///
     /// Offsets are trivial for the single-edge layout (slot index equals row),
@@ -745,10 +741,6 @@ impl MutableCsrTrait for SingleMutableCsr {
 
     fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
         SingleMutableCsr::edges_of(self, src, ts)
-    }
-
-    fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        SingleMutableCsr::compact_with_ts(self, ts, reserve_ratio)
     }
 
     fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {

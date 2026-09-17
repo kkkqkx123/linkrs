@@ -104,7 +104,7 @@ crates/graphdb-storage/src/storage/edge/
 ### 1. Enum-Based Dispatch (No Vtable)
 - Inline-friendly, compiler can optimize
 - Type-safe at compile time via pattern matching
-- Uses `dispatch!` and `dispatch_immutable!` macros to reduce boilerplate
+- Uses a single `dispatch!` macro to reduce boilerplate
 
 ### 2. Two-Level Storage (MutableCsr)
 - O(1) amortized insertion (no reshuffle)

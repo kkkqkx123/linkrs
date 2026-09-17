@@ -23,9 +23,11 @@ use super::{
     MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator, Timestamp, VertexId,
 };
 
-/// Macro for dispatching method calls to the underlying CSR variant (mutable methods).
+/// Macro for dispatching method calls to the underlying CSR variant.
 ///
-/// Expands to a match statement with proper None handling.
+/// Expands to a match statement with proper None handling. Mutability lives
+/// with the receiver, so this single macro serves both mutable and immutable
+/// call sites; a second macro would only duplicate the match below.
 ///
 /// # Usage
 ///
@@ -51,28 +53,6 @@ macro_rules! dispatch {
     };
 
     // Method with no arguments and return value with default for None
-    ($self:expr, $method:ident() -> $default:expr) => {
-        match $self {
-            CsrVariant::Multiple(csr) => csr.$method(),
-            CsrVariant::Single(csr) => csr.$method(),
-            CsrVariant::None { .. } => $default,
-        }
-    };
-}
-
-/// Macro for dispatching method calls to immutable CSR methods.
-/// Returns default value for None variant.
-macro_rules! dispatch_immutable {
-    // Method with arguments and return value
-    ($self:expr, $method:ident($($arg:expr),+ $(,)?) -> $default:expr) => {
-        match $self {
-            CsrVariant::Multiple(csr) => csr.$method($($arg),+),
-            CsrVariant::Single(csr) => csr.$method($($arg),+),
-            CsrVariant::None { .. } => $default,
-        }
-    };
-
-    // Method with no arguments and return value
     ($self:expr, $method:ident() -> $default:expr) => {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method(),
@@ -198,20 +178,10 @@ impl CsrVariant {
     /// non-empty table reports zero with a debug line. Callers handle zero
     /// explicitly instead of relying on a structural estimate.
     pub fn bytes_per_edge(&self) -> usize {
-        let edges = self.edge_count();
-        if edges == 0 {
-            return 0;
-        }
-        let bytes = self.used_memory_size();
-        let bpe = bytes / edges as usize;
-        if bpe == 0 {
-            log::debug!(
-                "bytes_per_edge: measured zero ({} bytes / {} edges), reporting zero",
-                bytes,
-                edges,
-            );
-        }
-        bpe
+        super::FragmentationStats::measured_bytes_per_edge(
+            self.used_memory_size(),
+            self.edge_count(),
+        )
     }
 }
 
@@ -225,7 +195,7 @@ impl CsrBase for CsrVariant {
     }
 
     fn edge_count(&self) -> u64 {
-        dispatch_immutable!(self, edge_count() -> 0)
+        dispatch!(self, edge_count() -> 0)
     }
 
     fn dump(&self) -> Vec<u8> {
@@ -332,15 +302,15 @@ impl MutableCsrTrait for CsrVariant {
     }
 
     fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
-        dispatch_immutable!(self, nbr_at_offset(src_vid, offset) -> None)
+        dispatch!(self, nbr_at_offset(src_vid, offset) -> None)
     }
 
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
-        dispatch_immutable!(self, get_edge_physical(src_vid, dst) -> None)
+        dispatch!(self, get_edge_physical(src_vid, dst) -> None)
     }
 
     fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
-        dispatch_immutable!(self, physical_edges_of(src_vid) -> Vec::new())
+        dispatch!(self, physical_edges_of(src_vid) -> Vec::new())
     }
 
     fn has_physical_entries(&self, vid: u32) -> bool {
@@ -368,15 +338,11 @@ impl MutableCsrTrait for CsrVariant {
     }
 
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        dispatch_immutable!(self, get_edge(src_vid, dst, ts) -> None)
+        dispatch!(self, get_edge(src_vid, dst, ts) -> None)
     }
 
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
-        dispatch_immutable!(self, edges_of(src_vid, ts) -> Vec::new())
-    }
-
-    fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        dispatch!(self, compact_with_ts(ts, reserve_ratio) -> 0)
+        dispatch!(self, edges_of(src_vid, ts) -> Vec::new())
     }
 
     fn compact_vertex_with_reporting(
@@ -423,21 +389,21 @@ impl MutableCsrTrait for CsrVariant {
     fn row_gap(&self, vid: u32) -> usize {
         match self {
             CsrVariant::Multiple(csr) => csr.row_gap(vid),
-            _ => 0,
+            CsrVariant::Single(_) | CsrVariant::None { .. } => 0,
         }
     }
 
     fn row_density(&self, vid: u32) -> f32 {
         match self {
             CsrVariant::Multiple(csr) => csr.row_density(vid),
-            _ => 1.0,
+            CsrVariant::Single(_) | CsrVariant::None { .. } => 1.0,
         }
     }
 
     fn rebalance_row(&mut self, vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.rebalance_row(vid),
-            _ => true,
+            CsrVariant::Single(_) | CsrVariant::None { .. } => true,
         }
     }
 
@@ -617,8 +583,7 @@ mod tests {
         // None variant should return None for get_edge
         assert!(csr.get_edge(0, VertexId::from_int64(1), 1).is_none());
 
-        // Compact and clear should be no-ops
-        assert_eq!(csr.compact_with_ts(1, 0.5), 0);
+        // Clear should be a no-op
         csr.clear();
         assert_eq!(csr.edge_count(), 0);
     }

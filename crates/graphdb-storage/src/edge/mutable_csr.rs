@@ -190,30 +190,10 @@ impl MutableCsr {
     }
 
     fn rebuild_live_sets(&mut self) {
+        let capacity = self.vertex_capacity() as u32;
         self.live_sets.clear();
-        for vid in 0..self.vertex_capacity() {
-            let degree = self.degrees[vid] as usize;
-            let offset = self.adj_offsets[vid] as usize;
-            let mut set = HashSet::new();
-            for i in 0..degree {
-                if let Some(nbr) = self.nbr_list.get(offset + i) {
-                    if nbr.delete_ts == Timestamp::MAX {
-                        set.insert((nbr.endpoint, nbr.rank));
-                    }
-                }
-            }
-            if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
-                for chunk in chunks {
-                    for nbr in chunk {
-                        if nbr.delete_ts == Timestamp::MAX {
-                            set.insert((nbr.endpoint, nbr.rank));
-                        }
-                    }
-                }
-            }
-            if !set.is_empty() {
-                self.live_sets.insert(vid as u32, set);
-            }
+        for vid in 0..capacity {
+            self.rebuild_live_set_for_vertex(vid);
         }
     }
 
@@ -571,34 +551,36 @@ impl MutableCsr {
         Ok(())
     }
 
-    fn scan_overflow_for_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(usize, usize)> {
-        self.overflow_chunks
-            .get(&src_vid)?
-            .iter()
-            .enumerate()
-            .find_map(|(chunk_idx, chunk)| {
-                chunk
-                    .iter()
-                    .position(|nbr| nbr.edge_id == edge_id)
-                    .map(|edge_idx| (chunk_idx, edge_idx))
-            })
-    }
-
-    fn scan_overflow_for_dst(&self, src_vid: u32, dst: VertexId) -> Vec<(usize, usize)> {
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+    fn find_overflow_positions<F>(&self, src_vid: u32, mut matches: F) -> Vec<(usize, usize)>
+    where
+        F: FnMut(&Nbr) -> bool,
+    {
         let mut result = Vec::new();
         let Some(chunks) = self.overflow_chunks.get(&src_vid) else {
             return result;
         };
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             for (edge_idx, nbr) in chunk.iter().enumerate() {
-                if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
+                if matches(nbr) {
                     result.push((chunk_idx, edge_idx));
                 }
             }
         }
         result
+    }
+
+    fn scan_overflow_for_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(usize, usize)> {
+        self.find_overflow_positions(src_vid, |nbr| nbr.edge_id == edge_id)
+            .into_iter()
+            .next()
+    }
+
+    fn scan_overflow_for_dst(&self, src_vid: u32, dst: VertexId) -> Vec<(usize, usize)> {
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        self.find_overflow_positions(src_vid, |nbr| {
+            nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank
+        })
     }
 
     /// Delete an edge by edge_id.
@@ -1093,10 +1075,12 @@ impl MutableCsr {
 
         let degree = self.degrees[src_idx] as usize;
         let offset = self.adj_offsets[src_idx] as usize;
-
-        let total_valid_primary = self.count_valid_primary(src_idx, ts);
-        let total_valid_overflow = self.count_valid_overflow(src_vid, ts);
-        let mut result = Vec::with_capacity(total_valid_primary + total_valid_overflow);
+        let overflow_len = self
+            .overflow_chunks
+            .get(&src_vid)
+            .map(|chunks| chunks.iter().map(Vec::len).sum::<usize>())
+            .unwrap_or(0);
+        let mut result = Vec::with_capacity(degree + overflow_len);
 
         for i in 0..degree {
             let nbr = &self.nbr_list[offset + i];
@@ -1122,29 +1106,6 @@ impl MutableCsr {
     /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
         VertexEdgesIter::new(self, src_vid, ts)
-    }
-
-    fn count_valid_primary(&self, src_idx: usize, ts: Timestamp) -> usize {
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        let mut count = 0;
-        for i in 0..degree {
-            let nbr = &self.nbr_list[offset + i];
-            if nbr.is_alive_at(ts) {
-                count += 1;
-            }
-        }
-        count
-    }
-
-    fn count_valid_overflow(&self, src_vid: u32, ts: Timestamp) -> usize {
-        self.overflow_chunks
-            .get(&src_vid)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|nbr| nbr.is_alive_at(ts))
-            .count()
     }
 
     /// Get a specific edge
@@ -1432,14 +1393,6 @@ impl MutableCsr {
         }
 
         Ok(())
-    }
-
-    /// Compact CSR, dropping entries eligible under
-    /// `Visibility::is_gc_eligible` and merging overflow into primary.
-    /// Removed entries are reported via the callback for tombstone promotion;
-    /// with `cutoff == MAX` nothing is dropped.
-    pub fn compact_with_ts(&mut self, cutoff: Timestamp, reserve_ratio: f32) -> usize {
-        self.compact_with_ts_reporting(cutoff, reserve_ratio, &mut |_, _| {})
     }
 
     /// Compact with per-edge removal reporting (`on_edge_removed` receives
@@ -1876,10 +1829,6 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::edges_of(self, src_vid, ts)
     }
 
-    fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        MutableCsr::compact_with_ts(self, ts, reserve_ratio)
-    }
-
     fn compact_vertex_with_reporting(
         &mut self,
         vid: u32,
@@ -2089,7 +2038,7 @@ mod tests {
         csr.delete_edge(0u32, EdgeId(6), 5).unwrap();
 
         // Cutoff 6: deletions at 5 predate the cutoff, so they are removed.
-        let removed = csr.compact_with_ts(6, 0.25);
+        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
         assert_eq!(removed, 3);
 
         assert!(csr.overflow_chunks.get(&0).is_none_or(Vec::is_empty));
@@ -2110,14 +2059,14 @@ mod tests {
 
         // cutoff == MAX (no active snapshot): the deletion history must be
         // preserved for time-travel queries before the deletion.
-        let removed = csr.compact_with_ts(Timestamp::MAX, 0.25);
+        let removed = csr.compact_with_ts_reporting(Timestamp::MAX, 0.25, &mut |_, _| {});
         assert_eq!(removed, 0);
 
         assert_eq!(csr.edges_of(0u32, 3).len(), 3);
         assert_eq!(csr.edges_of(0u32, 6).len(), 2);
 
         // A real cutoff drops the entry again.
-        let removed = csr.compact_with_ts(6, 0.25);
+        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
         assert_eq!(removed, 1);
         assert_eq!(csr.edges_of(0u32, 3).len(), 2);
     }
@@ -2153,7 +2102,7 @@ mod tests {
         csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 1)
             .unwrap();
 
-        let removed = csr.compact_with_ts(3, 1.0);
+        let removed = csr.compact_with_ts_reporting(3, 1.0, &mut |_, _| {});
         assert_eq!(removed, 0);
 
         let capacity = csr.total_edge_capacity;
@@ -2173,7 +2122,7 @@ mod tests {
             csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
                 .unwrap();
         }
-        let removed = csr.compact_with_ts(3, 0.0);
+        let removed = csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
         assert_eq!(removed, 0);
         assert_eq!(csr.total_edge_capacity, 3);
         assert_eq!(csr.edges_of(0u32, 3).len(), 3);
@@ -2227,7 +2176,7 @@ mod tests {
 
         // Compact reclaims slots of rows whose edges were all removed
         csr.delete_edge(0u32, EdgeId(100), 2).unwrap();
-        csr.compact_with_ts(3, 0.0);
+        csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
         assert_eq!(csr.total_edge_capacity, 1);
         assert_eq!(csr.primary_capacities[0], 0);
     }
@@ -2283,7 +2232,7 @@ mod tests {
             "Setup failed: insufficient fragmentation"
         );
 
-        csr.compact_with_ts(1, 0.25);
+        csr.compact_with_ts_reporting(1, 0.25, &mut |_, _| {});
 
         let ratio_after = csr.fragmentation_ratio();
         assert!(
@@ -2689,7 +2638,7 @@ mod tests {
         assert_eq!(csr.row_gap(0), 3);
         assert!((csr.row_density(0) - 0.25).abs() < 1e-6);
         // Rebuilds size rows at the packed density target with gaps.
-        let removed = csr.compact_with_ts(2, 1.0 - PACKED_CSR_DENSITY);
+        let removed = csr.compact_with_ts_reporting(2, 1.0 - PACKED_CSR_DENSITY, &mut |_, _| {});
         assert_eq!(removed, 0);
         assert_eq!(csr.row_gap(0), 1);
         assert!((csr.row_density(0) - 0.5).abs() < 1e-6);

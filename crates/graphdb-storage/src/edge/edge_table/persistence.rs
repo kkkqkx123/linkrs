@@ -19,8 +19,8 @@
 //! Old single-file layouts, version 1 metadata without a commit tail,
 //! version 2 metadata with global timestamps, pre-version-5 manifests and
 //! the legacy global `properties.bin` are rejected: loading requires the
-//! manifest, the embedded tail must equal the manifest file, and trailing
-//! bytes after any payload fail loudly instead of loading partially.
+//! manifest, a torn manifest file falls back to the embedded tail, and
+//! trailing bytes after any payload fail loudly instead of loading partially.
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
@@ -80,7 +80,7 @@ pub fn flush_metadata(
 }
 
 /// Header section: label identity, openness, schema and the edge-id counter.
-/// Timestamps live in the following section and may split by group later.
+/// Timestamps live in per-group shards and never in this header.
 #[allow(clippy::too_many_arguments)]
 fn write_metadata_header(
     buf: &mut Vec<u8>,

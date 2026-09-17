@@ -767,6 +767,7 @@ fn test_single_csr_and_table_reject_second_live_edge_with_same_error() {
         .insert_edge(0, 2, 0, &[], 110)
         .expect_err("table must reject second live edge");
     assert!(table_err.to_string().contains("Single"));
+    assert!(table_err.to_string().contains("conflict"));
     let mut csr = crate::edge::SingleMutableCsr::with_capacity(4);
     csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(0), 100)
         .unwrap();
@@ -774,6 +775,10 @@ fn test_single_csr_and_table_reject_second_live_edge_with_same_error() {
         .insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(1), 200)
         .expect_err("csr must reject second live edge");
     assert!(csr_err.to_string().contains("conflict"));
+    assert_eq!(
+        std::mem::discriminant(&table_err.kind()),
+        std::mem::discriminant(&csr_err.kind())
+    );
     assert_eq!(table.live_authority_orphans(), 0);
     assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }

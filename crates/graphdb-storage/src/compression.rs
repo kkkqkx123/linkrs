@@ -372,15 +372,32 @@ impl PageReader {
 }
 
 pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
+    use std::io::Write;
     let path = path.as_ref();
     let shadow_path = path.with_extension("tmp");
-    std::fs::write(&shadow_path, data).map_err(|e| {
-        StorageError::io_error(format!(
-            "Failed to write shadow file {}: {}",
-            shadow_path.display(),
-            e
-        ))
-    })?;
+    {
+        let mut file = std::fs::File::create(&shadow_path).map_err(|e| {
+            StorageError::io_error(format!(
+                "Failed to write shadow file {}: {}",
+                shadow_path.display(),
+                e
+            ))
+        })?;
+        file.write_all(data).map_err(|e| {
+            StorageError::io_error(format!(
+                "Failed to write shadow file {}: {}",
+                shadow_path.display(),
+                e
+            ))
+        })?;
+        file.sync_all().map_err(|e| {
+            StorageError::io_error(format!(
+                "Failed to sync shadow file {}: {}",
+                shadow_path.display(),
+                e
+            ))
+        })?;
+    }
     std::fs::rename(&shadow_path, path).map_err(|e| {
         StorageError::io_error(format!(
             "Failed to rename shadow file {} to {}: {}",
@@ -389,6 +406,17 @@ pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> Sto
             e
         ))
     })?;
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| {
+                StorageError::io_error(format!(
+                    "Failed to sync parent dir for {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+    }
     Ok(())
 }
 

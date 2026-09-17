@@ -73,7 +73,7 @@ fn remap_endpoint_key_counted(
             },
             None => key,
         },
-        _ => key,
+        Some(_) | None => key,
     }
 }
 
@@ -341,6 +341,20 @@ mod tests {
         mapping
     }
 
+    fn make_single_table() -> EdgeStore {
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "single".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![],
+            oe_strategy: EdgeStrategy::Single,
+            ie_strategy: EdgeStrategy::Single,
+            schema_version: 1,
+        };
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+    }
+
     #[test]
     fn test_remap_rows_and_neighbors() {
         let mut table = make_table();
@@ -523,6 +537,20 @@ mod tests {
         assert!(stats.row_misses > 0);
         assert!(stats.neighbor_misses > 0);
         assert!(table.get_edge(0, 1, 0, 200).is_some());
+    }
+
+    #[test]
+    fn test_single_strategy_remap_into_fresh_shards() {
+        let mut table = make_single_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let mapping = HashMap::from([(0u32, 0u32), (1u32, 1u32)]);
+        let stats = table
+            .remap_vertex_ids_with_stats(Some(&mapping), Some(&mapping))
+            .unwrap();
+        assert_eq!(stats.row_misses, 0);
+        assert_eq!(stats.neighbor_misses, 0);
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
+        assert_eq!(table.live_authority_orphans(), 0);
     }
 
     #[test]
