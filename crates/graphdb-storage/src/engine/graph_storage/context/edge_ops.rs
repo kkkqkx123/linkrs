@@ -225,7 +225,11 @@ impl GraphStorageContext {
         ts: Timestamp,
         projection: Option<&[String]>,
     ) -> Option<EdgeRecord> {
-        if !self.persistent.is_open.load(std::sync::atomic::Ordering::Acquire) {
+        if !self
+            .persistent
+            .is_open
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             return None;
         }
         let (src_internal, dst_internal, key) = self.persistent.data_store.with_vertex_tables(
@@ -441,48 +445,6 @@ impl GraphStorageContext {
         Ok(erased)
     }
 
-    pub fn out_edges(
-        &self,
-        edge_label: LabelId,
-        src_label: LabelId,
-        _dst_label: LabelId,
-        src_id: VertexId,
-        ts: Timestamp,
-    ) -> Option<Vec<EdgeRecord>> {
-        if !self.persistent.is_open.load(Ordering::Acquire) {
-            return None;
-        }
-
-        let (src_internal, actual_src) =
-            self.persistent
-                .data_store
-                .with_vertex_tables(|vertex_tables| {
-                    let src_internal =
-                        helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
-                    let actual_src = if src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
-                            .unwrap_or(src_label)
-                    } else {
-                        src_label
-                    };
-                    Some((src_internal, actual_src))
-                })?;
-
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
-            {
-                records.extend(table.out_edges_with_gate(src_internal, ts, &gate));
-            }
-            records
-        });
-        Some(records)
-    }
-
     /// Raw out-edge neighbors of `src` (no `EdgeRecord` materialization, no
     /// property decode).  The neighbor endpoint is encoded in `Nbr.neighbor`.
     /// Returns the resolved internal src id together with the neighbors.
@@ -526,48 +488,6 @@ impl GraphStorageContext {
             nbrs
         });
         Some((src_internal, nbrs))
-    }
-
-    pub fn in_edges(
-        &self,
-        edge_label: LabelId,
-        _src_label: LabelId,
-        dst_label: LabelId,
-        dst_id: VertexId,
-        ts: Timestamp,
-    ) -> Option<Vec<EdgeRecord>> {
-        if !self.persistent.is_open.load(Ordering::Acquire) {
-            return None;
-        }
-
-        let (dst_internal, actual_dst) =
-            self.persistent
-                .data_store
-                .with_vertex_tables(|vertex_tables| {
-                    let dst_internal =
-                        helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
-                    let actual_dst = if dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
-                            .unwrap_or(dst_label)
-                    } else {
-                        dst_label
-                    };
-                    Some((dst_internal, actual_dst))
-                })?;
-
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
-            {
-                records.extend(table.in_edges_with_gate(dst_internal, ts, &gate));
-            }
-            records
-        });
-        Some(records)
     }
 
     /// Raw in-edge neighbors of `dst` (no `EdgeRecord` materialization, no
@@ -806,5 +726,4 @@ impl GraphStorageContext {
         });
         Some(records)
     }
-
 }

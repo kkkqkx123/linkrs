@@ -52,14 +52,16 @@ pub const REGION_MERGE_MIN_DENSITY: f32 = 0.4;
 /// Group density at or above which a multi-region dirty span merges at
 /// group scope. Below it merges stay region-scoped.
 pub const GROUP_MERGE_MIN_DENSITY: f32 = 0.65;
-/// Container serialization version for a sharded direction. Version 3
+/// Container serialization version for a sharded direction. Version 4
 /// carries sparse group ids plus per-region dirt and the append-log sidecar
-/// contract; version 1 and 2 payloads are rejected, never converted.
-pub const SHARD_SET_FORMAT_VERSION: u32 = 3;
-/// Manifest version for the per-table group layout file. Version 4 records
+/// contract over version 3 topology columns; version 3 and older payloads
+/// are rejected, never converted.
+pub const SHARD_SET_FORMAT_VERSION: u32 = 4;
+/// Manifest version for the per-table group layout file. Version 5 records
 /// existing group ids rather than contiguous counts and admits per-group
-/// timestamp and property shards; older manifests are rejected, never converted.
-pub const GROUP_MANIFEST_VERSION: u32 = 4;
+/// timestamp, property and segment-statistics shards; older manifests are
+/// rejected, never converted.
+pub const GROUP_MANIFEST_VERSION: u32 = 5;
 /// Wire version of one append-log sidecar payload. Version 2 carries only the
 /// address width so group-set growth never invalidates clean groups' sidecars;
 /// version 1 payloads are rejected, never converted.
@@ -265,35 +267,33 @@ pub(crate) fn decode_append_ops(
     let mut inserts = Vec::with_capacity(insert_count);
     for _ in 0..insert_count {
         let local = u32::from_le_bytes(
-            take(data, &mut cursor, 4)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log insert row too short")
-            })?,
+            take(data, &mut cursor, 4)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("append log insert row too short"))?,
         );
         let endpoint = u32::from_le_bytes(
-            take(data, &mut cursor, 4)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log endpoint too short")
-            })?,
+            take(data, &mut cursor, 4)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("append log endpoint too short"))?,
         );
         let rank = u64::from_le_bytes(
-            take(data, &mut cursor, 8)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log rank too short")
-            })?,
+            take(data, &mut cursor, 8)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("append log rank too short"))?,
         ) as i64;
         let edge_id = EdgeId(u64::from_le_bytes(
-            take(data, &mut cursor, 8)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log edge id too short")
-            })?,
+            take(data, &mut cursor, 8)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("append log edge id too short"))?,
         ));
-        let create_ts = u64::from_le_bytes(
-            take(data, &mut cursor, 8)?.try_into().map_err(|_| {
+        let create_ts =
+            u64::from_le_bytes(take(data, &mut cursor, 8)?.try_into().map_err(|_| {
                 StorageError::deserialize_error("append log create stamp too short")
-            })?,
-        );
-        let delete_ts = u64::from_le_bytes(
-            take(data, &mut cursor, 8)?.try_into().map_err(|_| {
+            })?);
+        let delete_ts =
+            u64::from_le_bytes(take(data, &mut cursor, 8)?.try_into().map_err(|_| {
                 StorageError::deserialize_error("append log delete stamp too short")
-            })?,
-        );
+            })?);
         let mut nbr = Nbr::with_timestamps(endpoint, rank, edge_id, delete_ts);
         nbr.create_ts = create_ts;
         inserts.push(AppendInsert { local, nbr });
@@ -306,20 +306,19 @@ pub(crate) fn decode_append_ops(
     let mut deletes = Vec::with_capacity(delete_count);
     for _ in 0..delete_count {
         let local = u32::from_le_bytes(
-            take(data, &mut cursor, 4)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log delete row too short")
-            })?,
+            take(data, &mut cursor, 4)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("append log delete row too short"))?,
         );
         let edge_id = EdgeId(u64::from_le_bytes(
             take(data, &mut cursor, 8)?.try_into().map_err(|_| {
                 StorageError::deserialize_error("append log delete edge id too short")
             })?,
         ));
-        let delete_ts = u64::from_le_bytes(
-            take(data, &mut cursor, 8)?.try_into().map_err(|_| {
+        let delete_ts =
+            u64::from_le_bytes(take(data, &mut cursor, 8)?.try_into().map_err(|_| {
                 StorageError::deserialize_error("append log delete stamp too short")
-            })?,
-        );
+            })?);
         deletes.push(AppendDelete {
             local,
             edge_id,
@@ -345,7 +344,6 @@ impl GroupDirty {
     pub fn is_column_dirty(self) -> bool {
         self.column_updated
     }
-
 }
 
 /// Checkpoint class derived from group dirt before it is cleared.
@@ -371,7 +369,6 @@ pub struct NodeGroupStats {
     pub dirty: GroupDirty,
 }
 
-
 /// Per-table group layout shared by both directions.
 ///
 /// Version 4 records existing group ids rather than contiguous counts:
@@ -392,8 +389,7 @@ impl TableShardManifest {
         let mut in_groups = self.in_groups.clone();
         in_groups.sort_unstable();
         in_groups.dedup();
-        let mut out =
-            Vec::with_capacity(16 + (out_groups.len() + in_groups.len()) * 4);
+        let mut out = Vec::with_capacity(16 + (out_groups.len() + in_groups.len()) * 4);
         out.extend_from_slice(&GROUP_MANIFEST_VERSION.to_le_bytes());
         out.extend_from_slice(&self.group_bits.to_le_bytes());
         out.extend_from_slice(&(out_groups.len() as u32).to_le_bytes());
@@ -431,8 +427,11 @@ impl TableShardManifest {
                     "group manifest slice too short",
                 ));
             }
-            let value =
-                u32::from_le_bytes(data[*cursor..*cursor + 4].try_into().map_err(|_| bad_slice())?);
+            let value = u32::from_le_bytes(
+                data[*cursor..*cursor + 4]
+                    .try_into()
+                    .map_err(|_| bad_slice())?,
+            );
             *cursor += 4;
             Ok(value)
         };
@@ -841,14 +840,7 @@ impl CsrShardSet {
         let empty: Vec<usize> = self
             .shards
             .iter()
-            .filter_map(|(gid, shard)| {
-                shard
-                    .variant
-                    .iter_all()
-                    .next()
-                    .is_none()
-                    .then_some(*gid)
-            })
+            .filter_map(|(gid, shard)| shard.variant.iter_all().next().is_none().then_some(*gid))
             .collect();
         for gid in empty {
             if self.shards.len() <= 1 {
@@ -880,6 +872,15 @@ impl CsrShardSet {
         self.shards
             .get(&gid)
             .is_some_and(|shard| shard.variant.primary_contains(local, edge_id))
+    }
+
+    /// Owner group of one global vertex id without creating groups.
+    ///
+    /// Shared row-location entry point for point lookups, adjacency batches
+    /// and full scans: every read path resolves rows through this routing
+    /// instead of duplicating the group arithmetic.
+    pub fn group_of(&self, vid: u32) -> Option<usize> {
+        self.route(vid).map(|(gid, _)| gid)
     }
 
     /// Visit every physically stored entry of one vertex without allocating.
@@ -1088,10 +1089,9 @@ impl CsrShardSet {
         };
         let mut removed = 0usize;
         for local in start..end {
-            removed +=
-                shard
-                    .variant
-                    .compact_vertex_with_reporting(local, cutoff, on_edge_removed);
+            removed += shard
+                .variant
+                .compact_vertex_with_reporting(local, cutoff, on_edge_removed);
             if shard.variant.row_gap(local) == 0 {
                 shard.variant.rebalance_row(local);
             }
@@ -1144,10 +1144,7 @@ impl CsrShardSet {
     }
 
     /// Committed ops held in one group append log, oldest first.
-    pub(crate) fn group_append_ops(
-        &self,
-        gid: usize,
-    ) -> (Vec<AppendInsert>, Vec<AppendDelete>) {
+    pub(crate) fn group_append_ops(&self, gid: usize) -> (Vec<AppendInsert>, Vec<AppendDelete>) {
         self.shards
             .get(&gid)
             .map(|shard| (shard.append.inserts.clone(), shard.append.deletes.clone()))
@@ -1286,6 +1283,32 @@ impl CsrShardSet {
             .into_iter()
             .filter_map(|gid| self.group_stats(gid))
             .collect()
+    }
+
+    /// Live edge count of one group for segment statistics.
+    pub fn group_live_count(&self, gid: usize) -> u64 {
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.edge_count())
+            .unwrap_or(0)
+    }
+
+    /// Minimum and maximum neighbor endpoints stored in one group.
+    ///
+    /// Sort-column bounds for segment statistics: a single pass over the
+    /// group entries without materializing them. Missing groups report no
+    /// bounds.
+    pub fn group_endpoint_bounds(&self, gid: usize) -> (Option<u32>, Option<u32>) {
+        let Some(shard) = self.shards.get(&gid) else {
+            return (None, None);
+        };
+        let mut min: Option<u32> = None;
+        let mut max: Option<u32> = None;
+        for (_, nbr) in shard.variant.iter_all() {
+            min = Some(min.map_or(nbr.endpoint, |current: u32| current.min(nbr.endpoint)));
+            max = Some(max.map_or(nbr.endpoint, |current: u32| current.max(nbr.endpoint)));
+        }
+        (min, max)
     }
 
     /// Whether a group holds uncheckpointed writes.
@@ -1666,18 +1689,12 @@ impl MutableCsrTrait for CsrShardSet {
 
     fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards
-            .get(&gid)?
-            .variant
-            .nbr_at_offset(local, offset)
+        self.shards.get(&gid)?.variant.nbr_at_offset(local, offset)
     }
 
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards
-            .get(&gid)?
-            .variant
-            .get_edge_physical(local, dst)
+        self.shards.get(&gid)?.variant.get_edge_physical(local, dst)
     }
 
     fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
@@ -2178,7 +2195,8 @@ mod tests {
         let mut set = narrow_set();
         assert_eq!(regions_per_group(set.group_size()), 2);
         set.insert_edge(10, endpoint(1, 0), EdgeId(0), 100).unwrap();
-        set.insert_edge(300, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        set.insert_edge(300, endpoint(2, 0), EdgeId(1), 100)
+            .unwrap();
         assert_eq!(set.dirty_region_ids(0), vec![0, 1]);
         assert!(set.region_needs_checkpoint(0, 0));
         assert!(set.region_needs_checkpoint(0, 1));
@@ -2245,7 +2263,8 @@ mod tests {
     fn compact_region_is_scoped_to_its_window() {
         let mut set = narrow_set();
         set.insert_edge(10, endpoint(1, 0), EdgeId(0), 100).unwrap();
-        set.insert_edge(300, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        set.insert_edge(300, endpoint(2, 0), EdgeId(1), 100)
+            .unwrap();
         assert!(set.delete_edge(10, EdgeId(0), 150).unwrap());
         assert!(set.delete_edge(300, EdgeId(1), 150).unwrap());
         let mut reported = Vec::new();
@@ -2305,7 +2324,9 @@ mod tests {
 
         let mut trailing = payload.clone();
         trailing.push(0);
-        assert!(loaded.replay_group_append_log(0, &trailing, &manifest).is_err());
+        assert!(loaded
+            .replay_group_append_log(0, &trailing, &manifest)
+            .is_err());
     }
 
     #[test]

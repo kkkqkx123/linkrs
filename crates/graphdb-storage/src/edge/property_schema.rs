@@ -86,5 +86,4 @@ impl PropertyCompactionStats {
             self.tombstone_count as f64 / self.total_records as f64
         }
     }
-
 }

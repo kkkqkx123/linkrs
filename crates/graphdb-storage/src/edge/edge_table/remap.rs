@@ -43,25 +43,7 @@ pub struct RemapStats {
     pub entries: usize,
 }
 
-/// Translate an encoded `(endpoint_internal_id, rank)` neighbor key using the
-/// old-to-new internal ID mapping. Unmapped endpoints are returned unchanged
-/// and counted as misses by the caller.
-pub(crate) fn remap_endpoint_key(key: VertexId, mapping: Option<&HashMap<u32, u32>>) -> VertexId {
-    let (endpoint, rank) = EdgeStore::decode_edge_endpoint(key);
-    match endpoint.as_int64() {
-        Some(id) if id >= 0 => match mapping.and_then(|m| m.get(&(id as u32))).copied() {
-            Some(new_id) => EdgeStore::edge_endpoint_key(new_id, rank),
-            None => key,
-        },
-        _ => key,
-    }
-}
-
-fn remapped_row_counted(
-    id: u32,
-    mapping: Option<&HashMap<u32, u32>>,
-    misses: &mut usize,
-) -> u32 {
+fn remapped_row_counted(id: u32, mapping: Option<&HashMap<u32, u32>>, misses: &mut usize) -> u32 {
     match mapping {
         Some(m) => match m.get(&id).copied() {
             Some(new_id) => new_id,

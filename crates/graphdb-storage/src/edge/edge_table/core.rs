@@ -9,6 +9,8 @@ use super::mvcc::MVCCManager;
 use super::schema_add_column::PendingAddColumn;
 use super::schema_drop_column::PendingDropColumn;
 use super::staging::EdgeStagingBatch;
+use super::stats::GroupSegmentStats;
+use crate::cursor::ScanPredicate;
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::{CsrWithProperties, VertexFragmentation};
 use crate::index::edge_index_manager::EdgePropertyIndex;
@@ -73,6 +75,11 @@ pub struct EdgeStore {
     /// small writes rewrite only dirty owners. Rebuilt on load, remap and
     /// reshard; orphan timestamps without topology fall back to group zero.
     pub(crate) edge_owner: HashMap<EdgeId, u32>,
+    /// Per-group segment statistics for scan pruning, collected at each
+    /// checkpoint and restored on load. Bounds widen monotonically so pruning
+    /// stays conservative for every snapshot; counts are exact-current for
+    /// observability.
+    pub(crate) segment_stats: HashMap<u32, GroupSegmentStats>,
 }
 
 impl std::fmt::Debug for EdgeStore {
@@ -174,6 +181,7 @@ impl EdgeStore {
             pending_add_column: None,
             pending_drop_column: None,
             edge_owner: HashMap::new(),
+            segment_stats: HashMap::new(),
         })
     }
 
@@ -309,6 +317,73 @@ impl EdgeStore {
         }
     }
 
+    /// Shared physical row location for point lookups: one physical topology
+    /// address plus the authoritative MVCC check. Adjacency batches, full
+    /// scans and point lookups all resolve rows through this routing instead
+    /// of duplicating group arithmetic; scans additionally share
+    /// [`EdgeStore::is_visible`] as the single visibility gate.
+    pub(crate) fn physical_location(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        dst: VertexId,
+    ) -> Option<Nbr> {
+        csr.get_edge_physical(src, dst)
+    }
+
+    /// Single visibility gate for topology reads. Row stamps never decide
+    /// visibility; only the version authority does.
+    pub(crate) fn is_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
+        self.mvcc.is_edge_visible(edge_id, ts)
+    }
+
+    /// Pending-aware variant of the shared visibility gate.
+    pub(crate) fn is_visible_with_gate(
+        &self,
+        edge_id: EdgeId,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> bool {
+        self.mvcc.is_edge_visible_with_gate(edge_id, ts, gate)
+    }
+
+    /// Fill a caller buffer with every visible neighbor of one row without
+    /// internal allocation. Shared batch primitive behind the adjacency
+    /// accessor and the allocating convenience wrappers below.
+    pub(crate) fn fill_visible_into(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        ts: Timestamp,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        csr.visit_physical(src, |nbr| {
+            if self.is_visible(nbr.edge_id, ts) {
+                out.push(nbr);
+            }
+            true
+        });
+    }
+
+    /// Pending-aware variant of the shared batch fill.
+    pub(crate) fn fill_visible_into_with_gate(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        csr.visit_physical(src, |nbr| {
+            if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                out.push(nbr);
+            }
+            true
+        });
+    }
+
     /// Single row-location entry for point lookups: physical topology lookup
     /// plus the authoritative MVCC visibility check. Adjacency, existence
     /// and record reads must funnel through here rather than reading CSR
@@ -325,7 +400,7 @@ impl EdgeStore {
     ) -> Option<Nbr> {
         let mut found = None;
         csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == dst && self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+            if nbr.to_vertex_id() == dst && self.is_visible(nbr.edge_id, ts) {
                 found = Some(nbr);
                 false
             } else {
@@ -335,13 +410,16 @@ impl EdgeStore {
         found
     }
 
+    /// Allocating convenience over the shared batch fill. High-frequency
+    /// traversal and batch queries use the reusable-buffer accessor instead;
+    /// this wrapper stays for call sites where an owned vector is handier.
     fn merged_edges_of(&self, csr: &CsrShardSet, src: u32, ts: Timestamp) -> Vec<Nbr> {
-        csr.physical_edges_of(src)
-            .into_iter()
-            .filter(|nbr| self.mvcc.is_edge_visible(nbr.edge_id, ts))
-            .collect()
+        let mut out = Vec::new();
+        self.fill_visible_into(csr, src, ts, &mut out);
+        out
     }
 
+    /// Allocating pending-aware convenience over the shared batch fill.
     fn merged_edges_of_with_gate(
         &self,
         csr: &CsrShardSet,
@@ -349,10 +427,9 @@ impl EdgeStore {
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
     ) -> Vec<Nbr> {
-        csr.physical_edges_of(src)
-            .into_iter()
-            .filter(|nbr| self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate))
-            .collect()
+        let mut out = Vec::new();
+        self.fill_visible_into_with_gate(csr, src, ts, gate, &mut out);
+        out
     }
 
     /// First-`limit` visible neighbors without decoding the full adjacency.
@@ -379,7 +456,7 @@ impl EdgeStore {
         }
         let mut out = Vec::with_capacity(limit.min(32));
         csr.visit_physical(vid, |nbr| {
-            if self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+            if self.is_visible(nbr.edge_id, ts) {
                 out.push(nbr);
                 out.len() < limit
             } else {
@@ -419,7 +496,7 @@ impl EdgeStore {
         }
         let mut out = Vec::with_capacity(limit.min(32));
         self.out_csr.visit_physical(src, |nbr| {
-            if self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+            if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 out.push(nbr);
                 out.len() < limit
             } else {
@@ -441,7 +518,7 @@ impl EdgeStore {
         }
         let mut out = Vec::with_capacity(limit.min(32));
         self.in_csr.visit_physical(dst, |nbr| {
-            if self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+            if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 out.push(nbr);
                 out.len() < limit
             } else {
@@ -619,7 +696,7 @@ impl EdgeStore {
     ) -> Vec<(String, Value)> {
         // MVCCManager is the single visibility authority. Row stamps exist
         // only for collection and must not decide query visibility here.
-        if !self.mvcc.is_edge_visible(edge_id, query_ts) {
+        if !self.is_visible(edge_id, query_ts) {
             return Vec::new();
         }
         // Snapshot read through the property version chain so an old reader
@@ -828,9 +905,9 @@ impl EdgeStore {
                 if single_out {
                     let live = self.merged_edges_of(&self.out_csr, ins.src, ins.create_ts);
                     let covered = !live.is_empty()
-                        && live.iter().all(|nbr| {
-                            seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank))
-                        });
+                        && live
+                            .iter()
+                            .all(|nbr| seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank)));
                     if !live.is_empty() && !covered {
                         return Err(StorageError::invalid_operation(format!(
                             "Single out-edge strategy already holds a live edge for src={}",
@@ -841,9 +918,9 @@ impl EdgeStore {
                 if single_in {
                     let live = self.merged_edges_of(&self.in_csr, ins.dst, ins.create_ts);
                     let covered = !live.is_empty()
-                        && live.iter().all(|nbr| {
-                            seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank))
-                        });
+                        && live
+                            .iter()
+                            .all(|nbr| seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank)));
                     if !live.is_empty() && !covered {
                         return Err(StorageError::invalid_operation(format!(
                             "Single in-edge strategy already holds a live edge for dst={}",
@@ -873,14 +950,10 @@ impl EdgeStore {
                 let del = &batch.staged_deletes()[ord.slot];
                 let key = (del.src, del.dst, del.rank);
                 if seen_inserts.remove(&key) {
-                    if single_out
-                        && !seen_inserts.iter().any(|(s, _, _)| *s == del.src)
-                    {
+                    if single_out && !seen_inserts.iter().any(|(s, _, _)| *s == del.src) {
                         seen_single_src.remove(&del.src);
                     }
-                    if single_in
-                        && !seen_inserts.iter().any(|(_, d, _)| *d == del.dst)
-                    {
+                    if single_in && !seen_inserts.iter().any(|(_, d, _)| *d == del.dst) {
                         seen_single_dst.remove(&del.dst);
                     }
                 } else {
@@ -975,19 +1048,19 @@ impl EdgeStore {
 
         if self.property_index.is_some() {
             let label = self.label;
-            let outcomes: Vec<(String, StorageResult<()>)> =
-                if let Some(ref mut index) = self.property_index {
-                    converted_values
-                        .iter()
-                        .map(|(prop_name, prop_value)| {
-                            let result =
-                                index.insert(prop_name, prop_value, src, dst, rank, label, ts);
-                            (prop_name.clone(), result)
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let outcomes: Vec<(String, StorageResult<()>)> = if let Some(ref mut index) =
+                self.property_index
+            {
+                converted_values
+                    .iter()
+                    .map(|(prop_name, prop_value)| {
+                        let result = index.insert(prop_name, prop_value, src, dst, rank, label, ts);
+                        (prop_name.clone(), result)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             for (prop_name, result) in outcomes {
                 self.note_index_result(&prop_name, result);
             }
@@ -1350,8 +1423,8 @@ impl EdgeStore {
             return None;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.out_csr.get_edge_physical(src, dst_key)?;
-        if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+        let nbr = self.physical_location(&self.out_csr, src, dst_key)?;
+        if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
             return None;
         }
         let properties = self.properties_for_edge(nbr.edge_id, ts);
@@ -1376,8 +1449,8 @@ impl EdgeStore {
             return None;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.out_csr.get_edge_physical(src, dst_key)?;
-        if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+        let nbr = self.physical_location(&self.out_csr, src, dst_key)?;
+        if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
             return None;
         }
         let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
@@ -1450,8 +1523,218 @@ impl EdgeStore {
 
     /// Raw in-edge neighbors of `dst` (MVCC-filtered, snapshot-consistent)
     /// with no property decoding.
+    ///
+    /// Allocating convenience; high-frequency paths use the batch accessor.
     pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
         self.merged_edges_of(&self.in_csr, dst, ts)
+    }
+
+    /// Batch adjacency accessor bound to one snapshot.
+    ///
+    /// Traversal and batch queries use the accessor with a caller buffer so
+    /// peak memory stays proportional to the batch size instead of the row
+    /// degree. The buffer is valid only for the snapshot the accessor was
+    /// created with and must not be held across snapshots.
+    pub fn batch_accessor(
+        &self,
+        outgoing: bool,
+        ts: Timestamp,
+    ) -> super::iterator::AdjacencyBatchAccessor<'_> {
+        super::iterator::AdjacencyBatchAccessor::new(self, outgoing, ts)
+    }
+
+    /// Whether one edge matches every pushed predicate at `query_ts`.
+    ///
+    /// Column-scan pushdown: only predicate columns are read through their
+    /// null bitmaps, with no intermediate record materialization. Visibility
+    /// stays with the authority; callers check it separately.
+    pub fn matches_pushdown(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        predicates: &[ScanPredicate],
+    ) -> bool {
+        self.properties
+            .matches_predicates_for_edge(edge_id, query_ts, predicates)
+    }
+
+    /// Filter edge ids by pushed predicates at the column-scan layer.
+    ///
+    /// Hits look up topology afterwards; misses never decode a record.
+    pub fn filter_edge_ids(
+        &self,
+        predicates: &[ScanPredicate],
+        query_ts: Timestamp,
+        candidates: Option<&[EdgeId]>,
+    ) -> Vec<EdgeId> {
+        self.properties
+            .filter_edge_ids_by_predicates(predicates, query_ts, candidates)
+    }
+
+    /// Whether one owner group may contain rows matching the predicates.
+    ///
+    /// Dirty groups always scan: their uncheckpointed writes are not covered
+    /// by the flushed statistics. Clean groups prune only on provable
+    /// exclusion from the widened bounds, so the pre-filter never changes
+    /// results.
+    pub fn segment_may_contain(&self, group: u32, predicates: &[ScanPredicate]) -> bool {
+        if predicates.is_empty() {
+            return true;
+        }
+        let gid = group as usize;
+        if self.out_csr.needs_checkpoint(gid) || self.in_csr.needs_checkpoint(gid) {
+            return true;
+        }
+        let Some(stats) = self.segment_stats.get(&group) else {
+            return true;
+        };
+        stats.may_contain(predicates)
+    }
+
+    /// Snapshot of the in-memory segment statistics.
+    pub fn segment_stats_snapshot(&self) -> HashMap<u32, GroupSegmentStats> {
+        self.segment_stats.clone()
+    }
+
+    /// Restore segment statistics decoded from a checkpoint.
+    pub(crate) fn restore_segment_stats(&mut self, stats: HashMap<u32, GroupSegmentStats>) {
+        self.segment_stats = stats;
+    }
+
+    /// Collect fresh per-group segment statistics and widen the in-memory
+    /// snapshot. Runs at checkpoint time so flushed bytes stay proportional
+    /// to dirty groups while bounds stay conservative for every snapshot.
+    pub(crate) fn refresh_segment_stats(&mut self) {
+        use std::collections::{HashMap, HashSet};
+        let use_out = self.schema.oe_strategy != super::super::EdgeStrategy::None;
+        let group_ids: Vec<u32> = if use_out {
+            self.out_csr.existing_group_ids()
+        } else {
+            self.in_csr.existing_group_ids()
+        }
+        .into_iter()
+        .map(|gid| gid as u32)
+        .collect();
+        let group_size = if use_out {
+            self.out_csr.group_size()
+        } else {
+            self.in_csr.group_size()
+        } as u64;
+        let column_names: Vec<String> = self
+            .schema
+            .properties
+            .iter()
+            .map(|prop| prop.name.clone())
+            .collect();
+        let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();
+        for name in &column_names {
+            if let Some(encoding) = self.properties.column_encoding_type(name) {
+                encodings.insert(name.clone(), encoding);
+            }
+        }
+        let mut by_owner: HashMap<u32, Vec<EdgeId>> = HashMap::new();
+        for edge_id in self.properties.edge_ids() {
+            let owner = self.edge_owner.get(&edge_id).copied().unwrap_or(0);
+            by_owner.entry(owner).or_default().push(edge_id);
+        }
+        for group in group_ids {
+            let gid = group as usize;
+            let live = if use_out {
+                self.out_csr.group_live_count(gid)
+            } else {
+                self.in_csr.group_live_count(gid)
+            };
+            let owned = by_owner.get(&group);
+            let mut endpoints: Vec<u32> = Vec::new();
+            if let Some(variant) = if use_out {
+                self.out_csr.group_variant(gid)
+            } else {
+                self.in_csr.group_variant(gid)
+            } {
+                for (_, nbr) in variant.iter_all() {
+                    endpoints.push(nbr.endpoint);
+                }
+            }
+            let mut column_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
+            for name in &column_names {
+                column_values.insert(name.clone(), Vec::new());
+            }
+            if let Some(edges) = owned {
+                for edge_id in edges {
+                    if let Some(cells) = self.properties.get_projected_physical_by_edge_id(
+                        *edge_id,
+                        graphdb_core::types::MAX_TIMESTAMP,
+                        None,
+                    ) {
+                        let cell_map: HashMap<&String, &Option<Value>> =
+                            cells.iter().map(|(name, value)| (name, value)).collect();
+                        for name in &column_names {
+                            let value = cell_map.get(name).and_then(|cell| (*cell).clone());
+                            if let Some(slot) = column_values.get_mut(name) {
+                                slot.push(value);
+                            }
+                        }
+                    }
+                }
+            }
+            let fresh = GroupSegmentStats::collect(
+                group,
+                group_size,
+                live,
+                &endpoints,
+                &column_values,
+                &encodings,
+            );
+            match self.segment_stats.get_mut(&group) {
+                Some(current) => current.widen_with(&fresh),
+                None => {
+                    self.segment_stats.insert(group, fresh);
+                }
+            }
+        }
+        let live_set: HashSet<u32> = if use_out {
+            self.out_csr.existing_group_ids()
+        } else {
+            self.in_csr.existing_group_ids()
+        }
+        .into_iter()
+        .map(|gid| gid as u32)
+        .collect();
+        self.segment_stats
+            .retain(|group, _| live_set.contains(group));
+    }
+
+    /// Encoding report for the persisted topology columns of both
+    /// directions. Neighbor and edge-id columns come first, offset and
+    /// length columns follow; all use the integer column path only.
+    pub fn topology_encoding_report(
+        &self,
+    ) -> Vec<(
+        String,
+        crate::edge::mutable_csr::serialization::TopologyColumnEncoding,
+        usize,
+        usize,
+    )> {
+        let mut report = Vec::new();
+        for gid in self.out_csr.existing_group_ids() {
+            if let Some(variant) = self.out_csr.group_variant(gid) {
+                if let super::super::CsrVariant::Multiple(csr) = variant {
+                    for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                        report.push((format!("out_g{}:{}", gid, name), encoding, plain, encoded));
+                    }
+                }
+            }
+        }
+        for gid in self.in_csr.existing_group_ids() {
+            if let Some(variant) = self.in_csr.group_variant(gid) {
+                if let super::super::CsrVariant::Multiple(csr) = variant {
+                    for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                        report.push((format!("in_g{}:{}", gid, name), encoding, plain, encoded));
+                    }
+                }
+            }
+        }
+        report
     }
 
     pub fn has_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> bool {
@@ -1501,7 +1784,7 @@ impl EdgeStore {
         }
         let mut records = Vec::new();
         for (src_vid, nbr) in self.out_csr.iter_all() {
-            if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+            if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
             records.push(self.edge_record_from_nbr(
@@ -1524,7 +1807,7 @@ impl EdgeStore {
         }
         let mut records = Vec::new();
         for (src_vid, nbr) in self.out_csr.iter_all() {
-            if !self.mvcc.is_edge_visible_with_gate(nbr.edge_id, ts, gate) {
+            if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
             records.push(self.edge_record_from_nbr_projected(
@@ -1893,7 +2176,6 @@ impl EdgeStore {
         }
 
         if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
-
             let prop_stats = self.properties.compaction_stats();
             if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
                 self.compact_properties(bound);

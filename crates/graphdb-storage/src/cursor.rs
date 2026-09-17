@@ -24,7 +24,7 @@ pub mod predicates;
 pub mod vec_cursors;
 
 pub use column_batch::{ColumnValues, EdgeColumnBatch, PropertyColumn, VertexColumnBatch};
-pub use predicates::{IndexPredicate, PredicateRange, ScanPredicate};
+pub use predicates::{compare_stat_values, IndexPredicate, PredicateRange, ScanPredicate};
 pub use vec_cursors::{VecEdgeCursor, VecVertexCursor};
 
 // ---------------------------------------------------------------------------

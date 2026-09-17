@@ -24,36 +24,19 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::persistence::read_u64_le;
+use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
 
+use super::mutable_csr::serialization::{
+    decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
+    encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
+};
 use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
 
-fn write_vertex_id(out: &mut Vec<u8>, id: VertexId) {
-    let bytes = id.as_bytes();
-    out.push(bytes.len() as u8);
-    out.extend_from_slice(bytes);
-}
-
-fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
-    if *offset >= data.len() {
-        return Err(StorageError::deserialize_error(
-            "Single CSR data too short for vertex id length",
-        ));
-    }
-
-    let len = data[*offset] as usize;
-    *offset += 1;
-    if data.len().saturating_sub(*offset) < len {
-        return Err(StorageError::deserialize_error(
-            "Single CSR data too short for vertex id bytes",
-        ));
-    }
-
-    let id = VertexId::from_bytes(data[*offset..*offset + len].to_vec());
-    *offset += len;
-    Ok(id)
-}
+/// Persistence version for the single-edge topology columns. Version 2
+/// carries the integer column path for neighbor and edge-id columns plus a
+/// version header; versionless payloads are rejected, never converted.
+pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 2;
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const VERTEX_GROWTH_FACTOR: f64 = 1.25;
@@ -160,8 +143,7 @@ impl SingleMutableCsr {
             )));
         }
 
-        let was_empty =
-            nbr.edge_id == INVALID_EDGE_ID || nbr.delete_ts != Timestamp::MAX;
+        let was_empty = nbr.edge_id == INVALID_EDGE_ID || nbr.delete_ts != Timestamp::MAX;
         let (endpoint_vid, rank) = dst.decode_edge_endpoint();
         nbr.endpoint = endpoint_vid.as_int64().unwrap_or(0) as u32;
         nbr.rank = rank;
@@ -441,7 +423,10 @@ impl SingleMutableCsr {
             return 0;
         }
         let src_idx = vid as usize;
-        let (edge_id, delete_ts) = (self.nbr_list[src_idx].edge_id, self.nbr_list[src_idx].delete_ts);
+        let (edge_id, delete_ts) = (
+            self.nbr_list[src_idx].edge_id,
+            self.nbr_list[src_idx].delete_ts,
+        );
         on_edge_removed(edge_id, delete_ts);
         self.nbr_list[src_idx] = Nbr::with_timestamps(0, 0, INVALID_EDGE_ID, 0);
         1
@@ -513,17 +498,34 @@ impl SingleMutableCsr {
         self.compact_with_ts_reporting(cutoff, &mut |_, _| {})
     }
 
+    /// Dump with integer column encoding for neighbor and edge-id columns.
+    ///
+    /// Offsets are trivial for the single-edge layout (slot index equals row),
+    /// so only neighbor, rank, edge-id and stamp columns go through the
+    /// column path with a plain fallback. Versionless payloads are rejected
+    /// on load.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
+        result.extend_from_slice(&SINGLE_CSR_FORMAT_VERSION.to_le_bytes());
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
+        result.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
 
-        for nbr in &self.nbr_list {
-            write_vertex_id(&mut result, nbr.to_vertex_id());
-            result.extend_from_slice(&nbr.edge_id.to_le_bytes());
-            result.extend_from_slice(&nbr.create_ts.to_le_bytes());
-            result.extend_from_slice(&nbr.delete_ts.to_le_bytes());
-        }
+        let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
+        let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
+        let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+        let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
+        let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
+        let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
+        result.extend_from_slice(&endpoints_payload);
+        let (_, ranks_payload) = encode_topology_i64_column(&ranks);
+        result.extend_from_slice(&ranks_payload);
+        let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
+        result.extend_from_slice(&edge_ids_payload);
+        let (_, create_payload) = encode_topology_u64_column(&create_stamps);
+        result.extend_from_slice(&create_payload);
+        let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
+        result.extend_from_slice(&delete_payload);
 
         result
     }
@@ -532,8 +534,9 @@ impl SingleMutableCsr {
         self.nbr_list.len() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }
 
+    /// Load version 2 only; versionless payloads fail closed.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 8 {
+        if data.len() < 16 {
             return Err(StorageError::deserialize_error(
                 "Single CSR data too short for header",
             ));
@@ -541,24 +544,40 @@ impl SingleMutableCsr {
 
         let mut offset = 0usize;
 
+        let version = read_u32_le(data, &mut offset)?;
+        if version != SINGLE_CSR_FORMAT_VERSION {
+            return Err(StorageError::deserialize_error(format!(
+                "Unsupported single CSR format version: {}",
+                version
+            )));
+        }
         let edge_count = read_u64_le(data, &mut offset)?;
+        let slot_count = read_u64_le(data, &mut offset)? as usize;
 
-        let mut nbr_list = Vec::new();
-        while offset < data.len() {
-            let neighbor = read_vertex_id(data, &mut offset)?;
-            let raw_edge_id = read_u64_le(data, &mut offset)?;
-            let create_ts = read_u64_le(data, &mut offset)?;
-            let delete_ts = read_u64_le(data, &mut offset)?;
-
-            let edge_id = EdgeId(raw_edge_id);
-            let (endpoint_vid, rank) = neighbor.decode_edge_endpoint();
+        let endpoints = decode_topology_u32_column(data, &mut offset)?;
+        let ranks = decode_topology_i64_column(data, &mut offset)?;
+        let edge_ids = decode_topology_u64_column(data, &mut offset)?;
+        let create_stamps = decode_topology_u64_column(data, &mut offset)?;
+        let delete_stamps = decode_topology_u64_column(data, &mut offset)?;
+        if endpoints.len() != slot_count
+            || ranks.len() != slot_count
+            || edge_ids.len() != slot_count
+            || create_stamps.len() != slot_count
+            || delete_stamps.len() != slot_count
+        {
+            return Err(StorageError::deserialize_error(
+                "Single CSR column length mismatch",
+            ));
+        }
+        let mut nbr_list = Vec::with_capacity(slot_count);
+        for index in 0..slot_count {
             let mut nbr = Nbr::with_timestamps(
-                endpoint_vid.as_int64().unwrap_or(0) as u32,
-                rank,
-                edge_id,
-                delete_ts,
+                endpoints[index],
+                ranks[index],
+                EdgeId(edge_ids[index]),
+                delete_stamps[index],
             );
-            nbr.create_ts = create_ts;
+            nbr.create_ts = create_stamps[index];
             nbr_list.push(nbr);
         }
         if offset != data.len() {
@@ -807,18 +826,9 @@ mod tests {
         let mut csr = SingleMutableCsr::with_capacity(4);
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
-        assert_eq!(
-            csr.delete_edge_by_dst(0, VertexId::from_int64(11), 150),
-            0
-        );
-        assert_eq!(
-            csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150),
-            1
-        );
-        assert_eq!(
-            csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150),
-            0
-        );
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(11), 150), 0);
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150), 1);
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150), 0);
     }
 
     #[test]
@@ -941,5 +951,30 @@ mod tests {
         assert!(csr.delete_edge(0, EdgeId(101), 120).unwrap());
         assert!(csr.revert_delete_by_edge_id(0, EdgeId(101), 130));
         assert_eq!(csr.edges_of(0, 130).len(), 1);
+    }
+
+    #[test]
+    fn test_single_topology_encoding_roundtrip() {
+        let mut csr = SingleMutableCsr::with_capacity(8);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        csr.insert_edge(3u32, VertexId::from_int64(11), EdgeId(101), 100)
+            .unwrap();
+        let payload = csr.dump();
+        let mut loaded = SingleMutableCsr::new();
+        loaded.load(&payload).expect("encoded load must succeed");
+        assert_eq!(loaded.edge_count(), 2);
+        assert_eq!(loaded.edges_of(0, 200).len(), 1);
+        assert_eq!(loaded.edges_of(3, 200).len(), 1);
+        assert_eq!(loaded.edges_of(1, 200).len(), 0);
+    }
+
+    #[test]
+    fn test_single_topology_encoding_rejects_versionless() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&5u64.to_le_bytes());
+        payload.extend_from_slice(&[0u8; 24]);
+        let mut csr = SingleMutableCsr::new();
+        assert!(csr.load(&payload).is_err());
     }
 }

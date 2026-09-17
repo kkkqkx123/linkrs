@@ -1,20 +1,23 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
-//! Node-group sharded layout, version 4:
+//! Node-group sharded layout, version 5:
 //! - `meta.bin`: header section only (label ids, label name, schema, next
 //!   edge id), with the manifest commit tail appended so metadata and
 //!   manifest share one atomic unit.
 //! - `groups_manifest.bin`: address width plus existing out/in group id lists.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
-//!   existing group, written only for dirty groups; missing groups read as
+//!   existing group, written only for dirty groups; topology columns use the
+//!   integer column path with per-column encoding. Missing groups read as
 //!   empty and never produce files.
 //! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
 //!   falling with the same dirt as the group.
 //! - `props_g{gid}.bin`: property rows for the owning group's edges,
 //!   falling with the same dirt as the group.
+//! - `segment_stats.bin`: per-group segment statistics for scan pruning,
+//!   collected at each checkpoint.
 //!
 //! Old single-file layouts, version 1 metadata without a commit tail,
-//! version 2 metadata with global timestamps, pre-version-4 manifests and
+//! version 2 metadata with global timestamps, pre-version-5 manifests and
 //! the legacy global `properties.bin` are rejected: loading requires the
 //! manifest, the embedded tail must equal the manifest file, and trailing
 //! bytes after any payload fail loudly instead of loading partially.
@@ -69,7 +72,9 @@ pub fn flush_metadata(
     _edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
-    write_metadata_header(buf, label, src_label, dst_label, label_name, is_open, schema)?;
+    write_metadata_header(
+        buf, label, src_label, dst_label, label_name, is_open, schema,
+    )?;
     write_metadata_next_edge_id(buf, next_edge_id);
     Ok(())
 }
@@ -183,8 +188,9 @@ pub fn serialize_property_shard(
     section_id: u32,
     buf: &mut Vec<u8>,
 ) -> StorageResult<()> {
-    write_header_to(buf, section_id)
-        .map_err(|e| StorageError::io_error(format!("Failed to write props shard header: {}", e)))?;
+    write_header_to(buf, section_id).map_err(|e| {
+        StorageError::io_error(format!("Failed to write props shard header: {}", e))
+    })?;
     let data = properties.dump();
     buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
     buf.extend_from_slice(&data);
@@ -271,11 +277,7 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
 /// multi-segment payloads fail loudly instead of loading partially.
 /// `expected_section` must match the file section id; out/in files are not
 /// interchangeable.
-pub fn load_csr(
-    path: &Path,
-    csr: &mut CsrVariant,
-    expected_section: u32,
-) -> StorageResult<()> {
+pub fn load_csr(path: &Path, csr: &mut CsrVariant, expected_section: u32) -> StorageResult<()> {
     let (raw_data, total_rows) = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];

@@ -929,12 +929,12 @@ impl TransactionManager {
                 .write_exclusion_owner
                 .compare_exchange(owner, 0, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
-            {
-                log::warn!(
-                    "Released single-writer exclusion held by dead owner {}",
-                    owner
-                );
-            }
+        {
+            log::warn!(
+                "Released single-writer exclusion held by dead owner {}",
+                owner
+            );
+        }
     }
 
     /// Whether a checkpoint should be triggered after the latest commit.

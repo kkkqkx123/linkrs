@@ -32,6 +32,11 @@ pub(crate) use serialization::{read_nbr, write_nbr};
 
 use overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use serialization::MUTABLE_CSR_FORMAT_VERSION;
+use serialization::{
+    decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
+    encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
+    TopologyColumnEncoding,
+};
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGE_CAPACITY: usize = 4096;
@@ -316,7 +321,9 @@ impl MutableCsr {
 
     /// Effective overflow chunk size for a row with `live` live entries.
     fn effective_chunk_edges(&self, live: usize) -> usize {
-        graded_overflow_chunk_edges(live).min(self.overflow_chunk_edges).max(1)
+        graded_overflow_chunk_edges(live)
+            .min(self.overflow_chunk_edges)
+            .max(1)
     }
 
     /// Rebalance one row in place: tighten live primary entries to the
@@ -377,11 +384,10 @@ impl MutableCsr {
             .map_or(0, |chunks| chunks.iter().map(Vec::capacity).sum());
         if overflow_live.is_empty() && overflow_pinned.is_empty() {
             self.overflow_chunks.remove(&vid);
-            self.total_edge_capacity = self
-                .total_edge_capacity
-                .saturating_sub(old_overflow_cap);
+            self.total_edge_capacity = self.total_edge_capacity.saturating_sub(old_overflow_cap);
         } else {
-            let mut rest: Vec<Nbr> = Vec::with_capacity(overflow_live.len() + overflow_pinned.len());
+            let mut rest: Vec<Nbr> =
+                Vec::with_capacity(overflow_live.len() + overflow_pinned.len());
             rest.extend_from_slice(&overflow_live);
             rest.extend_from_slice(&overflow_pinned);
             let chunk_edges = self.effective_chunk_edges(placed_live);
@@ -926,7 +932,11 @@ impl MutableCsr {
         let degree = self.degrees[src_idx] as usize;
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
-            if self.nbr_list.get(offset + i).is_some_and(|nbr| nbr.edge_id == edge_id) {
+            if self
+                .nbr_list
+                .get(offset + i)
+                .is_some_and(|nbr| nbr.edge_id == edge_id)
+            {
                 return true;
             }
         }
@@ -998,9 +1008,8 @@ impl MutableCsr {
                 // Clean up empty chunk vectors to keep per-vertex chunk count bounded.
                 if chunks[chunk_idx].is_empty() {
                     let removed = chunks.remove(chunk_idx);
-                    self.total_edge_capacity = self
-                        .total_edge_capacity
-                        .saturating_sub(removed.capacity());
+                    self.total_edge_capacity =
+                        self.total_edge_capacity.saturating_sub(removed.capacity());
                     if chunks.is_empty() {
                         // Drop the per-vertex entry so later lookups stay constant time.
                         // The unified live set still covers primary rows, so
@@ -1199,19 +1208,31 @@ impl MutableCsr {
         MutableCsrIterator::new_all(self)
     }
 
-    /// Dump to bytes
+    /// Dump to bytes, version 3.
+    ///
+    /// Header columns (offsets, degrees, capacities) and primary neighbor
+    /// columns (endpoints, ranks, edge ids, stamps) persist through the
+    /// integer column path with per-column bit-packing or run-length
+    /// encoding and a plain fallback when compression does not pay.
+    /// Overflow deltas stay plain: they are small append-only buffers where
+    /// an encoding dictionary would cost more than it saves. Version 2
+    /// payloads are rejected on load, never converted.
     ///
     /// Format:
-    /// - format_version (u32)
+    /// - format_version (u32 = 3)
     /// - vertex_capacity (u64)
     /// - edge_count (u64)
-    /// - total_edge_capacity (u64)
-    /// - adj_offsets (u32 * vertex_capacity)
-    /// - degrees (u32 * vertex_capacity)
-    /// - primary_capacities (u32 * vertex_capacity)
+    /// - primary_len (u64)
     /// - overflow_chunk_edges (u64)
-    /// - primary neighbor list
-    /// - per-vertex overflow chunks
+    /// - encoded offsets column
+    /// - encoded degrees column
+    /// - encoded capacities column
+    /// - encoded endpoints column
+    /// - encoded ranks column
+    /// - encoded edge ids column
+    /// - encoded create stamps column
+    /// - encoded delete stamps column
+    /// - per-vertex overflow chunks (plain)
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
@@ -1221,21 +1242,28 @@ impl MutableCsr {
         result.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
         result.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
-        for &offset in &self.adj_offsets {
-            result.extend_from_slice(&offset.to_le_bytes());
-        }
+        let (_, offsets_payload) = encode_topology_u32_column(&self.adj_offsets);
+        result.extend_from_slice(&offsets_payload);
+        let (_, degrees_payload) = encode_topology_u32_column(&self.degrees);
+        result.extend_from_slice(&degrees_payload);
+        let (_, caps_payload) = encode_topology_u32_column(&self.primary_capacities);
+        result.extend_from_slice(&caps_payload);
 
-        for &degree in &self.degrees {
-            result.extend_from_slice(&degree.to_le_bytes());
-        }
-
-        for &cap in &self.primary_capacities {
-            result.extend_from_slice(&cap.to_le_bytes());
-        }
-
-        for nbr in &self.nbr_list {
-            write_nbr(&mut result, nbr);
-        }
+        let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
+        let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
+        let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+        let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
+        let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
+        let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
+        result.extend_from_slice(&endpoints_payload);
+        let (_, ranks_payload) = encode_topology_i64_column(&ranks);
+        result.extend_from_slice(&ranks_payload);
+        let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
+        result.extend_from_slice(&edge_ids_payload);
+        let (_, create_payload) = encode_topology_u64_column(&create_stamps);
+        result.extend_from_slice(&create_payload);
+        let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
+        result.extend_from_slice(&delete_payload);
 
         for vid in 0..self.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(&(vid as u32));
@@ -1253,7 +1281,54 @@ impl MutableCsr {
         result
     }
 
-    /// Load from bytes
+    /// Encoding report for the persisted topology columns.
+    ///
+    /// Measures the winning encoding per column without changing in-memory
+    /// state. Neighbor and edge-id columns are reported first, offset and
+    /// length columns follow; all use the integer column path only.
+    pub fn topology_encoding_report(&self) -> Vec<(String, TopologyColumnEncoding, usize, usize)> {
+        let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
+        let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+        let (endpoint_choice, _) = encode_topology_u32_column(&endpoints);
+        let (edge_id_choice, _) = encode_topology_u64_column(&edge_ids);
+        let (offsets_choice, _) = encode_topology_u32_column(&self.adj_offsets);
+        let (degrees_choice, _) = encode_topology_u32_column(&self.degrees);
+        let (caps_choice, _) = encode_topology_u32_column(&self.primary_capacities);
+        vec![
+            (
+                "neighbor".to_string(),
+                endpoint_choice.encoding,
+                endpoint_choice.plain_bytes,
+                endpoint_choice.encoded_bytes,
+            ),
+            (
+                "edge_id".to_string(),
+                edge_id_choice.encoding,
+                edge_id_choice.plain_bytes,
+                edge_id_choice.encoded_bytes,
+            ),
+            (
+                "offsets".to_string(),
+                offsets_choice.encoding,
+                offsets_choice.plain_bytes,
+                offsets_choice.encoded_bytes,
+            ),
+            (
+                "lengths".to_string(),
+                degrees_choice.encoding,
+                degrees_choice.plain_bytes,
+                degrees_choice.encoded_bytes,
+            ),
+            (
+                "capacities".to_string(),
+                caps_choice.encoding,
+                caps_choice.plain_bytes,
+                caps_choice.encoded_bytes,
+            ),
+        ]
+    }
+
+    /// Load from bytes, version 3 only.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         if data.len() < 36 {
             return Err(StorageError::deserialize_error(
@@ -1271,7 +1346,7 @@ impl MutableCsr {
         }
         let vertex_capacity = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
-        let primary_edge_capacity = read_u64_le(data, &mut offset)? as usize;
+        let primary_len = read_u64_le(data, &mut offset)? as usize;
         let overflow_chunk_edges = read_u64_le(data, &mut offset)? as usize;
         if overflow_chunk_edges == 0 {
             return Err(StorageError::deserialize_error(
@@ -1279,24 +1354,42 @@ impl MutableCsr {
             ));
         }
 
-        let mut adj_offsets = Vec::with_capacity(vertex_capacity);
-        for _ in 0..vertex_capacity {
-            adj_offsets.push(read_u32_le(data, &mut offset)?);
+        let adj_offsets = decode_topology_u32_column(data, &mut offset)?;
+        let degrees = decode_topology_u32_column(data, &mut offset)?;
+        let primary_capacities = decode_topology_u32_column(data, &mut offset)?;
+        if adj_offsets.len() != vertex_capacity
+            || degrees.len() != vertex_capacity
+            || primary_capacities.len() != vertex_capacity
+        {
+            return Err(StorageError::deserialize_error(
+                "Mutable CSR header column length mismatch",
+            ));
         }
-
-        let mut degrees = Vec::with_capacity(vertex_capacity);
-        for _ in 0..vertex_capacity {
-            degrees.push(read_u32_le(data, &mut offset)?);
+        let endpoints = decode_topology_u32_column(data, &mut offset)?;
+        let ranks = decode_topology_i64_column(data, &mut offset)?;
+        let edge_ids = decode_topology_u64_column(data, &mut offset)?;
+        let create_stamps = decode_topology_u64_column(data, &mut offset)?;
+        let delete_stamps = decode_topology_u64_column(data, &mut offset)?;
+        if endpoints.len() != primary_len
+            || ranks.len() != primary_len
+            || edge_ids.len() != primary_len
+            || create_stamps.len() != primary_len
+            || delete_stamps.len() != primary_len
+        {
+            return Err(StorageError::deserialize_error(
+                "Mutable CSR neighbor column length mismatch",
+            ));
         }
-
-        let mut primary_capacities = Vec::with_capacity(vertex_capacity);
-        for _ in 0..vertex_capacity {
-            primary_capacities.push(read_u32_le(data, &mut offset)?);
-        }
-
-        let mut nbr_list = Vec::with_capacity(primary_edge_capacity);
-        for _ in 0..primary_edge_capacity {
-            nbr_list.push(read_nbr(data, &mut offset)?);
+        let mut nbr_list = Vec::with_capacity(primary_len);
+        for index in 0..primary_len {
+            let mut nbr = Nbr::with_timestamps(
+                endpoints[index],
+                ranks[index],
+                EdgeId(edge_ids[index]),
+                delete_stamps[index],
+            );
+            nbr.create_ts = create_stamps[index];
+            nbr_list.push(nbr);
         }
 
         let mut overflow_chunks = OverflowStorage::new();
@@ -1323,7 +1416,7 @@ impl MutableCsr {
             }
         }
 
-        self.total_edge_capacity = primary_edge_capacity.saturating_add(overflow_capacity);
+        self.total_edge_capacity = nbr_list.len().saturating_add(overflow_capacity);
         self.adj_offsets = adj_offsets;
         self.degrees = degrees;
         self.primary_capacities = primary_capacities;
@@ -1332,6 +1425,11 @@ impl MutableCsr {
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
         self.rebuild_live_sets();
+        if offset != data.len() {
+            return Err(StorageError::deserialize_error(
+                "unexpected trailing data in mutable CSR payload",
+            ));
+        }
 
         Ok(())
     }
@@ -1602,8 +1700,7 @@ impl MutableCsr {
             if kept.is_empty() {
                 let freed: usize = chunks.iter().map(|c| c.capacity()).sum();
                 self.overflow_chunks.remove(&vid);
-                self.total_edge_capacity =
-                    self.total_edge_capacity.saturating_sub(freed);
+                self.total_edge_capacity = self.total_edge_capacity.saturating_sub(freed);
             } else {
                 let chunk_edges = self.effective_chunk_edges(keep);
                 let mut repacked: Vec<Vec<Nbr>> = Vec::new();
@@ -2550,7 +2647,9 @@ mod tests {
         let chunks = csr.get_overflow_chunks(0).expect("vertex 0 has overflow");
         assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_SMALL);
         assert!(
-            chunks.iter().all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MEDIUM),
+            chunks
+                .iter()
+                .all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MEDIUM),
             "graded chunks must stay at or below the medium tier for 300 live edges"
         );
         assert_eq!(csr.edges_of(0u32, 1).len(), 300);
@@ -2594,5 +2693,49 @@ mod tests {
         assert_eq!(removed, 0);
         assert_eq!(csr.row_gap(0), 1);
         assert!((csr.row_density(0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_topology_encoding_roundtrip_keeps_snapshot_reads() {
+        let mut csr = MutableCsr::with_capacity(16, 64);
+        for i in 0..20u64 {
+            csr.insert_edge(
+                (i % 4) as u32,
+                VertexId::from_int64(100 + i as i64),
+                EdgeId(i),
+                10,
+            )
+            .unwrap();
+        }
+        assert!(csr.delete_edge(0u32, EdgeId(0), 20).unwrap());
+        let before: Vec<Nbr> = {
+            let mut all = csr.physical_edges_of(0);
+            all.extend(csr.physical_edges_of(1));
+            all
+        };
+        let live_before = csr.edges_of(1u32, 30);
+
+        let payload = csr.dump();
+        let mut loaded = MutableCsr::new();
+        loaded.load(&payload).expect("encoded load must succeed");
+        let mut after = loaded.physical_edges_of(0);
+        after.extend(loaded.physical_edges_of(1));
+        assert_eq!(before, after);
+        assert_eq!(loaded.edges_of(1u32, 30), live_before);
+        assert_eq!(loaded.edge_count(), csr.edge_count());
+
+        let report = loaded.topology_encoding_report();
+        assert_eq!(report.len(), 5);
+        assert!(report.iter().any(|(name, _, _, _)| name == "neighbor"));
+        assert!(report.iter().any(|(name, _, _, _)| name == "edge_id"));
+    }
+
+    #[test]
+    fn test_topology_encoding_rejects_old_version() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u32.to_le_bytes());
+        payload.extend_from_slice(&[0u8; 32]);
+        let mut csr = MutableCsr::new();
+        assert!(csr.load(&payload).is_err());
     }
 }

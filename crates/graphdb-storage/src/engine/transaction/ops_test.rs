@@ -410,11 +410,8 @@ mod tests {
         };
         let table = edge_tables.get(&EdgeTableKey::new(0, 0, 0)).unwrap();
         let mut edge_store = table.write();
-        let result = TransactionOps::revert_delete_edge_single_by_key(
-            &mut edge_store,
-            revert_params,
-            3,
-        );
+        let result =
+            TransactionOps::revert_delete_edge_single_by_key(&mut edge_store, revert_params, 3);
         assert!(result.is_ok());
     }
 

@@ -50,8 +50,8 @@ pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use node_group::{
     region_id_for_local, region_local_range, regions_per_group, CsrShardSet, EdgeCheckpointKind,
     GroupDirty, NodeGroupStats, RegionDirty, RegionMergeScope, ShardCsrIterator,
-    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION,
-    GROUP_MERGE_MIN_DENSITY, LEAF_REGION_ROWS, REGION_MERGE_MIN_DENSITY,
+    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION, GROUP_MERGE_MIN_DENSITY,
+    LEAF_REGION_ROWS, REGION_MERGE_MIN_DENSITY,
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 

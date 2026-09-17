@@ -113,9 +113,7 @@ impl GraphStorageContext {
                         );
                         if let Some(stats) = self.persistent.stats_manager.as_ref() {
                             stats.record_checkpoint_strategy_by_name(match kind {
-                                crate::edge::EdgeCheckpointKind::AppendOnly => {
-                                    "edge-append-only"
-                                }
+                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
                                 crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
                             });
                         }
@@ -319,9 +317,7 @@ impl GraphStorageContext {
                         );
                         if let Some(stats) = self.persistent.stats_manager.as_ref() {
                             stats.record_checkpoint_strategy_by_name(match kind {
-                                crate::edge::EdgeCheckpointKind::AppendOnly => {
-                                    "edge-append-only"
-                                }
+                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
                                 crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
                             });
                         }

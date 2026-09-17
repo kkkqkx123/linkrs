@@ -221,8 +221,8 @@ impl CsrWithProperties {
             }
             return;
         }
-        let virgin = self.visibility[row_idx].create_ts == 0
-            && self.visibility[row_idx].delete_ts.is_none();
+        let virgin =
+            self.visibility[row_idx].create_ts == 0 && self.visibility[row_idx].delete_ts.is_none();
         if virgin {
             if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
                 if let Some(edge_id) = slot.take() {
@@ -370,6 +370,114 @@ impl CsrWithProperties {
         }
     }
 
+    /// Column index for one property name.
+    fn column_index(&self, name: &str) -> Option<usize> {
+        self.property_schema.iter().position(|s| s.name == name)
+    }
+
+    /// Snapshot value of one column cell for pushdown filtering.
+    ///
+    /// Reads through the version chain at `query_ts`; a `None` return means
+    /// null at that snapshot, expressed through the column null bitmap rather
+    /// than a materialized record.
+    fn pushdown_cell(&self, row: usize, column: usize, query_ts: Timestamp) -> Option<Value> {
+        self.property_columns.get(column)?.get_at_ts(row, query_ts)
+    }
+
+    /// Whether one edge matches every pushed predicate at `query_ts`.
+    ///
+    /// Column-scan layer: only predicate columns are read, each through its
+    /// null bitmap, and no intermediate record is materialized. A missing
+    /// column, a missing row mapping or a null cell never matches, mirroring
+    /// the query NULL semantics where comparisons against NULL are false.
+    pub fn matches_predicates_for_edge(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        predicates: &[crate::cursor::ScanPredicate],
+    ) -> bool {
+        if predicates.is_empty() {
+            return true;
+        }
+        let Some(&row) = self.edge_to_row.get(&edge_id) else {
+            return false;
+        };
+        let row = row as usize;
+        for predicate in predicates {
+            let Some(column) = self.column_index(predicate.column()) else {
+                return false;
+            };
+            let Some(value) = self.pushdown_cell(row, column, query_ts) else {
+                return false;
+            };
+            if !predicate.matches_value(&value) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Filter edge ids by pushed predicates at the column-scan layer.
+    ///
+    /// Attribute equality and range predicates filter row numbers first;
+    /// callers look up topology only for the returned hits. Nulls use bitmap
+    /// semantics throughout and no intermediate records are materialized.
+    /// `candidates` bounds the scan when the caller already holds row
+    /// numbers; `None` scans every mapped edge.
+    pub fn filter_edge_ids_by_predicates(
+        &self,
+        predicates: &[crate::cursor::ScanPredicate],
+        query_ts: Timestamp,
+        candidates: Option<&[EdgeId]>,
+    ) -> Vec<EdgeId> {
+        if predicates.is_empty() {
+            return candidates.map_or_else(
+                || self.edge_to_row.keys().copied().collect(),
+                <[EdgeId]>::to_vec,
+            );
+        }
+        let resolved: Vec<(usize, &crate::cursor::ScanPredicate)> = predicates
+            .iter()
+            .map(|predicate| (self.column_index(predicate.column()), predicate))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|(index, predicate)| index.map(|column| (column, predicate)))
+            .collect();
+        if resolved.len() != predicates.len() {
+            return Vec::new();
+        }
+        match candidates {
+            Some(ids) => ids
+                .iter()
+                .copied()
+                .filter(|edge_id| {
+                    let Some(&row) = self.edge_to_row.get(edge_id) else {
+                        return false;
+                    };
+                    let row = row as usize;
+                    resolved.iter().all(|(column, predicate)| {
+                        self.pushdown_cell(row, *column, query_ts)
+                            .is_some_and(|value| predicate.matches_value(&value))
+                    })
+                })
+                .collect(),
+            None => self
+                .edge_to_row
+                .iter()
+                .filter_map(|(edge_id, row)| {
+                    let row = *row as usize;
+                    resolved
+                        .iter()
+                        .all(|(column, predicate)| {
+                            self.pushdown_cell(row, *column, query_ts)
+                                .is_some_and(|value| predicate.matches_value(&value))
+                        })
+                        .then_some(*edge_id)
+                })
+                .collect(),
+        }
+    }
+
     pub fn mark_deleted(&mut self, edge_id: EdgeId, ts: Timestamp) -> bool {
         if let Some(&pos) = self.edge_to_row.get(&edge_id) {
             if let Some(vis) = self.visibility.get_mut(pos as usize) {
@@ -464,9 +572,7 @@ impl CsrWithProperties {
             .property_schema
             .iter()
             .position(|s| s.prop_id as u16 == prop_id.0)
-            .ok_or_else(|| {
-                StorageError::column_not_found(format!("prop_id={}", prop_id.0))
-            })?;
+            .ok_or_else(|| StorageError::column_not_found(format!("prop_id={}", prop_id.0)))?;
         let name = self.property_schema[idx].name.clone();
         self.set_property_at_row(pos as usize, &name, value, ts)
     }
@@ -881,8 +987,7 @@ impl CsrWithProperties {
             });
         }
         need(data, offset, 4, "row count")?;
-        self.row_count =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        self.row_count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         need(data, offset, 4, "edge map length")?;
         let map_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
@@ -897,8 +1002,7 @@ impl CsrWithProperties {
             self.edge_to_row.insert(EdgeId(eid), pos);
         }
         need(data, offset, 4, "free list length")?;
-        let free_len =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let free_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         self.free_list.clear();
         for _ in 0..free_len {
@@ -1083,8 +1187,15 @@ impl CsrWithProperties {
         for &slot in &self.free_list {
             self.free_set.insert(slot);
         }
-        let max_id = self.property_schema.iter().map(|s| s.prop_id).max().unwrap_or(-1);
-        self.next_prop_id = max_id.saturating_add(1).max(self.property_schema.len() as i32);
+        let max_id = self
+            .property_schema
+            .iter()
+            .map(|s| s.prop_id)
+            .max()
+            .unwrap_or(-1);
+        self.next_prop_id = max_id
+            .saturating_add(1)
+            .max(self.property_schema.len() as i32);
     }
 
     pub fn reclaim_slots(
@@ -1341,8 +1452,15 @@ impl CsrWithProperties {
                 }
             }
         }
-        let max_id = self.property_schema.iter().map(|s| s.prop_id).max().unwrap_or(-1);
-        self.next_prop_id = max_id.saturating_add(1).max(self.property_schema.len() as i32);
+        let max_id = self
+            .property_schema
+            .iter()
+            .map(|s| s.prop_id)
+            .max()
+            .unwrap_or(-1);
+        self.next_prop_id = max_id
+            .saturating_add(1)
+            .max(self.property_schema.len() as i32);
     }
 
     /// Stable identifier for one column in this shard, if present.
@@ -1370,10 +1488,7 @@ impl CsrWithProperties {
             .iter()
             .enumerate()
             .map(|(idx, schema)| {
-                let current = self
-                    .property_columns
-                    .get(idx)
-                    .and_then(|col| col.get(pos));
+                let current = self.property_columns.get(idx).and_then(|col| col.get(pos));
                 (schema.name.clone(), current)
             })
             .collect();

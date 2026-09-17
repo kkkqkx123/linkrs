@@ -231,6 +231,16 @@ impl ScanPredicate {
     }
 
     /// Evaluate the predicate against a single decoded value.
+    ///
+    /// Column-scan pushdown entry point: the caller already selected the
+    /// predicate column, so no property-set lookup happens here. A null
+    /// value never reaches this method; callers return false for nulls to
+    /// keep bitmap null semantics.
+    pub fn matches_value(&self, value: &graphdb_core::Value) -> bool {
+        self.matches_scalar(value)
+    }
+
+    /// Evaluate the predicate against a single decoded value.
     fn matches_scalar(&self, value: &graphdb_core::Value) -> bool {
         match self {
             ScanPredicate::ColumnEqual {
@@ -276,6 +286,13 @@ impl ScanPredicate {
 /// Integer kinds are compared exactly as `i64`; any numeric pair involving a
 /// float is compared as `f64` (mirroring the query engine's typed batch
 /// evaluation); everything else falls back to `Value` ordering.
+///
+/// Shared by segment-statistics widening so bounds merging uses exactly the
+/// same ordering as pruning decisions.
+pub fn compare_stat_values(a: &graphdb_core::Value, b: &graphdb_core::Value) -> std::cmp::Ordering {
+    compare_scalar(a, b)
+}
+
 fn compare_scalar(a: &graphdb_core::Value, b: &graphdb_core::Value) -> std::cmp::Ordering {
     match (as_i64(a), as_i64(b)) {
         (Some(x), Some(y)) => x.cmp(&y),

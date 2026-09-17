@@ -1273,13 +1273,7 @@ mod pending_visibility_tests {
             "own edge write visible to point lookup"
         );
         let neighbors = bound
-            .out_edges(
-                edge_label,
-                src_label,
-                dst_label,
-                VertexId::from_int64(1),
-                start,
-            )
+            .out_edges_projected(edge_label, src_label, VertexId::from_int64(1), start, None)
             .expect("traversal resolves");
         assert_eq!(neighbors.len(), 1);
 

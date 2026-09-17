@@ -677,9 +677,7 @@ fn encode_decimal(
     let exponent10 = exponent_part.parse::<i32>().map_err(|error| {
         StorageError::serialize_error(format!("Invalid decimal exponent: {error}"))
     })?;
-    let (whole, fractional) = mantissa
-        .split_once('.')
-        .unwrap_or((mantissa, ""));
+    let (whole, fractional) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let mut digits = whole.bytes().chain(fractional.bytes()).collect::<Vec<_>>();
     if digits.is_empty() || digits.iter().any(|digit| !digit.is_ascii_digit()) {
         return Err(StorageError::serialize_error(format!(

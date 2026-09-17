@@ -179,13 +179,7 @@ pub(crate) fn get_node_edges_projected(
                         )
                         .unwrap_or_default(),
                     None => ctx
-                        .out_edges_projected(
-                            edge_label_id,
-                            src_label_id,
-                            *node_id,
-                            ts,
-                            projection,
-                        )
+                        .out_edges_projected(edge_label_id, src_label_id, *node_id, ts, projection)
                         .unwrap_or_default(),
                 };
                 for record in records {
@@ -224,13 +218,7 @@ pub(crate) fn get_node_edges_projected(
                         )
                         .unwrap_or_default(),
                     None => ctx
-                        .in_edges_projected(
-                            edge_label_id,
-                            dst_label_id,
-                            *node_id,
-                            ts,
-                            projection,
-                        )
+                        .in_edges_projected(edge_label_id, dst_label_id, *node_id, ts, projection)
                         .unwrap_or_default(),
                 };
                 for record in records {
@@ -269,13 +257,7 @@ pub(crate) fn get_node_edges_projected(
                         )
                         .unwrap_or_default(),
                     None => ctx
-                        .out_edges_projected(
-                            edge_label_id,
-                            src_label_id,
-                            *node_id,
-                            ts,
-                            projection,
-                        )
+                        .out_edges_projected(edge_label_id, src_label_id, *node_id, ts, projection)
                         .unwrap_or_default(),
                 };
                 for record in out_records {
@@ -316,13 +298,7 @@ pub(crate) fn get_node_edges_projected(
                         )
                         .unwrap_or_default(),
                     None => ctx
-                        .in_edges_projected(
-                            edge_label_id,
-                            dst_label_id,
-                            *node_id,
-                            ts,
-                            projection,
-                        )
+                        .in_edges_projected(edge_label_id, dst_label_id, *node_id, ts, projection)
                         .unwrap_or_default(),
                 };
                 for record in in_records {

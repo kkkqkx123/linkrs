@@ -7,7 +7,7 @@
 //! - `compaction`: per-group CSR compaction and property cleanup
 //! - `iterator`: sharded scan iterator
 //! - `mvcc`: centralized timestamps, tombstones, and GC watermarks
-//! - `persistence`: version-4 serialization (flush/load)
+//! - `persistence`: version-5 serialization (flush/load)
 //! - `remap`: vertex ID remapping plus offline group-width resharding
 //! - `schema_add_column`: staged add-column state machine (prepare/fill/publish/abort)
 //! - `schema_drop_column`: staged drop-column state machine (prepare/publish/abort)
@@ -36,8 +36,9 @@ pub mod stats;
 
 // Re-export commonly used types
 pub use core::{EdgeStore, UpdateEdgePropertyByKeyParams};
+pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
-pub use stats::{DeletionStats, TombstoneStats};
+pub use stats::{DeletionStats, GroupSegmentStats, ScanPruneReport, TombstoneStats};
 
 // Re-export from parent
 pub use super::{CsrBase, CsrVariant, Nbr};

@@ -269,10 +269,39 @@ fn scan_mutable(args: ScanArgs) {
         }
     };
 
+    // Segment pruning before decoding: groups whose flushed statistics
+    // provably exclude the predicates are skipped without touching property
+    // columns. Safe mid-scan because visibility is snapshot-fixed, bounds
+    // only widen, and dirty groups never prune; the resume accounting below
+    // advances past skipped groups exactly like a full walk.
+    let mut pruned: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    if !args.predicate.is_empty() {
+        for gid in args.store.out_csr.existing_group_ids() {
+            if !args.store.segment_may_contain(gid as u32, args.predicate) {
+                pruned.insert(gid);
+            }
+        }
+        if !pruned.is_empty() {
+            log::debug!(
+                "edge scan pruned {} of {} groups",
+                pruned.len(),
+                args.store.out_csr.existing_group_ids().len()
+            );
+        }
+    }
+
     let existing = args.store.out_csr.existing_group_ids();
     let group_bits = args.store.out_csr.group_bits();
     let start_pos = existing.partition_point(|gid| *gid < args.state.resume_group);
     for gid in existing.into_iter().skip(start_pos) {
+        if pruned.contains(&gid) {
+            // Fully consumed without decoding: pruned groups yield no
+            // candidates, so batches never end inside them and resume
+            // advances past the whole group.
+            args.state.resume_group = gid + 1;
+            args.state.skip_in_group = 0;
+            continue;
+        }
         let Some(variant) = args.store.out_csr.group_variant(gid) else {
             args.state.resume_group = gid + 1;
             args.state.skip_in_group = 0;
@@ -281,23 +310,21 @@ fn scan_mutable(args: ScanArgs) {
         let base = crate::edge::node_group::group_base(gid, group_bits);
         let mut iter = variant.iter_all();
         if gid == args.state.resume_group {
-            let mut skip = args.state.skip_in_group;
-            while skip > 0 {
-                match iter.next() {
-                    Some(_) => skip -= 1,
-                    None => break,
+            let skip = args.state.skip_in_group;
+            for _ in 0..skip {
+                if iter.next().is_none() {
+                    break;
                 }
             }
-            // Consumed prefix; subsequent groups start at zero.
+            // Keep the absolute physical offset: entries below keep incrementing
+            // it so the next batch resumes after all consumed entries.
+        } else {
+            args.state.resume_group = gid;
             args.state.skip_in_group = 0;
         }
         for (local_vid, nbr) in iter.by_ref() {
             args.state.skip_in_group += 1;
-            if !args
-                .store
-                .mvcc
-                .is_edge_visible_with_gate(nbr.edge_id, args.ts, &gate)
-            {
+            if !args.store.is_visible_with_gate(nbr.edge_id, args.ts, &gate) {
                 continue;
             }
             let src_vid = VertexId::from_int64(local_vid.as_int64().unwrap_or(0) + base as i64);
@@ -314,6 +341,21 @@ fn scan_mutable(args: ScanArgs) {
             // Decode once with predicate columns included so pushed predicates
             // can be evaluated; matching rows are then trimmed back to the
             // projection. Filtering happens before offset/limit accounting.
+            // With predicates, the column-scan layer filters row numbers
+            // first on predicate columns only, and hits decode the fetch
+            // set afterwards; misses never materialize a record and nulls
+            // use bitmap semantics (missing never matches).
+            if !args.predicate.is_empty() {
+                let probe = decode_edge_properties(
+                    args.store,
+                    nbr.edge_id,
+                    args.ts,
+                    Some(args.predicate_columns),
+                );
+                if !args.predicate.iter().all(|p| p.matches(probe.as_slice())) {
+                    continue;
+                }
+            }
             let mut properties =
                 decode_edge_properties(args.store, nbr.edge_id, args.ts, fetch_columns.as_deref());
             if !args
@@ -434,7 +476,7 @@ fn decode_edge_properties(
     ts: Timestamp,
     fetch: Option<&[String]>,
 ) -> Vec<(String, Value)> {
-    if !store.mvcc.is_edge_visible(edge_id, ts) {
+    if !store.is_visible(edge_id, ts) {
         return Vec::new();
     }
     // Snapshot read through the property version chain so old readers see

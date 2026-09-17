@@ -130,15 +130,13 @@ impl CsrVariant {
         overflow_chunk_edges: usize,
     ) -> StorageResult<Self> {
         match strategy {
-            EdgeStrategy::Multiple => {
-                Ok(CsrVariant::Multiple(Box::new(
-                    MutableCsr::with_overflow_chunk_edges(
-                        vertex_capacity,
-                        edge_capacity,
-                        overflow_chunk_edges,
-                    ),
-                )))
-            }
+            EdgeStrategy::Multiple => Ok(CsrVariant::Multiple(Box::new(
+                MutableCsr::with_overflow_chunk_edges(
+                    vertex_capacity,
+                    edge_capacity,
+                    overflow_chunk_edges,
+                ),
+            ))),
             EdgeStrategy::Single => Ok(CsrVariant::Single(SingleMutableCsr::with_capacity(
                 vertex_capacity,
             ))),
@@ -501,9 +499,7 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
             }
-            CsrVariant::Single(csr) => {
-                csr.compact_with_ts_reporting(cutoff, on_edge_removed)
-            }
+            CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
             CsrVariant::None { .. } => 0,
         }
     }
@@ -537,7 +533,6 @@ impl CsrVariant {
             CsrVariant::None { .. } => {}
         }
     }
-
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types
